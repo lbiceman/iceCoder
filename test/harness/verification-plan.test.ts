@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -29,6 +29,16 @@ afterEach(() => {
 });
 
 describe('parseVerificationCommandsFromGoal', () => {
+  it.each([
+    ['`src/foo.ts`，验收命令：`npm test`。', ['npm test']],
+    ['`README.md`；完成条件：必须运行 `pytest -q`。', ['pytest -q']],
+    ['`available = onHand - reserved`，Acceptance: `cargo test`.', ['cargo test']],
+    ['ordinary example `npm run build`, must pass `npm test`.', ['npm test']],
+    ['ordinary `build`; before finish: `go test ./...`.', ['go test ./...']],
+  ])('does not reverse-capture ordinary backticks: %s', (goal, expected) => {
+    expect(parseVerificationCommandsFromGoal(goal)).toEqual(expected);
+  });
+
   it('extracts only backtick commands governed by an adjacent Chinese marker', () => {
     const goal = [
       '请阅读 `README.md`，不要把普通反引号当命令。',
@@ -60,11 +70,21 @@ describe('parseVerificationCommandsFromGoal', () => {
     const tooLong = 'x'.repeat(501);
     const goal = [
       '可以参考 `npm test`，但没有验收 marker。',
-      `验收命令：\`valid command\`、\`has\u0000nul\`、\`${tooLong}\`.`,
+      `验收命令：\`npm test\`、\`has\u0000nul\`、\`${tooLong}\`.`,
       '完成条件：必须运行 ``。',
     ].join('\n');
 
-    expect(parseVerificationCommandsFromGoal(goal)).toEqual(['valid command']);
+    expect(parseVerificationCommandsFromGoal(goal)).toEqual(['npm test']);
+  });
+
+  it('keeps only runnable commands even when invalid backticks follow a marker', () => {
+    expect(parseVerificationCommandsFromGoal([
+      '验收命令：`src/foo.ts`、`README.md`、`available = onHand - reserved`、`build`、',
+      '`./scripts/ci.sh`、`C:\\tools\\make.exe verify`。',
+    ].join(''))).toEqual([
+      './scripts/ci.sh',
+      'C:\\tools\\make.exe verify',
+    ]);
   });
 });
 
@@ -238,5 +258,74 @@ describe('resolveVerificationPlan', () => {
       goal: '',
       workspaceRoot: buildOnlyRoot,
     })).resolves.toBeNull();
+  });
+
+  it('warns for malformed config while continuing to the next configured name', async () => {
+    const root = temporaryWorkspace();
+    writeFileSync(join(root, '.icecoder.json'), '{', 'utf8');
+    writeJson(root, 'icecoder.json', { verificationCommands: ['npm run verify'] });
+    const warnings: Array<{ kind: string; path: string; code?: string }> = [];
+
+    await expect(resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
+    })).resolves.toMatchObject({
+      source: 'project',
+      commands: [{ command: 'npm run verify' }],
+    });
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        kind: 'malformed',
+        path: join(root, '.icecoder.json'),
+      }),
+    ]);
+  });
+
+  it('does not warn for ENOENT but reports unreadable files without throwing', async () => {
+    const missingRoot = temporaryWorkspace();
+    writeJson(missingRoot, 'package.json', { scripts: { test: 'vitest --run' } });
+    const missingWarnings: Array<{ kind: string; path: string; code?: string }> = [];
+    await resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: missingRoot,
+      onWarning: warning => missingWarnings.push(warning),
+    });
+    expect(missingWarnings).toEqual([]);
+
+    const unreadableRoot = temporaryWorkspace();
+    mkdirSync(join(unreadableRoot, '.icecoder.json'));
+    writeJson(unreadableRoot, 'package.json', { scripts: { test: 'vitest --run' } });
+    const unreadableWarnings: Array<{ kind: string; path: string; code?: string }> = [];
+    await expect(resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: unreadableRoot,
+      onWarning: warning => unreadableWarnings.push(warning),
+    })).resolves.toMatchObject({ source: 'runtime_default' });
+    expect(unreadableWarnings).toEqual([
+      expect.objectContaining({
+        kind: 'read_error',
+        path: join(unreadableRoot, '.icecoder.json'),
+      }),
+    ]);
+  });
+
+  it('reports a malformed package manifest while returning no default plan', async () => {
+    const root = temporaryWorkspace();
+    writeFileSync(join(root, 'package.json'), '{', 'utf8');
+    const warnings: Array<{ kind: string; source: string; path: string }> = [];
+
+    await expect(resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
+    })).resolves.toBeNull();
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        kind: 'malformed',
+        source: 'package_manifest',
+        path: join(root, 'package.json'),
+      }),
+    ]);
   });
 });

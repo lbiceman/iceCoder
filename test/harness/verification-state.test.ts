@@ -7,8 +7,8 @@ import {
   markVerificationPassed,
   markVerificationUnavailable,
   markWorkspaceMutation,
-  restoreVerificationRuntimeState,
   sanitizeVerificationRuntimeState,
+  tryConsumeVerificationContinuation,
 } from '../../src/harness/verification-state.js';
 
 describe('verification-state', () => {
@@ -17,8 +17,10 @@ describe('verification-state', () => {
 
     expect(state).toEqual({
       workspaceMutationVersion: 0,
-      verifiedMutationVersion: 0,
+      verifiedMutationVersion: null,
       verifiedPlanFingerprint: null,
+      attemptedMutationVersion: null,
+      attemptedPlanFingerprint: null,
       continuationCount: 0,
       blockingSignature: null,
       lastResult: null,
@@ -87,6 +89,10 @@ describe('verification-state', () => {
       evidenceRef: 'tool-2',
     });
     expect(state.blockingSignature).toBe('npm-test:1');
+    expect(state.verifiedMutationVersion).toBe(0);
+    expect(state.verifiedPlanFingerprint).toBe('plan-a');
+    expect(state.attemptedMutationVersion).toBe(0);
+    expect(state.attemptedPlanFingerprint).toBe('plan-a');
     expect(isVerificationFresh(state, 'plan-a')).toBe(false);
 
     markVerificationUnavailable(state, {
@@ -98,7 +104,44 @@ describe('verification-state', () => {
     });
     expect(state.lastResult?.status).toBe('unavailable');
     expect(state.blockingSignature).toBe('runner-unavailable');
+    expect(state.attemptedMutationVersion).toBe(0);
+    expect(state.attemptedPlanFingerprint).toBe('plan-a');
     expect(isVerificationFresh(state, 'plan-a')).toBe(false);
+  });
+
+  it('records attempts without populating verified fields before any pass', () => {
+    const state = createVerificationRuntimeState();
+
+    markVerificationFailed(state, {
+      planFingerprint: 'plan-a',
+      source: 'user',
+      exitCode: 1,
+    });
+
+    expect(state.verifiedMutationVersion).toBeNull();
+    expect(state.verifiedPlanFingerprint).toBeNull();
+    expect(state.attemptedMutationVersion).toBe(0);
+    expect(state.attemptedPlanFingerprint).toBe('plan-a');
+  });
+
+  it('keeps the previous pass identity when a newer plan attempt fails', () => {
+    const state = createVerificationRuntimeState();
+    markVerificationPassed(state, {
+      planFingerprint: 'plan-old',
+      source: 'project',
+    });
+    markWorkspaceMutation(state);
+
+    markVerificationFailed(state, {
+      planFingerprint: 'plan-new',
+      source: 'project',
+      exitCode: 1,
+    });
+
+    expect(state.verifiedMutationVersion).toBe(0);
+    expect(state.verifiedPlanFingerprint).toBe('plan-old');
+    expect(state.attemptedMutationVersion).toBe(1);
+    expect(state.attemptedPlanFingerprint).toBe('plan-new');
   });
 
   it('does not consult wall-clock time when deciding freshness', () => {
@@ -133,8 +176,10 @@ describe('verification-state', () => {
 
     expect(sanitized).toEqual({
       workspaceMutationVersion: 0,
-      verifiedMutationVersion: 3,
+      verifiedMutationVersion: null,
       verifiedPlanFingerprint: null,
+      attemptedMutationVersion: null,
+      attemptedPlanFingerprint: null,
       continuationCount: 0,
       blockingSignature: null,
       lastResult: {
@@ -145,11 +190,77 @@ describe('verification-state', () => {
     });
   });
 
-  it('restores a detached sanitized state and falls back for invalid input', () => {
+  it.each([
+    {
+      workspaceMutationVersion: -1,
+      verifiedMutationVersion: 0,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      workspaceMutationVersion: 1.5,
+      verifiedMutationVersion: 1,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      workspaceMutationVersion: 1,
+      verifiedMutationVersion: -1,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      workspaceMutationVersion: 1,
+      verifiedMutationVersion: 1.5,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      workspaceMutationVersion: 1,
+      verifiedMutationVersion: 2,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      workspaceMutationVersion: 1,
+      verifiedMutationVersion: 1,
+      verifiedPlanFingerprint: null,
+    },
+    {
+      workspaceMutationVersion: 1,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+    {
+      verifiedMutationVersion: 0,
+      verifiedPlanFingerprint: 'plan-a',
+    },
+  ])('fails closed for malformed freshness state %#', (freshness) => {
+    const state = sanitizeVerificationRuntimeState({
+      ...freshness,
+      continuationCount: 0,
+      blockingSignature: null,
+      lastResult: { status: 'passed', source: 'user' },
+    });
+
+    expect(isVerificationFresh(state, 'plan-a')).toBe(false);
+  });
+
+  it('does not restore a passed result without complete verification evidence', () => {
+    const state = sanitizeVerificationRuntimeState({
+      workspaceMutationVersion: 2,
+      verifiedMutationVersion: 2,
+      verifiedPlanFingerprint: '',
+      continuationCount: 0,
+      lastResult: { status: 'passed', source: 'user' },
+    });
+
+    expect(state.verifiedMutationVersion).toBeNull();
+    expect(state.verifiedPlanFingerprint).toBeNull();
+    expect(isVerificationFresh(state, 'plan-a')).toBe(false);
+  });
+
+  it('sanitizes into a detached state and falls back for invalid input', () => {
     const persisted = {
       workspaceMutationVersion: 4,
       verifiedMutationVersion: 4,
       verifiedPlanFingerprint: 'plan-a',
+      attemptedMutationVersion: 4,
+      attemptedPlanFingerprint: 'plan-a',
       continuationCount: 2,
       blockingSignature: null,
       lastResult: {
@@ -159,11 +270,21 @@ describe('verification-state', () => {
         exitCode: 0,
       },
     };
-    const restored = restoreVerificationRuntimeState(persisted);
+    const restored = sanitizeVerificationRuntimeState(persisted);
     persisted.workspaceMutationVersion = 99;
 
     expect(restored.workspaceMutationVersion).toBe(4);
     expect(isVerificationFresh(restored, 'plan-a')).toBe(true);
-    expect(restoreVerificationRuntimeState(null)).toEqual(createVerificationRuntimeState());
+    expect(sanitizeVerificationRuntimeState(null)).toEqual(createVerificationRuntimeState());
+  });
+
+  it('consumes continuation budget without direct field mutation', () => {
+    const state = createVerificationRuntimeState();
+
+    expect(tryConsumeVerificationContinuation(state, 1)).toBe(true);
+    expect(state.continuationCount).toBe(1);
+    expect(tryConsumeVerificationContinuation(state, 1)).toBe(false);
+    expect(state.continuationCount).toBe(1);
+    expect(tryConsumeVerificationContinuation(state, -1)).toBe(false);
   });
 });

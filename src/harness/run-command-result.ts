@@ -11,6 +11,18 @@ export type RunCommandResultClassification =
   | { kind: 'background_completed'; command: string; exitCode?: number }
   | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
 
+const COMMAND_RUNNERS = new Set([
+  'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
+  'node', 'nodejs', 'tsx', 'ts-node',
+  'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
+  'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
+  'docker', 'docker-compose', 'podman',
+  'just', 'task', 'bazel',
+  'vitest', 'jest', 'mocha', 'playwright', 'cypress',
+  'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
+  'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
+]);
+
 export function classifyRunCommandResult(
   args: Record<string, unknown> | undefined | null,
   rawOutput: string,
@@ -105,6 +117,25 @@ export function normalizeAcceptanceCommandKey(command: string): string {
   return normalizeExecutableIdentity(key);
 }
 
+/** 文件路径、公式和自然语言不是可执行验收命令。 */
+export function looksLikeRunnableCommand(value: string): boolean {
+  const text = value.trim();
+  if (!text || text.length > 500 || /[\r\n\u0000]/.test(text)) return false;
+  if (/^(?:the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
+    return false;
+  }
+  if (/=/.test(text) && !/^[A-Za-z_][\w.-]*=\S+\s+\S/.test(text)) return false;
+  if (/^(?:\.\/|\.\\)/.test(text)) return true;
+  if (looksLikeBareFileOrGlob(text)) return false;
+  const head = firstCommandToken(text);
+  if (!head) return false;
+  const executable = head
+    .split(/[\\/]/)
+    .at(-1)
+    ?.replace(/\.(?:exe|cmd|bat|com)$/i, '') ?? head;
+  return COMMAND_RUNNERS.has(executable.toLowerCase());
+}
+
 function normalizeExecutableIdentity(command: string): string {
   const match = command.match(/^(?:"([^"]+)"|(\S+))(.*)$/);
   if (!match) return command;
@@ -115,6 +146,18 @@ function normalizeExecutableIdentity(command: string): string {
     .at(-1)
     ?.replace(/\.(?:exe|cmd|bat|com)$/i, '');
   return basename ? `${basename}${suffix}`.trim() : command;
+}
+
+function looksLikeBareFileOrGlob(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  if (/\/$|\*\*?$/.test(text)) return true;
+  if (/[\\/]/.test(text)) return true;
+  return /\.(md|json|ya?ml|toml|lock|txt|ts|tsx|js|mjs|cjs|jsx|css|html|map)$/i.test(text);
+}
+
+function firstCommandToken(text: string): string {
+  const match = text.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  return (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
 }
 
 function safeParseJson(raw: string): Record<string, unknown> | null {

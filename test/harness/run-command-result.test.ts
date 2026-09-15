@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyRunCommandResult,
+  looksLikeRunnableCommand,
   normalizeAcceptanceCommandKey,
   stripLeadingCdPrefix,
 } from '../../src/harness/run-command-result.js';
@@ -169,5 +170,21 @@ describe('run-command-result', () => {
     expect(normalizeAcceptanceCommandKey('npm run test:e2e')).toBe('npm run test:e2e');
     expect(normalizeAcceptanceCommandKey('./scripts/ci.sh')).toBe('ci.sh');
     expect(normalizeAcceptanceCommandKey('cargo test')).toBe('cargo test');
+  });
+
+  it('recognizes supported runnable commands across path styles', () => {
+    expect(looksLikeRunnableCommand('npm test')).toBe(true);
+    expect(looksLikeRunnableCommand('./scripts/ci.sh')).toBe(true);
+    expect(looksLikeRunnableCommand('.\\scripts\\ci.cmd')).toBe(true);
+    expect(looksLikeRunnableCommand('C:\\tools\\make.exe verify')).toBe(true);
+    expect(looksLikeRunnableCommand('"/opt/tools/python3" -m pytest')).toBe(true);
+  });
+
+  it('rejects files, formulas, prose, and unsupported bare tokens', () => {
+    expect(looksLikeRunnableCommand('src/foo.ts')).toBe(false);
+    expect(looksLikeRunnableCommand('README.md')).toBe(false);
+    expect(looksLikeRunnableCommand('available = onHand - reserved')).toBe(false);
+    expect(looksLikeRunnableCommand('build')).toBe(false);
+    expect(looksLikeRunnableCommand('please run the checks when everything is ready')).toBe(false);
   });
 });

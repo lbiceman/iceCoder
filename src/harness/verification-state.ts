@@ -12,8 +12,10 @@ export interface VerificationLastResult {
 
 export interface VerificationFreshness {
   workspaceMutationVersion: number;
-  verifiedMutationVersion: number;
+  verifiedMutationVersion: number | null;
   verifiedPlanFingerprint: string | null;
+  attemptedMutationVersion: number | null;
+  attemptedPlanFingerprint: string | null;
 }
 
 export interface VerificationRuntimeState extends VerificationFreshness {
@@ -34,8 +36,10 @@ export interface MarkVerificationResultOptions {
 export function createVerificationRuntimeState(): VerificationRuntimeState {
   return {
     workspaceMutationVersion: 0,
-    verifiedMutationVersion: 0,
+    verifiedMutationVersion: null,
     verifiedPlanFingerprint: null,
+    attemptedMutationVersion: null,
+    attemptedPlanFingerprint: null,
     continuationCount: 0,
     blockingSignature: null,
     lastResult: null,
@@ -47,10 +51,8 @@ export function markWorkspaceMutation(
 ): VerificationRuntimeState {
   if (state.workspaceMutationVersion >= Number.MAX_SAFE_INTEGER) {
     state.workspaceMutationVersion = Number.MAX_SAFE_INTEGER;
-    state.verifiedMutationVersion = Math.min(
-      state.verifiedMutationVersion,
-      Number.MAX_SAFE_INTEGER - 1,
-    );
+    state.verifiedMutationVersion = null;
+    state.verifiedPlanFingerprint = null;
   } else {
     state.workspaceMutationVersion += 1;
   }
@@ -63,6 +65,8 @@ export function isVerificationFresh(
 ): boolean {
   return !!planFingerprint
     && state.lastResult?.status === 'passed'
+    && isNonNegativeInteger(state.workspaceMutationVersion)
+    && isNonNegativeInteger(state.verifiedMutationVersion)
     && state.workspaceMutationVersion === state.verifiedMutationVersion
     && state.verifiedPlanFingerprint === planFingerprint;
 }
@@ -73,6 +77,8 @@ export function markVerificationPassed(
 ): VerificationRuntimeState {
   state.verifiedMutationVersion = state.workspaceMutationVersion;
   state.verifiedPlanFingerprint = options.planFingerprint;
+  state.attemptedMutationVersion = state.workspaceMutationVersion;
+  state.attemptedPlanFingerprint = options.planFingerprint;
   state.blockingSignature = null;
   state.lastResult = buildLastResult('passed', options);
   return state;
@@ -96,18 +102,43 @@ export function sanitizeVerificationRuntimeState(value: unknown): VerificationRu
   const record = asRecord(value);
   if (!record) return createVerificationRuntimeState();
 
+  const workspaceVersion = persistedVersion(record.workspaceMutationVersion);
+  const verifiedVersion = persistedVersion(record.verifiedMutationVersion);
+  const verifiedFingerprint = nonEmptyString(record.verifiedPlanFingerprint);
+  const verifiedStateIsValid = workspaceVersion !== null
+    && verifiedVersion !== null
+    && verifiedVersion <= workspaceVersion
+    && verifiedFingerprint !== null;
+  const attemptedVersion = persistedVersion(record.attemptedMutationVersion);
+  const attemptedFingerprint = nonEmptyString(record.attemptedPlanFingerprint);
+  const attemptedStateIsValid = workspaceVersion !== null
+    && attemptedVersion !== null
+    && attemptedVersion <= workspaceVersion
+    && attemptedFingerprint !== null;
+
   return {
-    workspaceMutationVersion: nonNegativeInteger(record.workspaceMutationVersion),
-    verifiedMutationVersion: nonNegativeInteger(record.verifiedMutationVersion),
-    verifiedPlanFingerprint: nonEmptyString(record.verifiedPlanFingerprint),
+    workspaceMutationVersion: workspaceVersion ?? 0,
+    verifiedMutationVersion: verifiedStateIsValid ? verifiedVersion : null,
+    verifiedPlanFingerprint: verifiedStateIsValid ? verifiedFingerprint : null,
+    attemptedMutationVersion: attemptedStateIsValid ? attemptedVersion : null,
+    attemptedPlanFingerprint: attemptedStateIsValid ? attemptedFingerprint : null,
     continuationCount: nonNegativeInteger(record.continuationCount),
     blockingSignature: nonEmptyString(record.blockingSignature),
     lastResult: sanitizeLastResult(record.lastResult),
   };
 }
 
-export function restoreVerificationRuntimeState(value: unknown): VerificationRuntimeState {
-  return sanitizeVerificationRuntimeState(value);
+export function tryConsumeVerificationContinuation(
+  state: VerificationRuntimeState,
+  maxContinuations: number,
+): boolean {
+  if (!isNonNegativeInteger(maxContinuations)) return false;
+  const current = isNonNegativeInteger(state.continuationCount)
+    ? state.continuationCount
+    : 0;
+  if (current >= maxContinuations) return false;
+  state.continuationCount = current + 1;
+  return true;
 }
 
 function markVerificationNotPassed(
@@ -115,8 +146,8 @@ function markVerificationNotPassed(
   status: Exclude<VerificationResultStatus, 'passed'>,
   options: MarkVerificationResultOptions,
 ): VerificationRuntimeState {
-  state.verifiedMutationVersion = state.workspaceMutationVersion;
-  state.verifiedPlanFingerprint = options.planFingerprint;
+  state.attemptedMutationVersion = state.workspaceMutationVersion;
+  state.attemptedPlanFingerprint = options.planFingerprint;
   state.blockingSignature = nonEmptyString(options.blockingSignature);
   state.lastResult = buildLastResult(status, options);
   return state;
@@ -163,8 +194,17 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function nonNegativeInteger(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0;
-  return Math.min(Math.floor(value), Number.MAX_SAFE_INTEGER);
+  return persistedVersion(value) ?? 0;
+}
+
+function persistedVersion(value: unknown): number | null {
+  return isNonNegativeInteger(value) ? value : null;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0;
 }
 
 function nonEmptyString(value: unknown): string | null {

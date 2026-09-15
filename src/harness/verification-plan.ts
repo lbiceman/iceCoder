@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { looksLikeRunnableCommand } from './run-command-result.js';
 import { WORKSPACE_ICECODER_CONFIG_NAMES } from './verification-exempt-config.js';
 
 export type VerificationPlanSource = 'user' | 'project' | 'runtime_default';
@@ -33,6 +34,15 @@ export interface BuildVerificationPlanOptions {
 export interface ResolveVerificationPlanOptions {
   goal: string;
   workspaceRoot: string;
+  onWarning?: (warning: VerificationPlanWarning) => void;
+}
+
+export interface VerificationPlanWarning {
+  kind: 'malformed' | 'read_error';
+  source: 'workspace_config' | 'package_manifest' | 'lockfile';
+  path: string;
+  code?: string;
+  message: string;
 }
 
 interface LocatedCommand {
@@ -43,6 +53,7 @@ interface LocatedCommand {
 const STRICT_MARKER =
   /完成条件\s*[：:]?\s*必须(?:运行|通过)?|验收命令|完成条件|必须(?:运行|通过)|completion\s+condition|acceptance|must\s+(?:run|pass)|before\s+(?:you\s+)?finish/gi;
 const CODE_SPAN = /`([^`]*)`/g;
+const POSTFIX_BEFORE_FINISH = /`([^`]*)`\s+before\s+(?:you\s+)?finish/gi;
 
 /**
  * 只提取受明确 marker 直接支配的反引号命令。
@@ -57,7 +68,6 @@ export function parseVerificationCommandsFromGoal(goal: string): string[] {
   const located: LocatedCommand[] = [];
 
   for (const marker of goal.matchAll(STRICT_MARKER)) {
-    const markerStart = marker.index;
     const markerEnd = marker.index + marker[0].length;
     const following = codeSpans.filter(span => span.index >= markerEnd);
     let cursor = markerEnd;
@@ -77,18 +87,15 @@ export function parseVerificationCommandsFromGoal(goal: string): string[] {
       acceptedAny = true;
       cursor = span.end;
     }
+  }
 
-    const preceding = [...codeSpans].reverse().find(span => span.end <= markerStart);
-    if (preceding) {
-      const separator = goal.slice(preceding.end, markerStart);
-      if (!hasSentenceBoundary(separator) && isReverseMarkerSeparator(separator)) {
-        located.push({ index: preceding.index, command: preceding.command });
-      }
-    }
+  for (const match of goal.matchAll(POSTFIX_BEFORE_FINISH)) {
+    located.push({ index: match.index, command: match[1] ?? '' });
   }
 
   located.sort((left, right) => left.index - right.index);
-  return normalizeVerificationCommands(located.map(item => item.command));
+  return normalizeVerificationCommands(located.map(item => item.command))
+    .filter(looksLikeRunnableCommand);
 }
 
 export function buildVerificationPlan(
@@ -129,7 +136,10 @@ export async function resolveVerificationPlan(
   });
   if (userPlan) return userPlan;
 
-  const projectCommands = await readWorkspaceVerificationCommands(options.workspaceRoot);
+  const projectCommands = await readWorkspaceVerificationCommands(
+    options.workspaceRoot,
+    options.onWarning,
+  );
   const projectPlan = buildVerificationPlan({
     source: 'project',
     commands: projectCommands,
@@ -137,7 +147,10 @@ export async function resolveVerificationPlan(
   });
   if (projectPlan) return projectPlan;
 
-  const runtimeCommand = await resolveRuntimeDefaultCommand(options.workspaceRoot);
+  const runtimeCommand = await resolveRuntimeDefaultCommand(
+    options.workspaceRoot,
+    options.onWarning,
+  );
   return buildVerificationPlan({
     source: 'runtime_default',
     commands: runtimeCommand ? [runtimeCommand] : [],
@@ -220,33 +233,81 @@ function isCommandListSeparator(separator: string): boolean {
   return /^[\s,，、;；/|→]*(?:(?:and|then|以及|和)\s*)?$/i.test(separator);
 }
 
-function isReverseMarkerSeparator(separator: string): boolean {
-  return /^[\s,:：，、;；\-—]*$/i.test(separator);
-}
-
-async function readWorkspaceVerificationCommands(workspaceRoot: string): Promise<string[]> {
+async function readWorkspaceVerificationCommands(
+  workspaceRoot: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): Promise<string[]> {
   if (!workspaceRoot.trim()) return [];
   for (const name of WORKSPACE_ICECODER_CONFIG_NAMES) {
+    const configPath = path.join(workspaceRoot, name);
+    let raw: string;
     try {
-      const raw = await fs.readFile(path.join(workspaceRoot, name), 'utf8');
-      const parsed = JSON.parse(raw) as { verificationCommands?: unknown };
-      if (!Array.isArray(parsed.verificationCommands)) continue;
+      raw = await fs.readFile(configPath, 'utf8');
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        emitWarning(onWarning, warningFromError(
+          'read_error',
+          'workspace_config',
+          configPath,
+          error,
+        ));
+      }
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!isRecord(parsed)) {
+        emitMalformedWarning(onWarning, 'workspace_config', configPath, 'expected JSON object');
+        continue;
+      }
+      if (parsed.verificationCommands === undefined) continue;
+      if (!Array.isArray(parsed.verificationCommands)) {
+        emitMalformedWarning(
+          onWarning,
+          'workspace_config',
+          configPath,
+          'verificationCommands must be an array',
+        );
+        continue;
+      }
       return parsed.verificationCommands.filter(
         (value): value is string => typeof value === 'string',
       );
-    } catch {
-      continue;
+    } catch (error) {
+      emitWarning(onWarning, warningFromError(
+        'malformed',
+        'workspace_config',
+        configPath,
+        error,
+      ));
     }
   }
   return [];
 }
 
-async function resolveRuntimeDefaultCommand(workspaceRoot: string): Promise<string | null> {
+async function resolveRuntimeDefaultCommand(
+  workspaceRoot: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): Promise<string | null> {
   if (!workspaceRoot.trim()) return null;
+  const manifestPath = path.join(workspaceRoot, 'package.json');
+  let rawManifest: string;
   try {
-    const packageJson = JSON.parse(
-      await fs.readFile(path.join(workspaceRoot, 'package.json'), 'utf8'),
-    ) as { scripts?: { test?: unknown } };
+    rawManifest = await fs.readFile(manifestPath, 'utf8');
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      emitWarning(onWarning, warningFromError(
+        'read_error',
+        'package_manifest',
+        manifestPath,
+        error,
+      ));
+    }
+    return null;
+  }
+
+  try {
+    const packageJson = JSON.parse(rawManifest) as { scripts?: { test?: unknown } };
     if (
       !packageJson.scripts
       || typeof packageJson.scripts.test !== 'string'
@@ -254,7 +315,13 @@ async function resolveRuntimeDefaultCommand(workspaceRoot: string): Promise<stri
     ) {
       return null;
     }
-  } catch {
+  } catch (error) {
+    emitWarning(onWarning, warningFromError(
+      'malformed',
+      'package_manifest',
+      manifestPath,
+      error,
+    ));
     return null;
   }
 
@@ -267,12 +334,68 @@ async function resolveRuntimeDefaultCommand(workspaceRoot: string): Promise<stri
   ] as const;
 
   for (const [lockfile, command] of lockfileCommands) {
+    const lockfilePath = path.join(workspaceRoot, lockfile);
     try {
-      await fs.access(path.join(workspaceRoot, lockfile));
+      await fs.access(lockfilePath);
       return command;
-    } catch {
-      // 缺失或不可读的锁文件只影响包管理器选择。
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        emitWarning(onWarning, warningFromError(
+          'read_error',
+          'lockfile',
+          lockfilePath,
+          error,
+        ));
+      }
     }
   }
   return 'npm test';
+}
+
+function emitMalformedWarning(
+  onWarning: ((warning: VerificationPlanWarning) => void) | undefined,
+  source: VerificationPlanWarning['source'],
+  filePath: string,
+  message: string,
+): void {
+  emitWarning(onWarning, { kind: 'malformed', source, path: filePath, message });
+}
+
+function emitWarning(
+  onWarning: ((warning: VerificationPlanWarning) => void) | undefined,
+  warning: VerificationPlanWarning,
+): void {
+  try {
+    onWarning?.(warning);
+  } catch {
+    // 可观测回调不得改变解析器的 fallback 语义。
+  }
+}
+
+function warningFromError(
+  kind: VerificationPlanWarning['kind'],
+  source: VerificationPlanWarning['source'],
+  filePath: string,
+  error: unknown,
+): VerificationPlanWarning {
+  const code = errorCode(error);
+  return {
+    kind,
+    source,
+    path: filePath,
+    ...(code ? { code } : {}),
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function errorCode(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return errorCode(error) === 'ENOENT';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
 }

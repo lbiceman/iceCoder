@@ -1,14 +1,10 @@
 import { isLongRunningImplementationGoal } from './resume-goal.js';
 import type { CompletionCondition } from './completion-condition.js';
-import { normalizeAcceptanceCommandKey } from './run-command-result.js';
-import type { RunCommandResultClassification } from './run-command-result.js';
-
-export {
-  classifyRunCommandResult,
+import {
+  looksLikeRunnableCommand,
   normalizeAcceptanceCommandKey,
-  stripLeadingCdPrefix,
 } from './run-command-result.js';
-export type { RunCommandResultClassification } from './run-command-result.js';
+import type { RunCommandResultClassification } from './run-command-result.js';
 
 export type AcceptanceCommandStatus = 'pending' | 'passed' | 'failed';
 
@@ -206,13 +202,13 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
     const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
     for (const part of parts) {
       const command = part.trim();
-      if (looksLikeCommandCriterion(command)) found.push(command);
+      if (looksLikeRunnableCommand(command)) found.push(command);
     }
   }
 
   for (const match of goal.matchAll(/['"]([^'"\r\n]+)['"]/g)) {
     const candidate = match[1]?.trim();
-    if (candidate && looksLikeCommandCriterion(candidate)) found.push(candidate);
+    if (candidate && looksLikeRunnableCommand(candidate)) found.push(candidate);
   }
 
   const unique: Array<{ key: string; label: string }> = [];
@@ -225,47 +221,6 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
     unique.push({ key, label });
   }
   return unique;
-}
-
-/** 真正会拿去执行的 runner；文件路径、标识符、公式不是验收命令。 */
-const COMMAND_RUNNERS = new Set([
-  'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
-  'node', 'nodejs', 'tsx', 'ts-node',
-  'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
-  'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
-  'docker', 'docker-compose', 'podman',
-  'just', 'task', 'bazel',
-  'vitest', 'jest', 'mocha', 'playwright', 'cypress',
-  'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
-  'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
-]);
-
-function looksLikeCommandCriterion(value: string): boolean {
-  const text = value.trim();
-  if (!text || text.length > 500 || /[\r\n]/.test(text)) return false;
-  if (/^(?:the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
-    return false;
-  }
-  // `available = onHand - reserved` 这类公式不是命令
-  if (/=/.test(text) && !/^[A-Za-z_][\w.-]*=\S+\s+\S/.test(text)) return false;
-  if (/^(?:\.\/|\.\\)/.test(text)) return true;
-  if (looksLikeBareFileOrGlob(text)) return false;
-  const head = firstCommandToken(text);
-  if (!head) return false;
-  const executable = head.split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat|com)$/i, '') ?? head;
-  return COMMAND_RUNNERS.has(executable.toLowerCase());
-}
-
-function looksLikeBareFileOrGlob(text: string): boolean {
-  if (/\s/.test(text)) return false;
-  if (/\/$|\*\*?$/.test(text)) return true;
-  if (/[\\/]/.test(text)) return true;
-  return /\.(md|json|ya?ml|toml|lock|txt|ts|tsx|js|mjs|cjs|jsx|css|html|map)$/i.test(text);
-}
-
-function firstCommandToken(text: string): string {
-  const match = text.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-  return (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
 }
 
 function hasExplicitAcceptanceMarker(goal: string): boolean {
