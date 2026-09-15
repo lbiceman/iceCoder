@@ -1,6 +1,9 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResultStatus } from '../tools/types.js';
-import type { RunCommandResultClassification } from './run-command-result.js';
+import {
+  extractRunCommandTaskId,
+  type RunCommandResultClassification,
+} from './run-command-result.js';
 import type { TaskState } from './task-state.js';
 import {
   DEFAULT_VERIFICATION_TIMEOUT_MS,
@@ -197,7 +200,7 @@ async function executeVerificationCommand(
   const initialSettled = settleImmediateResult(initial);
   if (initialSettled) return initialSettled;
 
-  const taskId = backgroundTaskId(initial.output);
+  const taskId = extractRunCommandTaskId(undefined, initial.output);
   if (!taskId) {
     return {
       status: 'unavailable',
@@ -289,7 +292,12 @@ async function executeVerificationCommand(
     cursor = outputCursor(checked.output) ?? cursor;
     const settled = settleImmediateResult(checked);
     if (settled) {
-      if (settled.status === 'aborted' || settled.status === 'unavailable') {
+      const terminalBackgroundResult = checked.classification?.kind === 'background_completed'
+        || checked.classification?.kind === 'background_failed';
+      if (
+        !terminalBackgroundResult
+        && (settled.status === 'aborted' || settled.status === 'unavailable')
+      ) {
         return stopBackgroundTask(
           options,
           commandIndex,
@@ -325,13 +333,18 @@ async function stopBackgroundTask(
   });
   const cleanupSucceeded = !stopped.blocked
     && !stopped.aborted
-    && stopped.operationStatus !== 'failed'
-    && stopped.operationStatus !== 'awaiting_approval'
     && (
-      stopped.operationStatus === 'completed'
-      || stopped.classification?.kind === 'background_completed'
-      || stopped.classification?.kind === 'background_failed'
-      || /\b(?:stopped|killed|terminated)\b/i.test(stopped.output)
+      isAlreadySettledStopOutput(stopped.output)
+      || (
+        stopped.operationStatus !== 'failed'
+        && stopped.operationStatus !== 'awaiting_approval'
+        && (
+          stopped.operationStatus === 'completed'
+          || stopped.classification?.kind === 'background_completed'
+          || stopped.classification?.kind === 'background_failed'
+          || /\b(?:stopped|killed|terminated)\b/i.test(stopped.output)
+        )
+      )
     );
   return {
     ...pendingResult,
@@ -520,12 +533,6 @@ function finishAborted(
   };
 }
 
-function backgroundTaskId(output: string): string | null {
-  const parsed = parseObject(output);
-  const value = parsed?.taskId ?? parsed?.task_id;
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
 function outputCursor(output: string): number | null {
   const value = parseObject(output)?.cursor;
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -541,7 +548,13 @@ function isTimeoutClassification(
 }
 
 function isTimeoutOutput(output: string): boolean {
-  return /\b(?:timed?\s*out|timeout|soft_timeout)\b/i.test(output);
+  return /(?:^|\r?\n)(?:Tool execution error:\s*)?Command timed out \(\d+ms\)(?:\r?\n|$)/i
+    .test(output)
+    || /"reason"\s*:\s*"soft_timeout"/i.test(output);
+}
+
+function isAlreadySettledStopOutput(output: string): boolean {
+  return /\bnot running \(status:\s*(?:completed|failed|timeout|killed)\)/i.test(output);
 }
 
 function classificationExitCode(

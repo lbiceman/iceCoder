@@ -220,6 +220,44 @@ describe('executeStopVerificationPlan', () => {
     });
   });
 
+  it('uses structured background timeout status without stopping an already terminal task', async () => {
+    const executeToolCall = vi.fn()
+      .mockResolvedValueOnce({
+        classification: { kind: 'background_start', command: 'npm test' },
+        output: JSON.stringify({ taskId: 'bg-structured-timeout', status: 'started' }),
+        evidenceRef: 'start',
+      })
+      .mockResolvedValueOnce({
+        classification: {
+          kind: 'background_failed',
+          command: 'npm test',
+          statusLabel: 'timeout',
+        },
+        output: JSON.stringify({
+          command: 'npm test',
+          taskId: 'bg-structured-timeout',
+          status: 'timeout',
+        }),
+        evidenceRef: 'terminal-timeout',
+      });
+
+    const result = await executeStopVerificationPlan({
+      plan: makePlan(['npm test']),
+      taskState: new TaskState('edit'),
+      verificationState: createVerificationRuntimeState(),
+      executeToolCall,
+      pollIntervalMs: 1,
+      wait: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'timeout',
+      evidenceRef: 'terminal-timeout',
+    });
+    expect(executeToolCall).toHaveBeenCalledTimes(2);
+  });
+
   it('maps a ToolGate or approval block to unavailable without running later commands', async () => {
     const plan = makePlan(['npm test', 'npm run lint']);
     const verificationState = createVerificationRuntimeState();
@@ -577,7 +615,7 @@ describe('executeStopVerificationPlan', () => {
       executeToolCall: async () => foreground(
         'npm test',
         false,
-        'Tool execution error: Command timed out after 10000ms',
+        'Tool execution error: Command timed out (10000ms)',
       ),
     });
 
@@ -585,6 +623,58 @@ describe('executeStopVerificationPlan', () => {
       status: 'unavailable',
       reason: 'timeout',
       failedCommand: 'npm test',
+    });
+  });
+
+  it.each([
+    'FAIL test/api.test.ts > retries\nError: Test timed out in 5000ms',
+    'AssertionError: expected connection timeout message',
+  ])('does not confuse ordinary test output with a Harness timeout: %s', async (output) => {
+    const result = await executeStopVerificationPlan({
+      plan: makePlan(['npm test']),
+      taskState: new TaskState('edit'),
+      verificationState: createVerificationRuntimeState(),
+      executeToolCall: async () => foreground('npm test', false, output),
+    });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      failedCommand: 'npm test',
+    });
+    expect(result).not.toHaveProperty('reason', 'timeout');
+  });
+
+  it('treats an already completed task as successful cleanup receipt', async () => {
+    const executeToolCall = vi.fn(async (toolCall: ToolCall): Promise<VerificationToolCallResult> => {
+      if (toolCall.arguments.action === 'stop') {
+        return {
+          classification: null,
+          operationStatus: 'failed',
+          output: 'Tool execution error: Task bg-natural is not running (status: completed)',
+          evidenceRef: 'natural-terminal',
+        };
+      }
+      return {
+        classification: { kind: 'background_start', command: 'npm test' },
+        output: JSON.stringify({ taskId: 'bg-natural', status: 'started' }),
+        evidenceRef: toolCall.id,
+      };
+    });
+
+    const result = await executeStopVerificationPlan({
+      plan: makePlan([{ command: 'npm test', required: true, timeoutMs: 10 }]),
+      taskState: new TaskState('edit'),
+      verificationState: createVerificationRuntimeState(),
+      executeToolCall,
+      pollIntervalMs: 10,
+      now: () => 0,
+      wait: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'timeout',
+      evidenceRef: 'natural-terminal',
     });
   });
 

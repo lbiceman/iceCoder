@@ -269,6 +269,7 @@ describe('Harness verification tool adapter', () => {
 
   it('collapses intermediate background poll pairs after a terminal result', async () => {
     const state = adapterState();
+    const originalMessages = state.messages;
     let check = 0;
     const executeTool = vi.fn(async (toolCall: ToolCall) => {
       if (!toolCall.arguments.action) {
@@ -340,6 +341,77 @@ describe('Harness verification tool adapter', () => {
       .map(call => call.id)).toEqual(['verify-start', 'verify-completed']);
     expect(state.messages.filter(message => message.role === 'tool')
       .map(message => message.toolCallId)).toEqual(['verify-start', 'verify-completed']);
+    expect(state.operationOutcomes?.hasPending()).toBe(false);
+    expect(state.messages).toBe(originalMessages);
+    originalMessages.push({ role: 'user', content: 'checkpoint-after-compact' });
+    expect(state.messages.at(-1)?.content).toBe('checkpoint-after-compact');
+  });
+
+  it('tracks only the initial run across sixty background polls', async () => {
+    const state = adapterState();
+    state.executionMode = 'forced';
+    const checkToolCall = vi.fn(() => ({ action: 'allow' as const }));
+    let checks = 0;
+    const executeTool = vi.fn(async (toolCall: ToolCall) => {
+      const action = toolCall.arguments.action;
+      if (!action) {
+        return {
+          success: true,
+          output: JSON.stringify({ mode: 'background', taskId: 'bg-graph', status: 'started' }),
+        };
+      }
+      if (action === 'stop') {
+        return { success: false, output: '', error: 'Task bg-graph is not running (status: completed)' };
+      }
+      checks += 1;
+      return {
+        success: true,
+        output: JSON.stringify({
+          command: 'npm test',
+          taskId: 'bg-graph',
+          status: checks <= 60 ? 'running' : 'completed',
+          exitCode: checks <= 60 ? undefined : 0,
+          cursor: checks,
+        }),
+      };
+    });
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 70 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+      graphExecutor: {
+        hasGraph: () => true,
+        checkToolCall,
+        recordToolResult: vi.fn(),
+      } as never,
+    });
+
+    await adapter({
+      id: 'graph-start',
+      name: 'run_command',
+      arguments: { command: 'npm test', timeout: 120_000 },
+    });
+    for (let index = 0; index < 61; index++) {
+      await adapter({
+        id: `graph-check-${index}`,
+        name: 'run_command',
+        arguments: { action: 'check', task_id: 'bg-graph', since: index },
+      });
+    }
+    await adapter({
+      id: 'graph-stop',
+      name: 'run_command',
+      arguments: { action: 'stop', task_id: 'bg-graph' },
+    });
+
+    expect(checkToolCall.mock.calls.filter(([, options]) => options.track === true))
+      .toEqual([['run_command', { track: true }]]);
     expect(state.operationOutcomes?.hasPending()).toBe(false);
   });
 

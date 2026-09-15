@@ -18,6 +18,18 @@ const SKIP_DIRS = new Set([
   'release',
   'releases',
   'runtime',
+  'target',
+  'bin',
+  'obj',
+  'artifacts',
+  'tmp',
+  'temp',
+  '.cache',
+  '.turbo',
+  '.nx',
+  '.gradle',
+  '.venv',
+  'venv',
   '.ice',
   '__pycache__',
   '.next',
@@ -34,7 +46,17 @@ export interface WorkspaceFileInventory extends Map<string, {
 }
 
 const preCommandInventories = new Map<string, WorkspaceFileInventory>();
-const backgroundCommandInventories = new Map<string, WorkspaceFileInventory>();
+interface BackgroundInventoryEntry {
+  inventory: WorkspaceFileInventory;
+  expiresAt: number;
+}
+
+export const WORKSPACE_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024;
+export const WORKSPACE_CONTENT_HASH_CACHE_LIMIT = 512;
+export const BACKGROUND_INVENTORY_LIMIT = 128;
+export const BACKGROUND_INVENTORY_TTL_MS = 5 * 60_000;
+
+const backgroundCommandInventories = new Map<string, BackgroundInventoryEntry>();
 const contentHashCache = new Map<string, {
   size: number;
   mtimeMs: number;
@@ -161,14 +183,11 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
         const file = files[nextIndex++]!;
         try {
           const stat = await fs.stat(file.abs);
-          const cached = contentHashCache.get(file.abs);
-          const contentHash = cached
-            && cached.size === stat.size
-            && cached.mtimeMs === stat.mtimeMs
-            && cached.ctimeMs === stat.ctimeMs
-            ? cached.contentHash
-            : createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
-          contentHashCache.set(file.abs, {
+          const cached = takeCachedContentHash(file.abs, stat);
+          const contentHash = stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES
+            ? `metadata:${stat.size}:${stat.mtimeMs}`
+            : cached ?? createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
+          rememberCachedContentHash(file.abs, {
             size: stat.size,
             mtimeMs: stat.mtimeMs,
             ctimeMs: stat.ctimeMs,
@@ -186,8 +205,43 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
     },
   );
   await Promise.all(workers);
-  if (contentHashCache.size > 50_000) contentHashCache.clear();
   return out;
+}
+
+function takeCachedContentHash(
+  filePath: string,
+  stat: Pick<import('node:fs').Stats, 'size' | 'mtimeMs' | 'ctimeMs'>,
+): string | null {
+  const cached = contentHashCache.get(filePath);
+  if (
+    !cached
+    || cached.size !== stat.size
+    || cached.mtimeMs !== stat.mtimeMs
+    || cached.ctimeMs !== stat.ctimeMs
+  ) {
+    return null;
+  }
+  contentHashCache.delete(filePath);
+  contentHashCache.set(filePath, cached);
+  return cached.contentHash;
+}
+
+function rememberCachedContentHash(
+  filePath: string,
+  entry: {
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+    contentHash: string;
+  },
+): void {
+  contentHashCache.delete(filePath);
+  contentHashCache.set(filePath, entry);
+  while (contentHashCache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
+    const oldest = contentHashCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    contentHashCache.delete(oldest);
+  }
 }
 
 export function rememberPreCommandInventory(
@@ -213,19 +267,49 @@ export function rememberBackgroundCommandInventory(
   sessionId: string,
   taskId: string,
   inventory: WorkspaceFileInventory,
+  nowMs = Date.now(),
 ): void {
   if (!sessionId || !taskId) return;
-  backgroundCommandInventories.set(backgroundInventoryKey(sessionId, taskId), inventory);
+  purgeExpiredBackgroundInventories(nowMs);
+  const key = backgroundInventoryKey(sessionId, taskId);
+  backgroundCommandInventories.delete(key);
+  while (backgroundCommandInventories.size >= BACKGROUND_INVENTORY_LIMIT) {
+    const oldest = backgroundCommandInventories.keys().next().value as string | undefined;
+    if (!oldest) break;
+    backgroundCommandInventories.delete(oldest);
+  }
+  backgroundCommandInventories.set(key, {
+    inventory,
+    expiresAt: nowMs + BACKGROUND_INVENTORY_TTL_MS,
+  });
 }
 
 export function takeBackgroundCommandInventory(
   sessionId: string,
   taskId: string,
+  nowMs = Date.now(),
 ): WorkspaceFileInventory | undefined {
+  purgeExpiredBackgroundInventories(nowMs);
   const key = backgroundInventoryKey(sessionId, taskId);
-  const inventory = backgroundCommandInventories.get(key);
+  const entry = backgroundCommandInventories.get(key);
   backgroundCommandInventories.delete(key);
-  return inventory;
+  return entry?.inventory;
+}
+
+function purgeExpiredBackgroundInventories(nowMs: number): void {
+  for (const [key, entry] of backgroundCommandInventories) {
+    if (entry.expiresAt <= nowMs) backgroundCommandInventories.delete(key);
+  }
+}
+
+export function getWorkspaceInventoryDiagnostics(): {
+  contentHashCacheSize: number;
+  backgroundInventorySize: number;
+} {
+  return {
+    contentHashCacheSize: contentHashCache.size,
+    backgroundInventorySize: backgroundCommandInventories.size,
+  };
 }
 
 export function diffInventoryTouchedPaths(

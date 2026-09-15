@@ -54,7 +54,10 @@ import {
   takeBackgroundCommandInventory,
   takePreCommandInventory,
 } from './workspace-command-touch.js';
-import { classifyRunCommandResult } from './run-command-result.js';
+import {
+  classifyRunCommandResult,
+  extractRunCommandTaskId,
+} from './run-command-result.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
@@ -747,7 +750,7 @@ export async function executeToolCallsStreaming(
       ? classifyRunCommandResult(tc.arguments, output, result.success)
       : null;
     const taskId = tc.name === 'run_command'
-      ? backgroundTaskIdFromRunCommand(tc.arguments, output)
+      ? extractRunCommandTaskId(tc.arguments, output)
       : null;
     if (
       preInv
@@ -767,7 +770,7 @@ export async function executeToolCallsStreaming(
       : undefined;
     const inventoryBefore = preInv ?? backgroundInv;
     let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
-    if (result.success && inventoryBefore) {
+    if (inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot);
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       taskState?.recordCommandWorkspaceMutation([
@@ -776,6 +779,8 @@ export async function executeToolCallsStreaming(
         ...commandInventoryDiff.deleted,
         ...(commandInventoryDiff.incomplete ? ['[workspace-inventory-incomplete]'] : []),
       ]);
+    } else if (commandInventoryScope && taskId && backgroundTerminal) {
+      taskState?.recordCommandWorkspaceMutation(['[background-inventory-missing]']);
     }
     if (result.success && deps.sessionDir && deps.sessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
@@ -873,20 +878,6 @@ export async function executeToolCallsStreaming(
   };
 }
 
-function backgroundTaskIdFromRunCommand(
-  args: Record<string, unknown>,
-  output: string,
-): string | null {
-  if (typeof args.task_id === 'string' && args.task_id.trim()) return args.task_id.trim();
-  try {
-    const parsed = JSON.parse(output) as Record<string, unknown>;
-    const taskId = parsed.taskId ?? parsed.task_id;
-    return typeof taskId === 'string' && taskId.trim() ? taskId.trim() : null;
-  } catch {
-    const match = output.match(/["']?task_?[Ii]d["']?\s*[:=]\s*["']([^"']+)["']/);
-    return match?.[1]?.trim() || null;
-  }
-}
 
 /**
  * 为未完成的 tool_use 补齐错误 tool_result。

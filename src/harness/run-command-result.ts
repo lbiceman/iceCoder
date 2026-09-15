@@ -93,6 +93,20 @@ export function classifyRunCommandResult(
   };
 }
 
+/** 从 run_command 参数或其 JSON/错误前缀后的 JSON 输出提取后台 task id。 */
+export function extractRunCommandTaskId(
+  args: Record<string, unknown> | undefined | null,
+  rawOutput: string,
+): string | null {
+  const argumentTaskId = args?.task_id;
+  if (typeof argumentTaskId === 'string' && argumentTaskId.trim()) {
+    return argumentTaskId.trim();
+  }
+  const parsed = safeParseJson(rawOutput);
+  const value = parsed?.taskId ?? parsed?.task_id;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 /**
  * 剥离 Windows / POSIX 常见的 `cd ... && <real-cmd>` 前缀，仅保留真实命令体。
  */

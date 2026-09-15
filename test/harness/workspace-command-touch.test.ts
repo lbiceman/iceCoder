@@ -7,11 +7,24 @@ import { executeToolCallsStreaming } from '../../src/harness/harness-tool-execut
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import {
+  BACKGROUND_INVENTORY_LIMIT,
+  BACKGROUND_INVENTORY_TTL_MS,
   diffInventoryTouchedPaths,
   extractLikelyWritePathsFromCommand,
+  getWorkspaceInventoryDiagnostics,
   listWorkspaceFileInventory,
+  rememberBackgroundCommandInventory,
+  takeBackgroundCommandInventory,
+  WORKSPACE_CONTENT_HASH_CACHE_LIMIT,
+  WORKSPACE_CONTENT_HASH_MAX_BYTES,
 } from '../../src/harness/workspace-command-touch.js';
 import { collectSessionTouchedPaths } from '../../src/harness/intent-checkpoint-store.js';
+import {
+  createVerificationRuntimeState,
+  isVerificationFresh,
+  markVerificationPassed,
+  syncVerificationWorkspaceMutation,
+} from '../../src/harness/verification-state.js';
 
 describe('workspace-command-touch', () => {
   it('extracts redirect and copy/move targets from shell commands', () => {
@@ -104,6 +117,75 @@ describe('workspace-command-touch', () => {
     }
   });
 
+  it('skips common compiler and packaging output directories', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-skip-'));
+    try {
+      for (const dir of ['target', 'bin', 'obj', 'artifacts', 'tmp']) {
+        await fs.mkdir(path.join(root, dir), { recursive: true });
+        await fs.writeFile(path.join(root, dir, 'large.bin'), 'generated', 'utf8');
+      }
+      await fs.writeFile(path.join(root, 'source.ts'), 'source', 'utf8');
+
+      const inventory = await listWorkspaceFileInventory(root);
+
+      expect([...inventory.keys()]).toEqual(['source.ts']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a metadata signature instead of hashing oversized files', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-large-file-'));
+    try {
+      const file = path.join(root, 'large.dat');
+      await fs.writeFile(file, Buffer.alloc(WORKSPACE_CONTENT_HASH_MAX_BYTES + 1, 1));
+
+      const inventory = await listWorkspaceFileInventory(root);
+
+      expect(inventory.get('large.dat')?.contentHash).toMatch(/^metadata:/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the content hash cache bounded with LRU eviction', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-cache-bound-'));
+    try {
+      await Promise.all(Array.from(
+        { length: WORKSPACE_CONTENT_HASH_CACHE_LIMIT + 10 },
+        (_, index) => fs.writeFile(path.join(root, `cache-${index}.txt`), `${index}`, 'utf8'),
+      ));
+      await listWorkspaceFileInventory(root);
+
+      expect(getWorkspaceInventoryDiagnostics().contentHashCacheSize)
+        .toBeLessThanOrEqual(WORKSPACE_CONTENT_HASH_CACHE_LIMIT);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds and expires background inventory baselines', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-bg-bound-'));
+    try {
+      const inventory = await listWorkspaceFileInventory(root);
+      for (let index = 0; index < BACKGROUND_INVENTORY_LIMIT + 2; index++) {
+        rememberBackgroundCommandInventory('bounded', `task-${index}`, inventory, 1_000);
+      }
+      expect(getWorkspaceInventoryDiagnostics().backgroundInventorySize)
+        .toBeLessThanOrEqual(BACKGROUND_INVENTORY_LIMIT);
+      expect(takeBackgroundCommandInventory('bounded', 'task-0', 1_000)).toBeUndefined();
+
+      rememberBackgroundCommandInventory('ttl', 'expires', inventory, 2_000);
+      expect(takeBackgroundCommandInventory(
+        'ttl',
+        'expires',
+        2_000 + BACKGROUND_INVENTORY_TTL_MS + 1,
+      )).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('records one task mutation for all inventory changes from one successful command', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-mutation-'));
     const taskState = new TaskState('generate files');
@@ -141,10 +223,17 @@ describe('workspace-command-touch', () => {
     }
   });
 
-  it('does not record an inventory mutation when the command fails', async () => {
+  it('records a failed command mutation and invalidates an old green result', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-mutation-fail-'));
     const taskState = new TaskState('generate files');
+    const verificationState = createVerificationRuntimeState();
     try {
+      syncVerificationWorkspaceMutation(verificationState, taskState);
+      markVerificationPassed(verificationState, {
+        planFingerprint: 'old-green',
+        source: 'user',
+      });
+      expect(isVerificationFresh(verificationState, 'old-green')).toBe(true);
       const executeTool = vi.fn(async () => {
         await fs.writeFile(path.join(root, 'partial.txt'), 'partial', 'utf8');
         return { success: false, output: '', error: 'exit 1' };
@@ -170,7 +259,73 @@ describe('workspace-command-touch', () => {
         },
       );
 
-      expect(taskState.snapshot().workspaceMutationVersion).toBe(0);
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(1);
+      syncVerificationWorkspaceMutation(verificationState, taskState);
+      expect(isVerificationFresh(verificationState, 'old-green')).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when an evicted background baseline reaches terminal state', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-bg-evicted-'));
+    const taskState = new TaskState('background task');
+    let invocation = 0;
+    const executeTool = vi.fn(async () => {
+      invocation += 1;
+      return invocation === 1
+        ? {
+            success: true,
+            output: JSON.stringify({ mode: 'background', taskId: 'bg-evicted', status: 'started' }),
+          }
+        : {
+            success: true,
+            output: JSON.stringify({
+              command: 'npm test',
+              taskId: 'bg-evicted',
+              status: 'completed',
+              exitCode: 0,
+            }),
+          };
+    });
+    const deps = {
+      toolExecutor: { executeTool } as never,
+      loopController: new LoopController({ maxRounds: 2 }),
+      permissionRules: [],
+      workspaceRoot: root,
+      sessionId: 'eviction-session',
+    };
+    const messages: import('../../src/llm/types.js').UnifiedMessage[] = [];
+    const run = (toolCall: import('../../src/llm/types.js').ToolCall) =>
+      executeToolCallsStreaming(deps, {
+        toolCalls: [toolCall],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+        taskState,
+      });
+
+    try {
+      await run({
+        id: 'evicted-start',
+        name: 'run_command',
+        arguments: { command: 'npm test', background: true },
+      });
+      const inventory = await listWorkspaceFileInventory(root);
+      for (let index = 0; index < BACKGROUND_INVENTORY_LIMIT; index++) {
+        rememberBackgroundCommandInventory(
+          'eviction-session',
+          `newer-${index}`,
+          inventory,
+          Date.now(),
+        );
+      }
+      await run({
+        id: 'evicted-terminal',
+        name: 'run_command',
+        arguments: { action: 'check', task_id: 'bg-evicted' },
+      });
+
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(1);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -252,6 +407,70 @@ describe('workspace-command-touch', () => {
         name: 'run_command',
         arguments: { action: 'check', task_id: `bg-${mode}`, since: 3 },
       });
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['failed', undefined],
+    ['timeout', undefined],
+    ['killed', undefined],
+    ['completed', 9],
+  ])('compares the background baseline after terminal status %s', async (status, exitCode) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `ice-cmd-bg-${status}-`));
+    const taskState = new TaskState('failed background build');
+    let invocation = 0;
+    const executeTool = vi.fn(async () => {
+      invocation += 1;
+      if (invocation === 1) {
+        return {
+          success: true,
+          output: JSON.stringify({ mode: 'background', taskId: `bg-${status}`, status: 'started' }),
+        };
+      }
+      return {
+        success: false,
+        output: JSON.stringify({
+          command: 'npm test',
+          taskId: `bg-${status}`,
+          status,
+          ...(exitCode === undefined ? {} : { exitCode }),
+        }),
+        error: `background ${status}`,
+      };
+    });
+    const deps = {
+      toolExecutor: { executeTool } as never,
+      loopController: new LoopController({ maxRounds: 2 }),
+      permissionRules: [],
+      workspaceRoot: root,
+      sessionId: `terminal-${status}`,
+    };
+    const messages: import('../../src/llm/types.js').UnifiedMessage[] = [];
+    const run = (toolCall: import('../../src/llm/types.js').ToolCall) =>
+      executeToolCallsStreaming(deps, {
+        toolCalls: [toolCall],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+        taskState,
+      });
+
+    try {
+      await fs.writeFile(path.join(root, 'result.txt'), 'before', 'utf8');
+      await run({
+        id: `${status}-start`,
+        name: 'run_command',
+        arguments: { command: 'npm test', background: true },
+      });
+      await fs.writeFile(path.join(root, 'result.txt'), 'after!', 'utf8');
+      await run({
+        id: `${status}-terminal`,
+        name: 'run_command',
+        arguments: { action: 'check', task_id: `bg-${status}` },
+      });
+
       expect(taskState.snapshot().workspaceMutationVersion).toBe(1);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
