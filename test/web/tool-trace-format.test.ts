@@ -34,9 +34,10 @@ describe('tool-trace-format', () => {
     expect(resolveToolTraceResultStatus('run_command', true, 'executed', '{"mode":"foreground"}')).toBe('success');
   });
 
-  it('uses background icon at tool_call for long commands and explicit background', () => {
-    expect(resolveToolCallInitialStatus('run_command', { command: 'npm test 2>&1' })).toBe('background');
+  it('keeps foreground tests pending and uses background for long or explicit commands', () => {
+    expect(resolveToolCallInitialStatus('run_command', { command: 'npm test 2>&1' })).toBe('pending');
     expect(resolveToolCallInitialStatus('run_command', { command: 'git status' })).toBe('pending');
+    expect(resolveToolCallInitialStatus('run_command', { command: 'tsc --watch' })).toBe('background');
     expect(resolveToolCallInitialStatus('run_command', { command: 'echo hi', background: true })).toBe('background');
     expect(resolveToolCallInitialStatus('run_command', { action: 'check', task_id: 'bg_1' })).toBe('pending');
     expect(resolveToolCallInitialStatus('write_file', { path: 'a.txt' })).toBe('pending');

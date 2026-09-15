@@ -49,8 +49,8 @@ export interface GraphBuildInput {
 
 export function discoverRepoShape(workspaceRoot: string): RepoShape {
   const shape: RepoShape = {
-    type: 'unknown', packageManager: 'unknown', isMonorepo: false,
-    topLevelDirs: [], testFramework: 'unknown', typeSystem: 'unknown',
+    type: 'unknown', packageManager: 'none', isMonorepo: false,
+    topLevelDirs: [], testFramework: 'none', typeSystem: 'unknown',
     lintTool: 'unknown', buildTool: 'unknown', estimatedFileCount: 0, recentChangeCount: 0,
   };
 

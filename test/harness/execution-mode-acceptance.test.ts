@@ -1,4 +1,3 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -15,9 +14,14 @@ import type {
   ModeSignal,
   RuntimeExecutionState,
 } from '../../src/types/supervisor.js';
+import {
+  readTypeScriptSourceFiles,
+  type TypeScriptSourceFile,
+} from './source-file-scan.js';
 
 const cfg = defaultSupervisorConfig().executionMode!;
 const sourceRoot = path.join(process.cwd(), 'src');
+let sourceFilesPromise: Promise<TypeScriptSourceFile[]> | undefined;
 
 function state(overrides: Partial<RuntimeExecutionState> = {}): RuntimeExecutionState {
   return {
@@ -56,18 +60,9 @@ function context(overrides: Partial<ModeDecisionContext> = {}): ModeDecisionCont
   };
 }
 
-async function listSourceFiles(dir = sourceRoot): Promise<string[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files = await Promise.all(entries.map(async entry => {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) return listSourceFiles(fullPath);
-    return fullPath.endsWith('.ts') ? [fullPath] : [];
-  }));
-  return files.flat();
-}
-
-function relativeSourcePath(file: string): string {
-  return path.relative(process.cwd(), file).replaceAll(path.sep, '/');
+function loadSourceFiles(): Promise<TypeScriptSourceFile[]> {
+  sourceFilesPromise ??= readTypeScriptSourceFiles(sourceRoot, process.cwd());
+  return sourceFilesPromise;
 }
 
 describe('Execution mode acceptance - Batch 6 / T13', () => {
@@ -143,15 +138,12 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
   });
 
   it('does not treat user-goal keywords or inferIntent as forced-entry inputs', async () => {
-    const sourceFiles = await listSourceFiles();
     const forbiddenRefs: string[] = [];
 
-    for (const file of sourceFiles) {
-      const rel = relativeSourcePath(file);
-      if (!rel.startsWith('src/harness/supervisor/')) continue;
-      const content = await fs.readFile(file, 'utf-8');
-      if (/\b(userGoal|goal|intent|inferIntent)\b/.test(content)) {
-        forbiddenRefs.push(rel);
+    for (const file of await loadSourceFiles()) {
+      if (!file.relativePath.startsWith('src/harness/supervisor/')) continue;
+      if (/\b(userGoal|goal|intent|inferIntent)\b/.test(file.content)) {
+        forbiddenRefs.push(file.relativePath);
       }
     }
 
@@ -166,10 +158,9 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
     ]);
     const directReads: string[] = [];
 
-    for (const file of await listSourceFiles()) {
-      const content = await fs.readFile(file, 'utf-8');
-      if (/(?:process\.env|env)\.ICE_SUPERVISOR_[A-Z_]+/.test(content)) {
-        directReads.push(relativeSourcePath(file));
+    for (const file of await loadSourceFiles()) {
+      if (/(?:process\.env|env)\.ICE_SUPERVISOR_[A-Z_]+/.test(file.content)) {
+        directReads.push(file.relativePath);
       }
     }
 
@@ -180,10 +171,9 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
     const allowed = new Set(['src/harness/supervisor/execution-mode-constraints.ts']);
     const directMutations: string[] = [];
 
-    for (const file of await listSourceFiles()) {
-      const content = await fs.readFile(file, 'utf-8');
-      if (/\bstate\.executionMode\s*=/.test(content)) {
-        directMutations.push(relativeSourcePath(file));
+    for (const file of await loadSourceFiles()) {
+      if (/\bstate\.executionMode\s*=/.test(file.content)) {
+        directMutations.push(file.relativePath);
       }
     }
 
