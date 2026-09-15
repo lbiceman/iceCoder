@@ -176,54 +176,23 @@ export class TaskAcceptanceTracker {
   }
 }
 
-/** 从 goal 提取 `npm ci → npm test → ...` 或枚举式验收命令。 */
+/** 从 goal 提取用户原文里出现的命令片段（反引号 / 引号 / 箭头链），当作不透明字符串。 */
 export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: string; label: string }> {
   const found: string[] = [];
 
-  if (hasExplicitAcceptanceMarker(goal)) {
-    for (const match of goal.matchAll(/`([^`\r\n]+)`/g)) {
-      const candidate = match[1]?.trim();
-      if (!candidate) continue;
-      const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
-      for (const part of parts) {
-        const command = part.trim();
-        if (looksLikeCommandCriterion(command)) found.push(command);
-      }
+  for (const match of goal.matchAll(/`([^`\r\n]+)`/g)) {
+    const candidate = match[1]?.trim();
+    if (!candidate) continue;
+    const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
+    for (const part of parts) {
+      const command = part.trim();
+      if (looksLikeCommandCriterion(command)) found.push(command);
     }
   }
 
-  if (/npm ci[^→\n]*→[^→\n]*npm test[^→\n]*→[^→\n]*npm run build[^→\n]*→[^→\n]*npm run test:e2e/is.test(goal)) {
-    found.push('npm ci', 'npm test', 'npm run build', 'npm run test:e2e');
-  }
-
-  const arrowBlock = goal.match(
-    /[`'"]?(npm ci\s*→\s*npm test\s*→\s*npm run build\s*→\s*npm run test:e2e)[`'"]?/i,
-  );
-  if (arrowBlock && found.length === 0) {
-    found.push('npm ci', 'npm test', 'npm run build', 'npm run test:e2e');
-  }
-
-  if (found.length === 0) {
-    const fourCmd = goal.match(
-      /(?:全部|all).*?(npm ci)[^\n]*?(npm test)[^\n]*?(npm run build)[^\n]*?(npm run test:e2e)/is,
-    );
-    if (fourCmd) {
-      found.push('npm ci', 'npm test', 'npm run build', 'npm run test:e2e');
-    }
-  }
-
-  if (found.length === 0) {
-    const listed = goal.match(
-      /验收命令[^`\n]*[`'"]?(npm ci[^`'"]+)['`"]?/i,
-    );
-    if (listed) {
-      const segment = listed[1];
-      const parts = segment.split(/\s*→\s*|\s*->\s*|\s*,\s*|\s+then\s+/i);
-      for (const p of parts) {
-        const cmd = p.trim().replace(/\s*（[^）]*）\s*$/, '').replace(/\s*\([^)]*\)\s*$/, '');
-        if (/^(npm|pnpm|yarn|npx)\s/i.test(cmd)) found.push(cmd);
-      }
-    }
+  for (const match of goal.matchAll(/['"]([^'"\r\n]+)['"]/g)) {
+    const candidate = match[1]?.trim();
+    if (candidate && looksLikeCommandCriterion(candidate)) found.push(candidate);
   }
 
   const unique: Array<{ key: string; label: string }> = [];
@@ -238,15 +207,17 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
   return unique;
 }
 
-function hasExplicitAcceptanceMarker(goal: string): boolean {
-  return /验收(?:命令|条件)?|完成条件|必须(?:运行|通过|成功)|全部成功后|done when|acceptance|must (?:pass|succeed|run)|before (?:you )?(?:finish|stop)/i.test(goal);
-}
-
 function looksLikeCommandCriterion(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 500 || /[\r\n]/.test(text)) return false;
-  return /^(?:npm|pnpm|yarn|npx|bun|deno|node|python|python3|pytest|go|cargo|mvnw?|gradlew(?:\.bat)?|dotnet|make|cmake|ctest|bundle|phpunit|composer|git|docker|kubectl|terraform|ansible|powershell|pwsh|bash|sh)\b/i.test(text)
-    || /^(?:\.\/|\.\\|[A-Za-z]:\\)\S+/.test(text);
+  if (/^(the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
+    return false;
+  }
+  return /^(?:\.\/|\.\\|[A-Za-z]:\\|[A-Za-z_][\w.-]*|[./\\])/.test(text);
+}
+
+function hasExplicitAcceptanceMarker(goal: string): boolean {
+  return /验收(?:命令|条件)?|完成条件|必须(?:运行|通过|成功)|全部成功后|done when|acceptance|must (?:pass|succeed|run)|before (?:you )?(?:finish|stop)/i.test(goal);
 }
 
 /**
@@ -269,8 +240,7 @@ export function stripLeadingCdPrefix(command: string): string {
  * - 剥离 `cd ... && ` 前缀（Windows `cd /d` / Unix 通用）
  * - 去掉常见尾缀 `2>&1`、`| tail …`、`| head …`、`| less` 等
  * - 折叠空白，转小写
- * - `npx playwright test` ↔ `npm run test:e2e` 等价归一化
- * - `npm run test` → `npm test`（同义脚本）
+ * - 可执行路径收成 basename（`./scripts/ci.sh` → `ci.sh`），不做框架别名归一
  */
 export function normalizeAcceptanceCommandKey(command: string): string {
   let key = stripLeadingCdPrefix(command);
@@ -284,22 +254,6 @@ export function normalizeAcceptanceCommandKey(command: string): string {
     .toLowerCase();
 
   key = normalizeExecutableIdentity(key);
-
-  // 等价归一化：playwright/cypress e2e 视作 `npm run test:e2e`
-  if (/\bnpx\s+playwright\s+test\b/.test(key) || /\bplaywright\s+test\b/.test(key)) {
-    return 'npm run test:e2e';
-  }
-  if (/\bnpx\s+cypress\s+run\b/.test(key)) {
-    return 'npm run test:e2e';
-  }
-  // `npm run test` ↔ `npm test`
-  if (/^npm\s+run\s+test(?:\s|$)/.test(key) && !/\btest:/.test(key)) {
-    key = key.replace(/^npm\s+run\s+test\b/, 'npm test');
-  }
-  // `npx vitest run` / `npx vitest` 视作 `npm test`（针对 vitest 单测仓库）
-  if (/^npx\s+vitest(?:\s+run)?\b/.test(key)) {
-    return 'npm test';
-  }
 
   return key;
 }

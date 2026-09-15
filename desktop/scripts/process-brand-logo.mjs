@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * 将用户提供的 ICE 立方体原图抠白底，写出 logo.png / logo-dark.png / favicon.svg / logo.svg。
+ * 将用户提供的 ICE 立方体原图抠白底，再转成黑底白图案，
+ * 写出 logo.png / logo-dark.png / favicon.svg / logo.svg。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -52,21 +53,47 @@ const padded = await sharp({
   .png()
   .toBuffer();
 
-const logo512 = await sharp(padded)
+const { data: padData, info: padInfo } = await sharp(padded)
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
+const whiteMark = Buffer.from(padData);
+for (let i = 0; i < padInfo.width * padInfo.height; i += 1) {
+  const o = i * 4;
+  if (whiteMark[o + 3] > 0) {
+    whiteMark[o] = 255;
+    whiteMark[o + 1] = 255;
+    whiteMark[o + 2] = 255;
+  }
+}
+const whiteOnClear = await sharp(whiteMark, {
+  raw: { width: padInfo.width, height: padInfo.height, channels: 4 },
+})
+  .png()
+  .toBuffer();
+
+const logoMono = await sharp({
+  create: {
+    width: padInfo.width,
+    height: padInfo.height,
+    channels: 4,
+    background: { r: 0, g: 0, b: 0, alpha: 255 },
+  },
+})
+  .composite([{ input: whiteOnClear }])
+  .png()
+  .toBuffer();
+
+const logo512 = await sharp(logoMono)
   .resize(512, 512, {
     fit: 'contain',
-    background: { r: 0, g: 0, b: 0, alpha: 0 },
+    background: { r: 0, g: 0, b: 0, alpha: 255 },
   })
   .png()
   .toBuffer();
 
-const logoDark = await sharp(logo512)
-  .modulate({ brightness: 1.14, saturation: 1.22 })
-  .png()
-  .toBuffer();
-
 fs.writeFileSync(path.join(outDir, 'logo.png'), logo512);
-fs.writeFileSync(path.join(outDir, 'logo-dark.png'), logoDark);
+fs.writeFileSync(path.join(outDir, 'logo-dark.png'), logo512);
 
 async function writeSvg(fileName, pngBuffer, label) {
   const fav128 = await sharp(pngBuffer).resize(128, 128).png().toBuffer();
@@ -80,7 +107,7 @@ async function writeSvg(fileName, pngBuffer, label) {
   fs.writeFileSync(path.join(outDir, fileName), svg);
 }
 
-await writeSvg('favicon.svg', logoDark, 'IceCoder');
+await writeSvg('favicon.svg', logo512, 'IceCoder');
 await writeSvg('logo.svg', logo512, 'IceCoder');
 
 console.log('[process-brand-logo] wrote logo.png, logo-dark.png, favicon.svg, logo.svg');

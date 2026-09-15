@@ -18,7 +18,7 @@ async function renderPng(size) {
   return sharp(logoPngPath)
     .resize(size, size, {
       fit: 'contain',
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
+      background: { r: 0, g: 0, b: 0, alpha: 255 },
     })
     .png()
     .toBuffer();
@@ -47,7 +47,17 @@ async function main() {
   fs.writeFileSync(path.join(publicDir, 'favicon.ico'), favIco);
   fs.writeFileSync(path.join(publicDir, 'icons', 'favicon.ico'), favIco);
 
-  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico, public favicon.ico');
+  const fav128 = await renderPng(128);
+  const favSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="IceCoder">',
+    '  <title>IceCoder</title>',
+    `  <image href="data:image/png;base64,${fav128.toString('base64')}" width="128" height="128"/>`,
+    '</svg>',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(publicDir, 'icons', 'favicon.svg'), favSvg);
+
+  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico, public favicon.ico / favicon.svg');
   console.log('[generate-icons] macOS .icns 将在 electron-builder --mac 时由 icon.png 自动转换');
 }
 

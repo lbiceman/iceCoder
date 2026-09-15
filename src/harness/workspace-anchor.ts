@@ -11,7 +11,7 @@ export function buildWorkspaceAnchorContent(
     WORKSPACE_ANCHOR_OPEN,
     `Repository root: ${lockedRoot}`,
     'All write/edit/run_command operations default to this directory unless reading reference files.',
-    'Shell cwd is already set to the repository root; use `npm test` directly without `cd /d`.',
+    'Shell cwd is already set to the repository root. Run verification commands from here without `cd`; if the user specified a command, use that exact command.',
   ];
   if (referenceReads.length > 0) {
     lines.push('Reference reads (not workspace root):');

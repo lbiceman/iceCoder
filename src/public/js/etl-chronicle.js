@@ -156,8 +156,7 @@ window.EtlChronicle = (function () {
     if (toolName === 'batch_edit_file' || toolName === 'multi_edit') return '批量修改多个文件';
     if (toolName === 'run_command') {
       var cmd = String(target || '');
-      if (/test|vitest|jest|playwright|cypress/i.test(cmd)) return '运行测试验证改动';
-      return cmd ? '执行命令 ' + clamp(cmd, 24) : '执行命令验证或推进任务';
+      return cmd ? '运行命令 ' + clamp(cmd, 24) : '运行命令';
     }
     if (READ_TOOLS[toolName]) return '读取资源' + hint;
     if (SEARCH_TOOLS[toolName]) return '搜索项目' + hint;
@@ -226,7 +225,7 @@ window.EtlChronicle = (function () {
       if (WRITE_TOOLS[name]) hasWrite = true;
       if (READ_TOOLS[name]) hasRead = true;
       if (SEARCH_TOOLS[name]) hasSearch = true;
-      if (name === 'run_command' && /test|vitest|jest|playwright|cypress/i.test(tools[i].target || '')) {
+      if (name === 'run_command') {
         hasTest = true;
       }
     }

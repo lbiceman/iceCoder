@@ -217,8 +217,7 @@ export async function prepareHarnessRound(
     }
   }
 
-  // Phase 4a — 后台任务摘要：仅在有 dirty / due running 任务时返回非空，
-  // BackgroundTaskManager 内部 5min 节流；本块帮助模型记住「有 npm test 在跑」而不是再起一份。
+  // 后台任务摘要：running 5min 节流；任意终态 dirty 立即注入。启动 ≠ 通过，由模型看 exit。
   if (deps.workspaceRoot) {
     const sessionId = deps.sessionId ?? 'default';
     const bgStatus = takeBgStatusForInjection(sessionId, deps.workspaceRoot);

@@ -103,7 +103,7 @@ export interface OpenAIAdapterConfig {
   topP?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
-  /** 单次 API 请求超时（毫秒），默认 120000（2 分钟） */
+  /** 单次 API 请求超时（毫秒），默认 600000（10 分钟） */
   timeout?: number;
   /** 是否支持视觉/图片输入（默认自动检测：gpt-4o/gpt-4-vision 等支持，其他不支持） */
   supportsVision?: boolean;
@@ -136,7 +136,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
-    this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
+    this.defaultRequestTimeoutMs = config.timeout ?? 600_000;
     this.requestHeaderTemplates = { ...(config.requestHeaders ?? {}) };
     this.reasoningEffortLevels = [...(config.reasoningEffortLevels ?? [])];
     this.fallbackSessionId = randomUUID();

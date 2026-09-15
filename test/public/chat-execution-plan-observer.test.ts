@@ -1226,9 +1226,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         tabs: document.querySelectorAll('.etl-tab').length,
         chapters: !!document.querySelector('#etl-chapter-timeline'),
         flow: !!document.querySelector('#etl-panel-flow'),
+        wbStatus: !!document.querySelector('#etl-wb-status'),
+        snapshotHint: !!document.querySelector('.etl-snapshot-hint'),
       };
     }, makePlan());
-    expect(layout).toEqual({ tabs: 0, chapters: true, flow: true });
+    expect(layout).toEqual({
+      tabs: 0,
+      chapters: true,
+      flow: true,
+      wbStatus: false,
+      snapshotHint: false,
+    });
     await page.close();
 
     const freshPage = await loadPanel();
@@ -1875,11 +1883,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         messageId: 'u-now',
         preview: '看着这个项目的沙箱模块',
       });
+      const chapterRunPhase = () => {
+        const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+        if (!dot) return '';
+        if (dot.classList.contains('is-running')) return 'running';
+        if (dot.classList.contains('is-error')) return 'error';
+        if (dot.classList.contains('is-done')) return 'done';
+        return '';
+      };
       const before = {
         empty: document.querySelector('.etl-round-empty')?.textContent || '',
         emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? true,
         nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: chapterRunPhase(),
       };
       panel.applyToolActivity({
         type: 'tool_call',
@@ -1893,7 +1909,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? false,
         nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
         tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: chapterRunPhase(),
         firstName: document.querySelector('#etl-round-timeline .etl-round-action-name')?.textContent || '',
       };
       panel.applyToolActivity({
@@ -1911,11 +1927,11 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { before, afterFirst, afterSecond };
     });
 
-    expect(result.before.status).toContain('进行中');
+    expect(result.before.status).toBe('running');
     expect(result.afterFirst.emptyHidden).toBe(true);
     expect(result.afterFirst.nodes).toBe(1);
     expect(result.afterFirst.tools).toBeGreaterThanOrEqual(1);
-    expect(result.afterFirst.status).toContain('进行中');
+    expect(result.afterFirst.status).toBe('running');
     expect(result.afterFirst.firstName).toMatch(/读|read_file|读取/i);
     expect(result.afterSecond.nodes).toBe(1);
     expect(result.afterSecond.tools).toBeGreaterThan(result.afterFirst.tools);
@@ -1966,7 +1982,14 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
         waiting: !!(empty && !empty.classList.contains('hidden')
           && (empty.textContent || '').includes('本章暂无执行步骤')),
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: (function () {
+          const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+          if (!dot) return '';
+          if (dot.classList.contains('is-running')) return 'running';
+          if (dot.classList.contains('is-error')) return 'error';
+          if (dot.classList.contains('is-done')) return 'done';
+          return '';
+        })(),
       };
     });
 
@@ -1974,7 +1997,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.waiting).toBe(false);
     expect(result.nodes).toBeGreaterThanOrEqual(1);
     expect(result.tools).toBeGreaterThanOrEqual(1);
-    expect(result.status).toContain('进行中');
+    expect(result.status).toBe('running');
     await page.close();
   });
 
@@ -1982,8 +2005,14 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
       const panel = (window as any).ChatExecutionPlan;
-      const chapterStatus = () =>
-        document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '';
+      const chapterStatus = () => {
+        const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+        if (!dot) return '';
+        if (dot.classList.contains('is-running')) return 'running';
+        if (dot.classList.contains('is-error')) return 'error';
+        if (dot.classList.contains('is-done')) return 'done';
+        return '';
+      };
       const roundStatus = () =>
         document.querySelector('#etl-round-timeline .etl-round-badge')?.textContent || '';
       panel.setVisible(true);
@@ -2036,11 +2065,11 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     });
 
-    expect(result.duringRun.chapter).toContain('进行中');
+    expect(result.duringRun.chapter).toBe('running');
     expect(result.duringRun.round).toContain('失败');
-    expect(result.afterPrematureEnd).toContain('进行中');
-    expect(result.afterMoreWork).toContain('进行中');
-    expect(result.afterStop).toContain('失败');
+    expect(result.afterPrematureEnd).toBe('running');
+    expect(result.afterMoreWork).toBe('running');
+    expect(result.afterStop).toBe('error');
     await page.close();
   });
 
@@ -2075,11 +2104,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         stopReason: 'model_done',
         ts: Date.now() + 20,
       });
-      return document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '';
+      const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+      return {
+        running: !!dot?.classList.contains('is-running'),
+        done: !!dot?.classList.contains('is-done'),
+        error: !!dot?.classList.contains('is-error'),
+      };
     });
 
-    expect(status).toContain('完成');
-    expect(status).not.toContain('失败');
+    expect(status.done).toBe(true);
+    expect(status.error).toBe(false);
+    expect(status.running).toBe(false);
     await page.close();
   });
 

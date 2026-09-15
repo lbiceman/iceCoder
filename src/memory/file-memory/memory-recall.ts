@@ -12,7 +12,7 @@
  *
  * v4 改进：
  * - 否定查询展开：LLM prompt 加否定意识 + 关键词路径加领域展开表
- *   "不要用 Jest" → 补充搜索词 ["test", "testing", "vitest", ...]
+ *   "不要用 Jest" → 补充搜索词 ["test", "testing", "测试"]
  * - 时间范围加权：解析"上周"/"最近三天"等相对时间，软加权匹配记忆
  *   不硬过滤，只提升时间范围内记忆的优先级
  *
@@ -482,12 +482,11 @@ const NEGATION_PATTERNS: RegExp[] = [
  * 同时包含常见替代品名称，提高命中率。
  */
 const DOMAIN_EXPANSION: Record<string, string[]> = {
-  // 测试框架
-  jest:       ['test', 'testing', '测试', 'vitest', 'mocha', 'playwright', 'cypress'],
-  vitest:     ['test', 'testing', '测试', 'jest', 'mocha'],
-  mocha:      ['test', 'testing', '测试', 'jest', 'vitest'],
-  cypress:    ['test', 'testing', 'e2e', '测试', 'playwright'],
-  playwright: ['test', 'testing', 'e2e', '测试', 'cypress'],
+  // 测试：只按用户原词检索，不做框架同义展开（Jest→testing，不扩到 vitest/mocha）
+  jest:       ['test', 'testing', '测试'],
+  test:       ['test', 'testing', '测试'],
+  testing:    ['test', 'testing', '测试'],
+  测试:        ['test', 'testing', '测试'],
   // 构建工具
   webpack:    ['build', 'bundler', '构建', '打包', 'vite', 'esbuild', 'rollup'],
   rollup:     ['build', 'bundler', '构建', 'vite', 'webpack', 'esbuild'],
@@ -517,7 +516,7 @@ const DOMAIN_EXPANSION: Record<string, string[]> = {
 /**
  * 从查询中提取否定对象并展开为同领域搜索词。
  *
- * "不要用 Jest" → ["jest", "test", "testing", "测试", "vitest", "mocha", ...]
+ * "不要用 Jest" → ["jest", "test", "testing", "测试"]
  * "don't use Webpack" → ["webpack", "build", "bundler", "构建", "vite", ...]
  *
  * 即使没有映射表命中，也把否定对象本身加入搜索词

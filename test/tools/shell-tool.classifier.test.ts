@@ -21,14 +21,10 @@ describe('shell-tool — classifier integration', () => {
     workDir = mkdtempSync(join(tmpdir(), 'ice-shell-classifier-'));
   });
 
-  it('routes "npm test" to background automatically (no background flag)', async () => {
+  it('does not route "npm test" to background immediately', async () => {
     const tool = createShellTool(workDir);
-    const result = await tool.handler({ command: 'npm test' });
-    expect(result.success).toBe(true);
-    const parsed = JSON.parse(result.output);
-    expect(parsed.mode).toBe('background');
-    expect(parsed.taskId).toMatch(/^bg_/);
-    expect(parsed.classifiedAs).toBe('long');
+    const result = await tool.handler({ command: 'npm test', timeout: 5_000 });
+    expect(result.output).not.toMatch(/"mode":\s*"background"/);
   });
 
   it('routes "docker build ." to background', async () => {
@@ -80,10 +76,10 @@ describe('shell-tool — classifier integration', () => {
     expect(parsed.timeout).toBe('unlimited');
   });
 
-  it('long classifier with background:true uses unlimited timeout', async () => {
+  it('explicit background:true with a long command uses unlimited timeout', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
-      command: 'npm test',
+      command: 'docker build .',
       background: true,
     });
     expect(result.success).toBe(true);
@@ -95,7 +91,7 @@ describe('shell-tool — classifier integration', () => {
   it('explicit background:true with timeout applies hard timeout cap', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
-      command: 'npm test',
+      command: 'docker build .',
       background: true,
       timeout: 60_000,  // 1 min
     });
@@ -104,10 +100,10 @@ describe('shell-tool — classifier integration', () => {
     expect(parsed.timeout).toBe('60s');
   });
 
-  it('classifier-routed background ignores timeout (avoid schema default killing dev servers)', async () => {
+  it('classifier-routed background ignores timeout (avoid schema default killing long jobs)', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
-      command: 'npm test',
+      command: 'docker build .',
       timeout: 600_000,
     });
     expect(result.success).toBe(true);
@@ -135,7 +131,7 @@ describe('shell-tool — classifier integration', () => {
 
   it('cmd alias still works (long command via cmd field)', async () => {
     const tool = createShellTool(workDir);
-    const result = await tool.handler({ cmd: 'vitest' });
+    const result = await tool.handler({ cmd: 'docker build .' });
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.output);
     expect(parsed.mode).toBe('background');

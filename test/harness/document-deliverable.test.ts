@@ -284,7 +284,7 @@ describe('TaskState deliverable facts', () => {
       { success: true, output: 'all passed' },
     );
     expect(state.snapshot().commandsRun).toContain('npm test');
-    expect(state.snapshot().phase).toBe('verification');
+    expect(state.snapshot().phase).toBe('editing');
   });
 
   it('css-only changes do not trigger unit test gate', () => {
@@ -338,7 +338,7 @@ describe('TaskState deliverable facts', () => {
     expect(state.snapshot().fileDeliverableWriteVersions?.['js/main.js']).toBe(9);
   });
 
-  it('mvn test counts as verification command', () => {
+  it('run_command records any command string without switching phase by argv', () => {
     const state = new TaskState('fix java');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/Main.java' } },
@@ -349,6 +349,6 @@ describe('TaskState deliverable facts', () => {
       { success: true, output: 'BUILD SUCCESS' },
     );
     expect(state.snapshot().commandsRun).toContain('mvn test');
-    expect(state.snapshot().phase).toBe('verification');
+    expect(state.snapshot().phase).toBe('editing');
   });
 });

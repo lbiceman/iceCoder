@@ -89,7 +89,7 @@ export function getModelMaxOutputTokens(modelName: string): number {
 
 /**
  * 解析 OpenAI 兼容提供者的单次请求超时（毫秒）。
- * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 120s 处理）。
+ * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 10 分钟处理）。
  */
 export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number | undefined {
   if (

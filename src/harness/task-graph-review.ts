@@ -300,7 +300,7 @@ export class FailureClassifier {
     if (/tsc.*error|type.*error|cannot.find.module/i.test(normalized)) {
       return { failureId: id, category: 'verification_fail', subType: 'type_error', severity: 'recoverable',
         nodeId: '', rawError: raw, at,
-        suggestedRecovery: { strategy: 'retry_with_hint', hint: '类型错误。请根据 tsc 输出修复类型不匹配。' } };
+        suggestedRecovery: { strategy: 'retry_with_hint', hint: '类型错误。请根据本轮失败输出修复类型不匹配。' } };
     }
 
     // 6. context_missing
@@ -318,10 +318,10 @@ export class FailureClassifier {
     }
 
     // 8. repo_mismatch
-    if (/package.json.*not.found|tsconfig.*not.found|no.such.project/i.test(normalized)) {
+    if (/no.such.project|manifest.*not.found|config.*not.found/i.test(normalized)) {
       return { failureId: id, category: 'repo_mismatch', subType: 'expected_config_missing', severity: 'degraded',
         nodeId: '', rawError: raw, at,
-        suggestedRecovery: { strategy: 'skip_node', reason: '项目配置文件不存在，跳过依赖该配置的步骤。' } };
+        suggestedRecovery: { strategy: 'skip_node', reason: 'Required config/manifest is missing; skip steps that depend on it.' } };
     }
 
     // 9. branch_exhausted

@@ -1,24 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { looksLikeVerificationCommand, TaskState } from '../../src/harness/task-state.js';
+import { inferIntent, TaskState } from '../../src/harness/task-state.js';
 import { LEGACY_TASK_VERIFICATION_KEYS } from '../../src/types/legacy-runtime-schema.js';
 
-describe('looksLikeVerificationCommand', () => {
-  it('recognizes unit test commands only', () => {
-    expect(looksLikeVerificationCommand('npm test')).toBe(true);
-    expect(looksLikeVerificationCommand('vitest run')).toBe(true);
-    expect(looksLikeVerificationCommand('mvn test')).toBe(true);
+describe('inferIntent', () => {
+  it('maps natural-language check requests to test intent without framework names', () => {
+    expect(inferIntent('跑一下仓库里的检查')).toBe('test');
+    expect(inferIntent('run tests before finishing')).toBe('test');
   });
 
-  it('does not treat lint/build/tsc/node --check as unit test verification', () => {
-    expect(looksLikeVerificationCommand('node --check src/harness/logger.ts')).toBe(false);
-    expect(looksLikeVerificationCommand('npx tsc --noEmit')).toBe(false);
-    expect(looksLikeVerificationCommand('npm run lint')).toBe(false);
-    expect(looksLikeVerificationCommand('npm run build')).toBe(false);
-  });
-
-  it('does not treat arbitrary node commands as verification', () => {
-    expect(looksLikeVerificationCommand('node src/index.js')).toBe(false);
+  it('does not treat a manifest filename alone as test intent', () => {
+    expect(inferIntent('open Cargo.toml')).not.toBe('test');
   });
 });
 
@@ -35,7 +27,6 @@ describe('TaskState runtime facts', () => {
     );
 
     const snap = state.snapshot();
-    expect(snap.phase).toBe('verification');
     expect(snap.commandsRun).toContain('npm test');
     for (const key of LEGACY_TASK_VERIFICATION_KEYS) expect(snap).not.toHaveProperty(key);
   });

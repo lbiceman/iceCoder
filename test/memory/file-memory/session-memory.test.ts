@@ -288,7 +288,7 @@ describe('Runtime Evidence merge & contradiction', () => {
     expect(merged).toContain('fact: test');
   });
 
-  it('buildTestStackContradictionWarning 检测 Jest 幻觉风险', () => {
+  it('buildTestStackContradictionWarning 不再做 Jest/Vitest 栈警告', () => {
     const pkg: PackageJsonTestFacts = {
       resolvedPath: '/x/package.json',
       testScript: 'vitest --run',
@@ -303,7 +303,7 @@ describe('Runtime Evidence merge & contradiction', () => {
 _
 # Worklog
 ok`;
-    expect(buildTestStackContradictionWarning(notes, pkg)).toBeTruthy();
+    expect(buildTestStackContradictionWarning(notes, pkg)).toBeNull();
   });
 });
 

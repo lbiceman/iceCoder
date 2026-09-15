@@ -183,7 +183,8 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - Run independent tools in parallel and dependent tools in order. Do not repeat calls unless data may have changed.`,
     has('run_command')
       ? `## Shell execution
-- run_command may move long jobs to the background and return a taskId. Do not retry the command; check that task instead.
+- run_command may move long jobs to the background and return a taskId. A background start is not a completed check. Do not retry the command; poll that task with action:"check" until the process exits, then judge by exit code and output.
+- If the user specified a verification command or test framework, use that exact command. Otherwise discover how this repository verifies itself (scripts, README, manifests). Do not assume a default toolchain.
 - When checking a task, pass back its latest cursor. Silence after a server or watcher starts is normal; stop it only on failure, timeout, or user request.`
       : '',
     `## MCP
@@ -191,8 +192,8 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - Open MCP configuration only when the user asks about it or when diagnosing a missing/failing server.`,
     `## Tool arguments
 - Pass parameters as top-level JSON fields exactly as declared by the tool schema; never wrap the payload in a JSON string.
-${has('write_file') ? '- write_file example: `{ "path": "src/foo.ts", "content": "..." }`.' : ''}
-${has('run_command') ? '- run_command example: `{ "command": "npm test" }`.' : ''}
+${has('write_file') ? '- write_file example: `{ "path": "<path>", "content": "..." }`.' : ''}
+${has('run_command') ? '- run_command example: `{ "command": "<command>" }`.' : ''}
 ${hasAny('patch_file', 'edit_file', 'append_file') ? '- If a large write is truncated, switch to a patch or smaller edits instead of repeating the same payload.' : ''}`,
     hasAny('read_file', 'open_file')
       ? `## File reading
@@ -254,7 +255,7 @@ Allowed:
 - Write or update documentation only: \`.md\`, \`.markdown\`, \`.mdx\`, \`.txt\`, \`.rst\`, \`.adoc\`, \`.asciidoc\`.
 
 Forbidden:
-- Any code or config edit (\`.ts\`, \`.js\`, \`.py\`, \`.json\` except docs, etc.).
+- Any code or config edit (anything other than the documentation extensions listed above).
 - \`run_command\`, \`git\`, \`fs_operation\`, \`undo_edit\`, shell tools, and MCP tools.
 
 How to work:

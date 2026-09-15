@@ -1,16 +1,16 @@
 import type { ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
-import { extractRunCommand, extractToolTargetPath, isFileWriteTool } from './branch-budget-tool-path.js';
+import { extractToolTargetPath, isFileWriteTool } from './branch-budget-tool-path.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
-
-const MEANINGFUL_TEST_READ_RE = /\.test\.|\/test\/|\\test\\/i;
+import type { RunCommandResultClassification } from './task-acceptance-tracker.js';
 
 export interface ToolRoundProgressInput {
   executableToolCalls: ToolCall[];
   failedSignatures: string[];
   policyBlockedSignatures?: string[];
   branchBudget?: BranchBudgetTracker;
+  /** 按 toolCall.id 对照 classifyRunCommandResult；不看命令是否像测试。 */
+  runCommandClassifications?: ReadonlyMap<string, RunCommandResultClassification>;
 }
 
 export type ToolRoundProgress = 'all_failed_or_blocked' | 'meaningful_progress' | 'non_progress_success';
@@ -24,12 +24,22 @@ function succeededCalls(input: ToolRoundProgressInput): ToolCall[] {
   });
 }
 
+function isCompletedRunCommand(classified: RunCommandResultClassification | undefined): boolean {
+  if (!classified) return false;
+  if (classified.kind === 'background_start' || classified.kind === 'background_running') {
+    return false;
+  }
+  if (classified.kind === 'background_failed') return false;
+  if (classified.kind === 'background_completed') return true;
+  return classified.kind === 'foreground' && classified.foregroundSuccess;
+}
+
 function isMeaningfulSuccessfulTool(
   call: ToolCall,
-  branchBudget?: BranchBudgetTracker,
+  input: ToolRoundProgressInput,
 ): boolean {
   if (isFileWriteTool(call.name)) {
-    const over = branchBudget?.shouldBranchRecover();
+    const over = input.branchBudget?.shouldBranchRecover();
     if (over?.triggered && over.dimension === 'file_edit' && over.key) {
       const path = extractToolTargetPath(call.name, call.arguments);
       if (path && path === over.key) return false;
@@ -37,12 +47,7 @@ function isMeaningfulSuccessfulTool(
     return true;
   }
   if (call.name === 'run_command') {
-    const command = extractRunCommand(call.arguments);
-    return !!command && isHarnessVerificationCommand(command);
-  }
-  if (call.name === 'read_file') {
-    const path = String(call.arguments.path ?? call.arguments.file_path ?? '');
-    return MEANINGFUL_TEST_READ_RE.test(path);
+    return isCompletedRunCommand(input.runCommandClassifications?.get(call.id));
   }
   return false;
 }
@@ -51,7 +56,7 @@ export function classifyToolRoundProgress(input: ToolRoundProgressInput): ToolRo
   if (input.executableToolCalls.length === 0) return 'non_progress_success';
   const succeeded = succeededCalls(input);
   if (succeeded.length === 0) return 'all_failed_or_blocked';
-  return succeeded.some(call => isMeaningfulSuccessfulTool(call, input.branchBudget))
+  return succeeded.some(call => isMeaningfulSuccessfulTool(call, input))
     ? 'meaningful_progress'
     : 'non_progress_success';
 }

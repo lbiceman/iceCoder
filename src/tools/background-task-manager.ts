@@ -644,15 +644,47 @@ export class BackgroundTaskManager extends EventEmitter {
           || (now - task.lastSummaryEmittedAt) >= intervalMs;
         if (!task.summaryDirty && !due) continue;
       }
-      const summary = this.buildRunningSummary(task);
-      // newLinesSinceLastSummary
-      summary.newLinesSinceLastSummary = Math.max(
-        0,
-        task.totalOutputLines - this.getLastEmittedTotal(task),
-      );
-      out.push(summary);
+      out.push(this.enrichSummary(task));
     }
     return out;
+  }
+
+  /**
+   * 可注入摘要：running 仍受 interval 节流；任意终态且 dirty 的任务立即纳入（忽略 interval）。
+   */
+  getInjectableSummary(options: { onlyDirtyOrDue?: boolean; intervalMs?: number } = {}): RunningTaskSummary[] {
+    const now = Date.now();
+    const onlyDirtyOrDue = options.onlyDirtyOrDue ?? false;
+    const intervalMs = options.intervalMs ?? 0;
+    const out: RunningTaskSummary[] = [];
+    for (const task of this.tasks.values()) {
+      const terminal = task.status === 'completed'
+        || task.status === 'failed'
+        || task.status === 'timeout'
+        || task.status === 'killed';
+      if (task.status === 'running') {
+        if (onlyDirtyOrDue) {
+          const due = task.lastSummaryEmittedAt === 0
+            || (now - task.lastSummaryEmittedAt) >= intervalMs;
+          if (!task.summaryDirty && !due) continue;
+        }
+        out.push(this.enrichSummary(task));
+        continue;
+      }
+      if (terminal && task.summaryDirty) {
+        out.push(this.enrichSummary(task));
+      }
+    }
+    return out;
+  }
+
+  private enrichSummary(task: BackgroundTask): RunningTaskSummary {
+    const summary = this.buildRunningSummary(task);
+    summary.newLinesSinceLastSummary = Math.max(
+      0,
+      task.totalOutputLines - this.getLastEmittedTotal(task),
+    );
+    return summary;
   }
 
   /**
@@ -686,7 +718,7 @@ export class BackgroundTaskManager extends EventEmitter {
   formatRunningSummaryBlock(options: { intervalMs?: number; maxChars?: number } = {}): string | null {
     const intervalMs = options.intervalMs ?? 5 * 60 * 1000;
     const maxChars = options.maxChars ?? 600;
-    const summaries = this.getRunningSummary({ onlyDirtyOrDue: true, intervalMs });
+    const summaries = this.getInjectableSummary({ onlyDirtyOrDue: true, intervalMs });
     if (summaries.length === 0) return null;
 
     const lines: string[] = ['[Background Task Status]'];

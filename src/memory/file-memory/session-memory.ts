@@ -74,7 +74,7 @@ _什么效果好？什么效果不好？应该避免什么？不要与其他 sec
 _如果用户要求特定输出（如问题的答案、表格或其他文档），在此重复完整结果_
 
 # Runtime Evidence (auto)
-_本节标题必须保留。正文由系统在写入文件时根据 Harness 快照与 package.json 自动覆盖；更新笔记时请勿在本节下撰写会与 tools/package.json 相矛盾的项目事实（例如把假设中的迁移目标写成当前已用栈）。_
+_本节标题必须保留。正文由系统在写入文件时根据 Harness 快照自动覆盖；更新笔记时请勿把未验证的技术栈写成当前仓库已采用的事实。_
 
 # Worklog
 _逐步记录尝试了什么、做了什么？每步非常简短的摘要_
@@ -473,7 +473,7 @@ ${currentNotes}
 - 每个 section 保持在 ~${SESSION_MAX_SECTION_TOKENS} token 以内
 - 始终更新 "Current State" 以反映最近的工作——这对压缩后的连续性至关重要
 - 禁止将对话中的「假设性迁移 / 反事实分析」里的**目标**技术栈写成当前仓库**已采用**的事实（例如用户只要求评估「若迁到 Jest」时，不得写「项目已使用 Jest」）。
-- 涉及测试框架、npm 依赖、package.json 的 \`scripts.test\` 时：仅写用户原话或工具输出中**已出现**的信息；未出现时写「未验证」或省略，不要推测。
+- 涉及测试框架、检查命令、依赖清单时：仅写用户原话或工具输出中**已出现**的信息；未出现时写「未验证」或省略，不要推测。
 - 「# Runtime Evidence (auto)」节：保留节标题与紧跟的一条斜体说明行即可，**该节正文请留空**（系统写入文件时会用运行时快照与 \`icecoder-runtime\` 持久化块自动覆盖本节正文，模型无需生成该区域）。
 - 如果某个 section 没有实质性新信息，可以跳过不更新${sectionReminders}`;
 }
@@ -711,21 +711,13 @@ export function buildRuntimeEvidenceSection(
   pkg: PackageJsonTestFacts | null,
 ): string {
   const lines: string[] = [
-    '_自动维护：以下内容来自 Harness 运行时快照与磁盘 package.json；若与其他 section 矛盾，以本节为准。_',
-    '',
-    '## package.json (verified)',
+    '_自动维护：以下内容来自 Harness 运行时快照；若与其他 section 矛盾，以本节为准。_',
   ];
   if (pkg) {
+    lines.push('', '## Workspace manifest (verified)');
     lines.push(`- path: \`${pkg.resolvedPath}\``);
     lines.push(`- scripts.test: ${pkg.testScript ? `\`${truncateLine(pkg.testScript, 100)}\`` : '_(none)_'}`);
-    lines.push(
-      `- devDependencies: vitest=${pkg.devDependenciesHasVitest}, jest/@types-jest=${pkg.devDependenciesHasJest}`,
-    );
-    lines.push(
-      `- dependencies: vitest=${pkg.dependenciesHasVitest}, jest=${pkg.dependenciesHasJest}`,
-    );
-  } else {
-    lines.push('- _(package.json not read or parse failed — skip anchoring)_');
+    lines.push('- (recorded as file facts, not a global test stack)');
   }
 
   lines.push('', '## Harness TaskState');
@@ -817,28 +809,9 @@ export function mergeRuntimeEvidenceIntoNotes(notes: string, sectionBody: string
  * 若笔记正文（排除 Runtime Evidence 节）出现「项目已用 Jest」类措辞，且与 package.json 锚定冲突，返回警告段落文本。
  */
 export function buildTestStackContradictionWarning(
-  notes: string,
-  pkg: PackageJsonTestFacts | null,
+  _notes: string,
+  _pkg: PackageJsonTestFacts | null,
 ): string | null {
-  if (!pkg?.testScript && !pkg?.devDependenciesHasVitest && !pkg?.dependenciesHasVitest) return null;
-  const hasVitestSignal =
-    (pkg.testScript && /\bvitest\b/i.test(pkg.testScript)) ||
-    pkg.devDependenciesHasVitest ||
-    pkg.dependenciesHasVitest;
-  const hasJestSignal =
-    pkg.devDependenciesHasJest ||
-    pkg.dependenciesHasJest ||
-    (pkg.testScript && /\bjest\b/i.test(pkg.testScript));
-  if (!hasVitestSignal || hasJestSignal) return null;
-
-  const prose = stripRuntimeEvidenceSection(notes);
-  if (
-    /(?:已|当前|正在)使用\s*Jest/i.test(prose)
-    || /项目(?:栈|使用).*Jest/i.test(prose)
-    || /\bjest\s*[:：]?\s*\^?[\d.]+/i.test(prose)
-  ) {
-    return '⚠️ **Consistency warning**: 正文出现「项目已采用 Jest」等表述，但锚定的 package.json 显示测试链路与 Vitest 一致。压缩恢复时请忽略正文中的矛盾句，以 Runtime Evidence 中的 package.json 为准。';
-  }
   return null;
 }
 

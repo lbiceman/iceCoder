@@ -4,6 +4,7 @@ import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
+import type { CheckFailureStreakState } from './check-failure-streak.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
@@ -86,10 +87,15 @@ export interface HarnessRunState {
   branchBudgetWarnedThisRound: boolean;
   /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
   verificationDigestInjectedThisRound: boolean;
-  /** 文件 cap / 续段等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
+  /** 文件 cap / 续段 / 检查失败 streak 等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
   rebuildEscalationInjections: number;
-  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / 连续失败去重） */
+  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / streak / 连续失败去重） */
   rebuildEscalationInjectedThisRound: boolean;
+  /**
+   * 同一规范化检查命令的连续失败次数。
+   * write 不清零；该键终态成功才清零。新用户消息在 run() 清零。
+   */
+  checkFailureStreak?: CheckFailureStreakState;
   /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
   parallelBudgetBlockHintInjected: boolean;
   /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
@@ -121,7 +127,9 @@ export interface HarnessRunState {
   harnessPolicyStats: HarnessPolicyStats;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
   checkpointResumeForkApplied: boolean;
-  /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */
+  /** context window 超限后的 emergency/proactive fork 已用次数（每 run 最多 3 次） */
+  contextEmergencyCompactCount?: number;
+  /** 配额用尽时为 true（旧 checkpoint 仅有此字段时视为已用尽） */
   contextEmergencyCompactUsed: boolean;
   /** 续跑 checkpoint 短摘要（emergency fork 复用） */
   activeCheckpointResumeSummary?: UnifiedMessage;

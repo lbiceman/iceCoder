@@ -27,6 +27,11 @@ import type { HarnessLogger } from './logger.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import type { ChatFunction, HarnessStepEvent } from './types.js';
 import { CompletionFactsView } from './completion-facts-view.js';
+import {
+  canUseEmergencyCompact,
+  consumeEmergencyCompact,
+  refundEmergencyCompact,
+} from './emergency-compact-quota.js';
 
 export interface CompactionDeps extends ResilienceBridgeDeps {
   contextCompactor: ContextCompactor;
@@ -61,7 +66,7 @@ function applyProactiveForkIfNeeded(
   usageOptions: CompactionUsageOptions,
   onStep?: (event: HarnessStepEvent) => void,
 ): boolean {
-  if (!state || state.contextEmergencyCompactUsed) return false;
+  if (!state || !canUseEmergencyCompact(state)) return false;
 
   const ctxWindow = readEffectiveContextWindowTokens();
   const proactiveLine = Math.floor(ctxWindow * PROACTIVE_FORK_RATIO);
@@ -72,7 +77,7 @@ function applyProactiveForkIfNeeded(
   });
   if (usage.effectiveUsed < proactiveLine) return false;
 
-  state.contextEmergencyCompactUsed = true;
+  consumeEmergencyCompact(state);
   state.checkpointResumeForkApplied = true;
   const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
   const fork = applyCheckpointResumeFork(deps.contextCompactor, messages, summary, { aggressive: true });
@@ -325,6 +330,16 @@ export async function maybeCompact(
   onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
   logCacheSegmentReset(state?.turnCount, 'hard-compact');
   await resilienceSaveCheckpoint(deps, 'compaction', state);
+
+  const afterHardUsage = resolveCompactionUsage({
+    messages,
+    tools,
+    lastApiPromptTokens: 0,
+  });
+  const microLine = Math.floor(readEffectiveContextWindowTokens() * MICRO_COMPACTION_RATIO);
+  if (afterHardUsage.effectiveUsed < microLine) {
+    refundEmergencyCompact(state);
+  }
 
   emitContextUsageStep(onStep, messages, tools);
   applyProactiveForkIfNeeded(

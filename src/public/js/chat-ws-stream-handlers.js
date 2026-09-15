@@ -357,9 +357,20 @@ window.ChatWsStreamHandlers = (function () {
       tryMountToolDiff(buf.toolCallId, diffSource);
     }
 
+    function onStreamRetryDiscard(data) {
+      if (isForeignSessionEvent(data)) return;
+      if (get('userStopped')) return;
+      UI.discardIncompleteStream(Session.getMessages());
+      set('streamChunksReceived', false);
+      set('visibleStreamChunksReceived', false);
+      set('streamFinalized', false);
+      ctx.syncWelcomeState();
+    }
+
     WS.on('stream', onStream);
     WS.on('reasoning_stream', onReasoningStream);
     WS.on('stream_end', onStreamEnd);
+    WS.on('stream_retry_discard', onStreamRetryDiscard);
     WS.on('response', onResponse);
     WS.on('step', onStep);
     WS.on('status', onStatus);

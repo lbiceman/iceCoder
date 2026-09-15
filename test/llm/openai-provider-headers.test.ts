@@ -15,6 +15,22 @@ function buildOpts(
 }
 
 describe('OpenAIAdapter configured request headers', () => {
+  it('defaults SDK timeout to 10 minutes when unconfigured', () => {
+    const adapter = new OpenAIAdapter({
+      apiKey: 'test-key',
+      model: 'gpt-4o',
+    });
+    expect(buildOpts(adapter).timeout).toBe(600_000);
+  });
+
+  it('honors explicit provider timeout of 120s', () => {
+    const adapter = new OpenAIAdapter({
+      apiKey: 'test-key',
+      model: 'gpt-4o',
+      timeout: 120_000,
+    });
+    expect(buildOpts(adapter).timeout).toBe(120_000);
+  });
   it('does not attach extra headers when none are configured', () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'test-key',

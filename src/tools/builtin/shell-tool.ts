@@ -44,7 +44,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately with no time limit; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap; other foreground commands have a 10min cap. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
+        'Execute shell commands (foreground or background). Runtime may move a long-running command to the background and return a taskId immediately with no time limit — that start is not a completed run; poll with task_id + action:"check" until the process exits. Short commands (e.g. git status, ls) run foreground with a 10s cap; other foreground commands have a 10min cap and escalate to background if they outlive the soft timeout. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use action:"list" to list background tasks. Use task_id + action:"stop" to kill a running background task. Avoid inline one-liners with long/complex scripts on Windows — write a script file and run it instead.',
       parameters: {
         type: 'object',
         properties: {

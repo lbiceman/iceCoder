@@ -136,7 +136,8 @@ describe('callHarnessLlm · context window emergency fork', () => {
     );
 
     expect(result.action).toBe('retry');
-    expect(state.contextEmergencyCompactUsed).toBe(true);
+    expect(state.contextEmergencyCompactCount).toBe(1);
+    expect(state.contextEmergencyCompactUsed).toBe(false);
     expect(state.checkpointResumeForkApplied).toBe(true);
     expect(state.transition).toBe('compaction_retry');
     expect(state.turnCount).toBe(0);
@@ -152,7 +153,10 @@ describe('callHarnessLlm · context window emergency fork', () => {
   });
 
   it('does not emergency fork twice; second context error stops with error', async () => {
-    const state = buildState(longMessages(40), { contextEmergencyCompactUsed: true });
+    const state = buildState(longMessages(40), {
+      contextEmergencyCompactUsed: true,
+      contextEmergencyCompactCount: 3,
+    });
     const loopController = new LoopController({ maxRounds: 3 });
     const chatFn = vi.fn().mockRejectedValue(
       new Error('context_length_exceeded: max 128000'),

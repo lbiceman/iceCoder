@@ -2808,6 +2808,19 @@ window.ChatUI = (function () {
     if (el) el.remove();
   }
 
+  function discardIncompleteStream(messages) {
+    clearReasoningStream();
+    streamReplyBuffer = '';
+    var streamEl = document.getElementById('streaming-msg');
+    if (streamEl) streamEl.remove();
+    if (Array.isArray(messages)) {
+      var last = messages[messages.length - 1];
+      if (last && last.role === 'agent' && last._streaming) {
+        messages.pop();
+      }
+    }
+  }
+
   /** 将误落入 Assistant 正文的规划/推理气泡转为 Thinking 样式（并合并进思考流缓冲）。 */
   function promoteAssistantBubbleToThinking(stripStatusTagFn) {
     var stripFn = stripStatusTagFn || lastStripStatusTagFn;
@@ -3120,6 +3133,7 @@ window.ChatUI = (function () {
     appendReasoningStreamChunk: appendReasoningStreamChunk,
     appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,
     clearReasoningStream: clearReasoningStream,
+    discardIncompleteStream: discardIncompleteStream,
     promoteAssistantBubbleToThinking: promoteAssistantBubbleToThinking,
     finalizeStreamResponse: finalizeStreamResponse,
     updateMsgLabelTime: updateMsgLabelTime,

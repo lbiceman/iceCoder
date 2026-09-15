@@ -38,7 +38,7 @@ export class RepoContext {
       const command = String(toolCall.arguments?.command ?? '');
       if (command) {
         this.commandsRun.push(command);
-        if (looksLikeTestCommand(command)) this.testCommands.push(command);
+        this.testCommands.push(command);
         if (result.success) {
           for (const deletedPath of extractDeletedPathsFromCommand(command)) {
             this.removeChangedFile(deletedPath);
@@ -113,7 +113,3 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
   return undefined;
 }
 
-function looksLikeTestCommand(command: string): boolean {
-  const c = command.toLowerCase();
-  return /\b(test|vitest|jest|mocha|pytest|go test|cargo test|tsc|lint|typecheck)\b/.test(c);
-}

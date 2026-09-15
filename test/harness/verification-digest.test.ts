@@ -3,10 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildVerificationDigest,
   buildVerificationSuccessSummary,
-  isBuildVerificationCommand,
-  isHarnessVerificationCommand,
-  isUnitTestVerificationCommand,
-  isVerificationCommand,
   parseBuildFailureDigest,
   parseBuildErrorSourcePaths,
   parseBuildSuccessSummary,
@@ -18,30 +14,11 @@ import {
 } from '../../src/harness/verification-digest.js';
 
 describe('verification-digest', () => {
-  it('detects npm test / vitest / build commands', () => {
-    expect(isHarnessVerificationCommand('npm test')).toBe(true);
-    expect(isHarnessVerificationCommand('npm test -- test/unit/tasks.test.ts')).toBe(true);
-    expect(isHarnessVerificationCommand('npx vitest run')).toBe(true);
-    expect(isHarnessVerificationCommand('npm run build')).toBe(true);
-    expect(isHarnessVerificationCommand('npm run test:e2e')).toBe(true);
-    expect(isHarnessVerificationCommand('npx tsc --noEmit')).toBe(true);
-    expect(isVerificationCommand('npm run build')).toBe(true);
-    expect(isBuildVerificationCommand('npm run build 2>&1')).toBe(true);
-    expect(isHarnessVerificationCommand('echo hello')).toBe(false);
-    expect(isHarnessVerificationCommand('echo test')).toBe(false);
-  });
-
-  it('isUnitTestVerificationCommand excludes lint/build/tsc/e2e', () => {
-    expect(isUnitTestVerificationCommand('npm test')).toBe(true);
-    expect(isUnitTestVerificationCommand('npm run test')).toBe(true);
-    expect(isUnitTestVerificationCommand('npx vitest run')).toBe(true);
-    expect(isUnitTestVerificationCommand('mvn test')).toBe(true);
-    expect(isUnitTestVerificationCommand('npm run lint')).toBe(false);
-    expect(isUnitTestVerificationCommand('npm run build')).toBe(false);
-    expect(isUnitTestVerificationCommand('npm run typecheck')).toBe(false);
-    expect(isUnitTestVerificationCommand('npx tsc --noEmit')).toBe(false);
-    expect(isUnitTestVerificationCommand('npm run test:e2e')).toBe(false);
-    expect(isUnitTestVerificationCommand('node --check src/a.js')).toBe(false);
+  it('builds a generic digest for any failed command including opaque scripts', () => {
+    const digest = buildVerificationDigest('./scripts/ci.sh', 'FAIL ./scripts/ci.sh\nboom');
+    expect(digest).toContain('./scripts/ci.sh');
+    expect(digest).toContain('FAIL ./scripts/ci.sh');
+    expect(buildVerificationDigest('npm test', 'FAIL x')).toContain('npm test');
   });
 
   it('parses vitest FAIL headers and assertions', () => {
@@ -74,13 +51,13 @@ describe('verification-digest', () => {
       'npm test -- test/unit/tasks.test.ts',
       'FAIL test/unit/tasks.test.ts\nAssertionError: expected true to be false',
     );
-    expect(testDigest).toMatch(/read_file the failing test/);
+    expect(testDigest).toMatch(/project's own verification command/);
 
     const buildDigest = buildVerificationDigest(
       'npm run build 2>&1',
       'src/foo.ts(1,1): error TS2304: Cannot find name \'Phaser\'.',
     );
-    expect(buildDigest).toMatch(/npx tsc --noEmit/);
+    expect(buildDigest).toMatch(/project's own verification command/);
     expect(buildDigest).toContain('npm run build');
   });
 
@@ -146,28 +123,11 @@ describe('verification-digest', () => {
   });
 
   describe('buildVerificationSuccessSummary dispatch', () => {
-    const vitestOut = ' Test Files  8 passed (8)\n      Tests  22 passed (22)\n';
-    const pwOut = '  5 passed (4.4s)';
-    const buildOut = '✓ built in 7.49s';
-    const ciOut = 'added 60 packages in 4s';
-
-    it('dispatches by command shape', () => {
-      expect(buildVerificationSuccessSummary('npm test 2>&1', vitestOut)).toBe('8 files / 22 tests passed');
-      expect(buildVerificationSuccessSummary('npx vitest run', vitestOut)).toBe('8 files / 22 tests passed');
-      expect(buildVerificationSuccessSummary('npm run build', buildOut)).toBe('build succeeded in 7.49s');
-      expect(buildVerificationSuccessSummary('npm run test:e2e', pwOut)).toBe('5 e2e tests passed in 4.4s');
-      expect(buildVerificationSuccessSummary('npx playwright test', pwOut)).toBe('5 e2e tests passed in 4.4s');
-      expect(buildVerificationSuccessSummary('npm ci', ciOut)).toBe('added 60 packages in 4s');
-    });
-
-    it('falls back to generic message when parse cannot find concrete numbers', () => {
-      expect(buildVerificationSuccessSummary('npm test', 'all good')).toBe('tests passed');
-      expect(buildVerificationSuccessSummary('npm run build', '')).toBe('build succeeded');
-    });
-
-    it('returns null for unrelated commands', () => {
-      expect(buildVerificationSuccessSummary('ls -la', 'foo')).toBeNull();
-      expect(buildVerificationSuccessSummary('git status', 'On branch main')).toBeNull();
+    it('returns a short opaque tail for any successful command', () => {
+      expect(buildVerificationSuccessSummary('npm test', 'all good')).toBe('all good');
+      expect(buildVerificationSuccessSummary('npm run build', '')).toBe('ok');
+      expect(buildVerificationSuccessSummary('ls -la', 'foo')).toBe('foo');
+      expect(buildVerificationSuccessSummary('./scripts/ci.sh', 'ci ok')).toBe('ci ok');
     });
   });
 
@@ -196,12 +156,12 @@ describe('verification-digest', () => {
         output: vitestOut,
       });
       expect(resolveVerificationSuccessSummary('npm test', checkJson, { action: 'check' }))
-        .toBe('8 files / 22 tests passed');
+        .toContain('8 passed');
     });
 
     it('uses raw stdout for foreground commands', () => {
       expect(resolveVerificationSuccessSummary('npm test', vitestOut, { command: 'npm test' }))
-        .toBe('8 files / 22 tests passed');
+        .toContain('8 passed');
     });
   });
 });

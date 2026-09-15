@@ -48,6 +48,7 @@ import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { OperationOutcomeLedger } from './operation-outcome.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
+import { emptyCheckFailureStreak } from './check-failure-streak.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -575,6 +576,7 @@ export class Harness {
       verificationDigestInjectedThisRound: false,
       rebuildEscalationInjections: 0,
       rebuildEscalationInjectedThisRound: false,
+      checkFailureStreak: emptyCheckFailureStreak(),
       parallelBudgetBlockHintInjected: false,
       sessionGoalAnchor,
       buildDiagnosticGateActive: false,
@@ -588,6 +590,7 @@ export class Harness {
       harnessPolicyStats: emptyHarnessPolicyStats(),
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
+      contextEmergencyCompactCount: 0,
       stepReviewedThisRound: false,
       executionMode: 'free',
       executionModeLockRemaining: 0,
@@ -639,6 +642,7 @@ export class Harness {
     state.branchBudget?.resetRoundBudget();
     state.rebuildEscalationInjections = 0;
     state.rebuildEscalationInjectedThisRound = false;
+    state.checkFailureStreak = emptyCheckFailureStreak();
     state.parallelBudgetBlockHintInjected = false;
     state.verificationOutputBuffer.clear();
 

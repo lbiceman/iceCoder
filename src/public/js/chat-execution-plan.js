@@ -365,9 +365,6 @@ window.ChatExecutionPlan = (function () {
   /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
   function workbenchHtml() {
     return '<div class="etl-body etl-workbench">' +
-      '<div class="etl-wb-status hidden" id="etl-wb-status">' +
-        '<span class="etl-wb-status-run" id="etl-wb-status-run">当前运行中</span>' +
-      '</div>' +
       '<section class="etl-wb-chapters" id="etl-chapter-timeline">' +
         '<div class="etl-wb-section-head">' +
           '<div class="etl-wb-section-header">' +
@@ -1134,16 +1131,8 @@ window.ChatExecutionPlan = (function () {
   function renderWorkbenchStatus() {
     if (!hostEl) return;
     try {
-      var statusEl = hostEl.querySelector('#etl-wb-status');
-      var runEl = hostEl.querySelector('#etl-wb-status-run');
       var countEl = hostEl.querySelector('#etl-chapter-node-count');
       var n = allChapterViews().length;
-      var running = liveChapterStatus() === 'running';
-      if (statusEl) statusEl.classList.toggle('hidden', !running);
-      if (runEl) {
-        runEl.textContent = running ? '当前运行中' : '';
-        runEl.classList.toggle('is-running', running);
-      }
       if (countEl) countEl.textContent = n ? (n + ' 个节点') : '';
     } catch (e) {
       safeWarn('renderWorkbenchStatus', e);
@@ -1475,17 +1464,7 @@ window.ChatExecutionPlan = (function () {
     }
     if (cmd.indexOf('stop ') === 0) return '停止后台任务';
     if (cmd === 'list background tasks') return '查看后台任务列表';
-    if (/^(npm|pnpm|yarn|bun)\s+(test|t\b|run\s+test)/.test(cmd)) return '运行测试验证改动';
-    if (/^(vitest|jest|playwright|cypress)\b/.test(cmd)) return '运行测试验证改动';
-    if (/^(npm|pnpm|yarn|bun)\s+run\s+(build|dev|start|serve|preview|watch)/.test(cmd)) {
-      return '启动或构建项目';
-    }
-    if (/^(npm|pnpm|yarn|bun)\s+install/.test(cmd)) return '安装项目依赖';
-    if (/^git\s+(status|diff|log|show)\b/.test(cmd)) return '查看 Git 变更与历史';
-    if (/^git\s+(add|commit|checkout|branch|merge|pull|push)\b/.test(cmd)) return '执行 Git 操作';
-    if (/^(ls|dir|pwd|cat|head|tail|find|tree)\b/.test(cmd)) return '查看目录或文件内容';
-    if (/^(python|node|tsx?|deno|bun)\s/.test(cmd)) return '运行脚本验证逻辑';
-    return '执行命令 ' + clamp24(cmd);
+    return '运行命令 ' + clamp24(cmd);
   }
 
   function inferFsOperationIntent(tool) {
@@ -1625,6 +1604,25 @@ window.ChatExecutionPlan = (function () {
     if (status === 'paused') return '已暂停';
     if (status === 'stopped') return '用户停止';
     return '完成';
+  }
+
+  function chapterRunPhase(status) {
+    if (status === 'running') return 'running';
+    if (status === 'failed') return 'error';
+    return 'done';
+  }
+
+  function applyChapterRunDot(dot, status) {
+    if (!dot) return;
+    var phase = chapterRunPhase(status);
+    dot.className = 'chat-sidebar-item-run-dot is-' + phase;
+    dot.setAttribute('aria-label', chapterStatusLabel(status));
+  }
+
+  function makeChapterRunDot(status) {
+    var dot = document.createElement('span');
+    applyChapterRunDot(dot, status);
+    return dot;
   }
 
   function chapterMarkerLabel(key) {
@@ -2244,6 +2242,10 @@ window.ChatExecutionPlan = (function () {
     var stamp = formatChapterClock(chapter.startTs);
     timeEl.textContent = stamp;
     timeEl.classList.toggle('hidden', !stamp);
+    var clockRow = document.createElement('div');
+    clockRow.className = 'etl-chapter-clock-row';
+    clockRow.appendChild(timeEl);
+    clockRow.appendChild(makeChapterRunDot(chapter.status));
 
     var titleRow = document.createElement('div');
     titleRow.className = 'etl-chapter-title-row';
@@ -2251,23 +2253,13 @@ window.ChatExecutionPlan = (function () {
     preview.className = 'etl-snapshot-preview etl-chapter-title';
     preview.textContent = chapter.preview || '（无消息摘要）';
     safeSetTitle(preview, preview.textContent);
-    var statusEl = document.createElement('span');
-    statusEl.className = 'etl-chapter-status etl-round-badge status-' + (chapter.status || 'done');
-    statusEl.textContent = chapterStatusLabel(chapter.status);
     titleRow.appendChild(preview);
-    if (isCurrent) {
-      var latest = document.createElement('span');
-      latest.className = 'etl-chapter-latest';
-      latest.textContent = '最新';
-      titleRow.appendChild(latest);
-    }
-    titleRow.appendChild(statusEl);
     if (chapter.messageId && isSnapshotRestoreHidden(chapter.messageId)) {
       card.classList.add('etl-snapshot-card--no-restore');
     } else if (chapter.messageId && !isSyntheticLiveId(chapter.messageId)) {
       titleRow.appendChild(createSnapshotRestoreButton(chapter.messageId));
     }
-    main.appendChild(timeEl);
+    main.appendChild(clockRow);
     main.appendChild(titleRow);
     card.appendChild(main);
     li.appendChild(rail);
@@ -2342,11 +2334,8 @@ window.ChatExecutionPlan = (function () {
       title.textContent = live.preview;
       safeSetTitle(title, live.preview);
     }
-    var statusEl = node.querySelector('.etl-chapter-status');
-    if (statusEl) {
-      statusEl.textContent = chapterStatusLabel(live.status);
-      statusEl.className = 'etl-chapter-status etl-round-badge status-' + (live.status || 'done');
-    }
+    var statusEl = node.querySelector('.chat-sidebar-item-run-dot');
+    if (statusEl) applyChapterRunDot(statusEl, live.status);
     node.classList.remove('status-running', 'status-done', 'status-failed', 'status-paused', 'status-stopped');
     node.classList.add('status-' + (live.status || 'done'));
     var clock = node.querySelector('.etl-chapter-clock');
@@ -2891,8 +2880,7 @@ window.ChatExecutionPlan = (function () {
     var command = findFirstToolBy(tools, function (t) { return t.toolName === 'run_command'; });
     if (command) {
       var cmd = command.detail || command.target || '';
-      if (/test|vitest|jest|playwright|cypress/i.test(cmd)) return 'Run Integration Test';
-      return inferCommandIntent(command);
+      return cmd ? ('运行命令 ' + String(cmd).slice(0, 24)) : '运行命令';
     }
     var reads = tools.filter(function (t) { return CONTEXT_READ_TOOLS[t.toolName]; });
     if (reads.length >= 2) return '读取核心文件理解实现';
@@ -5307,19 +5295,6 @@ window.ChatExecutionPlan = (function () {
     if (!list) {
       refreshSnapshotTimeline();
       return;
-    }
-    var canRestore = snapshotRestoreAllowed();
-    var hint = chapterTimelineEl.querySelector('.etl-snapshot-hint');
-    if (!canRestore && !hint) {
-      hint = document.createElement('div');
-      hint.className = 'etl-snapshot-hint';
-      hint.setAttribute('role', 'status');
-      hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
-      var head = chapterTimelineEl.querySelector('.etl-wb-section-head');
-      if (head && head.nextSibling) chapterTimelineEl.insertBefore(hint, head.nextSibling);
-      else chapterTimelineEl.insertBefore(hint, chapterTimelineEl.firstChild);
-    } else if (canRestore && hint && hint.parentNode) {
-      hint.parentNode.removeChild(hint);
     }
     var btns = list.querySelectorAll('.etl-snapshot-restore-btn');
     Array.prototype.forEach.call(btns, function (btn) {

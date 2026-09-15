@@ -260,6 +260,7 @@ export interface HarnessStepEvent {
     | 'final'
     | 'stream_delta'
     | 'reasoning_stream_delta'
+    | 'stream_retry_discard'
     | 'tool_output'
     | 'memory_event'
     | 'execution_plan_init'

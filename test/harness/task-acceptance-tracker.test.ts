@@ -34,6 +34,20 @@ describe('task-acceptance-tracker', () => {
     expect(tracker.isComplete()).toBe(false);
   });
 
+  it('does not invent npm test when the goal has no user command', () => {
+    const cmds = parseAcceptanceCommandsFromGoal('实现仓库里的功能并自己找检查方式');
+    expect(cmds.some(c => c.key.includes('npm'))).toBe(false);
+  });
+
+  it('registers opaque user commands from backticks', () => {
+    expect(parseAcceptanceCommandsFromGoal('必须跑 `./scripts/ci.sh`').map(c => c.label))
+      .toEqual(['./scripts/ci.sh']);
+    expect(parseAcceptanceCommandsFromGoal('验收：`cargo test`').map(c => c.label))
+      .toEqual(['cargo test']);
+    expect(parseAcceptanceCommandsFromGoal('run `npx vitest run` then stop').map(c => c.label))
+      .toEqual(['npx vitest run']);
+  });
+
   it('does not activate for short question goals', () => {
     const tracker = new TaskAcceptanceTracker('解释一下这个函数');
     expect(tracker.isActive()).toBe(false);
@@ -113,18 +127,14 @@ describe('task-acceptance-tracker', () => {
     ]);
   });
 
-  it('normalizeAcceptanceCommandKey normalizes playwright/cypress e2e to `npm run test:e2e`', () => {
-    expect(normalizeAcceptanceCommandKey('npx playwright test --reporter=list')).toBe('npm run test:e2e');
-    expect(normalizeAcceptanceCommandKey('cd /d E:\\app && npx playwright test')).toBe('npm run test:e2e');
-    expect(normalizeAcceptanceCommandKey('npx cypress run')).toBe('npm run test:e2e');
-  });
-
-  it('normalizeAcceptanceCommandKey normalizes vitest / npm run test variants to `npm test`', () => {
-    expect(normalizeAcceptanceCommandKey('npx vitest run --reporter=verbose')).toBe('npm test');
-    expect(normalizeAcceptanceCommandKey('npx vitest')).toBe('npm test');
-    expect(normalizeAcceptanceCommandKey('npm run test')).toBe('npm test');
-    // test:e2e / test:unit 等带冒号的脚本应保留
+  it('normalizeAcceptanceCommandKey keeps user command strings opaque', () => {
+    expect(normalizeAcceptanceCommandKey('npx playwright test --reporter=list')).toBe('npx playwright test --reporter=list');
+    expect(normalizeAcceptanceCommandKey('npx vitest run --reporter=verbose')).toBe('npx vitest run --reporter=verbose');
+    expect(normalizeAcceptanceCommandKey('npx vitest')).toBe('npx vitest');
+    expect(normalizeAcceptanceCommandKey('npm run test')).toBe('npm run test');
     expect(normalizeAcceptanceCommandKey('npm run test:e2e')).toBe('npm run test:e2e');
+    expect(normalizeAcceptanceCommandKey('./scripts/ci.sh')).toBe('ci.sh');
+    expect(normalizeAcceptanceCommandKey('cargo test')).toBe('cargo test');
   });
 
   it('normalizeAcceptanceCommandKey strips piped tail / head / redirects', () => {
@@ -150,12 +160,11 @@ describe('task-acceptance-tracker', () => {
     expect(t?.newStatus).toBe('passed');
   });
 
-  it('acceptance gate matches `npx playwright test` against `npm run test:e2e`', () => {
+  it('does not alias npx playwright test to npm run test:e2e', () => {
     const tracker = new TaskAcceptanceTracker(BENCHMARK_GOAL);
     const t = tracker.recordRunCommand('npx playwright test --reporter=list 2>&1', true);
-    expect(t).not.toBeNull();
-    expect(t?.command).toBe('npm run test:e2e');
-    expect(tracker.getPassedCount()).toBe(1);
+    expect(t).toBeNull();
+    expect(tracker.getPassedCount()).toBe(0);
   });
 
   it('snapshot restore roundtrip preserves progress', () => {

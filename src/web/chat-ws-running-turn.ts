@@ -168,6 +168,10 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
   }
 
   switch (event.type) {
+    case 'stream_retry_discard':
+      t.streamingText = '';
+      t.streamingReasoningText = '';
+      break;
     case 'stream_delta':
       if (typeof event.delta === 'string') {
         t.streamingText += event.delta;

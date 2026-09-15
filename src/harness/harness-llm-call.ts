@@ -21,6 +21,7 @@ import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { canUseEmergencyCompact, consumeEmergencyCompact } from './emergency-compact-quota.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { TokenBudgetTracker } from './token-budget.js';
@@ -77,7 +78,7 @@ export async function callHarnessLlm(
   const precheckStartedAt = markTimingStart();
   if (
     deps.contextCompactor
-    && !state.contextEmergencyCompactUsed
+    && canUseEmergencyCompact(state)
     && !deps.loopController.isAborted()
   ) {
     const ctxWindow = readEffectiveContextWindowTokens();
@@ -88,7 +89,7 @@ export async function callHarnessLlm(
       lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
     });
     if (usage.effectiveUsed >= proactiveLine) {
-      state.contextEmergencyCompactUsed = true;
+      consumeEmergencyCompact(state);
       state.checkpointResumeForkApplied = true;
       const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
       const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
@@ -122,23 +123,30 @@ export async function callHarnessLlm(
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
       const reasoningSanitizer = new ReasoningSystemTagStreamFilter();
+      let streamedAny = false;
       try {
         const llmWaitStartedAt = markTimingStart();
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
+          if (typeof chunk === 'string' ? chunk.length > 0 : !!chunk) {
+            streamedAny = true;
+          }
           dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep, reasoningSanitizer);
         }, llmOpts);
         endTiming('llm_wait', llmWaitStartedAt, round);
         timeSync('llm_stream_filter', () => {
           const tail = streamFilter.flush();
           if (tail.thinking) {
+            streamedAny = true;
             onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
           }
           const reasoningTail = reasoningSanitizer.flush();
           if (reasoningTail) {
+            streamedAny = true;
             onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: reasoningTail });
           }
           if (tail.visible) {
+            streamedAny = true;
             onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });
           }
         }, round);
@@ -150,6 +158,9 @@ export async function callHarnessLlm(
           response = await chatFn(normalizedMsgs, llmOpts);
           endTiming('llm_wait', llmWaitStartedAt, round);
         } else {
+          if (streamedAny) {
+            onStep?.({ type: 'stream_retry_discard', iteration: round });
+          }
           throw streamError;
         }
       }
@@ -172,11 +183,11 @@ export async function callHarnessLlm(
     const pairingBroken = isToolCallPairingError(error);
     if (
       (isContextWindowExceededError(error) || pairingBroken)
-      && !state.contextEmergencyCompactUsed
+      && canUseEmergencyCompact(state)
       && deps.contextCompactor
       && !deps.loopController.isAborted()
     ) {
-      state.contextEmergencyCompactUsed = true;
+      consumeEmergencyCompact(state);
       state.checkpointResumeForkApplied = true;
       if (pairingBroken) {
         const repaired = finalizeMessagesForApi(state.messages);

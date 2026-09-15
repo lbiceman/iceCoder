@@ -31,10 +31,8 @@ export const SHORT_TIMEOUT_MAX_MS = 10_000;
 /** Harness / chat-ws 推送后台摘要的最小间隔 — 5 分钟（Phase 4a/4b 接入）。 */
 export const BG_SUMMARY_INTERVAL_MS = 5 * 60 * 1000;
 
-/** 长命令特征 — 直接后台启动 */
+/** 长命令特征 — 直接后台启动（基础设施；不含测试命令特权） */
 const LONG_RUNNING: RegExp[] = [
-  /^(npm|pnpm|yarn|bun)\s+(test|t\b|run\s+(test|dev|start|serve|preview|watch|build))/,
-  /^(vitest|jest|playwright|cypress)\b(?!\s+--?(version|help))/,
   /^tsc\s+(--watch|-w)\b/,
   /^docker\s+(build|run|compose\s+up)\b/,
   /^(pip|poetry|conda)\s+install\b/,

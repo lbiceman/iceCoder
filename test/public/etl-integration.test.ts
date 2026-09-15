@@ -685,6 +685,8 @@ describe('ETL 真实 Observer 链路', () => {
         filesFoot: !!document.querySelector('#etl-foot-files'),
         clock: !!document.querySelector('#etl-wb-clock'),
         nodeCount: !!document.querySelector('#etl-chapter-node-count'),
+        wbStatus: !!document.querySelector('#etl-wb-status'),
+        snapshotHint: !!document.querySelector('.etl-snapshot-hint'),
       };
     }, makePlan('desktop-tabs'));
     expect(desktopResult).toEqual({
@@ -694,6 +696,8 @@ describe('ETL 真实 Observer 链路', () => {
       filesFoot: true,
       clock: false,
       nodeCount: true,
+      wbStatus: false,
+      snapshotHint: false,
     });
 
     const mobile = await loadObserver({ mobile: true });
@@ -1004,7 +1008,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.overview).toContain('意图：实现');
     expect(result.iterations).toEqual(['1', '2', '3']);
     expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
-    expect(result.roundTexts[0]).toMatch(/run_command|Run Command|Run Integration Test/i);
+    expect(result.roundTexts[0]).toMatch(/run_command|Run Command|运行命令|Run Integration Test/i);
     expect(result.roundTexts[1]).toMatch(/read_file|Read File|读取/i);
     expect(result.finalMarker).toBe('3');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
@@ -1274,8 +1278,7 @@ describe('ETL 真实 Observer 链路', () => {
         afterPickOld: {
           selectedCount: document.querySelectorAll('.etl-chapter-node.is-selected').length,
           currentIsSelected: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
-          currentHasLatest: !!document.querySelector('.etl-chapter-node.is-current .etl-chapter-latest'),
-          selectedHasLatest: !!document.querySelector('.etl-chapter-node.is-selected .etl-chapter-latest'),
+          latestTag: !!document.querySelector('.etl-chapter-latest'),
         },
       };
     });
@@ -1289,8 +1292,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.afterPickOld).toEqual({
       selectedCount: 1,
       currentIsSelected: false,
-      currentHasLatest: true,
-      selectedHasLatest: false,
+      latestTag: false,
     });
     await page.close();
   });

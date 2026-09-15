@@ -623,6 +623,9 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
         broadcastToSession(runSessionId, { type: 'step', step: event });
 
+        if (event.type === 'stream_retry_discard') {
+          broadcastToSession(runSessionId, { type: 'stream_retry_discard' });
+        }
         if (event.type === 'stream_delta' && event.delta) {
           broadcastToSession(runSessionId, { type: 'stream', delta: event.delta });
         }

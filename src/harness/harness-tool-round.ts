@@ -8,7 +8,6 @@ import {
   FAILURE_EVIDENCE_THRESHOLD_START,
   LIGHT_HINT_FAILURE_THRESHOLD_END,
   LIGHT_HINT_FAILURE_THRESHOLD_START,
-  MAX_REBUILD_ESCALATIONS_PER_RUN,
   STRONG_WARNING_FAILURE_THRESHOLD,
 } from './harness-constants.js';
 import {
@@ -31,6 +30,7 @@ import { collectRepeatedFailures, toolCallSignature } from './harness-permission
 import { stripEmbeddedToolCalls, prepareAssistantContentForHistory } from './text-tool-call-salvage.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { classifyRunCommandResult } from './task-acceptance-tracker.js';
+import type { RunCommandResultClassification } from './task-acceptance-tracker.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
@@ -55,7 +55,6 @@ import { extractRunCommand } from './branch-budget-tool-path.js';
 import { classifyToolRoundProgress } from './tool-round-progress.js';
 import {
   buildVerificationDigest,
-  isHarnessVerificationCommand,
   resolveVerificationSuccessSummary,
 } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
@@ -71,6 +70,12 @@ import {
   shouldPlanTruncatedWriteToolRecovery,
 } from './harness-tool-truncation-recovery.js';
 import { tryInjectRebuildEscalation } from './harness-rebuild-inject.js';
+import {
+  emptyCheckFailureStreak,
+  findCheckFailureStreakRebuild,
+  markCheckStreakRebuild,
+  recordCheckCommandOutcome,
+} from './check-failure-streak.js';
 import {
   shouldInjectParallelBudgetBlockHint,
   shouldTriggerAnyFileCapRebuild,
@@ -181,7 +186,7 @@ export async function runHarnessToolRound(
   state.stepReviewedThisRound = false;
   state.verificationDigestInjectedThisRound = false;
   state.rebuildEscalationInjectedThisRound = false;
-  state.branchBudget?.resetRoundBudget();
+  // 三维计数只在每次用户发送 / 每次 harness.run() 归零，不在每轮工具开始归零。
 
   deps.branchBudget = state.branchBudget;
   deps.missingFileAttempts = state.missingFileAttempts;
@@ -261,6 +266,7 @@ export async function runHarnessToolRound(
   //       全部 passed 时再追加一条 stopping signal，让模型有客观信号决定收尾。
   const newlyPassedAcceptance: Array<{ command: string; summary: string | null }> = [];
   const failedAcceptanceSignatures = new Set<string>();
+  const runCommandClassifications = new Map<string, RunCommandResultClassification>();
   let acceptanceJustCompletedAll = false;
   if (executableToolCalls.length > 0) {
     const acceptanceActive = state.taskAcceptance?.isActive();
@@ -274,6 +280,9 @@ export async function runHarnessToolRound(
       const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
       const classified = classifyRunCommandResult(tc.arguments as Record<string, unknown>, rawOutput, success);
       if (!classified) continue;
+      runCommandClassifications.set(tc.id, classified);
+      state.checkFailureStreak ??= emptyCheckFailureStreak();
+      recordCheckCommandOutcome(state.checkFailureStreak, classified);
 
       if (acceptanceActive && state.taskAcceptance) {
         const transition = state.taskAcceptance.recordRunCommandToolResult(classified, tc.id);
@@ -293,7 +302,6 @@ export async function runHarnessToolRound(
       }
 
       if (classified.kind === 'background_failed'
-        && isHarnessVerificationCommand(classified.command)
         && state.verificationOutputBuffer) {
         state.verificationOutputBuffer.recordFailed(classified.command, rawOutput);
       }
@@ -370,6 +378,12 @@ export async function runHarnessToolRound(
   maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, deps);
 
   maybeInjectFileCapRebuildEscalation({
+    state,
+    msgs,
+    deps,
+  });
+
+  maybeInjectCheckFailureStreakRebuild({
     state,
     msgs,
     deps,
@@ -456,6 +470,7 @@ export async function runHarnessToolRound(
     failedSignatures: toolStats.failedSignatures,
     policyBlockedSignatures: toolStats.policyBlockedSignatures,
     branchBudget: state.branchBudget,
+    runCommandClassifications,
   });
 
   if (roundProgress === 'all_failed_or_blocked') {
@@ -715,6 +730,40 @@ function buildGateContext(
   };
 }
 
+function maybeInjectCheckFailureStreakRebuild(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  deps: ToolRoundDeps;
+}): void {
+  const { state, msgs, deps } = args;
+  state.checkFailureStreak ??= emptyCheckFailureStreak();
+  const pending = findCheckFailureStreakRebuild(state.checkFailureStreak);
+  if (!pending) return;
+
+  if (state.rebuildEscalationInjectedThisRound) {
+    markCheckStreakRebuild(state.checkFailureStreak, pending.key);
+    return;
+  }
+
+  const injected = tryInjectRebuildEscalation(
+    {
+      workspaceRoot: deps.workspaceRoot,
+      executionModeDecisionEnabled: deps.executionModeDecisionEnabled,
+    },
+    state,
+    msgs,
+    pending.failCount,
+    'check_failure_streak',
+    { stuckCommand: pending.label },
+  );
+  if (!injected) return;
+
+  markCheckStreakRebuild(state.checkFailureStreak, pending.key);
+  console.log(
+    `[harness] 同一检查命令连续失败 ${pending.failCount} 次，注入整文件重建提示`,
+  );
+}
+
 function maybeInjectFileCapRebuildEscalation(args: {
   state: HarnessRunState;
   msgs: HarnessRunState['messages'];
@@ -801,7 +850,7 @@ function maybeInjectParallelBudgetBlockHint(args: {
       '[System / BranchBudget] Multiple write/edit tools were blocked in one round (file edit cap).',
       `Blocked paths: ${paths.map(p => `\`${p}\``).join(', ')}.`,
       'Do NOT retry all capped files in parallel. Pick ONE path per round:',
-      '1. read failing test / build output first',
+      '1. read this round\'s failing output first',
       '2. If [Rebuild Escalation] granted write bypass, use write_file on ONE bypass path only',
       '3. Re-run verification before touching the next capped file',
     ].join('\n'),
@@ -833,7 +882,7 @@ function maybeInjectVerificationDigest(args: {
     if (!failed.has(toolCallSignature(tc))) continue;
 
     const command = extractRunCommand(tc.arguments);
-    if (!command || !isHarnessVerificationCommand(command)) continue;
+    if (!command) continue;
 
     const retries = state.branchBudget.inspect().commandRetries;
     const normalized = command.trim().replace(/\s+/g, ' ').slice(0, 200);
@@ -1066,10 +1115,7 @@ export function countModeEscalatingFailures(
     const signature = toolCallSignature(tc);
     if (!failedSignatures.has(signature)) continue;
     if (failedAcceptanceSignatures.has(signature)) continue;
-    const command = tc.name === 'run_command'
-      ? extractRunCommand(tc.arguments as Record<string, unknown>)
-      : undefined;
-    if (command && isHarnessVerificationCommand(command)) continue;
+    if (tc.name === 'run_command') continue;
     count++;
   }
   return count;

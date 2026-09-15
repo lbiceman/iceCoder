@@ -324,37 +324,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   overflow: hidden;
 }
 
-.etl-wb-status {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: 10px 12px 0;
-}
-
-.etl-wb-status.hidden {
-  display: none;
-}
-
-.etl-wb-status-run {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--success);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.etl-wb-status-run.is-running::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
-}
-
 .etl-wb-chapters,
 .etl-wb-flow {
   min-height: 0;
@@ -472,24 +441,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   font-weight: 600;
 }
 
-.etl-chapter-latest {
-  flex-shrink: 0;
-  padding: 0 5px;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-}
-
-.etl-chapter-node.is-selected .etl-chapter-latest {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
-  color: var(--accent);
-}
-
 .etl-chapter-row {
   cursor: pointer;
 }
@@ -526,11 +477,22 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   word-break: normal;
 }
 
+.etl-chapter-clock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .etl-chapter-clock.hidden {
   display: none;
 }
 
-.etl-chapter-status {
+.etl-chapter-clock-row .chat-sidebar-item-run-dot {
+  position: static;
+  top: auto;
+  margin-left: 5px;
+  right: auto;
   flex-shrink: 0;
 }
 
@@ -1397,17 +1359,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 
 .etl-msheet .etl-main-scroll {
   -webkit-overflow-scrolling: touch;
-}
-
-.etl-snapshot-hint {
-  margin: 0 12px 8px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-subtle));
-  border-radius: var(--radius);
-  background: var(--warning-light);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .etl-snapshot-header-count {

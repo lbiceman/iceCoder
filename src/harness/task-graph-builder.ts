@@ -49,9 +49,9 @@ export interface GraphBuildInput {
 
 export function discoverRepoShape(workspaceRoot: string): RepoShape {
   const shape: RepoShape = {
-    type: 'unknown', packageManager: 'none', isMonorepo: false,
-    topLevelDirs: [], testFramework: 'none', typeSystem: 'javascript',
-    lintTool: 'none', buildTool: 'none', estimatedFileCount: 0, recentChangeCount: 0,
+    type: 'unknown', packageManager: 'unknown', isMonorepo: false,
+    topLevelDirs: [], testFramework: 'unknown', typeSystem: 'unknown',
+    lintTool: 'unknown', buildTool: 'unknown', estimatedFileCount: 0, recentChangeCount: 0,
   };
 
   let pkg: Record<string, unknown> | null = null;
@@ -66,9 +66,7 @@ export function discoverRepoShape(workspaceRoot: string): RepoShape {
 
   const scripts = (_pkg.scripts ?? {}) as Record<string, string>;
   const testScript = scripts.test ?? '';
-  if (/vitest/.test(testScript)) shape.testFramework = 'vitest';
-  else if (/jest/.test(testScript)) shape.testFramework = 'jest';
-  else if (/mocha/.test(testScript)) shape.testFramework = 'mocha';
+  if (testScript.trim()) shape.testFramework = testScript.trim().split(/\s+/)[0] || 'unknown';
 
   const devDeps: Record<string, string> = (_pkg.devDependencies ?? {}) as Record<string, string>;
   const deps: Record<string, string> = (_pkg.dependencies ?? {}) as Record<string, string>;

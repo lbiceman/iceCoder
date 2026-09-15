@@ -17,7 +17,6 @@ import {
   type DeliverableKind,
 } from './document-deliverable.js';
 import { classifyRunCommandResult } from './task-acceptance-tracker.js';
-import { isUnitTestVerificationCommand } from './verification-digest.js';
 import type {
   TaskIntent,
   TaskPhase,
@@ -59,9 +58,6 @@ export class TaskState {
       const effectiveCommand = classified?.command ?? command;
       if (effectiveCommand) {
         this.commandsRun.push(effectiveCommand);
-        if (looksLikeVerificationCommand(effectiveCommand)) {
-          this.phase = 'verification';
-        }
         if (result.success) {
           for (const deletedPath of extractDeletedPathsFromCommand(effectiveCommand)) {
             this.removeChangedFileDeliverable(deletedPath);
@@ -293,10 +289,9 @@ const EDIT_GOAL_CN = /修改|改|编辑|实现|新增|创建|生成/;
 export function hasExecutableSideSignal(text: string): boolean {
   const t = text.toLowerCase();
   return EDIT_GOAL_CN.test(t)
-    || /运行\s*测试|跑测试|vitest|jest|pytest|mocha/i.test(t)
+    || /运行\s*测试|跑测试|跑一下.*检查|verify|(?:^|[\s,;])run\s+tests?\b/i.test(t)
     || /\b(edit|modify|implement|create|update|fix|investigate|refactor)\b/i.test(t)
-    || /\b(run|execute)\s+\S+/i.test(t)
-    || /(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b/i.test(t);
+    || /\b(run|execute)\s+\S+/i.test(t);
 }
 
 /** 由用户自然语言推断任务意图（与 TaskState 构造逻辑一致，供执行计划等复用） */
@@ -311,7 +306,7 @@ export function inferIntent(text: string): TaskIntent {
 
   // 实现 / 新增 / 创建 / 生成 同义 → edit（避免路径中含 test 被误判为跑测）
   if (EDIT_GOAL_CN.test(t) || /\b(edit|modify|implement|create|update)\b/.test(t)) return 'edit';
-  if (/测试|运行\s*测试|跑测试|verify|(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b|vitest|jest|pytest|\btsc\b/.test(t)) {
+  if (/测试|运行\s*测试|跑测试|跑一下.*检查|verify|(?:^|[\s,;])run\s+tests?\b/.test(t)) {
     return 'test';
   }
   if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
@@ -327,8 +322,4 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return undefined;
-}
-
-export function looksLikeVerificationCommand(command: string): boolean {
-  return isUnitTestVerificationCommand(command);
 }

@@ -2,11 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { classifyToolRoundProgress } from '../../src/harness/tool-round-progress.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
+import type { RunCommandResultClassification } from '../../src/harness/task-acceptance-tracker.js';
 import type { ToolCall } from '../../src/llm/types.js';
 
 function tc(name: string, args: Record<string, unknown>, id = name): ToolCall {
   return { id, name, arguments: args };
 }
+
+function classMap(
+  id: string,
+  classified: RunCommandResultClassification,
+): Map<string, RunCommandResultClassification> {
+  return new Map([[id, classified]]);
+}
+
+/** Opaque command strings: in-list, another stack, and unmatched by current verification regex. */
+const OPAQUE_COMMANDS = ['npm test', 'pytest -q', './scripts/ci.sh'] as const;
 
 describe('classifyToolRoundProgress', () => {
   it('classifies fully failed or blocked rounds', () => {
@@ -24,7 +35,7 @@ describe('classifyToolRoundProgress', () => {
     })).toBe('all_failed_or_blocked');
   });
 
-  it('distinguishes useful evidence from read-only spinning', () => {
+  it('treats ordinary reads as non-progress regardless of path', () => {
     expect(classifyToolRoundProgress({
       executableToolCalls: [tc('read_file', { path: 'src/scenes/Menu.ts' })],
       failedSignatures: [],
@@ -32,11 +43,68 @@ describe('classifyToolRoundProgress', () => {
     expect(classifyToolRoundProgress({
       executableToolCalls: [tc('read_file', { path: 'test/unit/tasks.test.ts' })],
       failedSignatures: [],
-    })).toBe('meaningful_progress');
+    })).toBe('non_progress_success');
+  });
+
+  it.each(OPAQUE_COMMANDS)('background start of %s is not meaningful_progress', (command) => {
+    const call = tc('run_command', { command }, 'c1');
     expect(classifyToolRoundProgress({
-      executableToolCalls: [tc('run_command', { command: 'npm test' })],
+      executableToolCalls: [call],
       failedSignatures: [],
+      runCommandClassifications: classMap('c1', { kind: 'background_start', command }),
+    })).toBe('non_progress_success');
+  });
+
+  it.each(OPAQUE_COMMANDS)('background running of %s is not meaningful_progress', (command) => {
+    const call = tc('run_command', { command, action: 'check', task_id: 'bg' }, 'c1');
+    expect(classifyToolRoundProgress({
+      executableToolCalls: [call],
+      failedSignatures: [],
+      runCommandClassifications: classMap('c1', { kind: 'background_running', command }),
+    })).toBe('non_progress_success');
+  });
+
+  it.each(OPAQUE_COMMANDS)('foreground success of %s is meaningful_progress', (command) => {
+    const call = tc('run_command', { command }, 'c1');
+    expect(classifyToolRoundProgress({
+      executableToolCalls: [call],
+      failedSignatures: [],
+      runCommandClassifications: classMap('c1', {
+        kind: 'foreground',
+        command,
+        foregroundSuccess: true,
+      }),
     })).toBe('meaningful_progress');
+  });
+
+  it.each(OPAQUE_COMMANDS)('background_completed of %s is meaningful_progress', (command) => {
+    const call = tc('run_command', { command, action: 'check', task_id: 'bg' }, 'c1');
+    expect(classifyToolRoundProgress({
+      executableToolCalls: [call],
+      failedSignatures: [],
+      runCommandClassifications: classMap('c1', {
+        kind: 'background_completed',
+        command,
+        exitCode: 0,
+      }),
+    })).toBe('meaningful_progress');
+  });
+
+  it.each(OPAQUE_COMMANDS)('edit_file success plus background start of %s is still meaningful_progress', (command) => {
+    const write = tc('edit_file', { path: 'src/a.ts', content: 'x' }, 'w1');
+    const run = tc('run_command', { command }, 'c1');
+    expect(classifyToolRoundProgress({
+      executableToolCalls: [write, run],
+      failedSignatures: [],
+      runCommandClassifications: classMap('c1', { kind: 'background_start', command }),
+    })).toBe('meaningful_progress');
+  });
+
+  it('unclassified run_command success is not treated as verification-by-name', () => {
+    expect(classifyToolRoundProgress({
+      executableToolCalls: [tc('run_command', { command: 'npm test' }, 'c1')],
+      failedSignatures: [],
+    })).toBe('non_progress_success');
   });
 
   it('allows progress on another file while one file is over budget', () => {

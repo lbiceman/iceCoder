@@ -1,5 +1,3 @@
-import { isHarnessVerificationCommand } from './verification-digest.js';
-
 export interface VerificationOutputEntry {
   command: string;
   outputBody: string;
@@ -12,13 +10,13 @@ function stripToolErrorPrefix(content: string): string {
   return content.replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
 }
 
-/** 保留最近若干条验收命令失败输出，compaction / BranchBudget block 后仍可注入 digest。 */
+/** 保留最近若干条失败命令输出，compaction / BranchBudget block 后仍可注入 digest。 */
 export class VerificationOutputBuffer {
   private entries: VerificationOutputEntry[] = [];
 
   recordFailed(command: string, rawOutput: string): void {
     const normalized = command.trim();
-    if (!normalized || !isHarnessVerificationCommand(normalized)) return;
+    if (!normalized) return;
 
     const outputBody = stripToolErrorPrefix(rawOutput);
     if (!outputBody) return;

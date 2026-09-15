@@ -1,62 +1,29 @@
-const VERIFICATION_TEST_CMD = /\b(npm\s+test|npm\s+run\s+test|vitest|npx\s+vitest)\b/i;
+const OUTPUT_TAIL_CHARS = 1200;
 
-/** 宽泛 harness 验收命令（digest / branch-budget / 输出缓冲等） */
-export function isHarnessVerificationCommand(command: string): boolean {
-  const c = command.toLowerCase();
-  return /\b(npm|pnpm|yarn)\s+(run\s+)?(test:e2e|test|lint|build|typecheck|check)\b/.test(c)
-    || /\b(npm|pnpm|yarn)\s+test\b/.test(c)
-    || /\b(vitest|jest|mocha|pytest|go test|cargo test)\b/.test(c)
-    || /\b(mvn(w)?\s+test|mvn(w)?\s+-pl\s+\S+\s+test)\b/.test(c)
-    || /\b(\.\/)?gradlew(\.bat)?\s+test\b/.test(c)
-    || /\bdotnet\s+test\b/.test(c)
-    || /\b(bundle exec rspec|bundle exec rake test|phpunit|vendor\/bin\/phpunit)\b/.test(c)
-    || /\b(npx\s+vitest|npx\s+tsc|tsc\s+--no-?emit)\b/i.test(command)
-    || /\bnode\s+--check\b/.test(c);
+export function takeCommandOutputTail(output: string, maxChars = OUTPUT_TAIL_CHARS): string {
+  const body = output.replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
+  if (!body) return '';
+  return body.length <= maxChars ? body : body.slice(-maxChars);
 }
 
-/**
- * 单元测试 Gate 专用：lint/build/tsc/e2e 不算「单测已通过」。
- * 与 {@link TaskState.recordToolResult} / Verification Gate 对齐。
- */
-export function isUnitTestVerificationCommand(command: string): boolean {
-  const c = command.trim().toLowerCase();
-  if (!c) return false;
-  if (isBuildVerificationCommand(command)) return false;
-  if (/\b(npm|pnpm|yarn)\s+(run\s+)?(lint|typecheck|check)\b/.test(c) && !/\btest\b/.test(c)) return false;
-  if (/\bnpx\s+tsc\b/.test(c) || /\btsc\s+--no-?emit\b/.test(c)) return false;
-  if (/\bnode\s+--check\b/.test(c)) return false;
-  if (/\btest:e2e\b/.test(c)) return false;
-
-  return /\b(npm|pnpm|yarn)\s+test\b/.test(c)
-    || /\b(npm|pnpm|yarn)\s+run\s+test\b/.test(c)
-    || /\b(vitest|jest|mocha|pytest)\b/.test(c)
-    || /\bgo test\b/.test(c)
-    || /\bcargo test\b/.test(c)
-    || /\bmvn(w)?\s+test\b/.test(c)
-    || /\bmvn(w)?\s+-pl\s+\S+\s+test\b/.test(c)
-    || /\b(\.\/)?gradlew(\.bat)?\s+test\b/.test(c)
-    || /\bdotnet\s+test\b/.test(c)
-    || /\b(bundle exec rspec|bundle exec rake test)\b/.test(c)
-    || /\b(phpunit|vendor\/bin\/phpunit)\b/.test(c)
-    || /\bnpx\s+vitest\b/.test(c);
+export function buildVerificationDigest(command: string, output: string): string | null {
+  const tail = takeCommandOutputTail(output);
+  if (!tail) return null;
+  const shortCmd = command.length > 160 ? `${command.slice(0, 157)}...` : command;
+  return [
+    '[Verification digest]',
+    `Command: ${shortCmd}`,
+    tail,
+    '',
+    'Next: inspect this round\'s output and re-run the project\'s own verification command after fixing the cause.',
+  ].join('\n');
 }
 
-/** @deprecated 使用 {@link isHarnessVerificationCommand} */
-export function isVerificationCommand(command: string): boolean {
-  return isHarnessVerificationCommand(command.trim());
-}
-
-export function isBuildVerificationCommand(command: string): boolean {
-  const c = command.toLowerCase();
-  return /\bnpm\s+run\s+build\b/.test(c)
-    || /\bnpx\s+tsc\b/.test(c)
-    || /\btsc\s+--no-emit\b/.test(c)
-    || /\bvite\s+build\b/.test(c)
-    || /\bnode\s+.*vite.*build\b/.test(c);
-}
-
-export function isTestVerificationCommand(command: string): boolean {
-  return VERIFICATION_TEST_CMD.test(command.trim());
+export function buildVerificationSuccessSummary(command: string, output: string): string | null {
+  const tail = takeCommandOutputTail(output, 200);
+  if (!tail) return 'ok';
+  const firstLine = tail.split(/\r?\n/).find(l => l.trim()) ?? 'ok';
+  return firstLine.slice(0, 120);
 }
 
 /**
@@ -160,48 +127,18 @@ export function parseBuildFailureDigest(output: string): string | null {
 export function parseBuildErrorSourcePaths(output: string): string[] {
   const paths = new Set<string>();
   const patterns = [
-    /(?:^|\s)(src\/[^\s(]+\.(?:ts|tsx|js|jsx))/gi,
-    /(?:^|\s)([^\s(]+\.(?:ts|tsx))(?:\(\d+,\d+\))/gi,
-    /error TS\d+:.*?\(([^)]+\.(?:ts|tsx))\)/gi,
+    /(?:^|\s)((?:\.\/)?[\w./\\-]+\.\w+)(?:\(\d+,\d+\))?/gi,
+    /error TS\d+:.*?\(([^)]+)\)/gi,
   ];
   for (const re of patterns) {
     re.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(output)) !== null) {
       const p = match[1]?.replace(/^[('"]+|[)'"]+$/g, '');
-      if (p && !p.includes('node_modules')) paths.add(p);
+      if (p && !p.includes('node_modules') && /[\\/]|\.\w+$/.test(p)) paths.add(p);
     }
   }
   return [...paths].slice(0, 4);
-}
-
-export function buildVerificationDigest(command: string, output: string): string | null {
-  if (!isHarnessVerificationCommand(command)) return null;
-
-  const digest = isBuildVerificationCommand(command)
-    ? parseBuildFailureDigest(output)
-    : parseVitestFailureDigest(output);
-  if (!digest) return null;
-
-  const shortCmd = command.length > 160 ? `${command.slice(0, 157)}...` : command;
-  const nextStep = isBuildVerificationCommand(command)
-    ? 'Next: read_file the reported source files; run npx tsc --noEmit if needed; fix TypeScript before rerunning build.'
-    : 'Next: read_file the failing test and implementation; do not rewrite the same file without new evidence.';
-
-  return [
-    digest,
-    '',
-    `Command: ${shortCmd}`,
-    nextStep,
-  ].join('\n');
-}
-
-/** Playwright / 通用 `\d+ passed` 风格的 e2e 命令判定。 */
-function isPlaywrightOrE2ECommand(command: string): boolean {
-  const c = command.toLowerCase();
-  return /\b(playwright|cypress)\b/.test(c)
-    || /\bnpm\s+run\s+test:e2e\b/.test(c)
-    || /\b(pnpm|yarn)\s+(run\s+)?test:e2e\b/.test(c);
 }
 
 /**
@@ -272,33 +209,6 @@ export function parseNpmInstallSuccessSummary(output: string): string | null {
   if (!match) return null;
   const duration = match[2] ? ` in ${match[2]}` : '';
   return `added ${match[1]} packages${duration}`;
-}
-
-/**
- * 构造验收命令「成功摘要」字符串（一行，几十字节）。
- *
- * 对**非失败**输出尽力解析；解析不出来时返回 `ok`，调用方仍可据此知道命令已成功。
- * 返回 null 表示这不是 harness 关心的验收命令（不打扰）。
- */
-export function buildVerificationSuccessSummary(command: string, output: string): string | null {
-  if (!isHarnessVerificationCommand(command) && !isPlaywrightOrE2ECommand(command)) {
-    if (!/\bnpm\s+(ci|install)\b/i.test(command)) return null;
-  }
-
-  const cmdLower = command.toLowerCase();
-  if (isBuildVerificationCommand(command)) {
-    return parseBuildSuccessSummary(output) ?? 'build succeeded';
-  }
-  if (isPlaywrightOrE2ECommand(command)) {
-    return parsePlaywrightSuccessSummary(output) ?? 'e2e passed';
-  }
-  if (/\b(npm\s+test|npm\s+run\s+test|vitest|jest|mocha)\b/i.test(cmdLower)) {
-    return parseVitestSuccessSummary(output) ?? 'tests passed';
-  }
-  if (/\bnpm\s+(ci|install)\b/i.test(cmdLower)) {
-    return parseNpmInstallSuccessSummary(output) ?? 'install ok';
-  }
-  return 'ok';
 }
 
 function safeParseToolOutputJson(raw: string): Record<string, unknown> | null {

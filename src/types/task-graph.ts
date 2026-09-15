@@ -439,19 +439,19 @@ export interface RepoShape {
   /** 仓库类型 */
   type: RepoType;
   /** 包管理器 */
-  packageManager: 'npm' | 'yarn' | 'pnpm' | 'none';
+  packageManager: string;
   /** 是否 monorepo */
   isMonorepo: boolean;
   /** 顶层目录结构特征 */
   topLevelDirs: string[];
-  /** 测试框架 */
-  testFramework: 'vitest' | 'jest' | 'mocha' | 'none';
+  /** 测试框架（发现什么记什么，没有就空） */
+  testFramework: string;
   /** 类型系统 */
-  typeSystem: 'typescript' | 'javascript' | 'mixed';
+  typeSystem: string;
   /** Lint 工具 */
-  lintTool: 'eslint' | 'biome' | 'none';
+  lintTool: string;
   /** 构建工具 */
-  buildTool: 'tsc' | 'vite' | 'webpack' | 'none';
+  buildTool: string;
   /** 文件总数（估算） */
   estimatedFileCount: number;
   /** 最近变更的文件数 */

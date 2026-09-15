@@ -12,8 +12,8 @@ describe('inferIntent', () => {
   });
 
   it('明确的测试诉求仍为 test', () => {
-    expect(inferIntent('跑一下 vitest，把失败用例修掉')).toBe('test');
-    expect(inferIntent('npm test 失败了')).toBe('test');
+    expect(inferIntent('跑一下测试，把失败用例修掉')).toBe('test');
+    expect(inferIntent('测试失败了')).toBe('test');
   });
 
   it('纯分析报错 → question，非 debug', () => {

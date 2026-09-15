@@ -32,7 +32,6 @@ import {
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 import {
@@ -729,7 +728,7 @@ export async function executeToolCallsStreaming(
       }
       if (tc.name === 'run_command' && verificationOutputBuffer) {
         const command = extractRunCommand(tc.arguments);
-        if (command && isHarnessVerificationCommand(command)) {
+        if (command) {
           verificationOutputBuffer.recordFailed(command, output);
         }
       }
