@@ -1,11 +1,17 @@
 import type { ToolCall } from '../llm/types.js';
+import type { ToolResultStatus } from '../tools/types.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
 import type { TaskState } from './task-state.js';
-import type { VerificationPlan, VerificationPlanCommand } from './verification-plan.js';
+import {
+  DEFAULT_VERIFICATION_TIMEOUT_MS,
+  type VerificationPlan,
+  type VerificationPlanCommand,
+} from './verification-plan.js';
 import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
+  syncVerificationWorkspaceMutation,
   type VerificationRuntimeState,
 } from './verification-state.js';
 
@@ -17,6 +23,7 @@ export type StopVerificationUnavailableReason =
   | 'aborted'
   | 'invalid_result'
   | 'execution_error'
+  | 'cleanup_failed'
   | 'workspace_mutated';
 
 export interface VerificationToolCallResult {
@@ -25,6 +32,7 @@ export interface VerificationToolCallResult {
   evidenceRef: string;
   blocked?: boolean;
   aborted?: boolean;
+  operationStatus?: ToolResultStatus;
 }
 
 export interface StopVerificationResult {
@@ -42,6 +50,8 @@ export interface ExecuteStopVerificationPlanOptions {
   verificationState: VerificationRuntimeState;
   executeToolCall: (toolCall: ToolCall) => Promise<VerificationToolCallResult>;
   pollIntervalMs?: number;
+  maxPollIntervalMs?: number;
+  maxPollAttempts?: number;
   wait?: (ms: number) => Promise<void>;
   now?: () => number;
   abortSignal?: AbortSignal;
@@ -56,10 +66,10 @@ interface SettledCommandResult {
   outputTail?: string;
 }
 
-const DEFAULT_POLL_INTERVAL_MS = 100;
+const DEFAULT_POLL_INTERVAL_MS = 500;
+const DEFAULT_MAX_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_MAX_POLL_ATTEMPTS = 60;
 const DEFAULT_OUTPUT_TAIL_CHARS = 2_000;
-
-let syntheticToolCallSequence = 0;
 
 /**
  * 在模型提出停手后顺序执行一次确定的验收计划。
@@ -73,7 +83,30 @@ export async function executeStopVerificationPlan(
     taskState,
     verificationState,
   } = options;
-  const initialMutationVersion = syncWorkspaceMutationVersion(verificationState, taskState);
+  syncVerificationWorkspaceMutation(verificationState, taskState);
+  const initialMutationVersion = taskState.snapshot().workspaceMutationVersion;
+  if (
+    verificationState.workspaceMutationVersion !== initialMutationVersion
+    || initialMutationVersion === Number.MAX_SAFE_INTEGER
+  ) {
+    return finishUnavailable(options, undefined, {
+      status: 'unavailable',
+      reason: 'invalid_result',
+    });
+  }
+  let syntheticToolCallSequence = 0;
+  const nextToolCallId = (commandIndex: number, phase: string): string => {
+    syntheticToolCallSequence = syntheticToolCallSequence >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : syntheticToolCallSequence + 1;
+    return [
+      'stop-verification',
+      plan.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
+      commandIndex,
+      phase,
+      syntheticToolCallSequence,
+    ].join(':');
+  };
 
   if (plan.commands.length === 0) {
     return finishUnavailable(options, undefined, {
@@ -96,12 +129,19 @@ export async function executeStopVerificationPlan(
       });
     }
 
-    const settled = await executeVerificationCommand(options, command, index);
+    const settled = await executeVerificationCommand(
+      options,
+      command,
+      index,
+      nextToolCallId,
+    );
     lastEvidenceRef = settled.evidenceRef ?? lastEvidenceRef;
     if (settled.status === 'failed') {
+      if (!command.required) continue;
       return finishFailed(options, command.command, settled);
     }
     if (settled.status === 'unavailable') {
+      if (!command.required) continue;
       return finishUnavailable(options, command.command, settled);
     }
     if (settled.status === 'aborted') {
@@ -109,7 +149,8 @@ export async function executeStopVerificationPlan(
     }
   }
 
-  const finalMutationVersion = syncWorkspaceMutationVersion(verificationState, taskState);
+  const finalMutationVersion = taskState.snapshot().workspaceMutationVersion;
+  syncVerificationWorkspaceMutation(verificationState, taskState);
   if (finalMutationVersion !== initialMutationVersion) {
     return finishUnavailable(options, lastCommand, {
       status: 'unavailable',
@@ -135,14 +176,18 @@ async function executeVerificationCommand(
   options: ExecuteStopVerificationPlanOptions,
   command: VerificationPlanCommand,
   commandIndex: number,
+  nextToolCallId: (commandIndex: number, phase: string) => string,
 ): Promise<SettledCommandResult> {
   const now = options.now ?? Date.now;
   const startedAt = now();
-  const timeoutMs = positiveInteger(command.timeoutMs, 1);
+  const timeoutMs = positiveInteger(
+    command.timeoutMs,
+    DEFAULT_VERIFICATION_TIMEOUT_MS,
+  );
   let syntheticElapsedMs = 0;
 
   const initial = await invokeTool(options, {
-    id: nextToolCallId(options.plan, commandIndex, 'run'),
+    id: nextToolCallId(commandIndex, 'run'),
     name: 'run_command',
     arguments: {
       command: command.command,
@@ -166,62 +211,134 @@ async function executeVerificationCommand(
     options.pollIntervalMs,
     DEFAULT_POLL_INTERVAL_MS,
   );
+  const maxPollIntervalMs = Math.max(
+    pollIntervalMs,
+    positiveInteger(options.maxPollIntervalMs, DEFAULT_MAX_POLL_INTERVAL_MS),
+  );
+  const maxPollAttempts = positiveInteger(
+    options.maxPollAttempts,
+    DEFAULT_MAX_POLL_ATTEMPTS,
+  );
   const wait = options.wait ?? defaultWait;
   let pollIndex = 0;
   let lastResult = initial;
+  let cursor = outputCursor(initial.output) ?? 0;
+  let nextDelayMs = pollIntervalMs;
 
-  while (elapsedMs(now, startedAt, syntheticElapsedMs) < timeoutMs) {
+  while (
+    pollIndex < maxPollAttempts
+    && elapsedMs(now, startedAt, syntheticElapsedMs) < timeoutMs
+  ) {
     if (options.abortSignal?.aborted) {
-      return {
+      return stopBackgroundTask(options, commandIndex, taskId, {
         status: 'aborted',
         reason: 'aborted',
         evidenceRef: lastResult.evidenceRef,
         outputTail: outputTail(lastResult.output, options.outputTailChars),
-      };
+      }, nextToolCallId);
     }
 
+    const remainingBeforeWait = timeoutMs - elapsedMs(now, startedAt, syntheticElapsedMs);
+    if (remainingBeforeWait <= 0) break;
+    const delay = Math.min(nextDelayMs, remainingBeforeWait);
+    try {
+      await wait(delay);
+    } catch (error) {
+      const interrupted: SettledCommandResult = options.abortSignal?.aborted
+        ? {
+            status: 'aborted',
+            reason: 'aborted',
+            evidenceRef: lastResult.evidenceRef,
+            outputTail: outputTail(lastResult.output, options.outputTailChars),
+          }
+        : {
+            status: 'unavailable',
+            reason: 'execution_error',
+            evidenceRef: lastResult.evidenceRef,
+            outputTail: outputTail(errorText(error), options.outputTailChars),
+          };
+      return stopBackgroundTask(
+        options,
+        commandIndex,
+        taskId,
+        interrupted,
+        nextToolCallId,
+      );
+    }
+    syntheticElapsedMs += delay;
+    if (options.abortSignal?.aborted) {
+      return stopBackgroundTask(options, commandIndex, taskId, {
+        status: 'aborted',
+        reason: 'aborted',
+        evidenceRef: lastResult.evidenceRef,
+        outputTail: outputTail(lastResult.output, options.outputTailChars),
+      }, nextToolCallId);
+    }
+    if (elapsedMs(now, startedAt, syntheticElapsedMs) >= timeoutMs) break;
+
     const checked = await invokeTool(options, {
-      id: nextToolCallId(options.plan, commandIndex, `check-${pollIndex++}`),
+      id: nextToolCallId(commandIndex, `check-${pollIndex++}`),
       name: 'run_command',
       arguments: {
         action: 'check',
         task_id: taskId,
+        since: cursor,
       },
     });
     lastResult = checked;
+    cursor = outputCursor(checked.output) ?? cursor;
     const settled = settleImmediateResult(checked);
-    if (settled) return settled;
-
-    const elapsed = elapsedMs(now, startedAt, syntheticElapsedMs);
-    const remaining = timeoutMs - elapsed;
-    if (remaining <= 0) break;
-    const delay = Math.min(pollIntervalMs, remaining);
-    try {
-      await wait(delay);
-    } catch (error) {
-      if (options.abortSignal?.aborted) {
-        return {
-          status: 'aborted',
-          reason: 'aborted',
-          evidenceRef: checked.evidenceRef,
-          outputTail: outputTail(checked.output, options.outputTailChars),
-        };
+    if (settled) {
+      if (settled.status === 'aborted' || settled.status === 'unavailable') {
+        return stopBackgroundTask(
+          options,
+          commandIndex,
+          taskId,
+          settled,
+          nextToolCallId,
+        );
       }
-      return {
-        status: 'unavailable',
-        reason: 'execution_error',
-        evidenceRef: checked.evidenceRef,
-        outputTail: outputTail(errorText(error), options.outputTailChars),
-      };
+      return settled;
     }
-    syntheticElapsedMs += delay;
+    nextDelayMs = Math.min(nextDelayMs * 2, maxPollIntervalMs);
   }
 
-  return {
+  return stopBackgroundTask(options, commandIndex, taskId, {
     status: 'unavailable',
     reason: 'timeout',
     evidenceRef: lastResult.evidenceRef,
     outputTail: outputTail(lastResult.output, options.outputTailChars),
+  }, nextToolCallId);
+}
+
+async function stopBackgroundTask(
+  options: ExecuteStopVerificationPlanOptions,
+  commandIndex: number,
+  taskId: string,
+  pendingResult: SettledCommandResult,
+  nextToolCallId: (commandIndex: number, phase: string) => string,
+): Promise<SettledCommandResult> {
+  const stopped = await invokeTool(options, {
+    id: nextToolCallId(commandIndex, 'stop'),
+    name: 'run_command',
+    arguments: { action: 'stop', task_id: taskId },
+  });
+  const cleanupSucceeded = !stopped.blocked
+    && !stopped.aborted
+    && stopped.operationStatus !== 'failed'
+    && stopped.operationStatus !== 'awaiting_approval'
+    && (
+      stopped.operationStatus === 'completed'
+      || stopped.classification?.kind === 'background_completed'
+      || stopped.classification?.kind === 'background_failed'
+      || /\b(?:stopped|killed|terminated)\b/i.test(stopped.output)
+    );
+  return {
+    ...pendingResult,
+    ...(!cleanupSucceeded ? { reason: 'cleanup_failed' as const } : {}),
+    evidenceRef: stopped.evidenceRef,
+    outputTail: outputTail(stopped.output, options.outputTailChars)
+      ?? pendingResult.outputTail,
   };
 }
 
@@ -274,6 +391,13 @@ function settleImmediateResult(
   if (classification.kind === 'foreground') {
     return classification.foregroundSuccess
       ? { status: 'passed', evidenceRef: result.evidenceRef }
+      : isTimeoutClassification(classification, result.output)
+      ? {
+          status: 'unavailable',
+          reason: 'timeout',
+          evidenceRef: result.evidenceRef,
+          outputTail: outputTail(result.output),
+        }
       : {
           status: 'failed',
           exitCode: classificationExitCode(classification, result.output),
@@ -288,6 +412,14 @@ function settleImmediateResult(
     };
   }
   if (classification.kind === 'background_failed') {
+    if (classification.statusLabel === 'timeout' || isTimeoutOutput(result.output)) {
+      return {
+        status: 'unavailable',
+        reason: 'timeout',
+        evidenceRef: result.evidenceRef,
+        outputTail: outputTail(result.output),
+      };
+    }
     return {
       status: 'failed',
       ...(classification.exitCode !== undefined
@@ -314,7 +446,7 @@ function finishFailed(
   failedCommand: string,
   settled: SettledCommandResult,
 ): StopVerificationResult {
-  syncWorkspaceMutationVersion(options.verificationState, options.taskState);
+  syncVerificationWorkspaceMutation(options.verificationState, options.taskState);
   markVerificationFailed(options.verificationState, {
     planFingerprint: options.plan.fingerprint,
     source: options.plan.source,
@@ -340,7 +472,7 @@ function finishUnavailable(
   failedCommand: string | undefined,
   settled: SettledCommandResult,
 ): StopVerificationResult {
-  syncWorkspaceMutationVersion(options.verificationState, options.taskState);
+  syncVerificationWorkspaceMutation(options.verificationState, options.taskState);
   markVerificationUnavailable(options.verificationState, {
     planFingerprint: options.plan.fingerprint,
     source: options.plan.source,
@@ -368,7 +500,7 @@ function finishAborted(
   failedCommand: string,
   settled: SettledCommandResult,
 ): StopVerificationResult {
-  syncWorkspaceMutationVersion(options.verificationState, options.taskState);
+  syncVerificationWorkspaceMutation(options.verificationState, options.taskState);
   markVerificationUnavailable(options.verificationState, {
     planFingerprint: options.plan.fingerprint,
     source: options.plan.source,
@@ -388,19 +520,28 @@ function finishAborted(
   };
 }
 
-function syncWorkspaceMutationVersion(
-  verificationState: VerificationRuntimeState,
-  taskState: TaskState,
-): number {
-  const version = taskState.snapshot().workspaceMutationVersion;
-  verificationState.workspaceMutationVersion = version;
-  return version;
-}
-
 function backgroundTaskId(output: string): string | null {
   const parsed = parseObject(output);
   const value = parsed?.taskId ?? parsed?.task_id;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function outputCursor(output: string): number | null {
+  const value = parseObject(output)?.cursor;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+function isTimeoutClassification(
+  classification: Extract<RunCommandResultClassification, { kind: 'foreground' }>,
+  output: string,
+): boolean {
+  return !classification.foregroundSuccess && isTimeoutOutput(output);
+}
+
+function isTimeoutOutput(output: string): boolean {
+  return /\b(?:timed?\s*out|timeout|soft_timeout)\b/i.test(output);
 }
 
 function classificationExitCode(
@@ -441,23 +582,6 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : fallback;
-}
-
-function nextToolCallId(
-  plan: VerificationPlan,
-  commandIndex: number,
-  phase: string,
-): string {
-  syntheticToolCallSequence = syntheticToolCallSequence >= Number.MAX_SAFE_INTEGER
-    ? 1
-    : syntheticToolCallSequence + 1;
-  return [
-    'stop-verification',
-    plan.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
-    commandIndex,
-    phase,
-    syntheticToolCallSequence,
-  ].join(':');
 }
 
 function verificationBlockingSignature(

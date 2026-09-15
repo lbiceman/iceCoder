@@ -1,4 +1,5 @@
 import type { VerificationPlanSource } from './verification-plan.js';
+import type { TaskState } from './task-state.js';
 
 export type VerificationResultStatus = 'passed' | 'failed' | 'unavailable';
 
@@ -46,19 +47,32 @@ export function createVerificationRuntimeState(): VerificationRuntimeState {
   };
 }
 
-export function markWorkspaceMutation(
+/**
+ * 仅把 TaskState 的单调 mutation version 镜像到 verification runtime。
+ * 旧/损坏状态若试图回退版本则 fail-closed，并保留较高水位。
+ */
+export function syncVerificationWorkspaceMutation(
   state: VerificationRuntimeState,
+  taskState: Pick<TaskState, 'snapshot'>,
 ): VerificationRuntimeState {
-  if (state.workspaceMutationVersion >= Number.MAX_SAFE_INTEGER) {
-    state.workspaceMutationVersion = Number.MAX_SAFE_INTEGER;
-    state.verifiedMutationVersion = null;
-    state.verifiedPlanFingerprint = null;
-    state.attemptedMutationVersion = null;
-    state.attemptedPlanFingerprint = null;
-  } else {
-    state.workspaceMutationVersion += 1;
+  const sourceVersion = taskState.snapshot().workspaceMutationVersion;
+  const currentVersion = isNonNegativeInteger(state.workspaceMutationVersion)
+    ? state.workspaceMutationVersion
+    : 0;
+  if (sourceVersion < currentVersion) {
+    clearVerificationIdentities(state);
+    return state;
   }
+  state.workspaceMutationVersion = sourceVersion;
+  if (sourceVersion === Number.MAX_SAFE_INTEGER) clearVerificationIdentities(state);
   return state;
+}
+
+function clearVerificationIdentities(state: VerificationRuntimeState): void {
+  state.verifiedMutationVersion = null;
+  state.verifiedPlanFingerprint = null;
+  state.attemptedMutationVersion = null;
+  state.attemptedPlanFingerprint = null;
 }
 
 export function isVerificationFresh(

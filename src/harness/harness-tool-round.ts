@@ -40,7 +40,7 @@ import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { TokenBudgetTracker } from './token-budget.js';
-import type { ExecutionModeConfig, GateContext } from '../types/supervisor.js';
+import type { ExecutionModeConfig } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
   clearResolvedRecoveryPending,
@@ -49,6 +49,7 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
+import { buildHarnessToolGateContext } from './harness-tool-gate-context.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
@@ -194,7 +195,11 @@ export async function runHarnessToolRound(
   state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
 
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
-  const gateContext = buildGateContext(deps.graphExecutor, toolCallsForGate, state);
+  const gateContext = buildHarnessToolGateContext(
+    deps.graphExecutor,
+    toolCallsForGate,
+    state,
+  );
   const gateResult = executeToolCallsThroughGate({
     toolCalls: toolCallsForGate,
     messages: msgs,
@@ -705,27 +710,6 @@ function didGraphStepAdvance(
   return before.cursor.nodeId !== after.cursor.nodeId
     || before.cursor.nodeIndex !== after.cursor.nodeIndex
     || before.cursor.completedNodeIds.length !== after.cursor.completedNodeIds.length;
-}
-
-function buildGateContext(
-  graphExecutor: GraphExecutor | undefined,
-  toolCalls: LLMResponse['toolCalls'],
-  state: HarnessRunState,
-): GateContext {
-  const executionMode = state.executionMode ?? 'free';
-  const graphHints: GateContext['graphHints'] = [];
-
-  if (executionMode === 'forced' && graphExecutor?.hasGraph() && toolCalls) {
-    for (const tc of toolCalls) {
-      const check = graphExecutor.checkToolCall(tc.name, { track: false });
-      graphHints.push({ toolName: tc.name, action: check.action, message: check.message });
-    }
-  }
-
-  return {
-    executionMode,
-    graphHints,
-  };
 }
 
 function maybeInjectCheckFailureStreakRebuild(args: {

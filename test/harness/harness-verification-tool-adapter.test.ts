@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createHarnessVerificationToolAdapter,
 } from '../../src/harness/harness-verification-tool-adapter.js';
+import { executeStopVerificationPlan } from '../../src/harness/harness-stop-verification.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
@@ -10,6 +11,8 @@ import { RepoContext } from '../../src/harness/repo-context.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import { VerificationOutputBuffer } from '../../src/harness/verification-output-buffer.js';
 import type { ToolCall, ToolDefinition, UnifiedMessage } from '../../src/llm/types.js';
+import { buildVerificationPlan } from '../../src/harness/verification-plan.js';
+import { createVerificationRuntimeState } from '../../src/harness/verification-state.js';
 
 const runCommandDefinition: ToolDefinition = {
   name: 'run_command',
@@ -143,6 +146,10 @@ describe('Harness verification tool adapter', () => {
     const state = adapterState();
     state.executionMode = 'forced';
     const executeTool = vi.fn();
+    const checkToolCall = vi.fn(() => ({
+      action: 'block' as const,
+      message: 'verification command is outside the active step',
+    }));
     const adapter = createHarnessVerificationToolAdapter({
       deps: {
         toolExecutor: { executeTool } as never,
@@ -153,14 +160,11 @@ describe('Harness verification tool adapter', () => {
       state,
       currentTools: [runCommandDefinition],
       logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      gateContext: {
-        executionMode: 'forced',
-        graphHints: [{
-          toolName: 'run_command',
-          action: 'block',
-          message: 'verification command is outside the active step',
-        }],
-      },
+      graphExecutor: {
+        hasGraph: () => true,
+        checkToolCall,
+        recordToolResult: vi.fn(),
+      } as never,
     });
 
     const result = await adapter({
@@ -179,5 +183,230 @@ describe('Harness verification tool adapter', () => {
       status: 'failed',
       disposition: 'policy_block',
     });
+    expect(checkToolCall).toHaveBeenCalledWith('run_command', { track: false });
+    expect(checkToolCall).not.toHaveBeenCalledWith('run_command', { track: true });
+  });
+
+  it('tracks an allowed forced-graph call exactly like a regular tool round', async () => {
+    const state = adapterState();
+    state.executionMode = 'forced';
+    const checkToolCall = vi.fn(() => ({ action: 'allow' as const }));
+    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 2 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+      graphExecutor: {
+        hasGraph: () => true,
+        checkToolCall,
+        recordToolResult: vi.fn(),
+      } as never,
+    });
+
+    const result = await adapter({
+      id: 'verify-forced-allowed',
+      name: 'run_command',
+      arguments: { command: 'npm test', timeout: 1_000 },
+    });
+
+    expect(result.blocked).not.toBe(true);
+    expect(checkToolCall.mock.calls).toEqual([
+      ['run_command', { track: false }],
+      ['run_command', { track: true }],
+    ]);
+  });
+
+  it.each([
+    ['BranchBudget', false],
+    ['preflight', true],
+  ])('maps a %s block from the shared executor to unavailable', async (_label, preflight) => {
+    const state = adapterState();
+    state.buildDiagnosticGateActive = preflight;
+    state.branchBudget = {
+      bindWorkspaceRoot: vi.fn(),
+      hasWriteBypass: () => false,
+      wouldBlockCommandRetry: () => preflight,
+      checkToolBlock: () => preflight
+        ? { blocked: false }
+        : {
+            blocked: true,
+            dimension: 'command_retry',
+            key: 'npm test',
+            message: '[BranchBudget / Blocked] retry cap',
+          },
+    } as never;
+    const executeTool = vi.fn();
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 2 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+    });
+
+    const result = await adapter({
+      id: `verify-${preflight ? 'preflight' : 'budget'}`,
+      name: 'run_command',
+      arguments: { command: 'npm test', timeout: 1_000 },
+    });
+
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ classification: null, blocked: true });
+    expect(state.operationOutcomes?.getByToolCallId(
+      `verify-${preflight ? 'preflight' : 'budget'}`,
+    )).toMatchObject({ disposition: 'policy_block' });
+  });
+
+  it('collapses intermediate background poll pairs after a terminal result', async () => {
+    const state = adapterState();
+    let check = 0;
+    const executeTool = vi.fn(async (toolCall: ToolCall) => {
+      if (!toolCall.arguments.action) {
+        return {
+          success: true,
+          output: JSON.stringify({
+            mode: 'background',
+            taskId: 'bg-collapse',
+            status: 'started',
+          }),
+        };
+      }
+      check += 1;
+      return {
+        success: true,
+        output: JSON.stringify(check < 3
+          ? {
+              command: 'npm test',
+              taskId: 'bg-collapse',
+              status: 'running',
+              cursor: check,
+            }
+          : {
+              command: 'npm test',
+              taskId: 'bg-collapse',
+              status: 'completed',
+              exitCode: 0,
+              cursor: check,
+            }),
+      };
+    });
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 6 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+    });
+
+    await adapter({
+      id: 'verify-start',
+      name: 'run_command',
+      arguments: { command: 'npm test', timeout: 10_000 },
+    });
+    await adapter({
+      id: 'verify-running-1',
+      name: 'run_command',
+      arguments: { action: 'check', task_id: 'bg-collapse', since: 0 },
+    });
+    await adapter({
+      id: 'verify-running-2',
+      name: 'run_command',
+      arguments: { action: 'check', task_id: 'bg-collapse', since: 1 },
+    });
+    const terminal = await adapter({
+      id: 'verify-completed',
+      name: 'run_command',
+      arguments: { action: 'check', task_id: 'bg-collapse', since: 2 },
+    });
+
+    expect(terminal.operationStatus).toBe('completed');
+    expect(state.messages).toHaveLength(4);
+    expect(state.messages.filter(message => message.role === 'assistant')
+      .flatMap(message => message.toolCalls ?? [])
+      .map(call => call.id)).toEqual(['verify-start', 'verify-completed']);
+    expect(state.messages.filter(message => message.role === 'tool')
+      .map(message => message.toolCallId)).toEqual(['verify-start', 'verify-completed']);
+    expect(state.operationOutcomes?.hasPending()).toBe(false);
+  });
+
+  it('settles the operation ledger after timeout cleanup through the same adapter', async () => {
+    const state = adapterState();
+    const executeTool = vi.fn(async (toolCall: ToolCall) => {
+      const action = toolCall.arguments.action;
+      if (action === 'check') {
+        return {
+          success: true,
+          output: JSON.stringify({
+            command: 'npm test',
+            taskId: 'bg-timeout-ledger',
+            status: 'running',
+            cursor: 8,
+          }),
+        };
+      }
+      if (action === 'stop') {
+        return {
+          success: true,
+          output: 'Stopped background task bg-timeout-ledger',
+        };
+      }
+      return {
+        success: true,
+        output: JSON.stringify({
+          mode: 'background',
+          taskId: 'bg-timeout-ledger',
+          status: 'started',
+        }),
+      };
+    });
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 5 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+    });
+    const plan = buildVerificationPlan({
+      source: 'user',
+      commands: [{ command: 'npm test', required: true, timeoutMs: 10 }],
+      workspaceRoot: process.cwd(),
+    })!;
+    let clock = 0;
+
+    const result = await executeStopVerificationPlan({
+      plan,
+      taskState: state.taskState,
+      verificationState: createVerificationRuntimeState(),
+      executeToolCall: adapter,
+      pollIntervalMs: 10,
+      now: () => clock,
+      wait: async ms => {
+        clock += ms;
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'timeout' });
+    expect(executeTool.mock.calls.map(([call]) => call.arguments.action ?? 'start'))
+      .toEqual(['start', 'stop']);
+    expect(state.operationOutcomes?.hasPending()).toBe(false);
+    expect(state.messages).toHaveLength(4);
   });
 });

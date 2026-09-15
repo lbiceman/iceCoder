@@ -1,6 +1,5 @@
 import type { ToolCall, ToolDefinition } from '../llm/types.js';
 import { redactToolArguments, redactToolCalls } from '../tools/tool-argument-redaction.js';
-import type { GateContext } from '../types/supervisor.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import {
@@ -18,6 +17,8 @@ import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { HarnessStepEvent } from './types.js';
 import type { VerificationToolCallResult } from './harness-stop-verification.js';
+import type { GraphExecutor } from './task-graph-executor.js';
+import { buildHarnessToolGateContext } from './harness-tool-gate-context.js';
 
 export interface HarnessVerificationToolAdapterOptions {
   deps: ToolExecutorDeps;
@@ -26,11 +27,7 @@ export interface HarnessVerificationToolAdapterOptions {
   logger: HarnessLogger;
   onStep?: (event: HarnessStepEvent) => void;
   abortSignal?: AbortSignal;
-  /**
-   * 下一任务接线时可传入当前 graph 派生的 GateContext。
-   * 未传时仍经过现有 ToolGate，只是不附加 graph step hints。
-   */
-  gateContext?: GateContext;
+  graphExecutor?: GraphExecutor;
 }
 
 /**
@@ -39,8 +36,13 @@ export interface HarnessVerificationToolAdapterOptions {
 export function createHarnessVerificationToolAdapter(
   options: HarnessVerificationToolAdapterOptions,
 ): (toolCall: ToolCall) => Promise<VerificationToolCallResult> {
+  const intermediatePollCallIds = new Map<string, string[]>();
   return async (toolCall: ToolCall): Promise<VerificationToolCallResult> => {
     const { deps, state } = options;
+    deps.branchBudget = state.branchBudget;
+    deps.missingFileAttempts = state.missingFileAttempts;
+    deps.harnessPolicyStats = state.harnessPolicyStats;
+    state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
     state.messages.push({
       role: 'assistant',
       content: '',
@@ -50,12 +52,12 @@ export function createHarnessVerificationToolAdapter(
     const gateResult = executeToolCallsThroughGate({
       toolCalls: [toolCall],
       messages: state.messages,
-      ctx: options.gateContext ?? {
-        executionMode: state.executionMode ?? 'free',
-        graphHints: [],
-      },
+      ctx: buildHarnessToolGateContext(options.graphExecutor, [toolCall], state),
     });
     const gateBlocked = gateResult.executableToolCalls.length === 0;
+    const graphExecutor = options.graphExecutor;
+    const forcedGraphActive = (state.executionMode ?? 'free') === 'forced'
+      && graphExecutor?.hasGraph() === true;
 
     if (gateBlocked) {
       emitGateBlockObservability(options, toolCall);
@@ -64,12 +66,17 @@ export function createHarnessVerificationToolAdapter(
         messages: state.messages,
         policyBlockedSignatures: [...gateResult.skippedSignatures],
       });
-      return adapterResult(
+      const result = adapterResult(
         options,
         toolCall,
         outcomes[0],
         true,
       );
+      compactBackgroundPollMessages(options.state, toolCall, result, intermediatePollCallIds);
+      return result;
+    }
+    if (forcedGraphActive) {
+      graphExecutor?.checkToolCall(toolCall.name, { track: true });
     }
 
     const stats = await executeToolCallsStreaming(deps, {
@@ -77,7 +84,7 @@ export function createHarnessVerificationToolAdapter(
       messages: state.messages,
       logger: options.logger,
       onStep: options.onStep,
-      harnessAbortSignal: options.abortSignal,
+      harnessAbortSignal: isBackgroundStop(toolCall) ? undefined : options.abortSignal,
       taskState: state.taskState,
       repoContext: state.repoContext,
       currentTools: options.currentTools,
@@ -93,6 +100,12 @@ export function createHarnessVerificationToolAdapter(
       policyBlockedSignatures: stats.policyBlockedSignatures,
     });
     const outcome = outcomes[0];
+    if (forcedGraphActive) {
+      graphExecutor?.recordToolResult(
+        toolCall.name,
+        !!outcome && outcome.disposition === 'executed' && outcome.status !== 'failed',
+      );
+    }
     const blocked = isUnavailableOutcome(outcome);
     if (
       blocked
@@ -100,7 +113,9 @@ export function createHarnessVerificationToolAdapter(
     ) {
       emitApprovalBlockCompletion(options, toolCall);
     }
-    return adapterResult(options, toolCall, outcome, blocked);
+    const result = adapterResult(options, toolCall, outcome, blocked);
+    compactBackgroundPollMessages(options.state, toolCall, result, intermediatePollCallIds);
+    return result;
   };
 }
 
@@ -111,9 +126,11 @@ function adapterResult(
   blocked: boolean,
 ): VerificationToolCallResult {
   const output = latestToolOutput(options.state, toolCall.id);
-  const aborted = options.abortSignal?.aborted === true
+  const aborted = !isBackgroundStop(toolCall) && (
+    options.abortSignal?.aborted === true
     || options.deps.loopController.isAborted()
-    || /tool execution was interrupted/i.test(output);
+    || /tool execution was interrupted/i.test(output)
+  );
   const executionSucceeded = !!outcome
     && outcome.disposition === 'executed'
     && outcome.status !== 'failed'
@@ -130,9 +147,59 @@ function adapterResult(
     classification,
     output,
     evidenceRef: toolCall.id,
+    ...(outcome?.status ? { operationStatus: outcome.status } : {}),
     ...(blocked ? { blocked: true } : {}),
     ...(aborted ? { aborted: true } : {}),
   };
+}
+
+function compactBackgroundPollMessages(
+  state: HarnessRunState,
+  toolCall: ToolCall,
+  result: VerificationToolCallResult,
+  intermediatePollCallIds: Map<string, string[]>,
+): void {
+  const taskId = backgroundTaskId(toolCall, result.output);
+  if (!taskId) return;
+  if (result.classification?.kind === 'background_start') {
+    intermediatePollCallIds.set(taskId, []);
+    return;
+  }
+  const action = String(toolCall.arguments?.action ?? '').toLowerCase();
+  if (action !== 'check' && action !== 'stop') return;
+  if (result.classification?.kind === 'background_running') {
+    const ids = intermediatePollCallIds.get(taskId) ?? [];
+    ids.push(toolCall.id);
+    intermediatePollCallIds.set(taskId, ids);
+    return;
+  }
+  const ids = new Set(intermediatePollCallIds.get(taskId) ?? []);
+  if (ids.size > 0) {
+    state.messages = state.messages.filter(message => {
+      if (message.role === 'tool') return !ids.has(message.toolCallId ?? '');
+      if (message.role !== 'assistant' || !message.toolCalls?.length) return true;
+      return !message.toolCalls.some(call => ids.has(call.id));
+    });
+  }
+  intermediatePollCallIds.delete(taskId);
+}
+
+function backgroundTaskId(toolCall: ToolCall, output: string): string | null {
+  if (typeof toolCall.arguments?.task_id === 'string' && toolCall.arguments.task_id.trim()) {
+    return toolCall.arguments.task_id.trim();
+  }
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    const value = parsed.taskId ?? parsed.task_id;
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function isBackgroundStop(toolCall: ToolCall): boolean {
+  return toolCall.name === 'run_command'
+    && String(toolCall.arguments?.action ?? '').toLowerCase() === 'stop';
 }
 
 function latestToolOutput(state: HarnessRunState, toolCallId: string): string {

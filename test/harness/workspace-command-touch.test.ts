@@ -50,6 +50,60 @@ describe('workspace-command-touch', () => {
     }
   });
 
+  it('does not treat mtime-only changes as workspace mutations', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-mtime-'));
+    try {
+      const file = path.join(root, 'same.txt');
+      await fs.writeFile(file, 'same-content', 'utf8');
+      const before = await listWorkspaceFileInventory(root);
+      const stat = await fs.stat(file);
+      await fs.utimes(file, stat.atime, new Date(stat.mtimeMs + 10_000));
+      const after = await listWorkspaceFileInventory(root);
+
+      expect(diffInventoryTouchedPaths(root, before, after).changed).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('detects same-size content changes even when mtime is restored', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-hash-'));
+    try {
+      const file = path.join(root, 'same-size.txt');
+      await fs.writeFile(file, 'abc', 'utf8');
+      const originalStat = await fs.stat(file);
+      const before = await listWorkspaceFileInventory(root);
+      await fs.writeFile(file, 'xyz', 'utf8');
+      await fs.utimes(file, originalStat.atime, originalStat.mtime);
+      const after = await listWorkspaceFileInventory(root);
+
+      expect(diffInventoryTouchedPaths(root, before, after).changed)
+        .toContain('same-size.txt');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('tracks files beyond the former 400-file inventory boundary', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-large-inv-'));
+    try {
+      await Promise.all(Array.from({ length: 450 }, (_, index) =>
+        fs.writeFile(path.join(root, `file-${String(index).padStart(3, '0')}.txt`), 'aaa', 'utf8'),
+      ));
+      const tail = path.join(root, 'zz-tail.txt');
+      await fs.writeFile(tail, 'before', 'utf8');
+      const before = await listWorkspaceFileInventory(root);
+      expect(before.size).toBe(451);
+      expect(before.complete).toBe(true);
+
+      await fs.writeFile(tail, 'after!', 'utf8');
+      const after = await listWorkspaceFileInventory(root);
+      expect(diffInventoryTouchedPaths(root, before, after).changed).toContain('zz-tail.txt');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('records one task mutation for all inventory changes from one successful command', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-mutation-'));
     const taskState = new TaskState('generate files');
@@ -117,6 +171,88 @@ describe('workspace-command-touch', () => {
       );
 
       expect(taskState.snapshot().workspaceMutationVersion).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['background', true],
+    ['escalated', false],
+  ])('tracks %s command mutations at terminal check', async (mode, explicitBackground) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `ice-cmd-${mode}-`));
+    const taskState = new TaskState('background build');
+    const messages: import('../../src/llm/types.js').UnifiedMessage[] = [];
+    const loopController = new LoopController({ maxRounds: 4 });
+    let invocation = 0;
+    const executeTool = vi.fn(async () => {
+      invocation += 1;
+      if (invocation === 1) {
+        return {
+          success: true,
+          output: JSON.stringify({ mode, taskId: `bg-${mode}`, status: 'started' }),
+        };
+      }
+      if (invocation === 2) {
+        return {
+          success: true,
+          output: JSON.stringify({
+            taskId: `bg-${mode}`,
+            command: 'npm test',
+            status: 'running',
+            cursor: 3,
+          }),
+        };
+      }
+      return {
+        success: true,
+        output: JSON.stringify({
+          taskId: `bg-${mode}`,
+          command: 'npm test',
+          status: 'completed',
+          exitCode: 0,
+        }),
+      };
+    });
+    const deps = {
+      toolExecutor: { executeTool } as never,
+      loopController,
+      permissionRules: [],
+      workspaceRoot: root,
+      sessionId: `session-${mode}`,
+    };
+    const run = (toolCall: import('../../src/llm/types.js').ToolCall) =>
+      executeToolCallsStreaming(deps, {
+        toolCalls: [toolCall],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+        taskState,
+      });
+
+    try {
+      await fs.writeFile(path.join(root, 'result.txt'), 'before', 'utf8');
+      await run({
+        id: `${mode}-start`,
+        name: 'run_command',
+        arguments: {
+          command: 'npm test',
+          ...(explicitBackground ? { background: true } : {}),
+        },
+      });
+      await fs.writeFile(path.join(root, 'result.txt'), 'after!', 'utf8');
+      await run({
+        id: `${mode}-running`,
+        name: 'run_command',
+        arguments: { action: 'check', task_id: `bg-${mode}`, since: 0 },
+      });
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(0);
+
+      await run({
+        id: `${mode}-completed`,
+        name: 'run_command',
+        arguments: { action: 'check', task_id: `bg-${mode}`, since: 3 },
+      });
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(1);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

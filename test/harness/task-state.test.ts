@@ -56,6 +56,81 @@ describe('TaskState runtime facts', () => {
     expect(state.snapshot().workspaceMutationVersion).toBe(1);
   });
 
+  it('tracks every successful mutating fs operation but not list or failures', () => {
+    const state = new TaskState('edit');
+    for (const [index, operation] of ['create_dir', 'copy', 'move', 'delete'].entries()) {
+      state.recordToolResult(
+        {
+          id: `fs-${operation}`,
+          name: 'fs_operation',
+          arguments: { operation, path: `src/${index}`, target: `dst/${index}` },
+        },
+        { success: true, output: 'ok' },
+      );
+      expect(state.snapshot().workspaceMutationVersion).toBe(index + 1);
+    }
+
+    state.recordToolResult(
+      { id: 'fs-list', name: 'fs_operation', arguments: { operation: 'list', path: 'src' } },
+      { success: true, output: 'files' },
+    );
+    state.recordToolResult(
+      { id: 'fs-failed', name: 'fs_operation', arguments: { operation: 'copy', path: 'a', target: 'b' } },
+      { success: false, output: '', error: 'failed' },
+    );
+    expect(state.snapshot().workspaceMutationVersion).toBe(4);
+  });
+
+  it('tracks successful undo and conservatively stale interactive shell writes', () => {
+    const state = new TaskState('edit');
+
+    state.recordToolResult(
+      { id: 'undo-list', name: 'undo_edit', arguments: { listHistory: true } },
+      { success: true, output: 'history' },
+    );
+    state.recordToolResult(
+      { id: 'shell-start', name: 'interactive_shell', arguments: { action: 'start' } },
+      { success: true, output: '{"status":"running"}' },
+    );
+    expect(state.snapshot().workspaceMutationVersion).toBe(0);
+
+    state.recordToolResult(
+      { id: 'undo', name: 'undo_edit', arguments: {} },
+      { success: true, output: 'undone' },
+    );
+    state.recordToolResult(
+      {
+        id: 'shell-command-start',
+        name: 'interactive_shell',
+        arguments: { action: 'start', command: 'setup.cmd' },
+      },
+      { success: true, output: '{"status":"running"}' },
+    );
+    state.recordToolResult(
+      {
+        id: 'shell-write',
+        name: 'interactive_shell',
+        arguments: { action: 'write', task_id: 'pty-1', input: 'yes' },
+      },
+      { success: true, output: '{"status":"running"}' },
+    );
+    expect(state.snapshot().workspaceMutationVersion).toBe(3);
+
+    state.recordToolResult(
+      { id: 'undo-fail', name: 'undo_edit', arguments: {} },
+      { success: false, output: '', error: 'failed' },
+    );
+    state.recordToolResult(
+      {
+        id: 'shell-write-fail',
+        name: 'interactive_shell',
+        arguments: { action: 'write', task_id: 'pty-1', input: 'no' },
+      },
+      { success: false, output: '', error: 'failed' },
+    );
+    expect(state.snapshot().workspaceMutationVersion).toBe(3);
+  });
+
   it('records a successful command inventory mutation once for any non-empty path list', () => {
     const state = new TaskState('edit');
 

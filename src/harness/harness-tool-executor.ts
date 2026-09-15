@@ -49,9 +49,12 @@ import {
   diffInventoryTouchedPaths,
   isShellWorkspaceTouchTool,
   listWorkspaceFileInventory,
+  rememberBackgroundCommandInventory,
   rememberPreCommandInventory,
+  takeBackgroundCommandInventory,
   takePreCommandInventory,
 } from './workspace-command-touch.js';
+import { classifyRunCommandResult } from './run-command-result.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
@@ -737,17 +740,41 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    const preInv = commandInventoryScope && tc.id
+    let preInv = commandInventoryScope && tc.id
       ? takePreCommandInventory(commandInventoryScope, tc.id)
       : undefined;
+    const runClassification = tc.name === 'run_command'
+      ? classifyRunCommandResult(tc.arguments, output, result.success)
+      : null;
+    const taskId = tc.name === 'run_command'
+      ? backgroundTaskIdFromRunCommand(tc.arguments, output)
+      : null;
+    if (
+      preInv
+      && commandInventoryScope
+      && taskId
+      && runClassification?.kind === 'background_start'
+    ) {
+      rememberBackgroundCommandInventory(commandInventoryScope, taskId, preInv);
+      preInv = undefined;
+    }
+    const action = String(tc.arguments?.action ?? '').toLowerCase();
+    const backgroundTerminal = runClassification?.kind === 'background_completed'
+      || runClassification?.kind === 'background_failed'
+      || action === 'stop';
+    const backgroundInv = commandInventoryScope && taskId && backgroundTerminal
+      ? takeBackgroundCommandInventory(commandInventoryScope, taskId)
+      : undefined;
+    const inventoryBefore = preInv ?? backgroundInv;
     let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
-    if (result.success && preInv) {
+    if (result.success && inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot);
-      commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, preInv, after);
+      commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       taskState?.recordCommandWorkspaceMutation([
         ...commandInventoryDiff.created,
         ...commandInventoryDiff.changed,
         ...commandInventoryDiff.deleted,
+        ...(commandInventoryDiff.incomplete ? ['[workspace-inventory-incomplete]'] : []),
       ]);
     }
     if (result.success && deps.sessionDir && deps.sessionId) {
@@ -844,6 +871,21 @@ export async function executeToolCallsStreaming(
     policyBlockedSignatures,
     budgetBlockedFilePaths,
   };
+}
+
+function backgroundTaskIdFromRunCommand(
+  args: Record<string, unknown>,
+  output: string,
+): string | null {
+  if (typeof args.task_id === 'string' && args.task_id.trim()) return args.task_id.trim();
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    const taskId = parsed.taskId ?? parsed.task_id;
+    return typeof taskId === 'string' && taskId.trim() ? taskId.trim() : null;
+  } catch {
+    const match = output.match(/["']?task_?[Ii]d["']?\s*[:=]\s*["']([^"']+)["']/);
+    return match?.[1]?.trim() || null;
+  }
 }
 
 /**

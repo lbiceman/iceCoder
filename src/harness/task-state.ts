@@ -31,6 +31,7 @@ export type {
 
 const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'glob', 'grep', 'git', 'file_info']);
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
+const FS_MUTATING_OPERATIONS = new Set(['create_dir', 'delete', 'move', 'copy']);
 
 export class TaskState {
   private goal: string;
@@ -71,11 +72,36 @@ export class TaskState {
 
     if (toolCall.name === 'fs_operation') {
       const op = String(toolCall.arguments?.operation ?? '');
+      if (result.success && FS_MUTATING_OPERATIONS.has(op)) {
+        this.bumpWorkspaceMutationVersion();
+      }
       if (op === 'delete' && result.success) {
         const path = extractPathLikeArg(toolCall.arguments);
         if (path) this.removeChangedFileDeliverable(path);
+      }
+      return;
+    }
+
+    if (toolCall.name === 'undo_edit') {
+      if (result.success && toolCall.arguments?.listHistory !== true) {
         this.bumpWorkspaceMutationVersion();
       }
+      return;
+    }
+
+    if (toolCall.name === 'interactive_shell') {
+      const action = String(toolCall.arguments?.action ?? '').toLowerCase();
+      const startsCommand = action === 'start'
+        && typeof toolCall.arguments?.command === 'string'
+        && toolCall.arguments.command.trim().length > 0;
+      if (result.success && (action === 'write' || startsCommand)) {
+        this.bumpWorkspaceMutationVersion();
+      }
+      return;
+    }
+
+    if (toolCall.name === 'shell_send_keys') {
+      if (result.success) this.bumpWorkspaceMutationVersion();
       return;
     }
 

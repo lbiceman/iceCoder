@@ -3,6 +3,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { remapPathToWorkspace } from './workspace-snapshot.js';
@@ -12,21 +13,41 @@ const SKIP_DIRS = new Set([
   '.git',
   'dist',
   'build',
+  'out',
   'coverage',
+  'release',
+  'releases',
+  'runtime',
   '.ice',
   '__pycache__',
   '.next',
   'vendor',
 ]);
 
-const MAX_INVENTORY_FILES = 400;
-
-export type WorkspaceFileInventory = Map<string, { size: number; mtimeMs: number }>;
+export interface WorkspaceFileInventory extends Map<string, {
+  size: number;
+  mtimeMs: number;
+  contentHash: string;
+}> {
+  /** false 表示扫描期间至少一个目录或候选文件无法读取。 */
+  complete: boolean;
+}
 
 const preCommandInventories = new Map<string, WorkspaceFileInventory>();
+const backgroundCommandInventories = new Map<string, WorkspaceFileInventory>();
+const contentHashCache = new Map<string, {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  contentHash: string;
+}>();
 
 function inventoryKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
+}
+
+function backgroundInventoryKey(sessionId: string, taskId: string): string {
+  return `${sessionId}:background:${taskId}`;
 }
 
 function looksLikePathToken(raw: string): boolean {
@@ -98,24 +119,23 @@ export function isShellWorkspaceTouchTool(
   if (toolName !== 'run_command') return false;
   const action = String(args.action || '').toLowerCase();
   if (action === 'check' || action === 'list' || action === 'stop') return false;
-  if (args.background === true) return false;
   return true;
 }
 
 export async function listWorkspaceFileInventory(workspaceRoot: string): Promise<WorkspaceFileInventory> {
-  const out: WorkspaceFileInventory = new Map();
+  const out = Object.assign(new Map(), { complete: true }) as WorkspaceFileInventory;
   const root = path.resolve(workspaceRoot);
+  const files: Array<{ abs: string; rel: string }> = [];
 
   const walk = async (dir: string): Promise<void> => {
-    if (out.size >= MAX_INVENTORY_FILES) return;
     let entries: import('node:fs').Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      out.complete = false;
       return;
     }
     for (const entry of entries) {
-      if (out.size >= MAX_INVENTORY_FILES) return;
       if (entry.name.startsWith('.') && entry.name !== '.env' && entry.name !== '.gitignore') {
         if (entry.isDirectory()) continue;
       }
@@ -126,18 +146,47 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
         continue;
       }
       if (!entry.isFile()) continue;
-      try {
-        const stat = await fs.stat(abs);
-        const rel = path.relative(root, abs).split(path.sep).join('/');
-        if (!rel || rel.startsWith('..')) continue;
-        out.set(rel, { size: stat.size, mtimeMs: stat.mtimeMs });
-      } catch {
-        /* skip */
-      }
+      const rel = path.relative(root, abs).split(path.sep).join('/');
+      if (!rel || rel.startsWith('..')) continue;
+      files.push({ abs, rel });
     }
   };
 
   await walk(root);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(32, files.length) },
+    async () => {
+      while (nextIndex < files.length) {
+        const file = files[nextIndex++]!;
+        try {
+          const stat = await fs.stat(file.abs);
+          const cached = contentHashCache.get(file.abs);
+          const contentHash = cached
+            && cached.size === stat.size
+            && cached.mtimeMs === stat.mtimeMs
+            && cached.ctimeMs === stat.ctimeMs
+            ? cached.contentHash
+            : createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
+          contentHashCache.set(file.abs, {
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+            contentHash,
+          });
+          out.set(file.rel, {
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            contentHash,
+          });
+        } catch {
+          out.complete = false;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (contentHashCache.size > 50_000) contentHashCache.clear();
   return out;
 }
 
@@ -160,11 +209,30 @@ export function takePreCommandInventory(
   return inv;
 }
 
+export function rememberBackgroundCommandInventory(
+  sessionId: string,
+  taskId: string,
+  inventory: WorkspaceFileInventory,
+): void {
+  if (!sessionId || !taskId) return;
+  backgroundCommandInventories.set(backgroundInventoryKey(sessionId, taskId), inventory);
+}
+
+export function takeBackgroundCommandInventory(
+  sessionId: string,
+  taskId: string,
+): WorkspaceFileInventory | undefined {
+  const key = backgroundInventoryKey(sessionId, taskId);
+  const inventory = backgroundCommandInventories.get(key);
+  backgroundCommandInventories.delete(key);
+  return inventory;
+}
+
 export function diffInventoryTouchedPaths(
   workspaceRoot: string,
   before: WorkspaceFileInventory,
   after: WorkspaceFileInventory,
-): { created: string[]; changed: string[]; deleted: string[] } {
+): { created: string[]; changed: string[]; deleted: string[]; incomplete: boolean } {
   const created: string[] = [];
   const changed: string[] = [];
   const deleted: string[] = [];
@@ -174,11 +242,16 @@ export function diffInventoryTouchedPaths(
     const key = remap(rel);
     const prev = before.get(rel) ?? before.get(key);
     if (!prev) created.push(key);
-    else if (prev.size !== info.size || prev.mtimeMs !== info.mtimeMs) changed.push(key);
+    else if (prev.size !== info.size || prev.contentHash !== info.contentHash) changed.push(key);
   }
   for (const rel of before.keys()) {
     const key = remap(rel);
     if (!after.has(rel) && !after.has(key)) deleted.push(key);
   }
-  return { created, changed, deleted };
+  return {
+    created,
+    changed,
+    deleted,
+    incomplete: before.complete !== true || after.complete !== true,
+  };
 }

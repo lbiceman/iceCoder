@@ -6,10 +6,11 @@ import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
-  markWorkspaceMutation,
   sanitizeVerificationRuntimeState,
+  syncVerificationWorkspaceMutation,
   tryConsumeVerificationContinuation,
 } from '../../src/harness/verification-state.js';
+import { TaskState } from '../../src/harness/task-state.js';
 
 describe('verification-state', () => {
   it('creates a JSON-persistable non-fresh state with non-negative counters', () => {
@@ -31,7 +32,9 @@ describe('verification-state', () => {
 
   it('becomes fresh only after a pass at the current version and fingerprint', () => {
     const state = createVerificationRuntimeState();
-    markWorkspaceMutation(state);
+    const taskState = new TaskState('edit');
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
     markVerificationPassed(state, {
       planFingerprint: 'plan-a',
       source: 'user',
@@ -54,13 +57,15 @@ describe('verification-state', () => {
 
   it('makes a previous pass stale after a workspace mutation', () => {
     const state = createVerificationRuntimeState();
+    const taskState = new TaskState('edit');
     markVerificationPassed(state, {
       planFingerprint: 'plan-a',
       source: 'project',
     });
     expect(isVerificationFresh(state, 'plan-a')).toBe(true);
 
-    markWorkspaceMutation(state);
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
 
     expect(isVerificationFresh(state, 'plan-a')).toBe(false);
     expect(state.lastResult?.status).toBe('passed');
@@ -68,13 +73,18 @@ describe('verification-state', () => {
 
   it('clears verified and attempted identities when mutation version saturates', () => {
     const state = createVerificationRuntimeState();
+    const taskState = new TaskState('edit');
+    taskState.applySnapshot({
+      ...taskState.snapshot(),
+      workspaceMutationVersion: Number.MAX_SAFE_INTEGER,
+    });
     state.workspaceMutationVersion = Number.MAX_SAFE_INTEGER;
     state.verifiedMutationVersion = Number.MAX_SAFE_INTEGER;
     state.verifiedPlanFingerprint = 'plan-a';
     state.attemptedMutationVersion = Number.MAX_SAFE_INTEGER;
     state.attemptedPlanFingerprint = 'plan-a';
 
-    markWorkspaceMutation(state);
+    syncVerificationWorkspaceMutation(state, taskState);
 
     expect(state.verifiedMutationVersion).toBeNull();
     expect(state.verifiedPlanFingerprint).toBeNull();
@@ -142,11 +152,13 @@ describe('verification-state', () => {
 
   it('keeps the previous pass identity when a newer plan attempt fails', () => {
     const state = createVerificationRuntimeState();
+    const taskState = new TaskState('edit');
     markVerificationPassed(state, {
       planFingerprint: 'plan-old',
       source: 'project',
     });
-    markWorkspaceMutation(state);
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
 
     markVerificationFailed(state, {
       planFingerprint: 'plan-new',
@@ -158,6 +170,21 @@ describe('verification-state', () => {
     expect(state.verifiedPlanFingerprint).toBe('plan-old');
     expect(state.attemptedMutationVersion).toBe(1);
     expect(state.attemptedPlanFingerprint).toBe('plan-new');
+  });
+
+  it('never rolls the verification mirror backward behind TaskState history', () => {
+    const state = createVerificationRuntimeState();
+    state.workspaceMutationVersion = 5;
+    state.verifiedMutationVersion = 5;
+    state.verifiedPlanFingerprint = 'plan-a';
+    state.lastResult = { status: 'passed', source: 'user' };
+
+    syncVerificationWorkspaceMutation(state, new TaskState('legacy snapshot'));
+
+    expect(state.workspaceMutationVersion).toBe(5);
+    expect(state.verifiedMutationVersion).toBeNull();
+    expect(state.verifiedPlanFingerprint).toBeNull();
+    expect(isVerificationFresh(state, 'plan-a')).toBe(false);
   });
 
   it('does not consult wall-clock time when deciding freshness', () => {
