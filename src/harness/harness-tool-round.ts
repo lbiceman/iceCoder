@@ -59,7 +59,7 @@ import {
 } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import { redactToolCalls } from '../tools/tool-argument-redaction.js';
-import { normalizeOperationOutcome } from './operation-outcome.js';
+import { recordToolOperationOutcomes } from './operation-outcome.js';
 import {
   buildDiagnosticGateMessage,
   shouldActivateBuildDiagnosticGate,
@@ -248,13 +248,12 @@ export async function runHarnessToolRound(
     boundary: 'tool_batch_completed',
     detail: `${executableToolCalls.length} tool call(s)`,
   });
-  recordOperationOutcomes(
-    state,
-    toolCallsForGate,
-    msgs,
-    toolStats.failedSignatures,
-    toolStats.policyBlockedSignatures,
-  );
+  recordToolOperationOutcomes(state.operationOutcomes, {
+    toolCalls: toolCallsForGate,
+    messages: msgs,
+    failedSignatures: toolStats.failedSignatures,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+  });
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
   }
@@ -1057,51 +1056,6 @@ function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures
     targets.add(target);
   }
   return targets.size;
-}
-
-function recordOperationOutcomes(
-  state: HarnessRunState,
-  toolCalls: NonNullable<LLMResponse['toolCalls']>,
-  messages: HarnessRunState['messages'],
-  failedSignatures: string[],
-  policyBlockedSignatures: string[],
-): void {
-  if (!state.operationOutcomes) return;
-  const failed = new Set(failedSignatures);
-  const policyBlocked = new Set(policyBlockedSignatures);
-
-  for (const toolCall of toolCalls) {
-    const toolMessage = [...messages].reverse().find(
-      message => message.role === 'tool' && message.toolCallId === toolCall.id,
-    );
-    if (!toolMessage || typeof toolMessage.content !== 'string') continue;
-
-    const output = toolMessage.content;
-    const signature = toolCallSignature(toolCall);
-    const userDenied = /user denied/i.test(output);
-    const implicitPolicyBlock = /denied by policy|\[.*blocked\]|not available in this turn/i.test(output);
-    const isPolicyBlocked = policyBlocked.has(signature) || implicitPolicyBlock;
-    const isFailed = failed.has(signature)
-      || isPolicyBlocked
-      || userDenied
-      || /tool execution was interrupted/i.test(output);
-    const awaitingApproval = /requires? (?:shell mandatory )?confirmation.*no .*handler/i.test(output);
-
-    state.operationOutcomes.record(normalizeOperationOutcome(toolCall, {
-      success: !isFailed && !awaitingApproval,
-      output,
-      ...(isFailed ? { error: output.slice(0, 500) } : {}),
-      ...(awaitingApproval ? { status: 'awaiting_approval' as const } : {}),
-    }, {
-      disposition: userDenied
-        ? 'user_denied'
-        : isPolicyBlocked
-          ? 'policy_block'
-          : isFailed
-            ? 'execution_fail'
-            : 'executed',
-    }));
-  }
 }
 
 export function countModeEscalatingFailures(

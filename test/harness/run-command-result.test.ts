@@ -101,6 +101,29 @@ describe('run-command-result', () => {
     },
   );
 
+  it('classifies a failed background check after Harness adds its error prefix', () => {
+    const output = [
+      'Tool execution error: background process failed',
+      '',
+      JSON.stringify({
+        command: 'npm test',
+        status: 'failed',
+        exitCode: 3,
+      }),
+    ].join('\n');
+
+    expect(classifyRunCommandResult(
+      { action: 'check', task_id: 'bg-prefixed' },
+      output,
+      false,
+    )).toEqual({
+      kind: 'background_failed',
+      command: 'npm test',
+      exitCode: 3,
+      statusLabel: 'failed',
+    });
+  });
+
   it('prefers the response command and falls back to the legacy label', () => {
     const withCommand = JSON.stringify({
       label: 'build-verify',
@@ -221,10 +244,11 @@ describe('run-command-result', () => {
     expect(looksLikeRunnableCommand('please run the checks when everything is ready')).toBe(false);
   });
 
-  it('keeps isolated tracker tokens on the legacy runner allowlist', () => {
+  it('keeps isolated tracker tokens on the real bare-runner allowlist', () => {
     expect(looksLikeStrictTrackedCommand('npm')).toBe(true);
     expect(looksLikeStrictTrackedCommand('pytest')).toBe(true);
-    expect(looksLikeStrictTrackedCommand('turbo')).toBe(false);
+    expect(looksLikeStrictTrackedCommand('turbo')).toBe(true);
+    expect(looksLikeStrictTrackedCommand('nx')).toBe(true);
     expect(looksLikeStrictTrackedCommand('utf8')).toBe(false);
     expect(looksLikeStrictTrackedCommand('100%')).toBe(false);
     expect(looksLikeStrictTrackedCommand('--strict')).toBe(false);

@@ -39,6 +39,8 @@ export class TaskState {
   private filesRead = new Set<string>();
   private filesChanged = new Set<string>();
   private commandsRun: string[] = [];
+  /** 成功落地到工作区的任务级变更版本；与文件交付物确认版本相互独立。 */
+  private workspaceMutationVersion = 0;
   /** 文件交付物写操作版本（归一化路径 → 版本号，写后递增） */
   private fileDeliverableWriteVersion = new Map<string, number>();
   /** 文件交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
@@ -72,6 +74,7 @@ export class TaskState {
       if (op === 'delete' && result.success) {
         const path = extractPathLikeArg(toolCall.arguments);
         if (path) this.removeChangedFileDeliverable(path);
+        this.bumpWorkspaceMutationVersion();
       }
       return;
     }
@@ -99,11 +102,21 @@ export class TaskState {
 
     if (FILE_WRITE_TOOLS.has(toolCall.name)) {
       this.phase = 'editing';
+      this.bumpWorkspaceMutationVersion();
       if (path) {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
       }
     }
+  }
+
+  /**
+   * 记录单条成功 shell 命令通过清单差异产生的工作区变更。
+   * 一条命令无论触及多少路径都只递增一次。
+   */
+  recordCommandWorkspaceMutation(paths: readonly string[]): void {
+    if (!paths.some(path => typeof path === 'string' && path.trim().length > 0)) return;
+    this.bumpWorkspaceMutationVersion();
   }
 
   deliverableKind(): DeliverableKind {
@@ -213,6 +226,7 @@ export class TaskState {
       filesRead: [...this.filesRead],
       filesChanged: [...this.filesChanged],
       commandsRun: [...this.commandsRun],
+      workspaceMutationVersion: this.workspaceMutationVersion,
     };
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
@@ -231,6 +245,9 @@ export class TaskState {
     this.filesRead = new Set(snapshot.filesRead);
     this.filesChanged = new Set(snapshot.filesChanged);
     this.commandsRun = [...snapshot.commandsRun];
+    this.workspaceMutationVersion = safeWorkspaceMutationVersion(
+      snapshot.workspaceMutationVersion,
+    );
     this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
     this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
     if (this.fileDeliverableWriteVersion.size === 0) {
@@ -243,6 +260,12 @@ export class TaskState {
       }
     }
     this.reconcileOrphanFileDeliverableWriteVersions();
+  }
+
+  private bumpWorkspaceMutationVersion(): void {
+    if (this.workspaceMutationVersion < Number.MAX_SAFE_INTEGER) {
+      this.workspaceMutationVersion += 1;
+    }
   }
 }
 
@@ -264,6 +287,12 @@ function mapToVersionRecord(map: Map<string, number>): Record<string, number> | 
 function recordToVersionMap(record: Record<string, number> | undefined): Map<string, number> {
   if (!record) return new Map();
   return new Map(Object.entries(record));
+}
+
+function safeWorkspaceMutationVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : 0;
 }
 
 /** 纯分析/疑问口吻（无明确「请改/请跑测」侧信号） */

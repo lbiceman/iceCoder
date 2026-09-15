@@ -104,6 +104,22 @@ describe('parseVerificationCommandsFromGoal', () => {
   });
 
   it.each([
+    'CI',
+    'utf8',
+    '全部通过',
+    'smoke',
+  ])('rejects an adjacent non-runner bare marker value: %s', (candidate) => {
+    expect(parseVerificationCommandsFromGoal(`验收命令：\`${candidate}\`。`)).toEqual([]);
+  });
+
+  it.each([
+    'turbo',
+    'nx',
+  ])('keeps a real bare command runner: %s', (runner) => {
+    expect(parseVerificationCommandsFromGoal(`验收命令：\`${runner}\`。`)).toEqual([runner]);
+  });
+
+  it.each([
     'acceptance criteria mention `npm test` here',
     'The acceptance criteria mention `npm test` here.',
     'This completion condition mentions `npm test` here.',

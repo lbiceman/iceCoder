@@ -11,13 +11,17 @@ export type RunCommandResultClassification =
   | { kind: 'background_completed'; command: string; exitCode?: number }
   | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
 
-const LEGACY_TRACKED_RUNNERS = new Set([
+/**
+ * 仅用于没有参数、也不是脚本路径的孤立 runner。
+ * 带参数的命令仍按结构宽松判断，避免把自定义 runner/包装器误杀。
+ */
+const ISOLATED_BARE_RUNNERS = new Set([
   'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
   'node', 'nodejs', 'tsx', 'ts-node',
   'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
   'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
   'docker', 'docker-compose', 'podman',
-  'just', 'task', 'bazel',
+  'just', 'task', 'bazel', 'turbo', 'nx', 'lerna',
   'vitest', 'jest', 'mocha', 'playwright', 'cypress',
   'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
   'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
@@ -138,8 +142,7 @@ export function looksLikeStrictTrackedCommand(value: string): boolean {
   if (!looksLikeRunnableCommand(text)) return false;
   if (/\s/.test(text) || /(?:&&|\|\||;)/.test(text)) return true;
   if (/[\\/]/.test(text) || isExecutableScriptPath(text)) return true;
-  const executable = text.replace(/\.(?:exe|cmd|bat|com)$/i, '').toLowerCase();
-  return LEGACY_TRACKED_RUNNERS.has(executable);
+  return isKnownIsolatedRunner(text);
 }
 
 function normalizeExecutableIdentity(command: string): string {
@@ -187,7 +190,13 @@ function looksLikeRunnableSegment(segment: string): boolean {
     if (isRejectedArtifactPath(head)) return false;
     return tokens.length > 1 && !/[*?]|[\\/]$/.test(head);
   }
+  if (tokens.length === 1) return isKnownIsolatedRunner(head);
   return true;
+}
+
+function isKnownIsolatedRunner(value: string): boolean {
+  const executable = value.replace(/\.(?:exe|cmd|bat|com)$/i, '').toLowerCase();
+  return ISOLATED_BARE_RUNNERS.has(executable);
 }
 
 function looksLikeObviousProse(text: string): boolean {
@@ -231,13 +240,22 @@ function firstCommandToken(text: string): string {
 
 function safeParseJson(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim();
-  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === 'object'
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
+  if (!trimmed) return null;
+  const candidates = [trimmed];
+  for (const match of trimmed.matchAll(/(?:^|\r?\n)([{\[])/g)) {
+    const start = match.index + match[0].length - 1;
+    if (start > 0) candidates.push(trimmed.slice(start));
   }
+  for (const candidate of candidates) {
+    if (candidate[0] !== '{' && candidate[0] !== '[') continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 尝试 Harness 错误前缀后的下一段 JSON。
+    }
+  }
+  return null;
 }

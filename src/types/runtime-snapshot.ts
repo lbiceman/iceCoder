@@ -16,6 +16,8 @@ export interface TaskStateSnapshot {
   filesRead: string[];
   filesChanged: string[];
   commandsRun: string[];
+  /** 本任务内成功落地的工作区变更次数；只增不减并饱和于安全整数上限 */
+  workspaceMutationVersion: number;
   /** file_deliverable 写后版本（归一化路径 → 版本号） */
   fileDeliverableWriteVersions?: Record<string, number>;
   /** file_deliverable 确认时对应的写版本 */

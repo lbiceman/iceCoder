@@ -291,6 +291,7 @@ export async function executeToolCallsStreaming(
   const policyBlockedSignatures: string[] = [];
   const budgetBlockedFilePaths: string[] = [];
   const budgetBlockedPathSet = new Set<string>();
+  const commandInventoryScope = deps.sessionId?.trim() || deps.workspaceRoot;
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -669,12 +670,12 @@ export async function executeToolCallsStreaming(
       await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, p);
     }
     if (
-      deps.sessionId
+      commandInventoryScope
       && tc.id
       && isShellWorkspaceTouchTool(tc.name, tc.arguments)
     ) {
       rememberPreCommandInventory(
-        deps.sessionId,
+        commandInventoryScope,
         tc.id,
         await listWorkspaceFileInventory(deps.workspaceRoot),
       );
@@ -736,17 +737,25 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    const preInv = deps.sessionId && tc.id
-      ? takePreCommandInventory(deps.sessionId, tc.id)
+    const preInv = commandInventoryScope && tc.id
+      ? takePreCommandInventory(commandInventoryScope, tc.id)
       : undefined;
+    let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
+    if (result.success && preInv) {
+      const after = await listWorkspaceFileInventory(deps.workspaceRoot);
+      commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, preInv, after);
+      taskState?.recordCommandWorkspaceMutation([
+        ...commandInventoryDiff.created,
+        ...commandInventoryDiff.changed,
+        ...commandInventoryDiff.deleted,
+      ]);
+    }
     if (result.success && deps.sessionDir && deps.sessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
         .map((p) => remapPathToWorkspace(deps.workspaceRoot, p) ?? p)
         .filter(Boolean);
-      if (preInv) {
-        const after = await listWorkspaceFileInventory(deps.workspaceRoot);
-        const diff = diffInventoryTouchedPaths(deps.workspaceRoot, preInv, after);
-        for (const created of diff.created) {
+      if (commandInventoryDiff) {
+        for (const created of commandInventoryDiff.created) {
           recordPreTurnMissingFile(deps.sessionId, deps.workspaceRoot, created);
           touchedPaths.push(created);
         }

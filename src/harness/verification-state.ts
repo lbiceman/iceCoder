@@ -172,7 +172,7 @@ function buildLastResult(
 function sanitizeLastResult(value: unknown): VerificationLastResult | null {
   const record = asRecord(value);
   if (!record) return null;
-  const status = verificationStatus(record.status);
+  const status = parseVerificationResultStatus(record.status);
   const source = verificationSource(record.source);
   if (!status || !source) return null;
 
@@ -213,7 +213,7 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-function verificationStatus(value: unknown): VerificationResultStatus | null {
+function parseVerificationResultStatus(value: unknown): VerificationResultStatus | null {
   return value === 'passed' || value === 'failed' || value === 'unavailable'
     ? value
     : null;

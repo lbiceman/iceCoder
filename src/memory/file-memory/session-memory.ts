@@ -132,6 +132,8 @@ export interface SessionRuntimeEvidenceInput {
     filesRead: string[];
     filesChanged: string[];
     commandsRun: string[];
+    /** 旧调用方可省略；写入持久化快照时安全归一化为 0。 */
+    workspaceMutationVersion?: number;
     fileDeliverableWriteVersions?: Record<string, number>;
     fileDeliverableConfirmVersions?: Record<string, number>;
   };
@@ -197,6 +199,9 @@ function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskSt
     filesRead: [...input.filesRead],
     filesChanged: [...input.filesChanged],
     commandsRun: [...input.commandsRun],
+    workspaceMutationVersion: safeWorkspaceMutationVersion(
+      input.workspaceMutationVersion,
+    ),
   };
   if (input.fileDeliverableWriteVersions) {
     snap.fileDeliverableWriteVersions = { ...input.fileDeliverableWriteVersions };
@@ -283,6 +288,9 @@ export function parsePersistedRuntime(notes: string): {
     filesRead: tt.filesRead.filter((x): x is string => typeof x === 'string'),
     filesChanged: tt.filesChanged.filter((x): x is string => typeof x === 'string'),
     commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
+    workspaceMutationVersion: safeWorkspaceMutationVersion(
+      tt.workspaceMutationVersion,
+    ),
     ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
     ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
   };
@@ -325,6 +333,9 @@ function parsePersistedRuntimeV1(
       filesRead: tt.filesRead.filter((x): x is string => typeof x === 'string'),
       filesChanged: tt.filesChanged.filter((x): x is string => typeof x === 'string'),
       commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
+      workspaceMutationVersion: safeWorkspaceMutationVersion(
+        tt.workspaceMutationVersion,
+      ),
       ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
       ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
     }),
@@ -336,6 +347,12 @@ function parsePersistedRuntimeV1(
       recentDiagnostics: rr.recentDiagnostics.filter((x): x is string => typeof x === 'string'),
     }),
   };
+}
+
+function safeWorkspaceMutationVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : 0;
 }
 
 // ─── 状态管理（闭包隔离） ───
