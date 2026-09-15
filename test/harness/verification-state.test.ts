@@ -66,6 +66,22 @@ describe('verification-state', () => {
     expect(state.lastResult?.status).toBe('passed');
   });
 
+  it('clears verified and attempted identities when mutation version saturates', () => {
+    const state = createVerificationRuntimeState();
+    state.workspaceMutationVersion = Number.MAX_SAFE_INTEGER;
+    state.verifiedMutationVersion = Number.MAX_SAFE_INTEGER;
+    state.verifiedPlanFingerprint = 'plan-a';
+    state.attemptedMutationVersion = Number.MAX_SAFE_INTEGER;
+    state.attemptedPlanFingerprint = 'plan-a';
+
+    markWorkspaceMutation(state);
+
+    expect(state.verifiedMutationVersion).toBeNull();
+    expect(state.verifiedPlanFingerprint).toBeNull();
+    expect(state.attemptedMutationVersion).toBeNull();
+    expect(state.attemptedPlanFingerprint).toBeNull();
+  });
+
   it('records failed and unavailable results without treating them as fresh', () => {
     const state = createVerificationRuntimeState();
     markVerificationPassed(state, {

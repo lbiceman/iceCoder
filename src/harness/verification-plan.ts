@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { looksLikeRunnableCommand } from './run-command-result.js';
 import { WORKSPACE_ICECODER_CONFIG_NAMES } from './verification-exempt-config.js';
 
 export type VerificationPlanSource = 'user' | 'project' | 'runtime_default';
@@ -18,6 +19,12 @@ export interface VerificationPlan {
   commands: VerificationPlanCommand[];
   fingerprint: string;
 }
+
+export type VerificationPlanResolution =
+  | { kind: 'resolved'; plan: VerificationPlan }
+  | { kind: 'disabled'; source: 'project' }
+  | { kind: 'unavailable' }
+  | { kind: 'invalid'; source: 'user' | 'project'; reason: string };
 
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000;
 export const MAX_VERIFICATION_COMMAND_LENGTH = 500;
@@ -50,7 +57,7 @@ interface LocatedCommand {
 }
 
 const STRICT_MARKER =
-  /完成条件\s*[：:]\s*必须(?:运行|通过)|验收命令\s*[：:]|completion\s+condition\s*:\s*must\s+(?:run|pass)|must\s+(?:run|pass)/gi;
+  /验收命令(?:\s*(?:[:：]|是|为))?|完成条件(?:\s*(?:[:：]|是|为))?(?:\s*必须(?:运行|通过))?|(?:你\s*)?必须(?:运行|通过)|\bacceptance\s*:|\bcompletion\s+condition\s*:\s*(?:must\s+(?:run|pass)\s*)?|\bmust\s+(?:run|pass)|\bbefore\s+(?:you\s+)?finish(?:\s*[:：])?/gi;
 const CODE_SPAN = /`([^`]*)`/g;
 const POSTFIX_BEFORE_FINISH = /`([^`]*)`\s+before\s+(?:you\s+)?finish/gi;
 
@@ -59,10 +66,11 @@ interface ParsedVerificationCommands {
   explicitCandidateCount: number;
 }
 
-interface WorkspaceVerificationCommands {
-  commands: string[];
-  disabled: boolean;
-}
+type WorkspaceVerificationCommands =
+  | { kind: 'absent' }
+  | { kind: 'commands'; commands: string[] }
+  | { kind: 'disabled' }
+  | { kind: 'invalid'; reason: string };
 
 /**
  * 只提取受明确 marker 直接支配的反引号命令。
@@ -94,7 +102,7 @@ function parseVerificationCommands(
 
     for (const span of following) {
       const separator = goal.slice(cursor, span.index);
-      if (hasSentenceBoundary(separator)) break;
+      if (hasScopeBoundary(separator)) break;
       if (
         acceptedAny
           ? !isCommandListSeparator(separator)
@@ -117,12 +125,12 @@ function parseVerificationCommands(
   const seen = new Set<string>();
   for (const item of located) {
     const command = normalizeVerificationCommand(item.command);
-    if (!command) {
+    if (!command || !looksLikeRunnableCommand(command)) {
       emitWarning(onWarning, {
         kind: 'invalid_command',
         source: 'user_goal',
         path: '<goal>',
-        message: 'explicit verification command is empty, too long, or contains newline/NUL',
+        message: 'explicit verification command is invalid or not plausibly executable',
       });
       continue;
     }
@@ -162,37 +170,53 @@ export function buildVerificationPlan(
 
 export async function resolveVerificationPlan(
   options: ResolveVerificationPlanOptions,
-): Promise<VerificationPlan | null> {
+): Promise<VerificationPlanResolution> {
   const parsedUserCommands = parseVerificationCommands(options.goal, options.onWarning);
   const userPlan = buildVerificationPlan({
     source: 'user',
     commands: parsedUserCommands.commands,
     workspaceRoot: options.workspaceRoot,
   });
-  if (userPlan) return userPlan;
-  if (parsedUserCommands.explicitCandidateCount > 0) return null;
+  if (userPlan) return { kind: 'resolved', plan: userPlan };
+  if (parsedUserCommands.explicitCandidateCount > 0) {
+    return {
+      kind: 'invalid',
+      source: 'user',
+      reason: 'all explicit user commands were rejected',
+    };
+  }
 
   const projectCommands = await readWorkspaceVerificationCommands(
     options.workspaceRoot,
     options.onWarning,
   );
-  if (projectCommands.disabled) return null;
-  const projectPlan = buildVerificationPlan({
-    source: 'project',
-    commands: projectCommands.commands,
-    workspaceRoot: options.workspaceRoot,
-  });
-  if (projectPlan) return projectPlan;
+  if (projectCommands.kind === 'disabled') {
+    return { kind: 'disabled', source: 'project' };
+  }
+  if (projectCommands.kind === 'invalid') {
+    return { kind: 'invalid', source: 'project', reason: projectCommands.reason };
+  }
+  if (projectCommands.kind === 'commands') {
+    const projectPlan = buildVerificationPlan({
+      source: 'project',
+      commands: projectCommands.commands,
+      workspaceRoot: options.workspaceRoot,
+    });
+    if (projectPlan) return { kind: 'resolved', plan: projectPlan };
+  }
 
   const runtimeCommand = await resolveRuntimeDefaultCommand(
     options.workspaceRoot,
     options.onWarning,
   );
-  return buildVerificationPlan({
+  const runtimePlan = buildVerificationPlan({
     source: 'runtime_default',
     commands: runtimeCommand ? [runtimeCommand] : [],
     workspaceRoot: options.workspaceRoot,
   });
+  return runtimePlan
+    ? { kind: 'resolved', plan: runtimePlan }
+    : { kind: 'unavailable' };
 }
 
 function normalizePlanCommands(
@@ -246,23 +270,23 @@ function normalizeTimeout(timeoutMs: number): number {
   return Math.floor(timeoutMs);
 }
 
-function hasSentenceBoundary(separator: string): boolean {
-  return /[。.!?！？\r\n]/.test(separator);
+function hasScopeBoundary(separator: string): boolean {
+  return /[。.!?！？]/.test(separator) || /\r?\n\s*\r?\n/.test(separator);
 }
 
 function isMarkerCommandSeparator(separator: string): boolean {
-  return /^[\s:：\-—]*(?:commands?\s*(?:are\s*)?)?[:：\-—]*$/i.test(separator);
+  return /^[\s:：\-—*+>]*$/i.test(separator);
 }
 
 function isCommandListSeparator(separator: string): boolean {
-  return /^[\s,，、;；/|→]*(?:(?:and|then|以及|和)\s*)?$/i.test(separator);
+  return /^[\s,，、;；/|→\-—*+>]*(?:(?:and|then|以及|和)\s*)?$/i.test(separator);
 }
 
 async function readWorkspaceVerificationCommands(
   workspaceRoot: string,
   onWarning?: (warning: VerificationPlanWarning) => void,
 ): Promise<WorkspaceVerificationCommands> {
-  if (!workspaceRoot.trim()) return { commands: [], disabled: false };
+  if (!workspaceRoot.trim()) return { kind: 'absent' };
   for (const name of WORKSPACE_ICECODER_CONFIG_NAMES) {
     const configPath = path.join(workspaceRoot, name);
     let raw: string;
@@ -296,20 +320,38 @@ async function readWorkspaceVerificationCommands(
         continue;
       }
       if (parsed.verificationCommands.length === 0) {
-        return { commands: [], disabled: true };
+        return { kind: 'disabled' };
       }
-      const commands = parsed.verificationCommands.filter(
-        (value): value is string => typeof value === 'string',
-      );
-      if (commands.length !== parsed.verificationCommands.length) {
-        emitMalformedWarning(
-          onWarning,
-          'workspace_config',
-          configPath,
-          'verificationCommands contains non-string entries',
-        );
+      const commands: string[] = [];
+      for (const value of parsed.verificationCommands) {
+        if (typeof value !== 'string') {
+          emitMalformedWarning(
+            onWarning,
+            'workspace_config',
+            configPath,
+            'verificationCommands contains a non-string entry',
+          );
+          continue;
+        }
+        const command = normalizeVerificationCommand(value);
+        if (!command) {
+          emitWarning(onWarning, {
+            kind: 'invalid_command',
+            source: 'workspace_config',
+            path: configPath,
+            message: 'verificationCommands contains an empty or unsafe command',
+          });
+          continue;
+        }
+        commands.push(command);
       }
-      return { commands, disabled: false };
+      if (commands.length === 0) {
+        return {
+          kind: 'invalid',
+          reason: 'all configured verification commands were rejected',
+        };
+      }
+      return { kind: 'commands', commands };
     } catch (error) {
       emitWarning(onWarning, warningFromError(
         'malformed',
@@ -319,7 +361,7 @@ async function readWorkspaceVerificationCommands(
       ));
     }
   }
-  return { commands: [], disabled: false };
+  return { kind: 'absent' };
 }
 
 async function resolveRuntimeDefaultCommand(

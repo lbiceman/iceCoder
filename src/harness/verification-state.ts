@@ -53,6 +53,8 @@ export function markWorkspaceMutation(
     state.workspaceMutationVersion = Number.MAX_SAFE_INTEGER;
     state.verifiedMutationVersion = null;
     state.verifiedPlanFingerprint = null;
+    state.attemptedMutationVersion = null;
+    state.attemptedPlanFingerprint = null;
   } else {
     state.workspaceMutationVersion += 1;
   }

@@ -56,8 +56,14 @@ describe('parseVerificationCommandsFromGoal', () => {
     '完成条件：必须运行 `pnpm test`。',
     '完成条件：必须通过 `pnpm test`。',
     '验收命令：`pnpm test`。',
-    'Completion condition: must run `pnpm test`.',
-    'Completion condition: must pass `pnpm test`.',
+    '验收命令是 `pnpm test`。',
+    '验收命令为 `pnpm test`。',
+    '验收命令 `pnpm test`。',
+    '完成条件：`pnpm test`。',
+    '你必须运行 `pnpm test` 才能结束。',
+    'Acceptance: `pnpm test`.',
+    'Completion condition: `pnpm test`.',
+    'Before finish: `pnpm test`.',
     'Must run `pnpm test`.',
     'Must pass `pnpm test`.',
     '`pnpm test` before finish.',
@@ -76,6 +82,14 @@ describe('parseVerificationCommandsFromGoal', () => {
     expect(parseVerificationCommandsFromGoal(goal)).toEqual(['npm test']);
   });
 
+  it('parses a markdown command list after an explicit marker', () => {
+    expect(parseVerificationCommandsFromGoal([
+      '验收命令：',
+      '- `npm test`',
+      '- `turbo run lint`',
+    ].join('\n'))).toEqual(['npm test', 'turbo run lint']);
+  });
+
   it('preserves explicit commands without applying the legacy runner whitelist', () => {
     expect(parseVerificationCommandsFromGoal([
       '验收命令：`turbo test`、`nx affected --target=test`、`cross-env NODE_ENV=test vitest`、',
@@ -91,10 +105,8 @@ describe('parseVerificationCommandsFromGoal', () => {
 
   it.each([
     'acceptance criteria mention `npm test` here',
-    'Acceptance: `npm test`.',
-    'Completion condition: `npm test`.',
-    '完成条件：`npm test`。',
-    '验收命令 `npm test`。',
+    'The acceptance criteria mention `npm test` here.',
+    'This completion condition mentions `npm test` here.',
   ])('rejects loose marker prose: %s', (goal) => {
     expect(parseVerificationCommandsFromGoal(goal)).toEqual([]);
   });
@@ -186,11 +198,14 @@ describe('resolveVerificationPlan', () => {
       goal: '完成条件：必须运行 `cargo test`、`cargo clippy`。',
       workspaceRoot: root,
     })).resolves.toMatchObject({
-      source: 'user',
-      commands: [
-        { command: 'cargo test', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
-        { command: 'cargo clippy', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
-      ],
+      kind: 'resolved',
+      plan: {
+        source: 'user',
+        commands: [
+          { command: 'cargo test', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
+          { command: 'cargo clippy', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
+        ],
+      },
     });
   });
 
@@ -207,11 +222,14 @@ describe('resolveVerificationPlan', () => {
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
     })).resolves.toMatchObject({
-      source: 'project',
-      commands: [
-        { command: 'npm run verify', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
-        { command: 'npm run lint', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
-      ],
+      kind: 'resolved',
+      plan: {
+        source: 'project',
+        commands: [
+          { command: 'npm run verify', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
+          { command: 'npm run lint', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
+        ],
+      },
     });
     expect(warnings).toEqual([
       expect.objectContaining({
@@ -229,7 +247,26 @@ describe('resolveVerificationPlan', () => {
     await expect(resolveVerificationPlan({
       goal: '',
       workspaceRoot: root,
-    })).resolves.toBeNull();
+    })).resolves.toEqual({ kind: 'disabled', source: 'project' });
+  });
+
+  it('returns project invalid when every configured entry is blank or non-string', async () => {
+    const root = temporaryWorkspace();
+    writeJson(root, '.icecoder.json', { verificationCommands: ['  ', 42] });
+    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
+    const warnings: Array<{ kind: string; source: string }> = [];
+
+    await expect(resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
+    })).resolves.toEqual({
+      kind: 'invalid',
+      source: 'project',
+      reason: 'all configured verification commands were rejected',
+    });
+    expect(warnings).toHaveLength(2);
+    expect(warnings.every(warning => warning.source === 'workspace_config')).toBe(true);
   });
 
   it('warns and does not fall back when explicit user commands are unsafe strings', async () => {
@@ -241,13 +278,35 @@ describe('resolveVerificationPlan', () => {
       goal: '验收命令：`bad\u0000command`。',
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
-    })).resolves.toBeNull();
+    })).resolves.toEqual({
+      kind: 'invalid',
+      source: 'user',
+      reason: 'all explicit user commands were rejected',
+    });
     expect(warnings).toEqual([
       expect.objectContaining({
         kind: 'invalid_command',
         source: 'user_goal',
       }),
     ]);
+  });
+
+  it('returns user invalid when explicitly marked values are not plausible commands', async () => {
+    const root = temporaryWorkspace();
+    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
+    const warnings: Array<{ kind: string; source: string }> = [];
+
+    await expect(resolveVerificationPlan({
+      goal: '验收命令：`src/foo.ts`、`README.md`。',
+      workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
+    })).resolves.toEqual({
+      kind: 'invalid',
+      source: 'user',
+      reason: 'all explicit user commands were rejected',
+    });
+    expect(warnings).toHaveLength(2);
+    expect(warnings.every(warning => warning.kind === 'invalid_command')).toBe(true);
   });
 
   it.each([
@@ -272,8 +331,11 @@ describe('resolveVerificationPlan', () => {
       goal: '实现功能，没有验收 marker。',
       workspaceRoot: root,
     })).resolves.toMatchObject({
-      source: 'runtime_default',
-      commands: [{ command: expectedCommand, required: true }],
+      kind: 'resolved',
+      plan: {
+        source: 'runtime_default',
+        commands: [{ command: expectedCommand, required: true }],
+      },
     });
   });
 
@@ -285,8 +347,11 @@ describe('resolveVerificationPlan', () => {
       goal: '',
       workspaceRoot: root,
     })).resolves.toMatchObject({
-      source: 'runtime_default',
-      commands: [{ command: 'npm test', required: true }],
+      kind: 'resolved',
+      plan: {
+        source: 'runtime_default',
+        commands: [{ command: 'npm test', required: true }],
+      },
     });
   });
 
@@ -297,7 +362,7 @@ describe('resolveVerificationPlan', () => {
     await expect(resolveVerificationPlan({
       goal: '',
       workspaceRoot: malformedConfigRoot,
-    })).resolves.toBeNull();
+    })).resolves.toEqual({ kind: 'unavailable' });
 
     const buildOnlyRoot = temporaryWorkspace();
     writeJson(buildOnlyRoot, 'package.json', {
@@ -306,7 +371,7 @@ describe('resolveVerificationPlan', () => {
     await expect(resolveVerificationPlan({
       goal: '',
       workspaceRoot: buildOnlyRoot,
-    })).resolves.toBeNull();
+    })).resolves.toEqual({ kind: 'unavailable' });
   });
 
   it('warns for malformed config while continuing to the next configured name', async () => {
@@ -320,8 +385,11 @@ describe('resolveVerificationPlan', () => {
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
     })).resolves.toMatchObject({
-      source: 'project',
-      commands: [{ command: 'npm run verify' }],
+      kind: 'resolved',
+      plan: {
+        source: 'project',
+        commands: [{ command: 'npm run verify' }],
+      },
     });
     expect(warnings).toEqual([
       expect.objectContaining({
@@ -350,7 +418,10 @@ describe('resolveVerificationPlan', () => {
       goal: '',
       workspaceRoot: unreadableRoot,
       onWarning: warning => unreadableWarnings.push(warning),
-    })).resolves.toMatchObject({ source: 'runtime_default' });
+    })).resolves.toMatchObject({
+      kind: 'resolved',
+      plan: { source: 'runtime_default' },
+    });
     expect(unreadableWarnings).toEqual([
       expect.objectContaining({
         kind: 'read_error',
@@ -368,7 +439,7 @@ describe('resolveVerificationPlan', () => {
       goal: '',
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
-    })).resolves.toBeNull();
+    })).resolves.toEqual({ kind: 'unavailable' });
     expect(warnings).toEqual([
       expect.objectContaining({
         kind: 'malformed',

@@ -11,18 +11,6 @@ export type RunCommandResultClassification =
   | { kind: 'background_completed'; command: string; exitCode?: number }
   | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
 
-const COMMAND_RUNNERS = new Set([
-  'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
-  'node', 'nodejs', 'tsx', 'ts-node',
-  'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
-  'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
-  'docker', 'docker-compose', 'podman',
-  'just', 'task', 'bazel',
-  'vitest', 'jest', 'mocha', 'playwright', 'cypress',
-  'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
-  'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
-]);
-
 export function classifyRunCommandResult(
   args: Record<string, unknown> | undefined | null,
   rawOutput: string,
@@ -121,19 +109,11 @@ export function normalizeAcceptanceCommandKey(command: string): string {
 export function looksLikeRunnableCommand(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 500 || /[\r\n\u0000]/.test(text)) return false;
-  if (/^(?:the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
-    return false;
-  }
-  if (/=/.test(text) && !/^[A-Za-z_][\w.-]*=\S+\s+\S/.test(text)) return false;
-  if (/^(?:\.\/|\.\\)/.test(text)) return true;
-  if (looksLikeBareFileOrGlob(text)) return false;
-  const head = firstCommandToken(text);
-  if (!head) return false;
-  const executable = head
-    .split(/[\\/]/)
-    .at(-1)
-    ?.replace(/\.(?:exe|cmd|bat|com)$/i, '') ?? head;
-  return COMMAND_RUNNERS.has(executable.toLowerCase());
+  if (/\s=\s/.test(text)) return false;
+  return text
+    .split(/\s*(?:&&|\|\||;)\s*/)
+    .filter(Boolean)
+    .every(looksLikeRunnableSegment);
 }
 
 function normalizeExecutableIdentity(command: string): string {
@@ -153,6 +133,67 @@ function looksLikeBareFileOrGlob(text: string): boolean {
   if (/\/$|\*\*?$/.test(text)) return true;
   if (/[\\/]/.test(text)) return true;
   return /\.(md|json|ya?ml|toml|lock|txt|ts|tsx|js|mjs|cjs|jsx|css|html|map)$/i.test(text);
+}
+
+function looksLikeRunnableSegment(segment: string): boolean {
+  const text = segment.trim();
+  if (!text) return false;
+  if (/^(["']).*\1$/.test(text)) return false;
+  if (looksLikeObviousProse(text)) return false;
+  if (!/\s/.test(text) && looksLikeBareFileOrGlob(text)) {
+    return isExecutableScriptPath(text);
+  }
+
+  const tokens = commandTokens(text);
+  while (tokens.length > 1 && isEnvironmentAssignment(tokens[0]!)) {
+    tokens.shift();
+  }
+  if (tokens.length === 0) return false;
+  const head = tokens[0]!;
+  if (tokens.length === 1 && /[a-z][A-Z]/.test(head)) return false;
+  if (tokens.length === 1 && /^(?:build|test|lint|check|verify|run)$/i.test(head)) {
+    return false;
+  }
+  if (looksLikeBareFileOrGlob(head)) {
+    if (isExecutableScriptPath(head)) return true;
+    if (isRejectedArtifactPath(head)) return false;
+    return tokens.length > 1 && !/[*?]|[\\/]$/.test(head);
+  }
+  return true;
+}
+
+function looksLikeObviousProse(text: string): boolean {
+  const words = text.split(/\s+/);
+  return (
+    words.length >= 4
+      && /^(?:the|a|an|this|that|please|just|we|you|i|read|explain|describe|mention)\b/i
+        .test(text)
+  ) || (
+    words.length >= 3
+      && /\b(?:of|the|is|are|to|for|with|here|mentions?)\b/i.test(text)
+  );
+}
+
+function commandTokens(text: string): string[] {
+  return Array.from(text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g), match =>
+    (match[1] ?? match[2] ?? match[3] ?? '').trim(),
+  ).filter(Boolean);
+}
+
+function isEnvironmentAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=\S+$/.test(token);
+}
+
+function isExecutableScriptPath(value: string): boolean {
+  const unquoted = value.replace(/^(['"])(.*)\1$/, '$2');
+  if (/[*?]|\.\.$/.test(unquoted) || /[\\/]$/.test(unquoted)) return false;
+  return /\.(?:exe|cmd|bat|ps1|sh)$/i.test(unquoted)
+    || /^(?:\.{1,2}[\\/]|bin[\\/])[^\\/]+$/i.test(unquoted);
+}
+
+function isRejectedArtifactPath(value: string): boolean {
+  return /\.(?:md|json|ya?ml|toml|lock|txt|ts|tsx|js|mjs|cjs|jsx|css|html|map)$/i
+    .test(value);
 }
 
 function firstCommandToken(text: string): string {

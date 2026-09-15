@@ -172,19 +172,37 @@ describe('run-command-result', () => {
     expect(normalizeAcceptanceCommandKey('cargo test')).toBe('cargo test');
   });
 
-  it('recognizes supported runnable commands across path styles', () => {
-    expect(looksLikeRunnableCommand('npm test')).toBe(true);
-    expect(looksLikeRunnableCommand('./scripts/ci.sh')).toBe(true);
-    expect(looksLikeRunnableCommand('.\\scripts\\ci.cmd')).toBe(true);
-    expect(looksLikeRunnableCommand('C:\\tools\\make.exe verify')).toBe(true);
-    expect(looksLikeRunnableCommand('"/opt/tools/python3" -m pytest')).toBe(true);
+  it.each([
+    'npm test',
+    'turbo test',
+    'nx affected --target=test',
+    'lerna run test',
+    'cross-env NODE_ENV=test vitest',
+    'env NODE_ENV=test npm test',
+    'NODE_ENV=test npm test',
+    'bin/ci.sh',
+    './scripts/ci.sh',
+    '.\\scripts\\ci.cmd',
+    'C:\\tools\\verify.exe --all',
+    'C:\\tools\\verify.cmd',
+    'C:\\tools\\verify.bat',
+    'C:\\tools\\verify.ps1',
+    'npm test && turbo run lint',
+  ])('accepts plausible runnable command: %s', (command) => {
+    expect(looksLikeRunnableCommand(command)).toBe(true);
   });
 
-  it('rejects files, formulas, prose, and unsupported bare tokens', () => {
+  it('rejects files, directories, globs, formulas, and obvious prose', () => {
     expect(looksLikeRunnableCommand('src/foo.ts')).toBe(false);
     expect(looksLikeRunnableCommand('README.md')).toBe(false);
+    expect(looksLikeRunnableCommand('tsconfig.json')).toBe(false);
+    expect(looksLikeRunnableCommand('src/')).toBe(false);
+    expect(looksLikeRunnableCommand('test/**/*.test.ts')).toBe(false);
     expect(looksLikeRunnableCommand('available = onHand - reserved')).toBe(false);
     expect(looksLikeRunnableCommand('build')).toBe(false);
+    expect(looksLikeRunnableCommand('"source of truth"')).toBe(false);
+    expect(looksLikeRunnableCommand('source of truth')).toBe(false);
+    expect(looksLikeRunnableCommand('tenantId')).toBe(false);
     expect(looksLikeRunnableCommand('please run the checks when everything is ready')).toBe(false);
   });
 });
