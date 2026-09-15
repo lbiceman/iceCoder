@@ -11,6 +11,18 @@ export type RunCommandResultClassification =
   | { kind: 'background_completed'; command: string; exitCode?: number }
   | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
 
+const LEGACY_TRACKED_RUNNERS = new Set([
+  'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
+  'node', 'nodejs', 'tsx', 'ts-node',
+  'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
+  'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
+  'docker', 'docker-compose', 'podman',
+  'just', 'task', 'bazel',
+  'vitest', 'jest', 'mocha', 'playwright', 'cypress',
+  'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
+  'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
+]);
+
 export function classifyRunCommandResult(
   args: Record<string, unknown> | undefined | null,
   rawOutput: string,
@@ -110,10 +122,24 @@ export function looksLikeRunnableCommand(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 500 || /[\r\n\u0000]/.test(text)) return false;
   if (/\s=\s/.test(text)) return false;
+  if (/^(?:\d+(?:\.\d+)?%?|\d+(?:ms|s|m|h|d)|--?[\w-]+)$/i.test(text)) return false;
   return text
     .split(/\s*(?:&&|\|\||;)\s*/)
     .filter(Boolean)
     .every(looksLikeRunnableSegment);
+}
+
+/**
+ * 旧 TaskAcceptanceTracker 的过渡扫描策略。
+ * 带参数命令沿用宽松合理性判定；孤立裸词仍须属于历史 runner 集合。
+ */
+export function looksLikeStrictTrackedCommand(value: string): boolean {
+  const text = value.trim();
+  if (!looksLikeRunnableCommand(text)) return false;
+  if (/\s/.test(text) || /(?:&&|\|\||;)/.test(text)) return true;
+  if (/[\\/]/.test(text) || isExecutableScriptPath(text)) return true;
+  const executable = text.replace(/\.(?:exe|cmd|bat|com)$/i, '').toLowerCase();
+  return LEGACY_TRACKED_RUNNERS.has(executable);
 }
 
 function normalizeExecutableIdentity(command: string): string {
@@ -139,12 +165,14 @@ function looksLikeRunnableSegment(segment: string): boolean {
   const text = segment.trim();
   if (!text) return false;
   if (/^(["']).*\1$/.test(text)) return false;
-  if (looksLikeObviousProse(text)) return false;
   if (!/\s/.test(text) && looksLikeBareFileOrGlob(text)) {
     return isExecutableScriptPath(text);
   }
 
   const tokens = commandTokens(text);
+  const hasFlagSignal = tokens.slice(1).some(token => /^-{1,2}\S+/.test(token));
+  const proseCandidate = text.replace(/"[^"]*"|'[^']*'/g, ' ');
+  if (!hasFlagSignal && looksLikeObviousProse(proseCandidate)) return false;
   while (tokens.length > 1 && isEnvironmentAssignment(tokens[0]!)) {
     tokens.shift();
   }

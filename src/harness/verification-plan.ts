@@ -20,11 +20,19 @@ export interface VerificationPlan {
   fingerprint: string;
 }
 
+export type VerificationPlanInvalidReason =
+  | 'unsafe_user_command'
+  | 'invalid_project_commands';
+
 export type VerificationPlanResolution =
   | { kind: 'resolved'; plan: VerificationPlan }
   | { kind: 'disabled'; source: 'project' }
   | { kind: 'unavailable' }
-  | { kind: 'invalid'; source: 'user' | 'project'; reason: string };
+  | {
+      kind: 'invalid';
+      source: 'user' | 'project';
+      reason: VerificationPlanInvalidReason;
+    };
 
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000;
 export const MAX_VERIFICATION_COMMAND_LENGTH = 500;
@@ -63,14 +71,14 @@ const POSTFIX_BEFORE_FINISH = /`([^`]*)`\s+before\s+(?:you\s+)?finish/gi;
 
 interface ParsedVerificationCommands {
   commands: string[];
-  explicitCandidateCount: number;
+  unsafeCandidateCount: number;
 }
 
 type WorkspaceVerificationCommands =
   | { kind: 'absent' }
   | { kind: 'commands'; commands: string[] }
   | { kind: 'disabled' }
-  | { kind: 'invalid'; reason: string };
+  | { kind: 'invalid'; reason: 'invalid_project_commands' };
 
 /**
  * 只提取受明确 marker 直接支配的反引号命令。
@@ -123,14 +131,25 @@ function parseVerificationCommands(
   located.sort((left, right) => left.index - right.index);
   const commands: string[] = [];
   const seen = new Set<string>();
+  let unsafeCandidateCount = 0;
   for (const item of located) {
     const command = normalizeVerificationCommand(item.command);
-    if (!command || !looksLikeRunnableCommand(command)) {
+    if (!command) {
+      unsafeCandidateCount += 1;
       emitWarning(onWarning, {
         kind: 'invalid_command',
         source: 'user_goal',
         path: '<goal>',
-        message: 'explicit verification command is invalid or not plausibly executable',
+        message: 'explicit verification command is empty, too long, or contains newline/NUL',
+      });
+      continue;
+    }
+    if (!looksLikeRunnableCommand(command)) {
+      emitWarning(onWarning, {
+        kind: 'invalid_command',
+        source: 'user_goal',
+        path: '<goal>',
+        message: 'explicit marker value is not plausibly executable',
       });
       continue;
     }
@@ -138,7 +157,10 @@ function parseVerificationCommands(
     seen.add(command);
     commands.push(command);
   }
-  return { commands, explicitCandidateCount: located.length };
+  return {
+    commands,
+    unsafeCandidateCount,
+  };
 }
 
 export function buildVerificationPlan(
@@ -177,14 +199,10 @@ export async function resolveVerificationPlan(
     commands: parsedUserCommands.commands,
     workspaceRoot: options.workspaceRoot,
   });
-  if (userPlan) return { kind: 'resolved', plan: userPlan };
-  if (parsedUserCommands.explicitCandidateCount > 0) {
-    return {
-      kind: 'invalid',
-      source: 'user',
-      reason: 'all explicit user commands were rejected',
-    };
+  if (parsedUserCommands.unsafeCandidateCount > 0) {
+    return { kind: 'invalid', source: 'user', reason: 'unsafe_user_command' };
   }
+  if (userPlan) return { kind: 'resolved', plan: userPlan };
 
   const projectCommands = await readWorkspaceVerificationCommands(
     options.workspaceRoot,
@@ -348,7 +366,7 @@ async function readWorkspaceVerificationCommands(
       if (commands.length === 0) {
         return {
           kind: 'invalid',
-          reason: 'all configured verification commands were rejected',
+          reason: 'invalid_project_commands',
         };
       }
       return { kind: 'commands', commands };

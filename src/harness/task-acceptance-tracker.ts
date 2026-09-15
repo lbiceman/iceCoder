@@ -1,7 +1,7 @@
 import { isLongRunningImplementationGoal } from './resume-goal.js';
 import type { CompletionCondition } from './completion-condition.js';
 import {
-  looksLikeRunnableCommand,
+  looksLikeStrictTrackedCommand,
   normalizeAcceptanceCommandKey,
 } from './run-command-result.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
@@ -202,13 +202,13 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
     const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
     for (const part of parts) {
       const command = part.trim();
-      if (looksLikeRunnableCommand(command)) found.push(command);
+      if (looksLikeStrictTrackedCommand(command)) found.push(command);
     }
   }
 
   for (const match of goal.matchAll(/['"]([^'"\r\n]+)['"]/g)) {
     const candidate = match[1]?.trim();
-    if (candidate && looksLikeRunnableCommand(candidate)) found.push(candidate);
+    if (candidate && looksLikeStrictTrackedCommand(candidate)) found.push(candidate);
   }
 
   const unique: Array<{ key: string; label: string }> = [];

@@ -263,25 +263,29 @@ describe('resolveVerificationPlan', () => {
     })).resolves.toEqual({
       kind: 'invalid',
       source: 'project',
-      reason: 'all configured verification commands were rejected',
+      reason: 'invalid_project_commands',
     });
     expect(warnings).toHaveLength(2);
     expect(warnings.every(warning => warning.source === 'workspace_config')).toBe(true);
   });
 
-  it('warns and does not fall back when explicit user commands are unsafe strings', async () => {
+  it.each([
+    'bad\u0000command',
+    'bad\ncommand',
+    'x'.repeat(501),
+  ])('warns and does not fall back for unsafe explicit command %#', async (candidate) => {
     const root = temporaryWorkspace();
     writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
     const warnings: Array<{ kind: string; source: string }> = [];
 
     await expect(resolveVerificationPlan({
-      goal: '验收命令：`bad\u0000command`。',
+      goal: `验收命令：\`${candidate}\`。`,
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
     })).resolves.toEqual({
       kind: 'invalid',
       source: 'user',
-      reason: 'all explicit user commands were rejected',
+      reason: 'unsafe_user_command',
     });
     expect(warnings).toEqual([
       expect.objectContaining({
@@ -291,21 +295,23 @@ describe('resolveVerificationPlan', () => {
     ]);
   });
 
-  it('returns user invalid when explicitly marked values are not plausible commands', async () => {
+  it('warns and falls back when marked values are simply not commands', async () => {
     const root = temporaryWorkspace();
     writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
     const warnings: Array<{ kind: string; source: string }> = [];
 
     await expect(resolveVerificationPlan({
-      goal: '验收命令：`src/foo.ts`、`README.md`。',
+      goal: '验收命令：`src/foo.ts`、`docs/runbook.md`、`source of truth`。',
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
-    })).resolves.toEqual({
-      kind: 'invalid',
-      source: 'user',
-      reason: 'all explicit user commands were rejected',
+    })).resolves.toMatchObject({
+      kind: 'resolved',
+      plan: {
+        source: 'runtime_default',
+        commands: [{ command: 'npm test' }],
+      },
     });
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(3);
     expect(warnings.every(warning => warning.kind === 'invalid_command')).toBe(true);
   });
 

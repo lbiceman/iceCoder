@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyRunCommandResult,
   looksLikeRunnableCommand,
+  looksLikeStrictTrackedCommand,
   normalizeAcceptanceCommandKey,
   stripLeadingCdPrefix,
 } from '../../src/harness/run-command-result.js';
@@ -192,6 +193,18 @@ describe('run-command-result', () => {
     expect(looksLikeRunnableCommand(command)).toBe(true);
   });
 
+  it.each([
+    'turbo',
+    'nx',
+    'npm test -- --testNamePattern "the user is able to log in"',
+    'vitest run -t "user is redirected to the dashboard"',
+    'npx playwright test --grep "the user is able to log in"',
+    'jest --testNamePattern "the user is able to log in"',
+    'npm test -- --filter "the acceptance criteria mention login here"',
+  ])('accepts command signals despite natural-language arguments: %s', (command) => {
+    expect(looksLikeRunnableCommand(command)).toBe(true);
+  });
+
   it('rejects files, directories, globs, formulas, and obvious prose', () => {
     expect(looksLikeRunnableCommand('src/foo.ts')).toBe(false);
     expect(looksLikeRunnableCommand('README.md')).toBe(false);
@@ -203,6 +216,18 @@ describe('run-command-result', () => {
     expect(looksLikeRunnableCommand('"source of truth"')).toBe(false);
     expect(looksLikeRunnableCommand('source of truth')).toBe(false);
     expect(looksLikeRunnableCommand('tenantId')).toBe(false);
+    expect(looksLikeRunnableCommand('100%')).toBe(false);
+    expect(looksLikeRunnableCommand('--strict')).toBe(false);
     expect(looksLikeRunnableCommand('please run the checks when everything is ready')).toBe(false);
+  });
+
+  it('keeps isolated tracker tokens on the legacy runner allowlist', () => {
+    expect(looksLikeStrictTrackedCommand('npm')).toBe(true);
+    expect(looksLikeStrictTrackedCommand('pytest')).toBe(true);
+    expect(looksLikeStrictTrackedCommand('turbo')).toBe(false);
+    expect(looksLikeStrictTrackedCommand('utf8')).toBe(false);
+    expect(looksLikeStrictTrackedCommand('100%')).toBe(false);
+    expect(looksLikeStrictTrackedCommand('--strict')).toBe(false);
+    expect(looksLikeStrictTrackedCommand('turbo test')).toBe(true);
   });
 });

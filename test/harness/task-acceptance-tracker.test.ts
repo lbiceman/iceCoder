@@ -49,6 +49,15 @@ describe('task-acceptance-tracker', () => {
     ]);
   });
 
+  it('does not track isolated literals, identifiers, flags, or duration tokens', () => {
+    const goal = [
+      '编码 `utf8`，字段 `id`，进度 `100%`，环境 `CI`。',
+      '参数 `timeout`，时长 `30s`，模式 `strict`，格式 `ISO8601`，flag `--strict`。',
+    ].join('\n');
+
+    expect(parseAcceptanceCommandsFromGoal(goal)).toEqual([]);
+  });
+
   it('marks every segment of a successful && chain, and ignores unrelated git diff failures', () => {
     const tracker = new TaskAcceptanceTracker([
       '从零实现仓库。',
