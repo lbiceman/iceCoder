@@ -14,10 +14,6 @@ import {
 } from './checkpoint-resume-compact.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import {
-  PRE_COMPACT_SESSION_MEMORY_WAIT_MS,
-  PRE_COMPACT_SESSION_TIMEOUT_MSG,
-} from './harness-constants.js';
 import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { logCacheSegmentReset } from './harness-cache-segment.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -198,41 +194,7 @@ export async function maybeCompact(
   const before = messages.length;
   const beforeTokens = deps.contextCompactor.getEffectiveUsed(messages, usageOptions);
 
-  // 压缩前备份任务目标到会话笔记：等待完成后再读盘，避免与硬压缩读到旧笔记竞态（带超时降级）
-  const taskDesc = deps.contextCompactor.getTaskDescription(messages);
-  if (taskDesc) {
-    const waitMs = PRE_COMPACT_SESSION_MEMORY_WAIT_MS;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(PRE_COMPACT_SESSION_TIMEOUT_MSG)), waitMs);
-    });
-    try {
-      await Promise.race([
-        deps.memoryIntegration.maybeUpdateSessionMemory(
-          messages,
-          0,
-          true,
-          state
-            ? { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() }
-            : undefined,
-        ),
-        timeoutPromise,
-      ]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg === PRE_COMPACT_SESSION_TIMEOUT_MSG) {
-        console.log(
-          `[harness] 压缩前会话笔记更新超时（>${waitMs}ms），使用磁盘上现有内容继续压缩`,
-        );
-      } else {
-        console.debug('[harness] 压缩前等待会话笔记更新失败:', msg);
-      }
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
-  }
-
-  // 压缩前获取会话笔记
+  // 压缩只读已有会话笔记，不在工作中打会话笔记 LLM（写入等到 model_done）。
   const sessionNotes = await deps.memoryIntegration.getSessionMemoryForCompact();
 
   // 压缩前保存最近注入的记忆消息

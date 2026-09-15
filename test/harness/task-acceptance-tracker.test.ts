@@ -34,10 +34,49 @@ describe('task-acceptance-tracker', () => {
     expect(tracker.isComplete()).toBe(false);
   });
 
-  it('does not invent npm test when the goal has no user command', () => {
-    const cmds = parseAcceptanceCommandsFromGoal('实现仓库里的功能并自己找检查方式');
-    expect(cmds.some(c => c.key.includes('npm'))).toBe(false);
+  it('does not treat file paths, formulas, or quoted phrases as acceptance commands', () => {
+    const goal = [
+      '禁止修改 `test/`、`package.json`、`vitest.config.ts`、`scripts/generate-fixtures.mjs`。',
+      '必须先阅读 `README.md` 和 `docs/DOMAIN-MODEL.md`。',
+      '以 `"source of truth"` 为准；`available = onHand - reserved - safetyStock`；隔离用 `tenantId`。',
+      '只有 `npm ci`、`npm test`、`npm run test:integration`、`npm run test:contracts`、`npm run migrate:check`、`npm run audit:snapshot`、`npm run build` 全部 exit 0 后结束。',
+    ].join('\n');
+    expect(parseAcceptanceCommandsFromGoal(goal).map(c => c.label)).toEqual([
+      'npm ci',
+      'npm test',
+      'npm run test:integration',
+      'npm run test:contracts',
+      'npm run migrate:check',
+      'npm run audit:snapshot',
+      'npm run build',
+    ]);
   });
+
+  it('marks every segment of a successful && chain, and ignores unrelated git diff failures', () => {
+    const tracker = new TaskAcceptanceTracker([
+      '从零实现仓库。',
+      '只有 `npm test`、`npm run test:integration`、`npm run build` 全部成功后结束。',
+    ].join('\n').padEnd(120, 'x'));
+    expect(tracker.isActive()).toBe(true);
+
+    tracker.recordRunCommand('npm run test:integration', false);
+    expect(tracker.hasFailure()).toBe(true);
+
+    const git = tracker.recordRunCommand(
+      'cd /d E:\\repo && git diff --name-only -- test/ package.json vitest.config.ts',
+      false,
+    );
+    expect(git).toBeNull();
+
+    const chained = tracker.recordRunCommand(
+      'cd /d E:\\repo && npm test && npm run test:integration && npm run build 2>&1',
+      true,
+    );
+    expect(chained?.newStatus).toBe('passed');
+    expect(tracker.isComplete()).toBe(true);
+    expect(tracker.hasFailure()).toBe(false);
+  });
+
 
   it('registers opaque user commands from backticks', () => {
     expect(parseAcceptanceCommandsFromGoal('必须跑 `./scripts/ci.sh`').map(c => c.label))

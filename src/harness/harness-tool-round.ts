@@ -433,7 +433,6 @@ export async function runHarnessToolRound(
       deps,
       state,
       'tool_failure',
-      chatFn,
     );
   }
 
@@ -444,7 +443,6 @@ export async function runHarnessToolRound(
         deps,
         state,
         'verification_failure',
-        chatFn,
       );
     }
   }
@@ -672,7 +670,8 @@ export async function runHarnessToolRound(
     }
   }
 
-  await deps.memoryIntegration.injectMemoryContext(msgs, { onStep });
+  // 工具轮后不再同步全量 LLM 召回：会堵住下一轮 2–30s。
+  // 下一轮 prep 仍走 coarse_pre_llm；标准召回放到 onLoopEnd 后台。
 
   const nextStop = deps.loopController.shouldContinue();
   if (nextStop) {

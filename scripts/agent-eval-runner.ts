@@ -113,6 +113,7 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
+      enableRequestAnalysis: testCase.expected.requiresAnalysisArtifact === true,
     };
 
     const harness = new Harness(harnessConfig, executor);

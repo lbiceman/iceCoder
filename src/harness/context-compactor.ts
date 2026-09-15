@@ -54,6 +54,9 @@ import {
   MICRO_MAX_PER_ROUND,
   MICRO_MAX_PER_SESSION,
 } from './compaction-constants.js';
+import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
+import { getFailedRunCommandInlineChars } from '../tools/tool-output-limits.js';
+import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 
 /** 去掉 recent 前缀中无前置 assistant(tool_calls) 的孤立 tool 消息（fork 切片可能留下）。 */
 function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage[] {
@@ -988,6 +991,15 @@ Continue the conversation from where it left off without asking the user any fur
         if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
 
         const content = msg.content;
+        if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(content)) {
+          const budget = getFailedRunCommandInlineChars();
+          if (content.length <= budget) return msg;
+          return {
+            ...msg,
+            content: truncateHeadTail(content, budget, { headRatio: 0.2 }),
+          };
+        }
+
         const isError = content.startsWith('Tool execution error')
           || content.startsWith('工具执行错误')
           || content.startsWith('工具调用被拒绝');
@@ -1023,15 +1035,17 @@ Continue the conversation from where it left off without asking the user any fur
       if (msg.role === 'tool' && typeof msg.content === 'string') {
         const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
         const isFileOp = toolName && FILE_TOOLS.has(toolName);
-        const limit = isFileOp
-          ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
-          : this.config.maxToolResultLength;      // 其他工具：3000 字符
+        const isFailedCommand = toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content);
+        const limit = isFailedCommand
+          ? getFailedRunCommandInlineChars()
+          : isFileOp
+            ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
+            : this.config.maxToolResultLength;      // 其他工具：3000 字符
 
         if (msg.content.length > limit) {
           return {
             ...msg,
-            content: msg.content.substring(0, limit) +
-              `\n...[truncated, original length: ${msg.content.length} chars]`,
+            content: truncateHeadTail(msg.content, limit, { headRatio: isFailedCommand ? 0.2 : 0.3 }),
           };
         }
       }

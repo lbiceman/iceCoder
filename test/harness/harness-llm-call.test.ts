@@ -9,6 +9,7 @@ import { LoopController } from '../../src/harness/loop-controller.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
+import { streamIdleTimeoutError } from '../../src/llm/stream-idle-watchdog.js';
 
 function longMessages(count: number): UnifiedMessage[] {
   const msgs: UnifiedMessage[] = [{ role: 'system', content: 'sys' }];
@@ -230,7 +231,39 @@ describe('callHarnessLlm · context window emergency fork', () => {
     expect(result.action).toBe('response');
     expect(chatFn).toHaveBeenCalledWith(
       state.messages,
-      expect.objectContaining({ sessionId: 'web-session-42' }),
+      expect.objectContaining({ sessionId: 'web-session-42', skipRetry: true }),
     );
+  });
+
+  it('retries a stream idle timeout only once and cleans retry timers', async () => {
+    vi.useFakeTimers();
+    try {
+      const state = buildState([{ role: 'user', content: 'hi' }]);
+      const loopController = new LoopController({ maxRounds: 3 });
+      loopController.advanceRound();
+      const streamFn = vi.fn().mockRejectedValue(streamIdleTimeoutError(180_000));
+      const args = {
+        state,
+        normalizedMsgs: state.messages,
+        currentTools: [],
+        round: 1,
+        chatFn: vi.fn(),
+        streamFn,
+        logger: new HarnessLogger(),
+      };
+
+      const firstPending = callHarnessLlm({ loopController }, args);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await firstPending).action).toBe('retry');
+      expect(state.llmRetryCount).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+
+      loopController.advanceRound();
+      const second = await callHarnessLlm({ loopController }, args);
+      expect(second.action).toBe('error');
+      expect(streamFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

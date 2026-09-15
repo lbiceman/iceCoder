@@ -232,21 +232,23 @@ Wave 5  回归（依赖 Wave 6）
 
 覆盖：依据 §6.3、验收场景 4–5。**P0-13 红线。**
 
-### 任务 2.1 — 默认请求超时 10 分钟
+### 任务 2.1 — 请求超时与 Stream 空闲检测
 
 | 项 | 内容 |
 |----|------|
 | **依赖** | 无 |
-| **修改** | `src/llm/openai-adapter.ts`、`src/config/model-capabilities.ts` 注释 |
+| **修改** | `src/llm/openai-adapter.ts`、`src/llm/stream-idle-watchdog.ts`、`src/config/model-capabilities.ts` 注释 |
 
 **Checklist**
 
-- [ ] 构造默认 `timeout`：`120_000` → `600_000`
-- [ ] 仍尊重 `provider.requestTimeoutMs` 与 `ICE_OPENAI_REQUEST_TIMEOUT_MS`
+- [x] SDK 默认 `timeout` 保持 600000，主要覆盖非 stream / stream 取响应头前的传输
+- [x] stream 使用单一 **300000 ms 无活动超时**，每个 SSE chunk 重置
+- [x] 仍尊重 `provider.requestTimeoutMs` 与 `ICE_OPENAI_REQUEST_TIMEOUT_MS`
 
 **验收**
 
-- 未配置时 SDK timeout = 600000；显式 120000 的 provider 仍是 120s
+- 未配置时 stream 连续 300s 无活动即中止；持续有 chunk 不因空闲检测中止
+- 用户 abort 与 stream 空闲超时分类不同
 
 ---
 
@@ -256,17 +258,19 @@ Wave 5  回归（依赖 Wave 6）
 |----|------|
 | **依赖** | 无 |
 | **修改** | `src/harness/harness-constants.ts`、`src/harness/harness-llm-call.ts` |
-| **不要改** | stream 的 `canRetry: () => !emittedAny` |
+| **约束** | Harness 调用必须传 `skipRetry: true`，避免 LLMAdapter × Harness 乘法重试 |
 
 **Checklist**
 
-- [ ] `LLM_MAX_RETRIES`：1 → **3**
-- [ ] `LLM_RETRY_MAX_DELAY`：2000 → **15000**
-- [ ] abort 不重试
+- [x] 一般传输错误仍最多重试 **3** 次
+- [x] stream 空闲超时最多重试 **1** 次
+- [x] abort 不重试
+- [x] 重试等待结束时清理 timer / abort listener
 
 **验收**
 
-- timeout 用尽次数后 `action: 'error'`；abort 零次 retry
+- stream 空闲最多两次请求后 `action: 'error'`；abort 零次 retry
+- Harness 路径不会进入 Adapter 内层重试
 
 ---
 

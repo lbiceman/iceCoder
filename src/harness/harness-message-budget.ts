@@ -1,10 +1,14 @@
 import type { UnifiedMessage } from '../llm/types.js';
+import { getFailedRunCommandInlineChars } from '../tools/tool-output-limits.js';
+import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 import {
+  FAILED_RUN_COMMAND_KEEP_RECENT,
   OLD_SUBAGENT_SUMMARY_CHARS,
   SUBAGENT_RESULT_KEEP_RECENT,
   TOOL_RESULT_BUDGET_PER_MESSAGE,
   TOOL_RESULT_KEEP_RECENT,
 } from './harness-constants.js';
+import { isFailedRunCommandToolResult } from './failed-run-command.js';
 import { isSubAgentToolResult } from './harness-message-utils.js';
 
 /** 写入 apiSealedContent 尾部的 tool budget 提示（仅展示；封存判定用 apiSealedBy） */
@@ -52,11 +56,24 @@ export function isSubAgentSealed(msg: UnifiedMessage): boolean {
  *
  * 最近 N 条 **非子代理** tool 保持完整 content；更早的普通 tool 在首次超 budget 时写入
  * `apiSealedContent` + `apiSealedBy: 'toolBudget'` 后永不再改。
+ * 失败的 `run_command`：最近 {@link FAILED_RUN_COMMAND_KEEP_RECENT} 条豁免封存；
+ * 更早的失败命令用更大预算做头尾裁剪（错误在尾部）。
  * 子代理由 {@link sealSubAgentResultsForApi} 单独处理，不参与 KEEP_RECENT 计数。
  */
 export function sealToolResultsForApi(messages: UnifiedMessage[]): void {
   const KEEP_RECENT = TOOL_RESULT_KEEP_RECENT;
   const BUDGET_PER_MESSAGE = TOOL_RESULT_BUDGET_PER_MESSAGE;
+  const failedBudget = getFailedRunCommandInlineChars();
+
+  const keepFailedIndexes = new Set<number>();
+  let failedSeenFromEnd = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!isFailedRunCommandToolResult(messages, i)) continue;
+    failedSeenFromEnd++;
+    if (failedSeenFromEnd <= FAILED_RUN_COMMAND_KEEP_RECENT) {
+      keepFailedIndexes.add(i);
+    }
+  }
 
   let toolMsgCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -77,15 +94,21 @@ export function sealToolResultsForApi(messages: UnifiedMessage[]): void {
     seen++;
     if (seen > cutoff) break;
 
+    if (keepFailedIndexes.has(i)) continue;
     if (isToolBudgetSealed(msg)) continue;
 
+    const failedCommand = isFailedRunCommandToolResult(messages, i);
+    const budget = failedCommand ? failedBudget : BUDGET_PER_MESSAGE;
     const source = msg.apiSealedContent ?? msg.content;
-    if (source.length <= BUDGET_PER_MESSAGE) continue;
+    if (source.length <= budget) continue;
 
+    const marker = `\n...[工具结果已裁剪，原始长度 ${source.length} 字符]...\n`;
     messages[i] = {
       ...msg,
-      apiSealedContent: source.substring(0, BUDGET_PER_MESSAGE)
-        + `\n...[工具结果已裁剪，原始长度 ${source.length} 字符]`,
+      apiSealedContent: truncateHeadTail(source, budget, {
+        headRatio: failedCommand ? 0.2 : 0.3,
+        marker,
+      }),
       apiSealedBy: 'toolBudget',
     };
   }

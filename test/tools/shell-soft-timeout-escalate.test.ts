@@ -111,39 +111,26 @@ describe('BackgroundTaskManager.adopt() — unit', () => {
   }, 10_000);
 });
 
-describe('shell-tool — soft timeout escalate (e2e)', () => {
+describe('shell-tool — auto waits in foreground by default', () => {
   let workDir: string;
 
   beforeEach(() => {
     workDir = mkdtempSync(join(tmpdir(), 'ice-escalate-'));
+    delete process.env.ICE_SHELL_SOFT_ESCALATE;
   });
 
-  /**
-   * 用 `sleep 12` 验证软超时 escalate：
-   * - 不是 long 也不是 short → 'auto'
-   * - 8s 内不结束 → 应当 escalate 到后台
-   *
-   * sleep 12 不在 SHORT_FAST 白名单里，会走 auto 分支。
-   * 但 args.timeout 默认 30s，确保 hard timeout 不先于 soft timeout 触发。
-   */
-  it('escalates a 12s sleep to background after ~8s', async () => {
+  it('waits for a 12s auto command instead of escalating at 8s', async () => {
     const tool = createShellTool(workDir);
 
     const start = Date.now();
-    const result = await tool.handler({ command: sleepCmd(12) });
+    const result = await tool.handler({ command: sleepCmd(12), timeout: 20_000 });
     const elapsed = Date.now() - start;
 
     expect(result.success).toBe(true);
-    // escalate 应在 ~8s 时触发（允许 ±2s 波动）
-    expect(elapsed).toBeGreaterThan(7_000);
-    expect(elapsed).toBeLessThan(11_000);
-
-    const parsed = JSON.parse(result.output);
-    expect(parsed.mode).toBe('escalated');
-    expect(parsed.taskId).toMatch(/^bg_/);
-    expect(parsed.reason).toBe('soft_timeout');
-    expect(parsed.hint).toMatch(/check/i);
-  }, 20_000);
+    expect(elapsed).toBeGreaterThan(11_000);
+    expect(elapsed).toBeLessThan(18_000);
+    expect(result.output).not.toMatch(/"mode":\s*"escalated"/);
+  }, 25_000);
 
   it('does NOT escalate a short command (< 8s)', async () => {
     const tool = createShellTool(workDir);
@@ -154,7 +141,6 @@ describe('shell-tool — soft timeout escalate (e2e)', () => {
 
     expect(result.success).toBe(true);
     expect(elapsed).toBeLessThan(7_000);
-    // not escalated → no 'mode':'escalated' wrapper
     expect(result.output).not.toMatch(/"mode":\s*"escalated"/);
   }, 15_000);
 
@@ -174,21 +160,52 @@ describe('shell-tool — soft timeout escalate (e2e)', () => {
     expect(result.output).not.toMatch(/"mode":\s*"escalated"/);
   }, 15_000);
 
-  it('escalated task still polls via action:"check"', async () => {
+  it('explicit background:true still polls via action:"check"', async () => {
     const tool = createShellTool(workDir);
 
-    const startResult = await tool.handler({ command: sleepCmd(12) });
+    const startResult = await tool.handler({ command: sleepCmd(12), background: true });
     const startParsed = JSON.parse(startResult.output);
-    expect(startParsed.mode).toBe('escalated');
+    expect(startParsed.taskId).toMatch(/^bg_/);
 
-    // check immediately
     const checkResult = await tool.handler({ action: 'check', task_id: startParsed.taskId });
     expect(checkResult.output).toMatch(/running|completed/);
 
-    // wait until finished
-    await new Promise((r) => setTimeout(r, 7_000));
+    await new Promise((r) => setTimeout(r, 14_000));
 
     const finalCheck = await tool.handler({ action: 'check', task_id: startParsed.taskId });
     expect(finalCheck.output).toMatch(/completed|failed/);
   }, 30_000);
+});
+
+describe('shell-tool — opt-in soft timeout escalate', () => {
+  let workDir: string;
+  const prevEscalate = process.env.ICE_SHELL_SOFT_ESCALATE;
+
+  beforeEach(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'ice-escalate-optin-'));
+    process.env.ICE_SHELL_SOFT_ESCALATE = '1';
+  });
+
+  afterEach(() => {
+    if (prevEscalate === undefined) delete process.env.ICE_SHELL_SOFT_ESCALATE;
+    else process.env.ICE_SHELL_SOFT_ESCALATE = prevEscalate;
+  });
+
+  it('escalates a 12s sleep to background after ~8s when ICE_SHELL_SOFT_ESCALATE=1', async () => {
+    const tool = createShellTool(workDir);
+
+    const start = Date.now();
+    const result = await tool.handler({ command: sleepCmd(12) });
+    const elapsed = Date.now() - start;
+
+    expect(result.success).toBe(true);
+    expect(elapsed).toBeGreaterThan(7_000);
+    expect(elapsed).toBeLessThan(11_000);
+
+    const parsed = JSON.parse(result.output);
+    expect(parsed.mode).toBe('escalated');
+    expect(parsed.taskId).toMatch(/^bg_/);
+    expect(parsed.reason).toBe('soft_timeout');
+    expect(parsed.hint).toMatch(/check/i);
+  }, 20_000);
 });

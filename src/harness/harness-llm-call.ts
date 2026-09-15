@@ -1,4 +1,8 @@
-import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
+import type {
+  UnifiedMessage,
+  ToolDefinition,
+  LLMResponse,
+} from '../llm/types.js';
 import {
   LLM_MAX_RETRIES,
   LLM_RETRY_BASE_DELAY,
@@ -34,6 +38,7 @@ import type {
   StreamFunction,
 } from './types.js';
 import { endTiming, markTimingStart, timeSync } from './harness-timing.js';
+import { isStreamIdleTimeoutError } from '../llm/stream-idle-watchdog.js';
 
 export interface LlmCallDeps {
   loopController: LoopController;
@@ -114,9 +119,16 @@ export async function callHarnessLlm(
   endTiming('llm_precheck', precheckStartedAt, round);
 
   let response: LLMResponse;
-  const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal; sessionId?: string } = {
+  const llmOpts: {
+    tools: ToolDefinition[];
+    signal?: AbortSignal;
+    sessionId?: string;
+    skipRetry: boolean;
+  } = {
     tools: currentTools,
     signal: deps.loopController.getAbortSignal(),
+    // Harness 是生产执行链的唯一重试负责人，避免 LLMAdapter × Harness 乘法重试。
+    skipRetry: true,
     ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
   };
   try {
@@ -219,24 +231,16 @@ export async function callHarnessLlm(
       return { action: 'retry' };
     }
 
-    if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES && !deps.loopController.isAborted()) {
+    const maxRetries = isStreamIdleTimeoutError(error) ? 1 : LLM_MAX_RETRIES;
+    if (isRetryableError(error) && state.llmRetryCount < maxRetries && !deps.loopController.isAborted()) {
       state.llmRetryCount++;
       const delay = Math.min(
         LLM_RETRY_BASE_DELAY * Math.pow(2, state.llmRetryCount - 1),
         LLM_RETRY_MAX_DELAY,
       );
       const errorMsg = error instanceof Error ? error.message : String(error);
-      logger.error(`LLM 调用失败 (${state.llmRetryCount}/${LLM_MAX_RETRIES}): ${errorMsg}，${delay}ms 后重试`);
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delay);
-        const checkAbort = () => { clearTimeout(timer); resolve(); };
-        if (deps.loopController.isAborted()) { checkAbort(); return; }
-        const interval = setInterval(() => {
-          if (deps.loopController.isAborted()) { clearInterval(interval); checkAbort(); }
-        }, 500);
-        const origResolve = resolve;
-        resolve = () => { clearInterval(interval); origResolve(); };
-      });
+      logger.error(`LLM 调用失败 (${state.llmRetryCount}/${maxRetries}): ${errorMsg}，${delay}ms 后重试`);
+      await waitForRetry(delay, deps.loopController.getAbortSignal());
       state.transition = 'llm_error_retry';
       deps.loopController.rewindRound();
       state.turnCount--;
@@ -286,4 +290,24 @@ export async function callHarnessLlm(
   }
 
   return { action: 'response', response, llmRoundLog, tokenUsage };
+}
+
+/** 可中断的重试等待；结束时同时清理 timer 和 AbortSignal listener。 */
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    if (signal?.aborted) {
+      finish();
+      return;
+    }
+    signal?.addEventListener('abort', finish, { once: true });
+  });
 }

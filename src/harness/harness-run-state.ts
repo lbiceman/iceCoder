@@ -71,13 +71,13 @@ export interface HarnessRunState {
   taskState: TaskState;
   /** 当前仓库上下文账本 */
   repoContext: RepoContext;
-  /** 上次注入 runtime state 的内容 hash */
+  /** 上次已注入且模型见过的 runtime 正文；相同则本轮跳过 */
   runtimeStateHash: string;
   /** 锁定的工作区根目录（延迟锁定；unset 时不设） */
   lockedWorkspaceRoot?: string;
   /** 允许只读访问的参考文件路径（不在 workspace 内） */
   referenceReads?: string[];
-  /** 上次注入 Workspace Anchor 的内容 hash */
+  /** 上次已注入的 Workspace Anchor 正文；相同则本轮跳过 */
   workspaceAnchorHash?: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;

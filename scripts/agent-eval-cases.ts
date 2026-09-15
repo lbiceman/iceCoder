@@ -242,6 +242,54 @@ export const agentEvalCases: AgentEvalCase[] = [
     maxRounds: 10,
   },
   {
+    id: 'noisy-test-failure-fix',
+    category: 'test-fix',
+    prompt: [
+      'npm test currently fails. The failure details are at the END of a very noisy log.',
+      'Fix src/score.js so applyScore returns price * (1 - rate), then run npm test.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'src/score.js': "function applyScore(price, rate) {\n  return price - rate;\n}\n\nmodule.exports = { applyScore };\n",
+      'test/score.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { applyScore } = require('../src/score');",
+        '',
+        "test('applies percentage scores', () => {",
+        "  for (let i = 0; i < 300; i++) console.log('setup-noise-' + i + '-' + 'x'.repeat(40));",
+        "  assert.equal(applyScore(100, 0.2), 80);",
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: { requiresTool: true, requiresVerification: true },
+    assertions: [
+      { path: 'src/score.js', notContains: 'return price - rate;' },
+      { path: 'src/score.js', contains: 'applyScore' },
+    ],
+  },
+  {
+    id: 'multi-round-runtime-stable-edit',
+    category: 'edit',
+    prompt: [
+      'Read src/label.js first, then change exported text() to return "ok".',
+      'Run npm test before finishing.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'src/label.js': "function text() {\n  return 'draft';\n}\n\nmodule.exports = { text };\n",
+      'test/label.test.js': "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst { text } = require('../src/label');\n\ntest('label is ok', () => {\n  assert.equal(text(), 'ok');\n});\n",
+    },
+    verifyCommands: ['npm test'],
+    expected: { requiresTool: true, requiresVerification: true },
+    assertions: [
+      { path: 'src/label.js', contains: "return 'ok'" },
+      { path: 'src/label.js', notContains: "return 'draft'" },
+    ],
+  },
+  {
     id: 'eval-mode-tools-disabled',
     category: 'eval-mode',
     prompt: [

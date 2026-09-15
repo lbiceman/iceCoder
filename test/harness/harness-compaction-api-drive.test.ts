@@ -92,7 +92,7 @@ describe('maybeCompact · API 双轨硬压缩', () => {
 
     const memoryIntegration = new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' });
     vi.spyOn(memoryIntegration, 'getSessionMemoryForCompact').mockResolvedValue('# session notes\n- task state');
-    vi.spyOn(memoryIntegration, 'maybeUpdateSessionMemory').mockResolvedValue(undefined);
+    const sessionWrite = vi.spyOn(memoryIntegration, 'maybeUpdateSessionMemory').mockResolvedValue(undefined);
 
     const compactionEvents: string[] = [];
     await maybeCompact(buildDeps(memoryIntegration), {
@@ -109,6 +109,7 @@ describe('maybeCompact · API 双轨硬压缩', () => {
     expect(compactionEvents.some(c => c.includes('→'))).toBe(true);
     expect(messages.some(m => typeof m.content === 'string' && m.content.includes('<context-summary>'))).toBe(true);
     expect(messages.length).toBeLessThan(beforeLen + 6);
+    expect(sessionWrite).not.toHaveBeenCalled();
   });
 
   it('API prompt 超线且消息量大时走 compact() 全层压缩', async () => {

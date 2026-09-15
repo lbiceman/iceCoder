@@ -80,9 +80,10 @@ export class TaskAcceptanceTracker {
   }
 
   /**
-   * 记录 run_command 结果；匹配第一条语义相同的验收项。
-   * 返回 transition 详情（命令、前后状态），方便上层注入「刚刚 ✓ / ✗」的反馈消息。
-   * 返回 null 表示未匹配到任何验收项。
+   * 记录 run_command 结果。
+   * 成功的 `a && b && c` 会把链上每一段对应的验收项都标 passed；
+   * 失败只标第一段（`&&` 短路），避免 git diff / 列目录误伤其它项。
+   * 返回给上层做 ✓/✗ 提示的那条 transition；未匹配返回 null。
    */
   recordRunCommand(
     rawCommand: string,
@@ -90,16 +91,28 @@ export class TaskAcceptanceTracker {
     evidenceRef?: string,
   ): AcceptanceTransition | null {
     if (!this.isActive() || !rawCommand.trim()) return null;
-    const entry = matchAcceptanceEntry(this.commands, rawCommand);
-    if (!entry) return null;
-    const previousStatus = entry.status;
+    const matched = matchAcceptanceEntries(this.commands, rawCommand);
+    if (matched.length === 0) return null;
+    const targets = success ? matched : matched.slice(0, 1);
     const newStatus: AcceptanceCommandStatus = success ? 'passed' : 'failed';
-    entry.status = newStatus;
-    entry.lastRunAt = Date.now();
-    if (evidenceRef) {
-      entry.evidenceRefs = [...new Set([...(entry.evidenceRefs ?? []), evidenceRef])];
+    let reported: AcceptanceTransition | null = null;
+    for (const entry of targets) {
+      const previousStatus = entry.status;
+      entry.status = newStatus;
+      entry.lastRunAt = Date.now();
+      if (evidenceRef) {
+        entry.evidenceRefs = [...new Set([...(entry.evidenceRefs ?? []), evidenceRef])];
+      }
+      const transition = { command: entry.label, previousStatus, newStatus };
+      if (
+        !reported
+        || (newStatus === 'passed' && previousStatus !== 'passed')
+        || newStatus === 'failed'
+      ) {
+        reported = transition;
+      }
     }
-    return { command: entry.label, previousStatus, newStatus };
+    return reported;
   }
 
   /**
@@ -143,22 +156,20 @@ export class TaskAcceptanceTracker {
   }
 
   buildAcceptancePrompt(): string {
+    const unresolved = this.commands.filter(cmd => cmd.status !== 'passed');
     const lines = [
-      '[System / Completion Gate] Required completion conditions are not settled.',
+      '[System / Completion Gate] Run the remaining verification once. If it passes, you can finish.',
       '',
-      `Progress: ${this.getPassedCount()}/${this.commands.length} satisfied`,
-      '',
-      'Required conditions:',
+      `Progress: ${this.getPassedCount()}/${this.commands.length} passed`,
     ];
-    for (const cmd of this.commands) {
-      const mark = cmd.status === 'passed' ? '✓' : cmd.status === 'failed' ? '✗' : '○';
-      lines.push(`  ${mark} ${cmd.label} (${cmd.status})`);
+    if (unresolved.length > 0) {
+      lines.push('', 'Still open:');
+      for (const cmd of unresolved) {
+        const mark = cmd.status === 'failed' ? '✗' : '○';
+        lines.push(`  ${mark} ${cmd.label} (${cmd.status})`);
+      }
     }
-    const next = this.getPendingCommands()[0] ?? this.commands.find(c => c.status === 'failed');
-    if (next) {
-      lines.push('', `Next unresolved condition: ${next.label}`);
-    }
-    lines.push('', 'Use relevant available tools to settle all required conditions before finishing.');
+    lines.push('', 'Re-run those verification commands. Do not substitute unrelated checks.');
     return lines.join('\n');
   }
 
@@ -207,13 +218,45 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
   return unique;
 }
 
+/** 真正会拿去执行的 runner；文件路径、标识符、公式不是验收命令。 */
+const COMMAND_RUNNERS = new Set([
+  'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno',
+  'node', 'nodejs', 'tsx', 'ts-node',
+  'cargo', 'go', 'python', 'python3', 'py', 'pytest', 'pip', 'pip3', 'poetry', 'uv',
+  'make', 'cmake', 'mvn', 'mvnw', 'gradle', 'gradlew', 'dotnet',
+  'docker', 'docker-compose', 'podman',
+  'just', 'task', 'bazel',
+  'vitest', 'jest', 'mocha', 'playwright', 'cypress',
+  'pwsh', 'powershell', 'cmd', 'bash', 'sh', 'zsh',
+  'php', 'composer', 'ruby', 'java', 'rake', 'bundle',
+]);
+
 function looksLikeCommandCriterion(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 500 || /[\r\n]/.test(text)) return false;
-  if (/^(the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
+  if (/^(?:the|a|an|this|that|please|just)\b/i.test(text) && text.split(/\s+/).length > 8) {
     return false;
   }
-  return /^(?:\.\/|\.\\|[A-Za-z]:\\|[A-Za-z_][\w.-]*|[./\\])/.test(text);
+  // `available = onHand - reserved` 这类公式不是命令
+  if (/=/.test(text) && !/^[A-Za-z_][\w.-]*=\S+\s+\S/.test(text)) return false;
+  if (/^(?:\.\/|\.\\)/.test(text)) return true;
+  if (looksLikeBareFileOrGlob(text)) return false;
+  const head = firstCommandToken(text);
+  if (!head) return false;
+  const executable = head.split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat|com)$/i, '') ?? head;
+  return COMMAND_RUNNERS.has(executable.toLowerCase());
+}
+
+function looksLikeBareFileOrGlob(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  if (/\/$|\*\*?$/.test(text)) return true;
+  if (/[\\/]/.test(text)) return true;
+  return /\.(md|json|ya?ml|toml|lock|txt|ts|tsx|js|mjs|cjs|jsx|css|html|map)$/i.test(text);
+}
+
+function firstCommandToken(text: string): string {
+  const match = text.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  return (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
 }
 
 function hasExplicitAcceptanceMarker(goal: string): boolean {
@@ -267,28 +310,38 @@ function normalizeExecutableIdentity(command: string): string {
   return basename ? `${basename}${suffix}`.trim() : command;
 }
 
-function matchAcceptanceEntry(
+function splitCommandChain(command: string): string[] {
+  return command
+    .split(/\s*(?:&&|;)\s*/)
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+function commandSegmentMatches(segment: string, entryKey: string): boolean {
+  if (!segment || !entryKey) return false;
+  if (segment === entryKey) return true;
+  // 允许额外 flag：`npm test --reporter=verbose` 对上 `npm test`
+  return segment.startsWith(`${entryKey} `);
+}
+
+function matchAcceptanceEntries(
   entries: AcceptanceCommandEntry[],
   rawCommand: string,
-): AcceptanceCommandEntry | undefined {
+): AcceptanceCommandEntry[] {
   const runKey = normalizeAcceptanceCommandKey(rawCommand);
-  if (!runKey) return undefined;
-
-  for (const entry of entries) {
-    if (runKey === entry.key) return entry;
+  if (!runKey) return [];
+  const segments = splitCommandChain(runKey);
+  const matched: AcceptanceCommandEntry[] = [];
+  const seen = new Set<string>();
+  for (const segment of segments) {
+    const entry = entries.find(item =>
+      !seen.has(item.key) && commandSegmentMatches(segment, item.key),
+    );
+    if (!entry) continue;
+    seen.add(entry.key);
+    matched.push(entry);
   }
-
-  for (const entry of entries) {
-    if (runKey.includes(entry.key) || entry.key.includes(runKey)) return entry;
-  }
-
-  // `npm test 2>&1` matches `npm test`; chained commands match if all parts present
-  for (const entry of entries) {
-    const entryBase = entry.key.split('&&')[0]?.trim() ?? entry.key;
-    if (runKey.startsWith(entryBase) || runKey.includes(` ${entryBase}`)) return entry;
-  }
-
-  return undefined;
+  return matched;
 }
 
 export function hasPendingAcceptanceWork(

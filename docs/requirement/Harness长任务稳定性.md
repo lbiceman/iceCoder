@@ -163,9 +163,10 @@ Harness **不**根据命令是不是测试来打分。只看 `classifyRunCommand
 
 | 层 | 之后 |
 |----|------|
-| 适配器默认 timeout | **600000 ms（10 分钟）**；`provider.requestTimeoutMs` 与 `ICE_OPENAI_REQUEST_TIMEOUT_MS` 仍优先 |
-| `LLMAdapter.stream` | 保持 P0-13：已产出任意可见/reasoning chunk 后不在适配器内重试 |
-| Harness `callHarnessLlm` | 可重试传输错误最多 **3** 次；`LLM_RETRY_MAX_DELAY` 至少 15s；abort 不重试 |
+| 非 stream SDK timeout | 默认 **600000 ms（10 分钟）**；`provider.requestTimeoutMs` 与 `ICE_OPENAI_REQUEST_TIMEOUT_MS` 仍优先 |
+| Stream 活性检测 | 连续 **300000 ms** 无 SSE 活动即中止；首包和中途卡死统一处理 |
+| `LLMAdapter.stream` | 非 Harness 调用保留自身重试；Harness 调用显式 `skipRetry` |
+| Harness `callHarnessLlm` | stream 空闲只重试 **1** 次；其他可重试传输错误最多 **3** 次；abort 不重试 |
 | 半截流后的 Harness 重试 | rewind 整轮；通知 UI 丢弃未完成 assistant 流 |
 
 ### 6.4 压缩

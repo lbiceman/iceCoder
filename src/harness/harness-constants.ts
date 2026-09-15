@@ -31,9 +31,11 @@ export const LLM_MAX_RETRIES = 3;
 export const LLM_RETRY_BASE_DELAY = 2000;
 export const LLM_RETRY_MAX_DELAY = 15_000;
 
-// ─── 工具结果预算裁剪 ───
+// ─── 工具结果预算裁剪（单位都是字符，不是行）───
 export const TOOL_RESULT_KEEP_RECENT = 6;
 export const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
+/** 最近几次失败的 run_command 不参与 3k 封存（失败栈必须还能看见） */
+export const FAILED_RUN_COMMAND_KEEP_RECENT = 2;
 export const SUBAGENT_RESULT_KEEP_RECENT = 6;
 export const OLD_SUBAGENT_SUMMARY_CHARS = 300;
 

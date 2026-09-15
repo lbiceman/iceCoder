@@ -8,11 +8,22 @@ import {
   FOREGROUND_DEFAULT_TIMEOUT_MS,
   SHORT_TIMEOUT_MAX_MS,
   BG_SUMMARY_INTERVAL_MS,
+  shellSoftEscalateEnabled,
 } from '../../src/tools/shell-runtime-classifier.js';
 
 describe('shell-runtime-classifier — constants', () => {
-  it('SOFT_TIMEOUT_MS is 8 seconds', () => {
+  it('SOFT_TIMEOUT_MS is 8 seconds (opt-in escalate only)', () => {
     expect(SOFT_TIMEOUT_MS).toBe(8_000);
+  });
+
+  it('shellSoftEscalateEnabled defaults off', () => {
+    const prev = process.env.ICE_SHELL_SOFT_ESCALATE;
+    delete process.env.ICE_SHELL_SOFT_ESCALATE;
+    expect(shellSoftEscalateEnabled()).toBe(false);
+    process.env.ICE_SHELL_SOFT_ESCALATE = '1';
+    expect(shellSoftEscalateEnabled()).toBe(true);
+    if (prev === undefined) delete process.env.ICE_SHELL_SOFT_ESCALATE;
+    else process.env.ICE_SHELL_SOFT_ESCALATE = prev;
   });
 
   it('HARD_TIMEOUT_NONE is 0 (unlimited background)', () => {

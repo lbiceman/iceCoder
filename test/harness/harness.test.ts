@@ -45,13 +45,6 @@ function finalResponse(content: string, tokens = { input: 100, output: 50 }): LL
   return { content, usage: makeUsage(tokens.input, tokens.output), finishReason: 'stop' };
 }
 
-/** step-review 启发式不确定时会额外消费一次 chatFn；队列中插入本桩避免抢走主对话的 mock。 */
-function stepReviewLlmStub(): LLMResponse {
-  return finalResponse(
-    '{"progressMade":false,"repeatedPattern":false,"fallbackSuggested":false,"reason":"test-stub"}',
-  );
-}
-
 function toolCallResponse(calls: { id: string; name: string; args?: Record<string, any> }[], content = ''): LLMResponse {
   return {
     content,
@@ -381,7 +374,6 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       finalResponse('File does not exist'),
       finalResponse('File does not exist'),
     ]);
@@ -1150,6 +1142,32 @@ describe('ContextCompactor - 微压缩', () => {
     expect(t6!.content).toContain('KEEPTHIS6');
   });
 
+  it('微压缩不清空失败的 run_command 输出', () => {
+    const failBody = 'Tool execution error: Command failed (exit code: 1)\n\n'
+      + 'FAIL src/foo.test.ts\nAssertionError: expected 1 to be 2\n';
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'fail1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+      { role: 'tool', toolCallId: 'fail1', content: failBody },
+    ];
+    for (let i = 2; i <= 8; i++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `ok${i}`, name: 'run_command', arguments: {} }],
+        },
+        { role: 'tool', toolCallId: `ok${i}`, content: 'ok' },
+      );
+    }
+    const compacted = new ContextCompactor().doLightCompact(messages);
+    expect(compacted.find(m => m.toolCallId === 'fail1')!.content).toBe(failBody);
+  });
+
   it('微压缩不清空 read_file 结果（即便轮次很旧）', () => {
     const compactor = new ContextCompactor();
     const oldBody = 'FILEBODY'.repeat(200);
@@ -1590,7 +1608,6 @@ describe('Harness - 连续工具失败熔断', () => {
     // 3 轮工具调用（全部失败）+ 1 次最终总结
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       finalResponse('summary'),
@@ -1612,7 +1629,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'missing.ts' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'missing.ts' } }]),
       finalResponse('blocked'),
     ]);
@@ -1642,9 +1658,7 @@ describe('Harness - 连续工具失败熔断', () => {
       toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc3', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc4', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc5', name: 'read_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       finalResponse('done'),
     ]);
     const result = await harness.run('test', chatFn);
@@ -1660,7 +1674,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
@@ -1694,7 +1707,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
@@ -1727,13 +1739,9 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'a.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w2', name: 'write_file', args: { path: 'b.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w3', name: 'write_file', args: { path: 'c.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w4', name: 'write_file', args: { path: 'd.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w5', name: 'write_file', args: { path: 'e.ts', content: 'x' } }]),
       finalResponse('done'),
     ]);

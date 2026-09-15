@@ -157,6 +157,8 @@ export class Harness {
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
   private verificationExemptDirs?: string[];
   private analysisSupervisor?: AnalysisSupervisor;
+  /** 为 false 时不暴露 request_analysis，也不自动拉起后台分析 */
+  private enableRequestAnalysis: boolean;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
   private agentMaxOutputTokens: number;
@@ -206,6 +208,7 @@ export class Harness {
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
+    this.enableRequestAnalysis = config.enableRequestAnalysis !== false;
     this.analysisSupervisor = config.analysisSupervisor;
     this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
     this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
@@ -514,7 +517,7 @@ export class Harness {
     deps.referenceReads = referenceReads;
 
     const tools = this.contextAssembler.getTools();
-    if (!this.analysisSupervisor && this.sessionDir) {
+    if (!this.analysisSupervisor && this.sessionDir && this.enableRequestAnalysis) {
       const manager = new AsyncSubAgentManager({
         sessionDir: this.sessionDir,
         toolExecutor: this.toolExecutor,
@@ -902,6 +905,7 @@ export class Harness {
           state.turnCount,
           this.loopController.getState().totalInputTokens,
           { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
+          { stopReason: this.loopController.getState().stopReason },
         ).catch(err => {
           console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
         });

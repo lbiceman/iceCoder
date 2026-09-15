@@ -31,10 +31,9 @@ export function prepareWorkspaceAnchorEphemeral(state: HarnessRunState): string 
     state.lockedWorkspaceRoot,
     state.referenceReads ?? [],
   );
-  // ephemeral 不进主历史：内容未变时每轮仍注入同一块，供模型可见
-  if (content === state.workspaceAnchorHash) {
-    return content;
-  }
+  // ephemeral 不进主历史。cwd 已在 Environment 段；root/referenceReads 未变则跳过，
+  // 避免每轮重复贴同一块打穿可缓存前缀。
+  if (content === state.workspaceAnchorHash) return null;
   state.workspaceAnchorHash = content;
   return content;
 }

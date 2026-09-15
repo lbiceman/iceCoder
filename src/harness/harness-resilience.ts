@@ -11,7 +11,7 @@ import { CompletionFactsView } from './completion-facts-view.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
-import type { ChatFunction, StopReason } from './types.js';
+import type { StopReason } from './types.js';
 import type { VerificationOutputTailEntry } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
@@ -187,13 +187,12 @@ export function resilienceMaybeBranchRecover(
 
 /**
  * 在工具失败 / 验证失败时做一次 step review。
- * 每轮最多 1 次；启发式给出明确结论时不触发 LLM。
+ * 每轮最多 1 次；只走本地启发式，不再打旁路 LLM（会堵住主循环 5–15s）。
  */
 export async function resilienceMaybeReviewStep(
   deps: ResilienceBridgeDeps,
   state: HarnessRunState,
   trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
-  chatFn: ChatFunction,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled) return;
   if (state.stepReviewedThisRound) return;
@@ -213,7 +212,7 @@ export async function resilienceMaybeReviewStep(
       taskSnapshot: state.taskState.snapshot(),
       completionFacts: CompletionFactsView.fromHarnessRunState(state),
       previousReview: state.lastStepReview,
-    }, chatFn);
+    });
 
     state.lastStepReview = result;
 

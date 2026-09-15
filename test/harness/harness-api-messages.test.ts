@@ -145,6 +145,74 @@ describe('sealToolResultsForApi', () => {
     expect(msgs[0].apiSealedContent).toBe('y'.repeat(TOOL_RESULT_BUDGET_PER_MESSAGE + 500));
     expect(msgs[0].apiSealedContent).not.toContain(TOOL_RESULT_BUDGET_TRUNCATION_MARKER);
   });
+
+  it('does not seal the most recent failed run_command even outside KEEP_RECENT', () => {
+    const failBody = `HEAD-CMD\n${'x'.repeat(60_000)}\nTAIL-FAIL-STACK`;
+    const msgs: UnifiedMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'fail-0', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'fail-0',
+        content: `Tool execution error: Command failed (exit code: 1)\n\n${failBody}`,
+      },
+      ...makeToolMessages(TOOL_RESULT_KEEP_RECENT + 1, TOOL_RESULT_BUDGET_PER_MESSAGE + 500),
+    ];
+
+    sealToolResultsForApi(msgs);
+
+    const failed = msgs.find(m => m.toolCallId === 'fail-0')!;
+    expect(failed.apiSealedContent).toBeUndefined();
+    expect(failed.content).toContain('TAIL-FAIL-STACK');
+  });
+
+  it('seals older failed run_command with head+tail instead of prefix-only', () => {
+    const failBody = (id: string) => `HEAD-${id}\n${'x'.repeat(60_000)}\nTAIL-${id}-STACK`;
+    const msgs: UnifiedMessage[] = [];
+    for (let i = 0; i < 3; i++) {
+      const id = `fail-${i}`;
+      msgs.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id, name: 'run_command', arguments: { command: `cmd ${i}` } }],
+        },
+        {
+          role: 'tool',
+          toolCallId: id,
+          content: `Tool execution error: Command failed (exit code: 1)\n\n${failBody(String(i))}`,
+        },
+      );
+    }
+    msgs.push(...makeToolMessages(TOOL_RESULT_KEEP_RECENT, 100));
+
+    sealToolResultsForApi(msgs);
+
+    const oldest = msgs.find(m => m.toolCallId === 'fail-0')!;
+    const newestFail = msgs.find(m => m.toolCallId === 'fail-2')!;
+    expect(newestFail.apiSealedContent).toBeUndefined();
+    expect(oldest.apiSealedContent).toBeDefined();
+    expect(oldest.apiSealedContent).toContain('HEAD-0');
+    expect(oldest.apiSealedContent).toContain('TAIL-0-STACK');
+    expect(oldest.apiSealedContent).toContain(TOOL_RESULT_BUDGET_TRUNCATION_MARKER);
+    expect((oldest.apiSealedContent as string).length).toBeLessThan((oldest.content as string).length);
+  });
+
+  it('generic crop-zone seal keeps the tail of the original body', () => {
+    const body = `HEAD-READ${'n'.repeat(TOOL_RESULT_BUDGET_PER_MESSAGE + 800)}TAIL-READ`;
+    const msgs = [
+      { role: 'tool' as const, content: body, toolCallId: 'old-0' },
+      ...makeToolMessages(TOOL_RESULT_KEEP_RECENT, 100),
+    ];
+
+    sealToolResultsForApi(msgs);
+
+    expect(msgs[0].apiSealedContent).toContain('HEAD-READ');
+    expect(msgs[0].apiSealedContent).toContain('TAIL-READ');
+  });
 });
 
 describe('buildMessagesForLlm', () => {

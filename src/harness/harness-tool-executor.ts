@@ -1,7 +1,8 @@
 import type { UnifiedMessage, ToolCall, ToolDefinition } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
-import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
+import { getFailedRunCommandInlineChars, getMaxToolOutputChars } from '../tools/tool-output-limits.js';
+import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
@@ -54,6 +55,7 @@ import {
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
+import { spillToolOutputToSession } from './tool-output-spill.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -780,10 +782,30 @@ export async function executeToolCallsStreaming(
 
     const toolMeta = getToolMetadata(tc.name);
     const maxCap = getMaxToolOutputChars();
-    const maxOutput = toolMeta.maxResultSizeChars === Infinity ? maxCap : Math.min(toolMeta.maxResultSizeChars, maxCap);
-    const truncatedOutput = output.length > maxOutput
-      ? output.substring(0, maxOutput) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
-      : output;
+    const defaultMax = toolMeta.maxResultSizeChars === Infinity
+      ? maxCap
+      : Math.min(toolMeta.maxResultSizeChars, maxCap);
+    const maxOutput = !result.success && tc.name === 'run_command'
+      ? Math.max(defaultMax, getFailedRunCommandInlineChars())
+      : defaultMax;
+
+    let truncatedOutput = output;
+    if (output.length > maxOutput) {
+      let spillPath: string | undefined;
+      if (deps.sessionDir && deps.sessionId && tc.id) {
+        spillPath = await spillToolOutputToSession({
+          sessionDir: deps.sessionDir,
+          sessionId: deps.sessionId,
+          toolCallId: tc.id,
+          content: output,
+        }) ?? undefined;
+      }
+      truncatedOutput = truncateHeadTail(output, maxOutput, {
+        headRatio: !result.success && tc.name === 'run_command' ? 0.2 : 0.3,
+        spillPath,
+        marker: `\n...[输出已截断，原始长度 ${output.length} 字符]...\n`,
+      });
+    }
 
     messages.push({
       role: 'tool',

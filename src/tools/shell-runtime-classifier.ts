@@ -5,13 +5,20 @@
  *
  * - 'long'  → 应当后台启动，不设 hard timeout（Shell Dock 长驻）
  * - 'short' → 前台执行，timeout 上限收紧到 10s
- * - 'auto'  → 前台启动，超过 SOFT_TIMEOUT_MS 仍在跑则 escalate（Phase 2）
+ * - 'auto'  → 前台等到进程退出或硬超时（默认 10min）。
+ *             不再在 8s 软超时切后台；否则 test/build 会变成「启动成功」+ 额外 LLM poll。
+ *             旧行为：ICE_SHELL_SOFT_ESCALATE=1 时仍按 SOFT_TIMEOUT_MS escalate
  *
- * 设计原则：零配置 — 全部白名单写死 const，不读 JSON / env / 命令行参数。
+ * 设计原则：分类白名单写死 const，不读 JSON。escalate 开关见 ICE_SHELL_SOFT_ESCALATE。
  */
 
-/** 前台软超时：到达此时长仍在跑则 escalate 到后台（Phase 2 接入）。 */
+/** 前台软超时：仅当 ICE_SHELL_SOFT_ESCALATE=1 时，到达此时长仍在跑则 escalate 到后台。 */
 export const SOFT_TIMEOUT_MS = 8_000;
+
+/** 默认关闭 auto 命令的 8s 软超时切后台（与 Claude Code Bash 等到 exit 对齐）。 */
+export function shellSoftEscalateEnabled(): boolean {
+  return process.env.ICE_SHELL_SOFT_ESCALATE === '1';
+}
 
 /** 后台任务不设 hard timeout（0 = 不限时，仅用户 stop / 进程退出 / 应用关闭时结束）。 */
 export const HARD_TIMEOUT_NONE = 0;

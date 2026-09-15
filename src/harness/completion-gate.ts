@@ -207,12 +207,11 @@ function buildConditionPrompt(
     condition.required && condition.status !== 'satisfied',
   );
   return [
-    '[System / Completion Gate] Required completion conditions are not settled.',
+    '[System / Completion Gate] Run the remaining verification once. If it passes, you can finish.',
     ...pending.map(condition => `- ${condition.label}: ${condition.status}`),
     reason === 'condition_failed'
-      ? 'Try one materially different corrective step if practical.'
-      : 'Satisfy all pending conditions together before finishing.',
-    'Do not repeat an unchanged action or perform unrelated checks.',
+      ? 'Re-run the failed verification command after a real fix. Do not substitute git diff, file listing, or other unrelated checks.'
+      : 'Run the pending verification command(s), then stop.',
   ].join('\n');
 }
 
