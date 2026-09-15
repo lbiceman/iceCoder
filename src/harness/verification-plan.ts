@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { looksLikeRunnableCommand } from './run-command-result.js';
 import { WORKSPACE_ICECODER_CONFIG_NAMES } from './verification-exempt-config.js';
 
 export type VerificationPlanSource = 'user' | 'project' | 'runtime_default';
@@ -38,8 +37,8 @@ export interface ResolveVerificationPlanOptions {
 }
 
 export interface VerificationPlanWarning {
-  kind: 'malformed' | 'read_error';
-  source: 'workspace_config' | 'package_manifest' | 'lockfile';
+  kind: 'malformed' | 'read_error' | 'invalid_command';
+  source: 'user_goal' | 'workspace_config' | 'package_manifest' | 'lockfile';
   path: string;
   code?: string;
   message: string;
@@ -51,15 +50,35 @@ interface LocatedCommand {
 }
 
 const STRICT_MARKER =
-  /完成条件\s*[：:]?\s*必须(?:运行|通过)?|验收命令|完成条件|必须(?:运行|通过)|completion\s+condition|acceptance|must\s+(?:run|pass)|before\s+(?:you\s+)?finish/gi;
+  /完成条件\s*[：:]\s*必须(?:运行|通过)|验收命令\s*[：:]|completion\s+condition\s*:\s*must\s+(?:run|pass)|must\s+(?:run|pass)/gi;
 const CODE_SPAN = /`([^`]*)`/g;
 const POSTFIX_BEFORE_FINISH = /`([^`]*)`\s+before\s+(?:you\s+)?finish/gi;
+
+interface ParsedVerificationCommands {
+  commands: string[];
+  explicitCandidateCount: number;
+}
+
+interface WorkspaceVerificationCommands {
+  commands: string[];
+  disabled: boolean;
+}
 
 /**
  * 只提取受明确 marker 直接支配的反引号命令。
  * marker 后可跟一个由常见分隔符连接的命令列表；普通反引号不会被全局扫描进计划。
  */
-export function parseVerificationCommandsFromGoal(goal: string): string[] {
+export function parseVerificationCommandsFromGoal(
+  goal: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): string[] {
+  return parseVerificationCommands(goal, onWarning).commands;
+}
+
+function parseVerificationCommands(
+  goal: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): ParsedVerificationCommands {
   const codeSpans = Array.from(goal.matchAll(CODE_SPAN), match => ({
     index: match.index,
     end: match.index + match[0].length,
@@ -94,8 +113,24 @@ export function parseVerificationCommandsFromGoal(goal: string): string[] {
   }
 
   located.sort((left, right) => left.index - right.index);
-  return normalizeVerificationCommands(located.map(item => item.command))
-    .filter(looksLikeRunnableCommand);
+  const commands: string[] = [];
+  const seen = new Set<string>();
+  for (const item of located) {
+    const command = normalizeVerificationCommand(item.command);
+    if (!command) {
+      emitWarning(onWarning, {
+        kind: 'invalid_command',
+        source: 'user_goal',
+        path: '<goal>',
+        message: 'explicit verification command is empty, too long, or contains newline/NUL',
+      });
+      continue;
+    }
+    if (seen.has(command)) continue;
+    seen.add(command);
+    commands.push(command);
+  }
+  return { commands, explicitCandidateCount: located.length };
 }
 
 export function buildVerificationPlan(
@@ -128,21 +163,23 @@ export function buildVerificationPlan(
 export async function resolveVerificationPlan(
   options: ResolveVerificationPlanOptions,
 ): Promise<VerificationPlan | null> {
-  const userCommands = parseVerificationCommandsFromGoal(options.goal);
+  const parsedUserCommands = parseVerificationCommands(options.goal, options.onWarning);
   const userPlan = buildVerificationPlan({
     source: 'user',
-    commands: userCommands,
+    commands: parsedUserCommands.commands,
     workspaceRoot: options.workspaceRoot,
   });
   if (userPlan) return userPlan;
+  if (parsedUserCommands.explicitCandidateCount > 0) return null;
 
   const projectCommands = await readWorkspaceVerificationCommands(
     options.workspaceRoot,
     options.onWarning,
   );
+  if (projectCommands.disabled) return null;
   const projectPlan = buildVerificationPlan({
     source: 'project',
-    commands: projectCommands,
+    commands: projectCommands.commands,
     workspaceRoot: options.workspaceRoot,
   });
   if (projectPlan) return projectPlan;
@@ -178,18 +215,6 @@ function normalizePlanCommands(
     });
   }
   return commands;
-}
-
-function normalizeVerificationCommands(commands: readonly string[]): string[] {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of commands) {
-    const command = normalizeVerificationCommand(raw);
-    if (!command || seen.has(command)) continue;
-    seen.add(command);
-    normalized.push(command);
-  }
-  return normalized;
 }
 
 function normalizeVerificationCommand(command: unknown): string | null {
@@ -236,8 +261,8 @@ function isCommandListSeparator(separator: string): boolean {
 async function readWorkspaceVerificationCommands(
   workspaceRoot: string,
   onWarning?: (warning: VerificationPlanWarning) => void,
-): Promise<string[]> {
-  if (!workspaceRoot.trim()) return [];
+): Promise<WorkspaceVerificationCommands> {
+  if (!workspaceRoot.trim()) return { commands: [], disabled: false };
   for (const name of WORKSPACE_ICECODER_CONFIG_NAMES) {
     const configPath = path.join(workspaceRoot, name);
     let raw: string;
@@ -270,9 +295,21 @@ async function readWorkspaceVerificationCommands(
         );
         continue;
       }
-      return parsed.verificationCommands.filter(
+      if (parsed.verificationCommands.length === 0) {
+        return { commands: [], disabled: true };
+      }
+      const commands = parsed.verificationCommands.filter(
         (value): value is string => typeof value === 'string',
       );
+      if (commands.length !== parsed.verificationCommands.length) {
+        emitMalformedWarning(
+          onWarning,
+          'workspace_config',
+          configPath,
+          'verificationCommands contains non-string entries',
+        );
+      }
+      return { commands, disabled: false };
     } catch (error) {
       emitWarning(onWarning, warningFromError(
         'malformed',
@@ -282,7 +319,7 @@ async function readWorkspaceVerificationCommands(
       ));
     }
   }
-  return [];
+  return { commands: [], disabled: false };
 }
 
 async function resolveRuntimeDefaultCommand(

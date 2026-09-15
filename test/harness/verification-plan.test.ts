@@ -32,9 +32,9 @@ describe('parseVerificationCommandsFromGoal', () => {
   it.each([
     ['`src/foo.ts`，验收命令：`npm test`。', ['npm test']],
     ['`README.md`；完成条件：必须运行 `pytest -q`。', ['pytest -q']],
-    ['`available = onHand - reserved`，Acceptance: `cargo test`.', ['cargo test']],
+    ['`available = onHand - reserved`，must run `cargo test`.', ['cargo test']],
     ['ordinary example `npm run build`, must pass `npm test`.', ['npm test']],
-    ['ordinary `build`; before finish: `go test ./...`.', ['go test ./...']],
+    ['ordinary `build`; completion condition: must run `go test ./...`.', ['go test ./...']],
   ])('does not reverse-capture ordinary backticks: %s', (goal, expected) => {
     expect(parseVerificationCommandsFromGoal(goal)).toEqual(expected);
   });
@@ -55,10 +55,9 @@ describe('parseVerificationCommandsFromGoal', () => {
   it.each([
     '完成条件：必须运行 `pnpm test`。',
     '完成条件：必须通过 `pnpm test`。',
-    '完成条件：必须 `pnpm test`。',
-    '完成条件：`pnpm test`。',
-    'Completion condition: `pnpm test`.',
-    'Acceptance: `pnpm test`.',
+    '验收命令：`pnpm test`。',
+    'Completion condition: must run `pnpm test`.',
+    'Completion condition: must pass `pnpm test`.',
     'Must run `pnpm test`.',
     'Must pass `pnpm test`.',
     '`pnpm test` before finish.',
@@ -77,14 +76,27 @@ describe('parseVerificationCommandsFromGoal', () => {
     expect(parseVerificationCommandsFromGoal(goal)).toEqual(['npm test']);
   });
 
-  it('keeps only runnable commands even when invalid backticks follow a marker', () => {
+  it('preserves explicit commands without applying the legacy runner whitelist', () => {
     expect(parseVerificationCommandsFromGoal([
-      '验收命令：`src/foo.ts`、`README.md`、`available = onHand - reserved`、`build`、',
-      '`./scripts/ci.sh`、`C:\\tools\\make.exe verify`。',
+      '验收命令：`turbo test`、`nx affected --target=test`、`cross-env NODE_ENV=test vitest`、',
+      '`bin/ci.sh`、`C:\\repo\\tools\\verify.exe --all`。',
     ].join(''))).toEqual([
-      './scripts/ci.sh',
-      'C:\\tools\\make.exe verify',
+      'turbo test',
+      'nx affected --target=test',
+      'cross-env NODE_ENV=test vitest',
+      'bin/ci.sh',
+      'C:\\repo\\tools\\verify.exe --all',
     ]);
+  });
+
+  it.each([
+    'acceptance criteria mention `npm test` here',
+    'Acceptance: `npm test`.',
+    'Completion condition: `npm test`.',
+    '完成条件：`npm test`。',
+    '验收命令 `npm test`。',
+  ])('rejects loose marker prose: %s', (goal) => {
+    expect(parseVerificationCommandsFromGoal(goal)).toEqual([]);
   });
 });
 
@@ -188,10 +200,12 @@ describe('resolveVerificationPlan', () => {
       verificationCommands: [' npm run verify ', 'npm run lint', 'npm run verify', 42],
     });
     writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
+    const warnings: Array<{ kind: string; source: string }> = [];
 
     await expect(resolveVerificationPlan({
       goal: '普通说明里出现 `npm run build`。',
       workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
     })).resolves.toMatchObject({
       source: 'project',
       commands: [
@@ -199,6 +213,41 @@ describe('resolveVerificationPlan', () => {
         { command: 'npm run lint', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
       ],
     });
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        kind: 'malformed',
+        source: 'workspace_config',
+      }),
+    ]);
+  });
+
+  it('treats an explicit empty project command list as disabling runtime defaults', async () => {
+    const root = temporaryWorkspace();
+    writeJson(root, '.icecoder.json', { verificationCommands: [] });
+    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
+
+    await expect(resolveVerificationPlan({
+      goal: '',
+      workspaceRoot: root,
+    })).resolves.toBeNull();
+  });
+
+  it('warns and does not fall back when explicit user commands are unsafe strings', async () => {
+    const root = temporaryWorkspace();
+    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
+    const warnings: Array<{ kind: string; source: string }> = [];
+
+    await expect(resolveVerificationPlan({
+      goal: '验收命令：`bad\u0000command`。',
+      workspaceRoot: root,
+      onWarning: warning => warnings.push(warning),
+    })).resolves.toBeNull();
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        kind: 'invalid_command',
+        source: 'user_goal',
+      }),
+    ]);
   });
 
   it.each([
