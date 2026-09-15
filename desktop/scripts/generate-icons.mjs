@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * 从 src/public/icons/logo.png（首页品牌标）生成 Electron 用 PNG / ICO / 托盘 / 通知图标。
- * 与侧栏、欢迎页同一张图，不从 SVG 重绘，避免轮廓跑样。
+ * 品牌标只维护一份源图：src/public/icons/logo.png
+ *
+ * 打包 / 开发入口会先跑本脚本，按尺寸生成其余图标（圆角 + 系统图标内缩）。
+ *
+ *   npm run icons
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,18 +13,68 @@ import sharp from 'sharp';
 import pngToIco from 'png-to-ico';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(__dirname, '..', '..');
 const assetsDir = path.join(__dirname, '..', 'assets');
-const publicDir = path.join(__dirname, '..', '..', 'src', 'public');
+const publicDir = path.join(repoRoot, 'src', 'public');
 const logoPngPath = path.join(publicDir, 'icons', 'logo.png');
 
+/** 与 .ice-brand-logo { width: 28px; border-radius: 6px } 同比例 */
+const CORNER_RADIUS_RATIO = 6 / 28;
+/** 仅系统 / 浏览器 tab 图标内缩；侧栏 CSS 自己控制 */
+const MARK_INSET_PX = 2;
+
+function cornerRadius(size) {
+  return Math.max(2, Math.round(size * CORNER_RADIUS_RATIO));
+}
+
+function roundedMaskSvg(size, radius) {
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">` +
+      `<rect width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#fff"/>` +
+      '</svg>',
+  );
+}
+
 async function renderPng(size) {
-  return sharp(logoPngPath)
-    .resize(size, size, {
+  const radius = cornerRadius(size);
+  const inner = Math.max(1, size - MARK_INSET_PX);
+  const innerPng = await sharp(logoPngPath)
+    .resize(inner, inner, {
       fit: 'contain',
       background: { r: 0, g: 0, b: 0, alpha: 255 },
     })
     .png()
     .toBuffer();
+
+  const square = await sharp({
+    create: {
+      width: size,
+      height: size,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 255 },
+    },
+  })
+    .composite([{ input: innerPng, gravity: 'centre' }])
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+
+  return sharp(square)
+    .composite([{ input: roundedMaskSvg(size, radius), blend: 'dest-in' }])
+    .png()
+    .toBuffer();
+}
+
+async function writeSvg(filePath, pngBuffer, label) {
+  const fav128 = await sharp(pngBuffer).resize(128, 128).png().toBuffer();
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="${label}">`,
+    `  <title>${label}</title>`,
+    `  <image href="data:image/png;base64,${fav128.toString('base64')}" width="128" height="128"/>`,
+    '</svg>',
+    '',
+  ].join('\n');
+  fs.writeFileSync(filePath, svg);
 }
 
 async function main() {
@@ -29,39 +82,48 @@ async function main() {
     throw new Error(`missing ${logoPngPath}`);
   }
 
+  fs.mkdirSync(assetsDir, { recursive: true });
+  fs.mkdirSync(path.join(publicDir, 'icons'), { recursive: true });
+
+  const outputs = [
+    path.join(assetsDir, 'icon.png'),
+    path.join(assetsDir, 'icon.ico'),
+    path.join(publicDir, 'favicon.ico'),
+    path.join(publicDir, 'icons', 'favicon.svg'),
+  ];
+  const srcMtime = fs.statSync(logoPngPath).mtimeMs;
+  const skip =
+    process.env.FORCE_ICONS !== '1' &&
+    outputs.every((p) => fs.existsSync(p) && fs.statSync(p).mtimeMs >= srcMtime);
+  if (skip) {
+    console.log('[generate-icons] up to date (src/public/icons/logo.png)');
+    return;
+  }
+
   const icon512 = await renderPng(512);
   fs.writeFileSync(path.join(assetsDir, 'icon.png'), icon512);
 
-  const tray32 = await renderPng(32);
-  fs.writeFileSync(path.join(assetsDir, 'tray-icon.png'), tray32);
-
-  const notify44 = await renderPng(44);
-  fs.writeFileSync(path.join(assetsDir, 'notification-app-logo.png'), notify44);
-
-  const icoSizes = [16, 24, 32, 48, 64, 128, 256];
-  const icoBuffers = await Promise.all(icoSizes.map((s) => renderPng(s)));
-  const ico = await pngToIco(icoBuffers);
+  const ico = await pngToIco(await Promise.all([16, 24, 32, 48, 64, 128, 256].map((s) => renderPng(s))));
   fs.writeFileSync(path.join(assetsDir, 'icon.ico'), ico);
 
   const favIco = await pngToIco(await Promise.all([16, 32, 48].map((s) => renderPng(s))));
   fs.writeFileSync(path.join(publicDir, 'favicon.ico'), favIco);
-  fs.writeFileSync(path.join(publicDir, 'icons', 'favicon.ico'), favIco);
 
-  const fav128 = await renderPng(128);
-  const favSvg = [
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="IceCoder">',
-    '  <title>IceCoder</title>',
-    `  <image href="data:image/png;base64,${fav128.toString('base64')}" width="128" height="128"/>`,
-    '</svg>',
-    '',
-  ].join('\n');
-  fs.writeFileSync(path.join(publicDir, 'icons', 'favicon.svg'), favSvg);
+  await writeSvg(path.join(publicDir, 'icons', 'favicon.svg'), icon512, 'IceCoder');
 
-  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico, public favicon.ico / favicon.svg');
-  console.log('[generate-icons] macOS .icns 将在 electron-builder --mac 时由 icon.png 自动转换');
+  for (const leftover of [
+    path.join(assetsDir, 'tray-icon.png'),
+    path.join(assetsDir, 'notification-app-logo.png'),
+    path.join(publicDir, 'icons', 'favicon.ico'),
+    path.join(publicDir, 'icons', 'logo-dark.png'),
+    path.join(publicDir, 'icons', 'logo.svg'),
+  ]) {
+    if (fs.existsSync(leftover)) fs.unlinkSync(leftover);
+  }
+
+  console.log('[generate-icons] source  src/public/icons/logo.png');
+  console.log('[generate-icons] wrote   desktop/assets/icon.png, icon.ico');
+  console.log('[generate-icons] wrote   src/public/favicon.ico, icons/favicon.svg');
 }
 
-main().catch((err) => {
-  process.stderr.write(`[generate-icons] FAILED: ${err && err.stack || err}\n`);
-  process.exit(1);
-});
+await main();

@@ -1,19 +1,14 @@
-应用图标资源
+品牌标只维护一份源图，其余在打包 / 开发时生成。
 
-- （源）src/public/icons/logo.png  黑底白图案品牌标；logo-dark.png 同图
-- 从原图重新抠图：node desktop/scripts/process-brand-logo.mjs <source-image>
-- icon.png        512×512，Linux / electron-builder 通用源
-- icon.ico        Windows 安装包、任务栏、系统通知左上角
-- src/public/favicon.ico  浏览器 tab /favicon.ico（与品牌标同源）
-- tray-icon.png   32×32 系统托盘
-- notification-app-logo.png  44×44 通知备用标
+源图（入库）：
 
-生成 PNG / ICO：
+- src/public/icons/logo.png   侧栏 / 移动端顶栏
 
-```bash
-cd desktop && npm run icons:generate
-```
+生成（不入库，npm run icons 或 npm run build 自动跑）：
 
-macOS 的 .icns 在 `npm run dist:mac` 时由 electron-builder 从 icon.png 自动转换。
+- desktop/assets/icon.png     Electron 窗口 / macOS / Linux
+- desktop/assets/icon.ico     Windows 任务栏、托盘、通知、安装包
+- src/public/favicon.ico      浏览器 tab
+- src/public/icons/favicon.svg
 
-UI 内联图标统一放在 `src/public/icons/`，通过 `AppIcon`（`/icons/*.svg`）加载。
+换新标：覆盖 logo.png 后执行 `npm run icons`，或直接 `npm run build` / `npm run build:desktop`。

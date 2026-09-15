@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * 将用户提供的 ICE 立方体原图抠白底，再转成黑底白图案，
- * 写出 logo.png / logo-dark.png / favicon.svg / logo.svg。
+ * 把任意原图处理成唯一品牌源图 src/public/icons/logo.png，再生成其余尺寸。
+ *
+ *   node desktop/scripts/process-brand-logo.mjs <source-image>
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import sharp from 'sharp';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -93,21 +95,10 @@ const logo512 = await sharp(logoMono)
   .toBuffer();
 
 fs.writeFileSync(path.join(outDir, 'logo.png'), logo512);
-fs.writeFileSync(path.join(outDir, 'logo-dark.png'), logo512);
+console.log('[process-brand-logo] wrote src/public/icons/logo.png');
 
-async function writeSvg(fileName, pngBuffer, label) {
-  const fav128 = await sharp(pngBuffer).resize(128, 128).png().toBuffer();
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="${label}">`,
-    `  <title>${label}</title>`,
-    `  <image href="data:image/png;base64,${fav128.toString('base64')}" width="128" height="128"/>`,
-    '</svg>',
-    '',
-  ].join('\n');
-  fs.writeFileSync(path.join(outDir, fileName), svg);
-}
-
-await writeSvg('favicon.svg', logo512, 'IceCoder');
-await writeSvg('logo.svg', logo512, 'IceCoder');
-
-console.log('[process-brand-logo] wrote logo.png, logo-dark.png, favicon.svg, logo.svg');
+const gen = spawnSync(process.execPath, [path.join(__dirname, 'generate-icons.mjs')], {
+  cwd: repoRoot,
+  stdio: 'inherit',
+});
+if ((gen.status ?? 1) !== 0) process.exit(gen.status ?? 1);

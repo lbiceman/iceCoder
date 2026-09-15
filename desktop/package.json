@@ -1,6 +1,6 @@
 {
   "name": "icecoder-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "iceCoder Electron desktop shell (Windows / macOS / Linux)",
   "main": "dist/main.js",
@@ -8,10 +8,10 @@
     "build": "tsc -p tsconfig.json",
     "icons:generate": "npm run desktop:icons --prefix ..",
     "dev": "npm run build && electron .",
-    "pack": "npm run build && electron-builder --dir",
-    "dist:win": "npm run build && electron-builder --win nsis",
-    "dist:mac": "npm run build && electron-builder --mac dmg",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "pack": "npm run icons:generate && npm run build && electron-builder --dir",
+    "dist:win": "npm run build && node scripts/dist-win.cjs",
+    "dist:mac": "npm run icons:generate && npm run build && electron-builder --mac dmg",
+    "dist:linux": "npm run icons:generate && npm run build && electron-builder --linux AppImage deb",
     "smoke:server-bundle": "node scripts/smoke-server-bundle.mjs",
     "rebuild:server-native": "node scripts/rebuild-server-native.cjs"
   },
@@ -54,6 +54,7 @@
       "**/node_modules/@vscode/ripgrep/**",
       "**/node_modules/node-pty/**"
     ],
+    "afterPack": "scripts/stamp-win-icon.cjs",
     "win": {
       "target": [
         {
@@ -66,7 +67,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "iceCoder"
+      "shortcutName": "iceCoder",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico"
     },
     "mac": {
       "target": "dmg",

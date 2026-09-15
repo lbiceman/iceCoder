@@ -18,13 +18,15 @@
   "type": "module",
   "scripts": {
     "prepack": "node scripts/assert-no-self-dep.mjs",
-    "prebuild": "node scripts/tunnel-pack-entry.cjs",
-    "prebuild:server": "node scripts/tunnel-pack-entry.cjs",
+    "icons": "node desktop/scripts/generate-icons.mjs",
+    "prebuild": "npm run icons && node scripts/tunnel-pack-entry.cjs",
+    "prebuild:server": "npm run icons && node scripts/tunnel-pack-entry.cjs",
+    "predev": "npm run icons",
     "build": "node scripts/bump-pack-version.mjs && tsc -p tsconfig.pack.json --listEmittedFiles && vite build && npm pack && node scripts/copy-release-tgz.mjs",
     "install:global": "node scripts/install-tgz.mjs",
     "build:install": "npm run build && npm run install:global",
     "build:server": "tsc -p tsconfig.pack.json",
-    "build:web": "vite build",
+    "build:web": "npm run icons && vite build",
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "dev": "node scripts/dev-entry.mjs",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -43,7 +45,7 @@
     "desktop:dist:mac": "cd desktop && npm run dist:mac",
     "desktop:dist:linux": "cd desktop && npm run dist:linux",
     "desktop:smoke": "cd desktop && npm run smoke:server-bundle",
-    "desktop:icons": "node desktop/scripts/generate-icons.mjs"
+    "desktop:icons": "npm run icons"
   },
   "engines": {
     "node": ">=22"
