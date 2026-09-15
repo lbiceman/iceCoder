@@ -1,5 +1,5 @@
 import type { ToolCall, UnifiedMessage } from '../llm/types.js';
-import { classifyRunCommandResult } from './task-acceptance-tracker.js';
+import { classifyRunCommandResult } from './run-command-result.js';
 
 /** 从 tool 消息向前找对应 assistant.toolCalls 项。 */
 export function findToolCallForResult(

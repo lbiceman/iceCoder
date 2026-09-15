@@ -29,8 +29,8 @@ import {
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
 import { stripEmbeddedToolCalls, prepareAssistantContentForHistory } from './text-tool-call-salvage.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import { classifyRunCommandResult } from './task-acceptance-tracker.js';
-import type { RunCommandResultClassification } from './task-acceptance-tracker.js';
+import { classifyRunCommandResult } from './run-command-result.js';
+import type { RunCommandResultClassification } from './run-command-result.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';

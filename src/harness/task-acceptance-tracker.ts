@@ -1,5 +1,14 @@
 import { isLongRunningImplementationGoal } from './resume-goal.js';
 import type { CompletionCondition } from './completion-condition.js';
+import { normalizeAcceptanceCommandKey } from './run-command-result.js';
+import type { RunCommandResultClassification } from './run-command-result.js';
+
+export {
+  classifyRunCommandResult,
+  normalizeAcceptanceCommandKey,
+  stripLeadingCdPrefix,
+} from './run-command-result.js';
+export type { RunCommandResultClassification } from './run-command-result.js';
 
 export type AcceptanceCommandStatus = 'pending' | 'passed' | 'failed';
 
@@ -263,53 +272,6 @@ function hasExplicitAcceptanceMarker(goal: string): boolean {
   return /验收(?:命令|条件)?|完成条件|必须(?:运行|通过|成功)|全部成功后|done when|acceptance|must (?:pass|succeed|run)|before (?:you )?(?:finish|stop)/i.test(goal);
 }
 
-/**
- * 剥离 Windows / POSIX 常见的 `cd ... && <real-cmd>` 前缀，仅保留真实命令体。
- * 例如：
- *   `cd /d E:\\foo && npm run build` → `npm run build`
- *   `cd ./pkg && npm test`           → `npm test`
- * 仅当 `&&` 后还存在非空命令时才剥离，避免把 `cd somewhere` 单独剥成空串。
- */
-export function stripLeadingCdPrefix(command: string): string {
-  const re = /^cd\s+(?:\/d\s+)?(?:"[^"]+"|'[^']+'|[^\s&|;]+)\s*&&\s*(.+)$/i;
-  const m = command.trim().match(re);
-  return m && m[1].trim() ? m[1].trim() : command.trim();
-}
-
-/**
- * Acceptance 命令归一化：用于 goal 解析键与 run_command 实际命令的稳定匹配。
- *
- * 处理：
- * - 剥离 `cd ... && ` 前缀（Windows `cd /d` / Unix 通用）
- * - 去掉常见尾缀 `2>&1`、`| tail …`、`| head …`、`| less` 等
- * - 折叠空白，转小写
- * - 可执行路径收成 basename（`./scripts/ci.sh` → `ci.sh`），不做框架别名归一
- */
-export function normalizeAcceptanceCommandKey(command: string): string {
-  let key = stripLeadingCdPrefix(command);
-
-  key = key
-    .replace(/\s+/g, ' ')
-    .replace(/\s2>&1\s*$/i, '')
-    .replace(/\s\|\s*(head|tail|less|more|grep)\b[^|]*$/i, '')
-    .replace(/\s>\s*\S+(?:\s+2>&1)?\s*$/i, '')
-    .trim()
-    .toLowerCase();
-
-  key = normalizeExecutableIdentity(key);
-
-  return key;
-}
-
-function normalizeExecutableIdentity(command: string): string {
-  const match = command.match(/^(?:"([^"]+)"|(\S+))(.*)$/);
-  if (!match) return command;
-  const executable = match[1] ?? match[2] ?? '';
-  const suffix = match[3] ?? '';
-  const basename = executable.split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat|com)$/i, '');
-  return basename ? `${basename}${suffix}`.trim() : command;
-}
-
 function splitCommandChain(command: string): string[] {
   return command
     .split(/\s*(?:&&|;)\s*/)
@@ -348,84 +310,4 @@ export function hasPendingAcceptanceWork(
   acceptance: TaskAcceptanceTracker | undefined,
 ): boolean {
   return !!acceptance?.isActive() && !acceptance.isComplete();
-}
-
-/**
- * P0-A — `run_command` 工具结果分类。
- *
- * 历史问题：shell-tool 后台分支返回 `success: true` 表示「启动成功」，
- * acceptance gate 直接据此把命令标 passed，但**进程往往还在跑**或已 exit ≠ 0。
- *
- * 本分类器解析 raw output 的 JSON 元数据（`mode` / `status` / `exitCode`），
- * 让 acceptance / verification-buffer / branch-budget 等下游按真实结果判定。
- */
-export type RunCommandResultClassification =
-  | { kind: 'foreground'; command: string; foregroundSuccess: boolean; exitCode?: number }
-  | { kind: 'background_start'; command: string }
-  | { kind: 'background_running'; command: string }
-  | { kind: 'background_completed'; command: string; exitCode?: number }
-  | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
-
-export function classifyRunCommandResult(
-  args: Record<string, unknown> | undefined | null,
-  rawOutput: string,
-  toolSuccess: boolean,
-): RunCommandResultClassification | null {
-  const a = args ?? {};
-  const action = typeof a.action === 'string' ? a.action.trim() : '';
-  const argCommand = typeof a.command === 'string'
-    ? a.command
-    : typeof a.cmd === 'string'
-      ? a.cmd
-      : '';
-
-  if (action === 'check' || action === 'list' || action === 'stop') {
-    const parsed = safeParseJson(rawOutput);
-    if (!parsed) return null;
-    const label = typeof parsed.label === 'string' ? parsed.label : '';
-    // P0: 优先用 check 响应里的 `command`（shell-tool 已暴露真实命令）；
-    // 旧 checkpoint / 早期响应可能只有 label，回退到 label。
-    const cmdFromResponse = typeof parsed.command === 'string' && parsed.command.trim()
-      ? parsed.command.trim()
-      : label;
-    const status = typeof parsed.status === 'string' ? parsed.status : '';
-    const exitCode = typeof parsed.exitCode === 'number' ? parsed.exitCode : undefined;
-    if (!cmdFromResponse) return null;
-    if (status === 'completed') {
-      const isExitNonZero = exitCode !== undefined && exitCode !== 0;
-      return isExitNonZero
-        ? { kind: 'background_failed', command: cmdFromResponse, exitCode, statusLabel: 'completed_nonzero' }
-        : { kind: 'background_completed', command: cmdFromResponse, exitCode };
-    }
-    if (status === 'failed' || status === 'timeout' || status === 'killed') {
-      return { kind: 'background_failed', command: cmdFromResponse, exitCode, statusLabel: status };
-    }
-    if (status === 'running') {
-      return { kind: 'background_running', command: cmdFromResponse };
-    }
-    return null;
-  }
-
-  if (!argCommand.trim()) return null;
-  if (toolSuccess) {
-    const parsed = safeParseJson(rawOutput);
-    if (parsed) {
-      const mode = typeof parsed.mode === 'string' ? parsed.mode : '';
-      if (mode === 'background' || mode === 'escalated') {
-        return { kind: 'background_start', command: argCommand };
-      }
-    }
-  }
-  return { kind: 'foreground', command: argCommand, foregroundSuccess: toolSuccess };
-}
-
-function safeParseJson(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
-  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
 }

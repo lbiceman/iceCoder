@@ -18,7 +18,7 @@ import { VerificationOutputBuffer } from '../../src/harness/verification-output-
 import {
   normalizeAcceptanceCommandKey,
   type RunCommandResultClassification,
-} from '../../src/harness/task-acceptance-tracker.js';
+} from '../../src/harness/run-command-result.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
 const OPAQUE_CI = './scripts/ci.sh';

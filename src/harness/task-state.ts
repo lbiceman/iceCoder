@@ -16,7 +16,7 @@ import {
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
-import { classifyRunCommandResult } from './task-acceptance-tracker.js';
+import { classifyRunCommandResult } from './run-command-result.js';
 import type {
   TaskIntent,
   TaskPhase,

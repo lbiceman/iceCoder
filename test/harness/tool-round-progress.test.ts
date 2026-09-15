@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { classifyToolRoundProgress } from '../../src/harness/tool-round-progress.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
-import type { RunCommandResultClassification } from '../../src/harness/task-acceptance-tracker.js';
+import type { RunCommandResultClassification } from '../../src/harness/run-command-result.js';
 import type { ToolCall } from '../../src/llm/types.js';
 
 function tc(name: string, args: Record<string, unknown>, id = name): ToolCall {
