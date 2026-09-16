@@ -18,7 +18,7 @@
 
 ![Desktop — workbench: changed files](./docs/assets/desktop-work-snapshot.png)
 
-**Empty-session welcome** — “IceCoder ready”: mode / Memory / Harness / L2·Gate, quick start, current context, Ice Bean on the right. The workbench stays closed until there is a turn:
+**Empty-session welcome** — “IceCoder ready”: mode / Memory / Harness / Gate, quick start, current context, Ice Bean on the right. The workbench stays closed until there is a turn:
 
 ![Desktop — empty-session welcome (dark)](./docs/assets/desktop-welcome.png)
 

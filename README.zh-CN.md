@@ -18,7 +18,7 @@
 
 ![桌面端 — 工作台：变更文件名单](./docs/assets/desktop-work-snapshot.png)
 
-**空会话欢迎页** — 「IceCoder 已就绪」：模式 / Memory / Harness / L2·Gate、快速上手、当前上下文；右侧冰豆。尚未发过话时工作台默认不占右侧：
+**空会话欢迎页** — 「IceCoder 已就绪」：模式 / Memory / Harness / 门控、快速上手、当前上下文；右侧冰豆。尚未发过话时工作台默认不占右侧：
 
 ![桌面端 — 空会话欢迎页（深色）](./docs/assets/desktop-welcome.png)
 
