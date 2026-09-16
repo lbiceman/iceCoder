@@ -5,14 +5,15 @@ import type { StepReviewResult } from './step-review.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { CheckFailureStreakState } from './check-failure-streak.js';
-import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type {
-  CompletionGateReason,
+  CompletionReason,
   CompletionStatus,
-} from './completion-gate.js';
+} from './completion-state.js';
+import type { VerificationPlanResolution } from './verification-plan.js';
+import type { VerificationRuntimeState } from './verification-state.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -104,10 +105,12 @@ export interface HarnessRunState {
   buildDiagnosticGateActive?: boolean;
   /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
   verificationOutputBuffer: VerificationOutputBuffer;
-  /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
-  taskAcceptance?: TaskAcceptanceTracker;
   /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
   operationOutcomes?: OperationOutcomeLedger;
+  /** 当前目标与工作区解析出的确定性停时验收计划。 */
+  verificationPlanResolution: VerificationPlanResolution;
+  /** 验收 freshness、续轮预算和逐命令证据。 */
+  verificationState: VerificationRuntimeState;
   /** 从 V3 恢复且尚未被本轮 tracker 替代的 completion 条件。 */
   restoredCompletionConditions?: CompletionCondition[];
   /** 统一收尾门控已注入的有界续轮数。 */
@@ -116,7 +119,7 @@ export interface HarnessRunState {
   completionGateBlockingSignature?: string;
   /** 最近一次统一收尾裁决，供 checkpoint 原样恢复。 */
   completionStatus?: CompletionStatus;
-  completionReason?: CompletionGateReason;
+  completionReason?: CompletionReason;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */

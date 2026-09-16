@@ -28,18 +28,33 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { StopHookManager } from './stop-hooks.js';
+import type { ToolExecutorDeps } from './harness-tool-executor.js';
+import type { ToolExecutor } from '../tools/tool-executor.js';
+import type { ToolPermissionRule } from './types.js';
 import type {
   HarnessResult,
   HarnessStepEvent,
+  StopReason,
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import {
-  buildCompletionGatePrompt,
-  CompletionGate,
+  evaluateCompletionHardState,
+  type CompletionReason,
   type CompletionStatus,
-} from './completion-gate.js';
-import { buildCompletionGateInput } from './completion-context.js';
+} from './completion-state.js';
+import { hasEngineeringTestTargets } from './document-deliverable.js';
+import {
+  executeStopVerificationPlan,
+  type StopVerificationResult,
+} from './harness-stop-verification.js';
+import { createHarnessVerificationToolAdapter } from './harness-verification-tool-adapter.js';
+import {
+  createVerificationRuntimeState,
+  isVerificationFresh,
+  syncVerificationWorkspaceMutation,
+  tryConsumeVerificationContinuation,
+} from './verification-state.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import {
   containsEmbeddedToolCalls,
@@ -66,6 +81,20 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   stopHookManager: StopHookManager;
   graphExecutor: GraphExecutor;
   workspaceRoot?: string;
+  toolExecutor?: ToolExecutor;
+  permissionRules?: ToolPermissionRule[];
+  skipPermissionChecks?: boolean;
+  onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  onShellMandatoryConfirm?: (
+    request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
+  ) => Promise<boolean>;
+  shellCollabActive?: boolean;
+  planModeActive?: boolean;
+  lockedWorkspaceRoot?: string;
+  referenceReads?: string[];
+  sessionId?: string;
+  sessionDir?: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface HandleNoToolCallsArgs {
@@ -114,7 +143,6 @@ export async function handleNoToolCalls(
     hasEmbeddedToolText
     && currentTools.length > 0
     && state.noToolExecutionRecoveryCount < 1
-    && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
   ) {
     state.noToolExecutionRecoveryCount++;
     console.log('[harness] 检测到正文中嵌入工具调用（未走 API），注入恢复提示并继续');
@@ -197,32 +225,12 @@ export async function handleNoToolCalls(
     response.finishReason === 'length'
     && state.maxOutputTokensRecoveryCount >= MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
   ) {
-    deps.loopController.stop('max_output_tokens');
-    const finalState = deps.loopController.getState();
-    logger.loopStop('max_output_tokens', finalState.currentRound, finalState.totalToolCalls);
-
-    onStep?.({
-      type: 'final',
-      iteration: finalState.currentRound,
-      totalToolCalls: finalState.totalToolCalls,
-      content: sanitizeAssistantContentForUser(response.content),
+    return finishNoToolRound(deps, args, {
+      status: 'interrupted',
+      reason: 'max_output_tokens',
       stopReason: 'max_output_tokens',
-      tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-      totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
-        lastInputTokens: finalState.lastInputTokens,
-        lastOutputTokens: finalState.lastOutputTokens,
-      }),
+      content: sanitizeAssistantContentForUser(response.content),
     });
-
-    return {
-      action: 'return',
-      result: {
-        content: sanitizeAssistantContentForUser(response.content),
-        loopState: finalState,
-        messages: [...msgs],
-        log: logger.getEntries(),
-      },
-    };
   }
 
   if (
@@ -256,7 +264,6 @@ export async function handleNoToolCalls(
       content: buildIncompleteContinuationPrompt(
         state.taskState.snapshot(),
         state.repoContext.snapshot(),
-        undefined,
         deps.workspaceRoot,
       ),
     });
@@ -269,45 +276,51 @@ export async function handleNoToolCalls(
     && !response.reasoningContent?.trim()
     && !hasEmbeddedToolText
   ) {
-    deps.loopController.stop('error');
-    const finalState = deps.loopController.getState();
-    logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
-
-    onStep?.({
-      type: 'final',
-      iteration: finalState.currentRound,
-      totalToolCalls: finalState.totalToolCalls,
-      content: 'LLM returned empty response',
+    return finishNoToolRound(deps, args, {
+      status: 'failed',
+      reason: 'error',
       stopReason: 'error',
+      content: 'LLM returned empty response, please retry.',
     });
-
-    return {
-      action: 'return',
-      result: {
-        content: 'LLM returned empty response, please retry.',
-        loopState: finalState,
-        messages: [...msgs],
-        log: logger.getEntries(),
-      },
-    };
   }
 
   state.emptyResponseRetryCount = 0;
 
-  // 删除/cleanup 后同步 filesChanged，避免 Gate 仍要求 read 已不存在的文件
+  // 删除/cleanup 后同步 filesChanged，避免收尾仍引用已不存在的交付物。
   state.taskState.reconcileMissingChangedFiles(deps.workspaceRoot);
   state.repoContext.reconcileMissingChangedFiles(deps.workspaceRoot);
 
   const taskSnap = state.taskState.snapshot();
   const workspaceRoot = deps.workspaceRoot;
-  const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance, workspaceRoot);
+  const pendingWork = hasPendingWork(taskSnap, workspaceRoot);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
   const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
 
+  // 实现任务从未真正调用工具时，保留一次协议恢复；验收计划不消费这份预算。
+  if (
+    currentTools.length > 0
+    && state.noToolExecutionRecoveryCount < 1
+    && state.stopHookContinuationCount === 0
+    && !hasToolCallSinceUser
+    && (
+      resumeWithPending
+      || (pendingWork && isImplementationIntent(taskSnap.intent))
+    )
+  ) {
+    state.noToolExecutionRecoveryCount++;
+    pushAssistantForHistory(msgs, response);
+    msgs.push({
+      role: 'user',
+      content: buildNoToolExecutionRecoveryPrompt(),
+    });
+    state.transition = 'no_tool_execution_recovery';
+    return { action: 'continue' };
+  }
+
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 已有写文件变更（Gate / prematureCompletion 接管收尾验收）
+  // 2) 已有写文件变更（D′ 停时验收接管）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
@@ -321,27 +334,12 @@ export async function handleNoToolCalls(
       state.stopHookContinuationCount++;
       if (state.stopHookContinuationCount > MAX_STOP_HOOK_CONTINUATIONS) {
         console.log(`[harness] 停止钩子连续干预 ${state.stopHookContinuationCount} 次，强制停止`);
-        deps.loopController.stop('stop_hook');
-        const finalState = deps.loopController.getState();
-        logger.loopStop('stop_hook', finalState.currentRound, finalState.totalToolCalls);
-
-        onStep?.({
-          type: 'final',
-          iteration: finalState.currentRound,
-          totalToolCalls: finalState.totalToolCalls,
-          content: sanitizeAssistantContentForUser(response.content),
+        return finishNoToolRound(deps, args, {
+          status: 'paused',
+          reason: 'stop_hook',
           stopReason: 'stop_hook',
+          content: sanitizeAssistantContentForUser(response.content),
         });
-
-        return {
-          action: 'return',
-          result: {
-            content: sanitizeAssistantContentForUser(response.content),
-            loopState: finalState,
-            messages: [...msgs],
-            log: logger.getEntries(),
-          },
-        };
       }
 
       console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续 (${state.stopHookContinuationCount}/${MAX_STOP_HOOK_CONTINUATIONS})`);
@@ -351,146 +349,298 @@ export async function handleNoToolCalls(
     }
   }
 
-  const completionDecision = new CompletionGate().evaluate(buildCompletionGateInput(state, {
-    answerReady: Boolean(response.content?.trim()),
-    currentTools,
-    workspaceRoot,
-  }));
-  state.completionStatus = completionDecision.status;
-  state.completionReason = completionDecision.reason;
-  emitLightweightSnapshotBoundary({
-    boundary: 'gate_decision',
-    detail: `${completionDecision.action}:${completionDecision.reason}`,
-  });
-  const completionStatus: CompletionStatus = completionDecision.status;
-
-  if (completionDecision.action === 'continue') {
-    const prompt = buildCompletionGatePrompt(completionDecision);
-    if (prompt) {
-      state.completionGateContinuationCount++;
-      state.completionGateBlockingSignature = completionDecision.blockingSignature;
-      pushAssistantForHistory(msgs, response);
-      injectContinuationUserMessage(deps, state, msgs, prompt);
-      await resilienceSaveCheckpoint(deps, 'verification_started', state);
-      state.transition = 'no_tool_execution_recovery';
-      return { action: 'continue' };
-    }
-  }
-
-  if (completionDecision.action === 'pause' || completionDecision.action === 'fail') {
-    const reason = completionDecision.action === 'fail'
-      ? 'completion_failed'
-      : 'completion_paused';
-    // 终态只写入 completionStatus / stopReason / checkpoint；不要把门控术语拼进用户可见正文。
-    const content = sanitizeAssistantContentForUser(response.content);
-    pushAssistantForHistory(msgs, response);
-    deps.loopController.stop(reason);
-    const finalState = deps.loopController.getState();
-    logger.loopStop(reason, finalState.currentRound, finalState.totalToolCalls);
-    await saveTaskCheckpoint(
-      deps,
-      completionDecision.action === 'fail' ? 'failed' : 'paused',
-      resolveCheckpointUserGoal(state, userMessage),
-      msgs,
-      state,
-      reason,
-    );
-    await resilienceSaveCheckpoint(deps, 'final_draft', state, reason);
-    recordTelemetrySummary(deps, reason, state, {
-      status: completionDecision.status,
-      reason: completionDecision.reason,
+  const hardState = evaluateCompletionHardState(state.operationOutcomes);
+  if (hardState) {
+    return finishNoToolRound(deps, args, {
+      status: hardState.status,
+      reason: hardState.reason,
+      stopReason: hardState.status === 'failed'
+        ? 'completion_failed'
+        : 'completion_paused',
+      content: sanitizeAssistantContentForUser(response.content),
     });
-    onStep?.({
-      type: 'final',
-      iteration: finalState.currentRound,
-      totalToolCalls: finalState.totalToolCalls,
-      content,
-      stopReason: reason,
-      completionStatus: completionDecision.status,
-      completionReason: completionDecision.reason,
-    });
-    return {
-      action: 'return',
-      result: {
-        content,
-        loopState: finalState,
-        messages: [...msgs],
-        log: logger.getEntries(),
-        completionStatus,
-      },
-    };
-  }
-
-  state.completionGateContinuationCount = 0;
-  state.completionGateBlockingSignature = undefined;
-
-  if (
-    currentTools.length > 0
-    && state.noToolExecutionRecoveryCount < 1
-    && state.stopHookContinuationCount === 0
-    && (
-      hasEmbeddedToolText
-      || (
-        !hasAssistantToolCallAfterLatestRealUser(msgs)
-        && (
-          resumeWithPending
-          || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
-        )
-      )
-    )
-  ) {
-    state.noToolExecutionRecoveryCount++;
-    pushAssistantForHistory(msgs, response);
-    msgs.push({
-      role: 'user',
-      content: buildNoToolExecutionRecoveryPrompt(),
-    });
-    state.transition = 'no_tool_execution_recovery';
-    return { action: 'continue' };
   }
 
   state.stopHookContinuationCount = 0;
+  state.verificationState ??= createVerificationRuntimeState();
+  syncVerificationWorkspaceMutation(state.verificationState, state.taskState);
+  const resolution = state.verificationPlanResolution ?? { kind: 'unavailable' as const };
+  const hasEngineeringChanges = hasEngineeringTestTargets(taskSnap.filesChanged);
 
-  if (deps.graphExecutor?.hasGraph()) {
-    const ar = deps.graphExecutor.advanceOrComplete();
-    if (ar.graphDone) {
-      onStep?.({ type: 'task_graph_done' });
-    }
+  if (resolution.kind === 'invalid') {
+    return finishNoToolRound(deps, args, {
+      status: 'paused',
+      reason: 'verification_plan_invalid',
+      stopReason: 'completion_paused',
+      content: sanitizeAssistantContentForUser(response.content),
+    });
   }
 
-  deps.loopController.stop('model_done');
-  const finalState = deps.loopController.getState();
-  logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
-  await saveTaskCheckpoint(deps, 'completed', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
-  await resilienceSaveCheckpoint(deps, 'final_draft', state, 'model_done');
-  recordTelemetrySummary(deps, 'model_done', state, {
-    status: completionDecision.status,
-    reason: completionDecision.reason,
-  });
+  const hasExplicitUserPlan = resolution.kind === 'resolved'
+    && resolution.plan.source === 'user';
+  // question / inspect / 纯阅读直接结束；严格用户验收 marker 则按 test-only 任务执行。
+  if (
+    (taskSnap.intent === 'question' || taskSnap.intent === 'inspect')
+    && !hasExplicitUserPlan
+  ) {
+    return finishNoToolRound(deps, args, {
+      status: 'completed',
+      reason: 'verification_not_required',
+      stopReason: 'model_done',
+      content: sanitizeAssistantContentForUser(response.content),
+    });
+  }
 
+  if (resolution.kind !== 'resolved') {
+    return finishNoToolRound(deps, args, {
+      status: hasEngineeringChanges ? 'completed_unverified' : 'completed',
+      reason: hasEngineeringChanges
+        ? 'verification_plan_unavailable'
+        : 'verification_not_required',
+      stopReason: 'model_done',
+      content: sanitizeAssistantContentForUser(response.content),
+    });
+  }
+
+  const plan = resolution.plan;
+  const mustRunPlan = plan.source === 'user'
+    || plan.source === 'project' // 旧 checkpoint；新解析不再产出 project
+    || (
+      plan.source === 'runtime_default'
+      && hasEngineeringChanges
+      && taskSnap.workspaceMutationVersion > 0
+    );
+  if (!mustRunPlan) {
+    return finishNoToolRound(deps, args, {
+      status: hasEngineeringChanges ? 'completed_unverified' : 'completed',
+      reason: hasEngineeringChanges
+        ? 'verification_plan_unavailable'
+        : 'verification_not_required',
+      stopReason: 'model_done',
+      content: sanitizeAssistantContentForUser(response.content),
+    });
+  }
+
+  if (isVerificationFresh(state.verificationState, plan.fingerprint)) {
+    return finishNoToolRound(deps, args, {
+      status: 'completed',
+      reason: 'verification_passed',
+      stopReason: 'model_done',
+      content: sanitizeAssistantContentForUser(response.content),
+    });
+  }
+
+  // 正文是结束提议；先写入历史，再以同一 deps/Graph/Gate 执行确定性验收。
+  pushAssistantForHistory(msgs, response);
+  const stopVerification = deps.toolExecutor
+    && workspaceRoot
+    && currentTools.some(tool => tool.name === 'run_command')
+    ? await executeStopVerificationPlan({
+        plan,
+        taskState: state.taskState,
+        verificationState: state.verificationState,
+        executeToolCall: createHarnessVerificationToolAdapter({
+          deps: deps as ToolExecutorDeps,
+          state,
+          currentTools,
+          logger,
+          onStep,
+          abortSignal: deps.abortSignal,
+          graphExecutor: deps.graphExecutor,
+        }),
+        abortSignal: deps.abortSignal,
+      })
+    : {
+        status: 'unavailable' as const,
+        reason: 'blocked' as const,
+        failedCommand: plan.commands[0]?.command,
+      };
+
+  if (stopVerification.status === 'passed') {
+    return finishNoToolRound(deps, args, {
+      status: 'completed',
+      reason: 'verification_passed',
+      stopReason: 'model_done',
+      content: sanitizeAssistantContentForUser(response.content),
+      assistantAlreadyRecorded: true,
+    });
+  }
+
+  if (stopVerification.status === 'aborted') {
+    return finishNoToolRound(deps, args, {
+      status: 'interrupted',
+      reason: 'verification_unavailable',
+      stopReason: 'user_abort',
+      content: sanitizeAssistantContentForUser(response.content),
+      assistantAlreadyRecorded: true,
+    });
+  }
+
+  if (stopVerification.status === 'failed') {
+    if (tryConsumeVerificationContinuation(state.verificationState, 1)) {
+      injectContinuationUserMessage(
+        deps,
+        state,
+        msgs,
+        buildVerificationContinuationPrompt(stopVerification),
+      );
+      await saveTaskCheckpoint(
+        deps,
+        'running',
+        resolveCheckpointUserGoal(state, userMessage),
+        msgs,
+        state,
+      );
+      await resilienceSaveCheckpoint(deps, 'verification_failed', state);
+      state.transition = 'no_tool_execution_recovery';
+      return { action: 'continue' };
+    }
+
+    const explicit = plan.source === 'user' || plan.source === 'project';
+    return finishNoToolRound(deps, args, {
+      status: explicit ? 'failed' : 'completed_unverified',
+      reason: 'verification_failed',
+      stopReason: 'model_done',
+      content: appendVerificationFailureNotice(
+        sanitizeAssistantContentForUser(response.content),
+        stopVerification,
+      ),
+      assistantAlreadyRecorded: true,
+    });
+  }
+
+  const explicit = plan.source === 'user' || plan.source === 'project';
+  return finishNoToolRound(deps, args, {
+    status: explicit ? 'paused' : 'completed_unverified',
+    reason: 'verification_unavailable',
+    stopReason: explicit ? 'completion_paused' : 'model_done',
+    content: sanitizeAssistantContentForUser(response.content),
+    assistantAlreadyRecorded: true,
+  });
+}
+
+function isImplementationIntent(intent: ReturnType<HarnessRunState['taskState']['snapshot']>['intent']): boolean {
+  return intent === 'edit'
+    || intent === 'debug'
+    || intent === 'refactor'
+    || intent === 'docs';
+}
+
+function buildVerificationContinuationPrompt(
+  result: StopVerificationResult,
+): string {
+  return [
+    '[System / Stop Verification] The deterministic acceptance command failed.',
+    result.failedCommand ? `Command: ${result.failedCommand}` : '',
+    result.exitCode !== undefined ? `Exit code: ${result.exitCode}` : '',
+    result.outputTail ? `Relevant output:\n${result.outputTail.slice(-1_200)}` : '',
+    'The single stop-verification continuation is now consumed.',
+    'Fix the real cause and run only the relevant verification. Do not substitute git diff or directory listings.',
+  ].filter(Boolean).join('\n');
+}
+
+function appendVerificationFailureNotice(
+  content: string,
+  result: StopVerificationResult,
+): string {
+  const command = result.failedCommand ?? 'verification command';
+  const exit = result.exitCode !== undefined ? ` (exit code ${result.exitCode})` : '';
+  return [content, `Verification still failed: ${command}${exit}.`]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+async function finishNoToolRound(
+  deps: NoToolRoundDeps,
+  args: HandleNoToolCallsArgs,
+  terminal: {
+    status: CompletionStatus;
+    reason: CompletionReason;
+    stopReason: StopReason;
+    content: string;
+    assistantAlreadyRecorded?: boolean;
+  },
+): Promise<HandleNoToolCallsResult> {
+  const {
+    state,
+    response,
+    userMessage,
+    currentTools,
+    tokenUsage,
+    logger,
+    onStep,
+  } = args;
+  if (!terminal.assistantAlreadyRecorded) {
+    pushAssistantForHistory(state.messages, response);
+  }
+  if (terminal.stopReason === 'model_done' && deps.graphExecutor?.hasGraph()) {
+    const advanced = deps.graphExecutor.advanceOrComplete();
+    if (advanced.graphDone) onStep?.({ type: 'task_graph_done' });
+  }
+
+  state.completionStatus = terminal.status;
+  state.completionReason = terminal.reason;
+  emitLightweightSnapshotBoundary({
+    boundary: 'gate_decision',
+    detail: `${terminal.status}:${terminal.reason}`,
+  });
+  deps.loopController.stop(terminal.stopReason);
+  const finalState = deps.loopController.getState();
+  logger.loopStop(
+    terminal.stopReason,
+    finalState.currentRound,
+    finalState.totalToolCalls,
+  );
+  await saveTaskCheckpoint(
+    deps,
+    checkpointStatusForCompletion(terminal.status),
+    resolveCheckpointUserGoal(state, userMessage),
+    state.messages,
+    state,
+    terminal.stopReason,
+  );
+  await resilienceSaveCheckpoint(
+    deps,
+    'final_draft',
+    state,
+    terminal.stopReason,
+  );
+  recordTelemetrySummary(deps, terminal.stopReason, state, {
+    status: terminal.status,
+    reason: terminal.reason,
+  });
   onStep?.({
     type: 'final',
     iteration: finalState.currentRound,
     totalToolCalls: finalState.totalToolCalls,
-    content: sanitizeAssistantContentForUser(response.content),
-    stopReason: 'model_done',
-    completionStatus: completionDecision.status,
-    completionReason: completionDecision.reason,
+    content: terminal.content,
+    stopReason: terminal.stopReason,
+    completionStatus: terminal.status,
+    completionReason: terminal.reason,
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+    totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, currentTools, {
       lastInputTokens: finalState.lastInputTokens,
       lastOutputTokens: finalState.lastOutputTokens,
     }),
   });
-
   return {
     action: 'return',
     result: {
-      content: sanitizeAssistantContentForUser(response.content),
+      content: terminal.content,
       loopState: finalState,
-      messages: [...msgs],
+      messages: [...state.messages],
       log: logger.getEntries(),
-      completionStatus,
+      completionStatus: terminal.status,
+      completionReason: terminal.reason,
     },
   };
+}
+
+function checkpointStatusForCompletion(
+  status: CompletionStatus,
+): 'completed' | 'paused' | 'failed' | 'aborted' {
+  if (status === 'completed' || status === 'completed_unverified') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'interrupted') return 'aborted';
+  return 'paused';
 }

@@ -3,7 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { CompletionGate } from '../../src/harness/completion-gate.js';
 import { CompletionFactsView } from '../../src/harness/completion-facts-view.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
 import { ProjectCheckpointStore } from '../../src/harness/project-checkpoint-store.js';
@@ -80,9 +79,9 @@ function checkpoint(): ProjectCheckpointV3 {
         reversibility: 'compensatable',
       }],
       status: 'failed',
-      reason: 'condition_failed',
+      reason: 'verification_failed',
       continuationCount: 1,
-      blockingSignature: 'condition:user:npm-test:failed',
+      blockingSignature: 'stop-verification:failed:npm test:1',
     },
     conversation: { messages: [{ role: 'user', content: 'Ship the patch after acceptance passes' }] },
     workspace: {
@@ -119,29 +118,13 @@ describe('V3 crash resume gate equivalence', () => {
     const facts = CompletionFactsView.fromCompletionSnapshot(restored!.completion);
     const ledger = new OperationOutcomeLedger();
     ledger.replace(restored!.completion.operationOutcomes);
-    const before = new CompletionGate().evaluate({
-      conditions: checkpoint().completion.conditions,
-      ledger: (() => {
-        const original = new OperationOutcomeLedger();
-        original.replace(checkpoint().completion.operationOutcomes);
-        return original;
-      })(),
-      continuationCount: checkpoint().completion.continuationCount,
-      previousBlockingSignature: checkpoint().completion.blockingSignature,
-    });
-    const after = new CompletionGate().evaluate({
-      conditions: facts.conditionSnapshot(),
-      ledger,
-      continuationCount: restored!.completion.continuationCount,
-      previousBlockingSignature: restored!.completion.blockingSignature,
-    });
 
-    expect(after).toMatchObject({
-      action: before.action,
-      status: before.status,
-      reason: before.reason,
-      blockingSignature: before.blockingSignature,
-    });
+    expect(facts.conditionSnapshot()).toEqual(checkpoint().completion.conditions);
+    expect(ledger.snapshot()).toEqual(checkpoint().completion.operationOutcomes);
+    expect(restored!.completion.continuationCount).toBe(checkpoint().completion.continuationCount);
+    expect(restored!.completion.blockingSignature).toBe(checkpoint().completion.blockingSignature);
+    expect(restored!.completion.status).toBe('failed');
+    expect(restored!.completion.reason).toBe('verification_failed');
     expect(restored!.execution.resumable?.branchBudget?.fileEdits['src/a.ts']).toBe(2);
     expect(BranchBudgetTracker.fromSnapshot(restored!.execution.resumable!.branchBudget!).inspect()
       .fileEdits['src/a.ts']).toBe(2);

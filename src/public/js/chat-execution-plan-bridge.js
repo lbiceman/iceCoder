@@ -110,7 +110,10 @@ window.ChatExecutionPlanBridge = (function () {
     var bridgePlanId = bridgeState && bridgeState.currentPlanId;
     var bridgeFootDismissed = bridgeState && bridgeState.planFootDismissed;
     var planId = bridgePlanId || currentPlanId || (plan && plan.planId) || null;
-    var hasFlow = !!(planId || panel.roundRecords.length || panel.currentExecutionMode);
+    var hasFlow = !!(planId
+      || panel.roundRecords.length
+      || panel.currentExecutionMode
+      || typeof panel.turnStartedAt === 'number');
     if (!hasFlow) {
       clearSessionFlow(sessionId);
       return;
@@ -523,7 +526,7 @@ window.ChatExecutionPlanBridge = (function () {
     }
     var meta = nextMeta && typeof nextMeta === 'object' ? nextMeta : {};
     if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.sealChapter === 'function') {
-      window.ChatExecutionPlan.sealChapter({ status: 'done', nextMeta: meta });
+      window.ChatExecutionPlan.sealChapter({ status: 'done', nextMeta: meta, resetTimer: true });
     } else {
       clearPlanStateForSession(getActiveSessionId());
     }

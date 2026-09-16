@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CompletionFactsView } from '../../src/harness/completion-facts-view.js';
-import { CompletionGate } from '../../src/harness/completion-gate.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
-import { TaskAcceptanceTracker } from '../../src/harness/task-acceptance-tracker.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
 import type { ProjectCheckpointCompletion } from '../../src/types/runtime-checkpoint.js';
@@ -11,12 +9,12 @@ import type { ProjectCheckpointCompletion } from '../../src/types/runtime-checkp
 function completionSnapshot(): ProjectCheckpointCompletion {
   return {
     conditions: [{
-      id: 'acceptance:npm-test',
+      id: 'verification:npm-test',
       label: 'npm test',
       required: true,
       status: 'pending',
       source: 'user',
-      sourceRef: 'acceptance:npm-test',
+      sourceRef: 'verification:npm-test',
       evidenceRefs: [],
     }],
     operationOutcomes: [{
@@ -45,7 +43,7 @@ describe('CompletionFactsView', () => {
       status: 'pending',
       required: true,
     });
-    expect(facts.completionDecisionInput({ answerReady: true }).conditions).toHaveLength(1);
+    expect(facts.conditionSnapshot()).toHaveLength(1);
   });
 
   it('supports scoped failures and pending operations', () => {
@@ -86,15 +84,10 @@ describe('CompletionFactsView', () => {
       required: false,
     });
     expect(facts.requiredBlockers()).toEqual([]);
-    expect(new CompletionGate().evaluate(
-      facts.completionDecisionInput({ answerReady: true }),
-    ).action).toBe('complete');
   });
 
-  it('keeps a restored passed condition authoritative over a fresh pending tracker', () => {
-    const taskState = new TaskState(
-      '实现功能；验收标准：依次运行 `npm test`',
-    );
+  it('keeps a restored passed condition even when the runtime tracker no longer exists', () => {
+    const taskState = new TaskState('实现功能。完成条件：必须运行 `npm test`。');
     const operationOutcomes = new OperationOutcomeLedger();
     operationOutcomes.record({
       toolCallId: 'restored:test',
@@ -109,18 +102,14 @@ describe('CompletionFactsView', () => {
     });
     const state = {
       taskState,
-      taskAcceptance: new TaskAcceptanceTracker(
-        '实现功能；验收标准：依次运行 `npm test`',
-        ['npm test'],
-      ),
       operationOutcomes,
       restoredCompletionConditions: [{
-        id: 'acceptance:npm test',
+        id: 'verification:npm test',
         label: 'npm test',
         required: true,
         status: 'satisfied',
         source: 'user',
-        sourceRef: 'acceptance:npm test',
+        sourceRef: 'verification:npm test',
         evidenceRefs: ['restored:test'],
       }],
       completionGateContinuationCount: 0,
@@ -128,16 +117,9 @@ describe('CompletionFactsView', () => {
 
     const facts = CompletionFactsView.fromHarnessRunState(state);
     expect(facts.verificationSignal()).toMatchObject({ status: 'passed', required: true });
-    expect(new CompletionGate().evaluate(
-      facts.completionDecisionInput({ answerReady: true }),
-    ).action).toBe('complete');
-
-    state.taskAcceptance!.recordRunCommand('npm test', false, 'new:test');
-    expect(CompletionFactsView.fromHarnessRunState(state).conditionSnapshot())
-      .toContainEqual(expect.objectContaining({
-        id: 'acceptance:npm test',
-        status: 'failed',
-        evidenceRefs: ['new:test'],
-      }));
+    expect(facts.conditionSnapshot()).toContainEqual(expect.objectContaining({
+      id: 'verification:npm test',
+      status: 'satisfied',
+    }));
   });
 });

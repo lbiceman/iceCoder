@@ -222,46 +222,69 @@ describe('Harness - 工具调用循环', () => {
     )).toBe(false);
   });
 
-  it('简单修改有成功回执时不强制追加测试', async () => {
-    const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
-    const executor = createToolExecutor(tools);
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+  it('简单工程修改在 runtime-default 过期时自动追加一次测试', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-default-stop-test-'));
+    try {
+      await fs.writeFile(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        scripts: { test: 'vitest run' },
+      }), 'utf8');
+      const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
+      const executor = createToolExecutor(tools);
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), executor);
 
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      finalResponse('已修复'),
-      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('已修复'),
-    ], finalResponse('已修复'));
+      const chatFn = createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+        finalResponse('已修复'),
+        toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('已修复'),
+      ], finalResponse('已修复'));
 
-    const result = await harness.run('修复失败用例', chatFn);
+      const result = await harness.run('修复失败用例', chatFn);
 
-    expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(1);
-    expect(result.loopState.stopReason).toBe('model_done');
-    expect(result.messages.some(m =>
-      m.role === 'user'
-      && typeof m.content === 'string'
-      && /unit tests/i.test(m.content)
-    )).toBe(false);
+      expect(result.content).toBe('已修复');
+      expect(result.loopState.totalToolCalls).toBe(2);
+      expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.completionStatus).toBe('completed');
+      expect(result.messages.some(m =>
+        m.role === 'user'
+        && typeof m.content === 'string'
+        && /unit tests/i.test(m.content)
+      )).toBe(false);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('修改代码且 npm test 通过后允许完成', async () => {
-    const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
-    const executor = createToolExecutor(tools);
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-explicit-test-'));
+    try {
+      await fs.writeFile(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        scripts: { test: 'vitest run' },
+      }), 'utf8');
+      const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
+      const executor = createToolExecutor(tools);
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), executor);
 
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('已修复并验证'),
-    ], finalResponse('已修复并验证'));
+      const chatFn = createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+        toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('已修复并验证'),
+      ], finalResponse('已修复并验证'));
 
-    const result = await harness.run('修复失败用例', chatFn);
+      const result = await harness.run('修复失败用例', chatFn);
 
-    expect(result.content).toBe('已修复并验证');
-    expect(result.loopState.totalToolCalls).toBe(2);
-    expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.content).toBe('已修复并验证');
+      expect(result.loopState.totalToolCalls).toBe(2);
+      expect(result.loopState.stopReason).toBe('model_done');
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('工具执行后通过发送管道注入 Runtime State 和 Repo Context', async () => {
@@ -381,7 +404,8 @@ describe('Harness - 工具调用循环', () => {
     const result = await harness.run('Read file', chatFn);
 
     expect(result.content).toBe('File does not exist');
-    expect(result.completionStatus).toBe('failed');
+    expect(result.completionStatus).toBe('completed');
+    expect(result.completionReason).toBe('verification_not_required');
     // 消息中应该包含工具错误
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
     expect(toolMsg).toBeDefined();
@@ -476,6 +500,8 @@ describe('Harness - max-output-tokens 恢复', () => {
     const result = await harness.run('Very long text', chatFn);
 
     expect(result.loopState.stopReason).toBe('max_output_tokens');
+    expect(result.completionStatus).toBe('interrupted');
+    expect(result.completionReason).toBe('max_output_tokens');
   });
 });
 
@@ -1009,11 +1035,15 @@ describe('Harness - onStep 回调', () => {
     const chatFn: ChatFunction = vi.fn().mockRejectedValue(new Error('Invalid key'));
 
     const events: HarnessStepEvent[] = [];
-    await harness.run('test', chatFn, (e) => events.push(e));
+    const result = await harness.run('test', chatFn, (e) => events.push(e));
 
     const finalEvent = events.find(e => e.type === 'final');
     expect(finalEvent).toBeDefined();
     expect(finalEvent!.stopReason).toBe('error');
+    expect(finalEvent!.completionStatus).toBe('failed');
+    expect(finalEvent!.completionReason).toBe('error');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.completionReason).toBe('error');
   });
 
   it('max_output_tokens 停止时 final 事件包含正确 stopReason', async () => {
@@ -1034,6 +1064,8 @@ describe('Harness - onStep 回调', () => {
     const finalEvent = events.find(e => e.type === 'final');
     expect(finalEvent!.stopReason).toBe('max_output_tokens');
     expect(finalEvent!.tokenUsage).toBeDefined();
+    expect(finalEvent!.completionStatus).toBe('interrupted');
+    expect(finalEvent!.completionReason).toBe('max_output_tokens');
   });
 });
 
@@ -1430,6 +1462,8 @@ describe('Harness - 边界情况', () => {
 
     expect(result.content).toBe('LLM returned empty response, please retry.');
     expect(result.loopState.stopReason).toBe('error');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.completionReason).toBe('error');
   });
 
   it('LLM 空响应重试后成功', async () => {
@@ -1599,7 +1633,7 @@ describe('Harness - 边界情况', () => {
 // 17. 连续工具失败熔断
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 连续工具失败熔断', () => {
-  it('连续 3 轮工具全部失败后注入策略调整提示', async () => {
+  it('连续普通只读失败不否决模型最终正文', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
     const executor = createToolExecutor(tools, failHandler);
@@ -1615,9 +1649,8 @@ describe('Harness - 连续工具失败熔断', () => {
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 模型仍可输出总结，但结构化终态必须保留最后一次失败；正文不再追加门控术语。
-    expect(result.loopState.stopReason).toBe('completion_failed');
-    expect(result.completionStatus).toBe('failed');
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.completionStatus).toBe('completed');
     expect(result.content).toBe('summary');
   });
 

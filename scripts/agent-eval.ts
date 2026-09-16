@@ -40,7 +40,7 @@ const METRIC_KEYS: Array<keyof EvalMetrics> = [
 ];
 
 interface CliArgs {
-  mode: 'real' | 'mock';
+  mode: 'real' | 'mock' | 'local';
   caseId?: string;
   format: 'json' | 'markdown';
   keepWorkspaces: boolean;
@@ -54,10 +54,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  const selectedCases = selectCases(args.caseId);
+  const selectedCases = args.mode === 'local'
+    ? selectLocalCases(selectCases(args.caseId))
+    : selectCases(args.caseId);
   const results = args.mode === 'real'
     ? await runRealEval(selectedCases, args)
-    : runMockEval(selectedCases);
+    : args.mode === 'local'
+      ? await runLocalEval(selectedCases, args)
+      : await runMockEval(selectedCases, args);
   const metrics = aggregate(results);
   const report = {
     timestamp: new Date().toISOString(),
@@ -80,8 +84,10 @@ async function main(): Promise<void> {
   }
 }
 
-function runMockEval(cases: AgentEvalCase[]): CaseResult[] {
-  return cases.map((testCase, index) => {
+async function runMockEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseResult[]> {
+  const scripted = cases.filter(testCase => (testCase.scriptedTurns?.length ?? 0) > 0);
+  const smoke = cases.filter(testCase => (testCase.scriptedTurns?.length ?? 0) === 0);
+  const smokeResults = smoke.map((testCase, index) => {
     const metrics: EvalMetrics = {
       task_success_rate: 1,
       tool_call_rate: testCase.expected.requiresTool ? 1 : 0,
@@ -96,6 +102,46 @@ function runMockEval(cases: AgentEvalCase[]): CaseResult[] {
     };
     return { id: testCase.id, category: testCase.category, passed: true, metrics, failures: [] };
   });
+  if (scripted.length === 0) return smokeResults;
+  return [...smokeResults, ...await runLocalEval(scripted, args)];
+}
+
+async function runLocalEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseResult[]> {
+  if (cases.length === 0) {
+    throw new Error('No scripted local-eval cases selected. Add scriptedTurns or pass a local case id.');
+  }
+  await ensureWebStreamsGlobals();
+  const { runAgentEvalCase } = await import('./agent-eval-runner.js');
+  const results: CaseResult[] = [];
+  const previousEvalMode = process.env.ICE_EVAL_MODE;
+  process.env.ICE_EVAL_MODE = '1';
+  try {
+    for (const testCase of cases) {
+      console.error(`[agent-eval] local ${testCase.id}`);
+      results.push(await runAgentEvalCase(testCase, {
+        keepWorkspace: args.keepWorkspaces,
+      }));
+    }
+  } finally {
+    if (previousEvalMode === undefined) {
+      delete process.env.ICE_EVAL_MODE;
+    } else {
+      process.env.ICE_EVAL_MODE = previousEvalMode;
+    }
+  }
+  return results;
+}
+
+function selectLocalCases(cases: AgentEvalCase[]): AgentEvalCase[] {
+  const local = cases.filter(testCase => (testCase.scriptedTurns?.length ?? 0) > 0);
+  if (cases.length > 0 && local.length === 0) {
+    throw new Error(
+      `No scriptedTurns on selected case(s). Local mode only runs real-workspace scripted cases. Available: ${
+        agentEvalCases.filter(testCase => testCase.scriptedTurns?.length).map(testCase => testCase.id).join(', ')
+      }`,
+    );
+  }
+  return local;
 }
 
 async function runRealEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseResult[]> {
@@ -252,10 +298,14 @@ function roundMetric(value: number): number {
 }
 
 function parseArgs(): CliArgs {
-  const envMode = process.env.ICE_AGENT_EVAL_MODE === 'mock' ? 'mock' : 'real';
+  const envMode = process.env.ICE_AGENT_EVAL_MODE === 'mock'
+    ? 'mock'
+    : process.env.ICE_AGENT_EVAL_MODE === 'local'
+      ? 'local'
+      : 'real';
   const modeArg = getArg('--mode') ?? envMode;
-  if (modeArg !== 'real' && modeArg !== 'mock') {
-    throw new Error(`Invalid --mode: ${modeArg}. Expected "real" or "mock".`);
+  if (modeArg !== 'real' && modeArg !== 'mock' && modeArg !== 'local') {
+    throw new Error(`Invalid --mode: ${modeArg}. Expected "real", "mock", or "local".`);
   }
   const formatArg = getArg('--format') ?? 'json';
   if (formatArg !== 'json' && formatArg !== 'markdown') {
@@ -276,10 +326,13 @@ function printHelp(): void {
 Usage:
   npm run eval:agent
   npm run eval:agent -- --mode=mock
+  npm run eval:agent -- --mode=local
   npm run eval:agent -- --case=single-file-edit --format=markdown
 
 Options:
-  --mode=<real|mock>       real drives Harness with configured LLM; mock is no-API smoke
+  --mode=<real|mock|local> real drives Harness with configured LLM;
+                           mock is no-API smoke, but still runs scripted local cases for real;
+                           local runs only scriptedTurns cases with real tools in isolated workspaces
   --case=<id>              run one case
   --format=<json|markdown> output format
   --keep-workspaces        keep temp workspaces for debugging

@@ -80,6 +80,20 @@ describe('executeStopVerificationPlan', () => {
     expect(executeToolCall.mock.calls.map(([toolCall]) => toolCall.arguments.timeout))
       .toEqual([111, 222]);
     expect(isVerificationFresh(verificationState, plan.fingerprint)).toBe(true);
+    expect(verificationState.commandProgress).toEqual([
+      expect.objectContaining({
+        command: 'npm test',
+        status: 'passed',
+        mutationVersion: 1,
+        evidenceRef: 'evidence:npm test',
+      }),
+      expect.objectContaining({
+        command: 'npm run lint',
+        status: 'passed',
+        mutationVersion: 1,
+        evidenceRef: 'evidence:npm run lint',
+      }),
+    ]);
   });
 
   it('stops at the second foreground failure and returns bounded failure evidence', async () => {
@@ -116,6 +130,14 @@ describe('executeStopVerificationPlan', () => {
     expect(result.outputTail).toHaveLength(200);
     expect(result.outputTail).toMatch(/TAIL$/);
     expect(verificationState.lastResult?.status).toBe('failed');
+    expect(verificationState.commandProgress).toEqual([
+      expect.objectContaining({ command: 'npm test', status: 'passed' }),
+      expect.objectContaining({
+        command: 'npm run lint',
+        status: 'failed',
+        exitCode: 2,
+      }),
+    ]);
     expect(isVerificationFresh(verificationState, plan.fingerprint)).toBe(false);
   });
 
@@ -698,7 +720,7 @@ describe('executeStopVerificationPlan', () => {
     expect(ids[0]?.[0]).toMatch(/:run:1$/);
   });
 
-  it('fails closed when the verification mirror is ahead of TaskState', async () => {
+  it('uses TaskState as truth when a persisted verification mirror is ahead', async () => {
     const verificationState = createVerificationRuntimeState();
     verificationState.workspaceMutationVersion = 5;
     const executeToolCall = vi.fn(async () => foreground('npm test'));
@@ -710,8 +732,9 @@ describe('executeStopVerificationPlan', () => {
       executeToolCall,
     });
 
-    expect(result).toMatchObject({ status: 'unavailable', reason: 'invalid_result' });
-    expect(executeToolCall).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: 'passed' });
+    expect(verificationState.workspaceMutationVersion).toBe(0);
+    expect(executeToolCall).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when TaskState mutation tracking is saturated', async () => {

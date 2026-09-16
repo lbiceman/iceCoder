@@ -902,6 +902,55 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
+  it('还原 runningTurn 时跳过 execution_plan_clear 并从 startedAt 走底栏时间', async () => {
+    const page = await loadChatPageObserver();
+    const result = await page.evaluate(() => {
+      const emit = (window as any).__emitWs;
+      const startedAt = Date.now() - 90_000;
+      emit('connected', {
+        features: { executionPlan: true },
+        sessionId: 'integration-session',
+        activeSessionId: 'integration-session',
+        runningTurn: {
+          isProcessing: true,
+          startedAt,
+          iteration: 2,
+          streamingText: '',
+          streamingReasoningText: '',
+          toolTimeline: [],
+          petState: 'running',
+          petBubble: '',
+          petStatusText: '',
+          lastInputTokens: 0,
+          lastOutputTokens: 0,
+          lastEffectiveUsed: 0,
+          contextWindow: 0,
+          planEvents: [
+            { type: 'execution_plan_clear' },
+            {
+              type: 'task_graph_init',
+              plan: {
+                planId: 'rt-restore-plan',
+                progress: 50,
+                activeStepId: 'step-0',
+                createdAt: startedAt,
+                steps: [{
+                  id: 'step-0',
+                  title: '继续施工',
+                  status: 'running',
+                  startedAt,
+                }],
+              },
+            },
+          ],
+        },
+      });
+      return document.querySelector('.etl-foot-time b')?.textContent;
+    });
+    expect(result).toBe('01:30');
+    await page.close();
+  });
+
   it('执行流按模型轮次纵向展示动作、耗时与结构化原因且不泄露 thinking 正文', async () => {
     const page = await loadChatPageObserver();
     const result = await page.evaluate((basePlan) => {

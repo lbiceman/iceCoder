@@ -14,6 +14,7 @@ import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
+  recordVerificationCommandResult,
   syncVerificationWorkspaceMutation,
   type VerificationRuntimeState,
 } from './verification-state.js';
@@ -139,6 +140,18 @@ export async function executeStopVerificationPlan(
       nextToolCallId,
     );
     lastEvidenceRef = settled.evidenceRef ?? lastEvidenceRef;
+    if (settled.status === 'passed' || settled.status === 'failed') {
+      recordVerificationCommandResult(verificationState, {
+        plan,
+        result: {
+          kind: 'foreground',
+          command: command.command,
+          foregroundSuccess: settled.status === 'passed',
+          ...(settled.exitCode !== undefined ? { exitCode: settled.exitCode } : {}),
+        },
+        ...(settled.evidenceRef ? { evidenceRef: settled.evidenceRef } : {}),
+      });
+    }
     if (settled.status === 'failed') {
       if (!command.required) continue;
       return finishFailed(options, command.command, settled);

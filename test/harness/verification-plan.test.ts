@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -164,7 +164,7 @@ describe('buildVerificationPlan', () => {
     })!;
     const variants = [
       buildVerificationPlan({
-        source: 'project',
+        source: 'runtime_default',
         workspaceRoot: root,
         commands: baseline.commands,
       }),
@@ -204,9 +204,8 @@ describe('buildVerificationPlan', () => {
 });
 
 describe('resolveVerificationPlan', () => {
-  it('prefers strict user commands over project and runtime defaults', async () => {
+  it('prefers strict user commands over the runtime default', async () => {
     const root = temporaryWorkspace();
-    writeJson(root, '.icecoder.json', { verificationCommands: ['npm run project-check'] });
     writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
     writeFileSync(join(root, 'pnpm-lock.yaml'), '', 'utf8');
 
@@ -225,11 +224,8 @@ describe('resolveVerificationPlan', () => {
     });
   });
 
-  it('uses ordered project commands when no strict user marker exists', async () => {
+  it('uses the runtime default when the goal has no verification marker', async () => {
     const root = temporaryWorkspace();
-    writeJson(root, 'icecoder.json', {
-      verificationCommands: [' npm run verify ', 'npm run lint', 'npm run verify', 42],
-    });
     writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
     const warnings: Array<{ kind: string; source: string }> = [];
 
@@ -240,49 +236,13 @@ describe('resolveVerificationPlan', () => {
     })).resolves.toMatchObject({
       kind: 'resolved',
       plan: {
-        source: 'project',
+        source: 'runtime_default',
         commands: [
-          { command: 'npm run verify', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
-          { command: 'npm run lint', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
+          { command: 'npm test', required: true, timeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS },
         ],
       },
     });
-    expect(warnings).toEqual([
-      expect.objectContaining({
-        kind: 'malformed',
-        source: 'workspace_config',
-      }),
-    ]);
-  });
-
-  it('treats an explicit empty project command list as disabling runtime defaults', async () => {
-    const root = temporaryWorkspace();
-    writeJson(root, '.icecoder.json', { verificationCommands: [] });
-    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
-
-    await expect(resolveVerificationPlan({
-      goal: '',
-      workspaceRoot: root,
-    })).resolves.toEqual({ kind: 'disabled', source: 'project' });
-  });
-
-  it('returns project invalid when every configured entry is blank or non-string', async () => {
-    const root = temporaryWorkspace();
-    writeJson(root, '.icecoder.json', { verificationCommands: ['  ', 42] });
-    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
-    const warnings: Array<{ kind: string; source: string }> = [];
-
-    await expect(resolveVerificationPlan({
-      goal: '',
-      workspaceRoot: root,
-      onWarning: warning => warnings.push(warning),
-    })).resolves.toEqual({
-      kind: 'invalid',
-      source: 'project',
-      reason: 'invalid_project_commands',
-    });
-    expect(warnings).toHaveLength(2);
-    expect(warnings.every(warning => warning.source === 'workspace_config')).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it.each([
@@ -377,79 +337,27 @@ describe('resolveVerificationPlan', () => {
     });
   });
 
-  it('falls through malformed files and never selects non-test scripts', async () => {
-    const malformedConfigRoot = temporaryWorkspace();
-    writeFileSync(join(malformedConfigRoot, '.icecoder.json'), '{', 'utf8');
-    writeFileSync(join(malformedConfigRoot, 'package.json'), '{', 'utf8');
-    await expect(resolveVerificationPlan({
-      goal: '',
-      workspaceRoot: malformedConfigRoot,
-    })).resolves.toEqual({ kind: 'unavailable' });
-
-    const buildOnlyRoot = temporaryWorkspace();
-    writeJson(buildOnlyRoot, 'package.json', {
+  it('never selects non-test package scripts as the runtime default', async () => {
+    const root = temporaryWorkspace();
+    writeJson(root, 'package.json', {
       scripts: { build: 'vite build', migrate: 'db migrate', snapshot: 'snapshot' },
     });
     await expect(resolveVerificationPlan({
       goal: '',
-      workspaceRoot: buildOnlyRoot,
+      workspaceRoot: root,
     })).resolves.toEqual({ kind: 'unavailable' });
   });
 
-  it('warns for malformed config while continuing to the next configured name', async () => {
+  it('does not warn when the lockfile is simply missing', async () => {
     const root = temporaryWorkspace();
-    writeFileSync(join(root, '.icecoder.json'), '{', 'utf8');
-    writeJson(root, 'icecoder.json', { verificationCommands: ['npm run verify'] });
+    writeJson(root, 'package.json', { scripts: { test: 'vitest --run' } });
     const warnings: Array<{ kind: string; path: string; code?: string }> = [];
-
-    await expect(resolveVerificationPlan({
+    await resolveVerificationPlan({
       goal: '',
       workspaceRoot: root,
       onWarning: warning => warnings.push(warning),
-    })).resolves.toMatchObject({
-      kind: 'resolved',
-      plan: {
-        source: 'project',
-        commands: [{ command: 'npm run verify' }],
-      },
     });
-    expect(warnings).toEqual([
-      expect.objectContaining({
-        kind: 'malformed',
-        path: join(root, '.icecoder.json'),
-      }),
-    ]);
-  });
-
-  it('does not warn for ENOENT but reports unreadable files without throwing', async () => {
-    const missingRoot = temporaryWorkspace();
-    writeJson(missingRoot, 'package.json', { scripts: { test: 'vitest --run' } });
-    const missingWarnings: Array<{ kind: string; path: string; code?: string }> = [];
-    await resolveVerificationPlan({
-      goal: '',
-      workspaceRoot: missingRoot,
-      onWarning: warning => missingWarnings.push(warning),
-    });
-    expect(missingWarnings).toEqual([]);
-
-    const unreadableRoot = temporaryWorkspace();
-    mkdirSync(join(unreadableRoot, '.icecoder.json'));
-    writeJson(unreadableRoot, 'package.json', { scripts: { test: 'vitest --run' } });
-    const unreadableWarnings: Array<{ kind: string; path: string; code?: string }> = [];
-    await expect(resolveVerificationPlan({
-      goal: '',
-      workspaceRoot: unreadableRoot,
-      onWarning: warning => unreadableWarnings.push(warning),
-    })).resolves.toMatchObject({
-      kind: 'resolved',
-      plan: { source: 'runtime_default' },
-    });
-    expect(unreadableWarnings).toEqual([
-      expect.objectContaining({
-        kind: 'read_error',
-        path: join(unreadableRoot, '.icecoder.json'),
-      }),
-    ]);
+    expect(warnings).toEqual([]);
   });
 
   it('reports a malformed package manifest while returning no default plan', async () => {

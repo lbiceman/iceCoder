@@ -15,7 +15,7 @@ import type {
 } from '../types/runtime-snapshot.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type { OperationOutcome } from './operation-outcome.js';
-import type { AcceptanceGateSnapshot } from './task-acceptance-tracker.js';
+import type { AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
 import type { LoopState, StopReason } from './types.js';
 
 const EPOCH = '1970-01-01T00:00:00.000Z';

@@ -20,7 +20,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 | Area | Status |
 |------|--------|
-| **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, verification gate, no-tool recovery, repeat-failure detection |
+| **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, D′ stop-time verification, no-tool recovery, repeat-failure detection |
 | **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
 | **Single-axis Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard; L2 takeover stack retired on 2026-08-31; overview [`docs/双模机制详解.md`](./双模机制详解.md) |
@@ -84,7 +84,7 @@ while running:
     continue
   else:
     recover no-tool executable tasks
-    enforce verification gate
+    hard state / D′ stop-time verification
     run stop hooks
     finalize
 ```
@@ -105,7 +105,7 @@ Key components:
 Key runtime protections:
 
 - No-tool recovery for executable tasks
-- Verification gate after file-changing tools
+- D′ stop-time verification: no-tool body proposes stop; stale plan runs once via `run_command` ToolGate
 - Permission rules before tool execution
 - Confirmation-required tools are denied if no confirmation callback exists
 - Repeated failed tool signature detection
@@ -586,15 +586,17 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 
 ```bash
 npm run eval:agent                              # default real — configured LLM required
-npm run eval:agent -- --mode=mock               # no-API smoke
+npm run eval:agent -- --mode=mock               # no-API smoke; scripted local cases still run for real
+npm run eval:agent -- --mode=local              # scriptedTurns only: isolated workspace + real tools
 npm run eval:agent -- --case=single-file-edit
 npm run eval:agent -- --format=markdown --keep-workspaces
 ```
 
-- Case definitions: `scripts/agent-eval-cases.ts` (7 fixed scenarios).
-- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, rule-based scoring.
+- Case definitions: `scripts/agent-eval-cases.ts` (catalog + `stop-verification` local-edit cases).
+- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, file/command judges. Cases with `scriptedTurns` must not be fake-passed by mock metrics.
 - History: `data/eval/agent-eval-history.jsonl`.
 - Non-zero exit when any case fails or P0 metrics regress.
+- Stop-time verification design: [`harness/收尾策略-模型停手与验收门控.md`](./harness/收尾策略-模型停手与验收门控.md).
 
 Metrics per case and aggregate:
 
@@ -770,7 +772,7 @@ Quick reference:
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness, compaction, task/repo state, TaskGraph, task-domain, sub-agent, tool planner,
+  harness/          # Harness, compaction, task/repo state, TaskGraph, D′ stop-time verification,
                     # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
   llm/              # OpenAI-compatible adapters
   memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction

@@ -33,6 +33,13 @@ export { HarnessLogger, type LlmRoundLogMeta, type LlmRoundTokenUsage } from './
 export { StopHookManager } from './stop-hooks.js';
 export { TokenBudgetTracker } from './token-budget.js';
 export { StreamingToolExecutor } from './streaming-tool-executor.js';
+export { evaluateCompletionHardState } from './completion-state.js';
+export type {
+  CompletionHardStateDecision,
+  CompletionReason,
+  CompletionStatus,
+  CompletionTerminalDecision,
+} from './completion-state.js';
 
 export type {
   HarnessConfig,

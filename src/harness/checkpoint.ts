@@ -13,11 +13,16 @@ import { ProjectCheckpointStore } from './project-checkpoint-store.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type {
-  CompletionGateReason,
+  CompletionReason,
   CompletionStatus,
-} from './completion-gate.js';
+} from './completion-state.js';
 import type { OperationOutcome } from './operation-outcome.js';
 import type { BranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
+import type { VerificationPlan } from './verification-plan.js';
+import {
+  createVerificationRuntimeState,
+  type VerificationRuntimeState,
+} from './verification-state.js';
 // ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
@@ -58,8 +63,10 @@ export interface TaskCheckpointUpdate {
   completion?: {
     conditions: CompletionCondition[];
     operationOutcomes: OperationOutcome[];
+    verificationPlan?: VerificationPlan;
+    verificationState?: VerificationRuntimeState;
     status?: CompletionStatus;
-    reason?: CompletionGateReason;
+    reason?: CompletionReason;
     continuationCount: number;
     blockingSignature?: string;
   };
@@ -186,7 +193,7 @@ function buildNativeProjectCheckpoint(
   completionFacts: CompletionFactsView,
 ): ProjectCheckpointV3 {
   const loopState = completeLoopState(update.loopState, update.stopReason);
-  const completion = update.completion
+  const completion: ProjectCheckpointV3['completion'] = update.completion
     ? structuredClone(update.completion)
     : existingProject
       ? structuredClone(existingProject.completion)
@@ -194,6 +201,11 @@ function buildNativeProjectCheckpoint(
         conditions: completionFacts.conditionSnapshot(),
         operationOutcomes: [],
       };
+  if (!completion.verificationState) {
+    completion.verificationState = createVerificationRuntimeState();
+    completion.verificationState.workspaceMutationVersion =
+      update.taskState.workspaceMutationVersion ?? 0;
+  }
   const resumable = update.resumableExecution
     ? structuredClone(update.resumableExecution)
     : existingProject?.execution.resumable

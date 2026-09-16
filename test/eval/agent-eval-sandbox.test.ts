@@ -124,4 +124,23 @@ describe('agent-eval sandbox (scripted LLM + real tools)', () => {
     expect(result.passed).toBe(true);
     expect(result.metrics.verification_rate).toBe(1);
   }, 90_000);
+
+  it.each([
+    'local-edit-stop-runs-npm-test',
+    'local-edit-stale-after-second-write',
+    'local-git-diff-noise-does-not-block',
+    'local-runtime-default-fail-unverified',
+    'local-explicit-must-run-failed',
+    'local-user-check-overrides-npm-test',
+    'local-write-new-file-runs-npm-test',
+    'local-engineering-edit-no-plan-unverified',
+    'local-mutating-verify-command-not-fresh',
+    'local-explicit-two-commands',
+    'local-read-only-no-file-change',
+  ])('scripted local workspace case %s', async (id) => {
+    process.env.ICE_EVAL_MODE = '1';
+    const result = await runAgentEvalCase(caseById(id), {});
+    expect(result.failures).toEqual([]);
+    expect(result.passed).toBe(true);
+  }, 90_000);
 });

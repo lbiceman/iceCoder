@@ -1,10 +1,8 @@
 import type { ProjectCheckpointCompletion } from '../types/runtime-checkpoint.js';
 import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import type { CompletionCondition } from './completion-condition.js';
-import type { CompletionGateInput } from './completion-gate.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import {
-  OperationOutcomeLedger,
   type OperationOutcome,
 } from './operation-outcome.js';
 
@@ -23,52 +21,31 @@ export interface CompletionFactsViewOptions {
 }
 
 /**
- * conditions / outcomes / completion control 的唯一执行期查询面。
+ * conditions / outcomes 的执行期查询面。
  */
 export class CompletionFactsView {
   private readonly conditions: CompletionCondition[];
   private readonly outcomes: OperationOutcome[];
   private readonly executionTask?: TaskStateSnapshot;
-  private readonly control: Pick<
-    CompletionGateInput,
-    'continuationCount' | 'previousBlockingSignature'
-  >;
 
   private constructor(args: {
     conditions?: readonly CompletionCondition[];
     outcomes?: readonly OperationOutcome[];
     executionTask?: TaskStateSnapshot;
-    continuationCount?: number;
-    previousBlockingSignature?: string;
   }) {
     this.conditions = (args.conditions ?? []).map(cloneCondition);
     this.outcomes = (args.outcomes ?? []).map(cloneOutcome);
     this.executionTask = args.executionTask
       ? cloneTaskSnapshot(args.executionTask)
       : undefined;
-    this.control = {
-      continuationCount: args.continuationCount,
-      previousBlockingSignature: args.previousBlockingSignature,
-    };
   }
 
   static fromHarnessRunState(
     state: HarnessRunState,
     options: CompletionFactsViewOptions = {},
   ): CompletionFactsView {
-    const tracked = state.taskAcceptance?.toCompletionConditions(
-      options.canExecuteRequiredConditions ?? true,
-    ) ?? [];
     const conditions = new Map<string, CompletionCondition>();
     for (const condition of state.restoredCompletionConditions ?? []) {
-      conditions.set(condition.id, condition);
-    }
-    for (const condition of tracked) {
-      const restored = conditions.get(condition.id);
-      // A freshly reconstructed tracker starts every criterion as pending. That pending
-      // placeholder must not erase a settled restored fact. A real result from this run
-      // (satisfied/failed/unverifiable) is allowed to supersede the restored condition.
-      if (restored && condition.status === 'pending') continue;
       conditions.set(condition.id, condition);
     }
     for (const condition of options.additionalConditions ?? []) {
@@ -78,8 +55,6 @@ export class CompletionFactsView {
       conditions: [...conditions.values()],
       outcomes: state.operationOutcomes?.snapshot() ?? [],
       executionTask: state.taskState.snapshot(),
-      continuationCount: state.completionGateContinuationCount,
-      previousBlockingSignature: state.completionGateBlockingSignature,
     });
   }
 
@@ -146,19 +121,6 @@ export class CompletionFactsView {
     );
   }
 
-  completionDecisionInput(
-    input: Pick<CompletionGateInput, 'answerReady' | 'maxContinuations'> = {},
-  ): CompletionGateInput {
-    const ledger = new OperationOutcomeLedger();
-    ledger.replace(this.outcomes);
-    return {
-      conditions: this.conditions.map(cloneCondition),
-      ledger,
-      ...this.control,
-      ...input,
-    };
-  }
-
   conditionSnapshot(): CompletionCondition[] {
     return this.conditions.map(cloneCondition);
   }
@@ -187,6 +149,7 @@ export class CompletionFactsView {
     );
   }
 }
+
 function cloneTaskSnapshot(task: TaskStateSnapshot): TaskStateSnapshot {
   return {
     ...task,

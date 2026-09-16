@@ -106,7 +106,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 > 原 **L2**（takeover / PassiveObserver / CorrectionPort / EventTimeline）已于 2026-08-31 删除，见 [`docs/L2监管层详解.md`](./docs/L2监管层详解.md)。
 
 - **adaptive**（默认）：按任务风险在自由与强约束间切换，适合日常编码；**strict** 全程偏 forced，关键工程任务首轮即建图。
-- 与 **TaskGraph**、**Verification Gate** 联动：工程源码变更会提示跑单测；Gate 与监管职责分离。
+- 与 **TaskGraph**、**D′ 停时验收** 联动：工程改动可由 `run_command` 跑一次有界验收计划；监管不裁决是否完成。
 - 配置：`data/config.json` 的 `supervisorMode` + `data/supervisor-config.json`（仅 `mode` + `executionMode`）。
 
 ### Harness 主循环与 TaskGraph
@@ -200,7 +200,7 @@ Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`�
 **约 2,000** 条 Vitest（**~225** 个文件；`src/` 行覆盖约 **78%**；Harness **~84%**、Supervisor **~95%**、记忆 **~71%**，以本地 `npm run test:coverage` 为准）。
 
 - 覆盖 Harness 门禁、TaskGraph、双模、记忆生命周期、Web 路由等；长会话与监管有专项用例。
-- **`npm run eval:agent`**：Agent 行为回归评测 — 7 个固定 case 在临时沙箱中真实跑 Harness + 工具，输出 pass/fail 与指标；`--mode=mock` 可无 API Key 烟测。详见 [`docs/使用文档.md`](./docs/使用文档.md)。
+- **`npm run eval:agent`**：Agent 行为回归。`--mode=local` 只跑带 `scriptedTurns` 的本地改文件用例（隔离目录 + 真实工具）；`--mode=mock` 不得给这些用例发假通过分。详见 [`docs/harness/收尾策略-模型停手与验收门控.md`](./docs/harness/收尾策略-模型停手与验收门控.md)。
 - **`npm run telemetry:runtime`**：汇总 runtime 遥测 JSONL，便于长任务排障。
 - 跑测命令见 [`docs/使用文档.md`](./docs/使用文档.md)。
 
@@ -241,13 +241,13 @@ Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`�
 ## 架构（简图）
 
 ```text
-CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、验收、压缩）
+CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、停时验收、压缩）
   → TaskGraph → Supervisor L0/L1/L3 → Checkpoint + BranchBudget → 27 工具 + MCP
 ```
 
 | 模块 | 作用 |
 |------|------|
-| **Harness** | 主循环、验收门禁、压缩、遥测 |
+| **Harness** | 主循环、D′ 停时验收、压缩、遥测 |
 | **Supervisor** | L0 档位 + L1 free/forced + L3 图硬约束 |
 | **TaskGraph** | 结构化计划注入 |
 | **文件记忆** | Memory v2：分级 / 证据强度 / 冲突裁决 + 会话笔记 |

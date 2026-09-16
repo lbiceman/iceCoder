@@ -86,11 +86,22 @@ export function classifyRunCommandResult(
       }
     }
   }
+  const exitCode = foregroundExitCode(rawOutput);
   return {
     kind: 'foreground',
     command: argumentCommand,
     foregroundSuccess: toolSuccess,
+    ...(exitCode !== undefined ? { exitCode } : {}),
   };
+}
+
+function foregroundExitCode(rawOutput: string): number | undefined {
+  const parsed = safeParseJson(rawOutput);
+  if (typeof parsed?.exitCode === 'number' && Number.isFinite(parsed.exitCode)) {
+    return Math.trunc(parsed.exitCode);
+  }
+  const match = rawOutput.match(/exit\s+code\s*[:=]?\s*\(?\s*(-?\d+)/i);
+  return match ? Number.parseInt(match[1]!, 10) : undefined;
 }
 
 /** 从 run_command 参数或其 JSON/错误前缀后的 JSON 输出提取后台 task id。 */
@@ -148,8 +159,7 @@ export function looksLikeRunnableCommand(value: string): boolean {
 }
 
 /**
- * 旧 TaskAcceptanceTracker 的过渡扫描策略。
- * 带参数命令沿用宽松合理性判定；孤立裸词仍须属于历史 runner 集合。
+ * 旧严格命令扫描：带参数命令沿用宽松合理性判定；孤立裸词仍须属于历史 runner 集合。
  */
 export function looksLikeStrictTrackedCommand(value: string): boolean {
   const text = value.trim();

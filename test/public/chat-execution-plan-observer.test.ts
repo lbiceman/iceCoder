@@ -261,6 +261,131 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('未调用 beginTurnTimer 时工具活动仍启动底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      const startedAt = Date.now() - 65_000;
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'orphan-timer',
+        toolName: 'read_file',
+        toolArgs: { path: 'a.ts' },
+        ts: startedAt,
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const initial = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { initial, afterWait: read() };
+    });
+
+    expect(result.initial).toBe('01:05');
+    expect(result.afterWait).not.toBe('00:00');
+    expect(result.afterWait).not.toBe(result.initial);
+    await page.close();
+  });
+
+  it('同轮封章不清掉进行中的底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 8_000;
+      panel.setVisible(true);
+      panel.beginTurnTimer(startedAt);
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'seal-keep-timer',
+        toolName: 'read_file',
+        toolArgs: { path: 'a.ts' },
+        ts: startedAt + 100,
+      });
+      panel.sealChapter({ status: 'done' });
+      return document.querySelector('.etl-foot-time b')?.textContent;
+    });
+
+    expect(result).toBe('00:08');
+    await page.close();
+  });
+
+  it('计划已全部终态但任务未结束时底栏继续走时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 8_000;
+      plan.createdAt = startedAt;
+      plan.steps[0].startedAt = startedAt;
+      panel.setVisible(true);
+      panel.beginTurnTimer(startedAt);
+      panel.setPlan(plan);
+      panel.applyPatch({
+        stepPatches: [{
+          id: 'step-0',
+          status: 'done',
+          endedAt: startedAt + 4000,
+        }],
+        activeStepId: null,
+        progress: 100,
+        updatedAt: startedAt + 4000,
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const afterComplete = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { afterComplete, afterWait: read() };
+    }, makePlan());
+
+    expect(result.afterComplete).toBe('00:08');
+    expect(result.afterWait).not.toBe(result.afterComplete);
+    expect(result.afterWait).not.toBe('00:00');
+    await page.close();
+  });
+
+  it('restoreFlowSnapshot 在无 running step 时仍恢复进行中底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 12_000;
+      panel.setVisible(true);
+      panel.restoreFlowSnapshot({
+        currentPlan: {
+          planId: 'restored-done-plan',
+          progress: 100,
+          activeStepId: null,
+          createdAt: startedAt,
+          updatedAt: startedAt + 3000,
+          steps: [{
+            id: 'step-0',
+            title: '已完成步骤',
+            status: 'done',
+            startedAt,
+            endedAt: startedAt + 3000,
+          }],
+        },
+        turnStartedAt: startedAt,
+        turnEndedAt: null,
+        liveChapterMeta: {
+          messageId: 'u-restore',
+          preview: '继续任务',
+          startedAt,
+          status: 'running',
+        },
+        roundRecords: [],
+        toolRecords: [],
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const initial = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { initial, afterWait: read() };
+    });
+
+    expect(result.initial).toBe('00:12');
+    expect(result.afterWait).not.toBe('00:00');
+    expect(result.afterWait).not.toBe(result.initial);
+    await page.close();
+  });
+
   it('底栏时间只计最近一次任务，且不含回滚系统提示', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {

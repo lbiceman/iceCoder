@@ -11,9 +11,12 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type {
-  CompletionGateReason,
+  CompletionReason,
   CompletionStatus,
-} from './completion-gate.js';
+} from './completion-state.js';
+import type { VerificationPlanResolution } from './verification-plan.js';
+import type { VerificationRuntimeState } from './verification-state.js';
+import { isVerificationFresh } from './verification-state.js';
 
 export interface CheckpointDeps {
   checkpointManager?: TaskCheckpointManager;
@@ -29,11 +32,12 @@ export interface CheckpointRuntimeState {
   branchBudget?: BranchBudgetTracker;
   operationOutcomes?: OperationOutcomeLedger;
   restoredCompletionConditions?: CompletionCondition[];
-  taskAcceptance?: HarnessRunState['taskAcceptance'];
   completionGateContinuationCount?: number;
   completionGateBlockingSignature?: string;
   completionStatus?: CompletionStatus;
-  completionReason?: CompletionGateReason;
+  completionReason?: CompletionReason;
+  verificationPlanResolution?: VerificationPlanResolution;
+  verificationState?: VerificationRuntimeState;
 }
 
 export async function saveTaskCheckpoint(
@@ -66,10 +70,19 @@ export async function saveTaskCheckpoint(
             runtimeState as HarnessRunState,
           ).conditionSnapshot(),
           operationOutcomes: runtimeState.operationOutcomes?.snapshot() ?? [],
+          ...(runtimeState.verificationPlanResolution?.kind === 'resolved'
+            ? { verificationPlan: structuredClone(runtimeState.verificationPlanResolution.plan) }
+            : {}),
+          ...(runtimeState.verificationState
+            ? { verificationState: structuredClone(runtimeState.verificationState) }
+            : {}),
           status: runtimeState.completionStatus,
           reason: runtimeState.completionReason,
-          continuationCount: runtimeState.completionGateContinuationCount ?? 0,
-          blockingSignature: runtimeState.completionGateBlockingSignature,
+          continuationCount: runtimeState.verificationState?.continuationCount
+            ?? runtimeState.completionGateContinuationCount
+            ?? 0,
+          blockingSignature: runtimeState.verificationState?.blockingSignature
+            ?? runtimeState.completionGateBlockingSignature,
         },
         resumableExecution: {
           branchBudget: runtimeState.branchBudget?.snapshot(),
@@ -88,13 +101,18 @@ export function recordTelemetrySummary(
   stopReason: StopReason,
   runtimeState: HarnessRunState,
   completion?: {
-    status: import('./completion-gate.js').CompletionStatus;
-    reason: import('./completion-gate.js').CompletionGateReason;
+    status: CompletionStatus;
+    reason: CompletionReason;
   },
 ): void {
   const loopState = deps.loopController.getState();
   const task = runtimeState.taskState.snapshot();
-  const verification = CompletionFactsView.fromHarnessRunState(runtimeState).verificationSignal();
+  const verificationPlan = runtimeState.verificationPlanResolution?.kind === 'resolved'
+    ? runtimeState.verificationPlanResolution.plan
+    : null;
+  const verificationPassed = !!verificationPlan
+    && !!runtimeState.verificationState
+    && isVerificationFresh(runtimeState.verificationState, verificationPlan.fingerprint);
   deps.runtimeTelemetry?.recordSummary({
     stopReason,
     ...(completion
@@ -104,9 +122,13 @@ export function recordTelemetrySummary(
     repo: runtimeState.repoContext.snapshot(),
     rounds: loopState.currentRound,
     toolCalls: loopState.totalToolCalls,
-    verificationRate: verification.status === 'passed' ? 1 : 0,
+    verificationRate: verificationPassed ? 1 : 0,
     noToolFinal: loopState.totalToolCalls === 0,
-    tokensPerSuccessfulTask: stopReason === 'model_done'
+    tokensPerSuccessfulTask: (
+      completion?.status === 'completed'
+      || completion?.status === 'completed_unverified'
+      || (!completion && stopReason === 'model_done')
+    )
       ? loopState.totalInputTokens + loopState.totalOutputTokens
       : undefined,
     harnessPolicy: runtimeState.harnessPolicyStats,

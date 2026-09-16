@@ -246,6 +246,29 @@ export interface ToolExecutionStats {
   policyBlockedSignatures: string[];
   /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
   budgetBlockedFilePaths: string[];
+  /** 通过执行前后工作区清单确认产生修改的 run_command 调用。 */
+  workspaceMutatedRunCommandIds: string[];
+  /** mutating run_command 的执行前 TaskState mutation version。 */
+  workspaceMutationVersionBeforeRunCommand: Record<string, number>;
+}
+
+const taskStateInventoryScopes = new WeakMap<TaskState, string>();
+let taskStateInventoryScopeSequence = 0;
+
+function commandInventoryScopeFor(
+  deps: ToolExecutorDeps,
+  taskState: TaskState | undefined,
+): string {
+  const base = `${deps.workspaceRoot.replace(/\\/g, '/')}::${deps.sessionId ?? 'default'}`;
+  if (!taskState) return base;
+  const existing = taskStateInventoryScopes.get(taskState);
+  if (existing) return existing;
+  taskStateInventoryScopeSequence = taskStateInventoryScopeSequence >= Number.MAX_SAFE_INTEGER
+    ? 1
+    : taskStateInventoryScopeSequence + 1;
+  const scope = `${base}::run-${taskStateInventoryScopeSequence}`;
+  taskStateInventoryScopes.set(taskState, scope);
+  return scope;
 }
 
 /**
@@ -297,7 +320,9 @@ export async function executeToolCallsStreaming(
   const policyBlockedSignatures: string[] = [];
   const budgetBlockedFilePaths: string[] = [];
   const budgetBlockedPathSet = new Set<string>();
-  const commandInventoryScope = deps.sessionId?.trim() || deps.workspaceRoot;
+  const workspaceMutatedRunCommandIds = new Set<string>();
+  const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
+  const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -703,6 +728,14 @@ export async function executeToolCallsStreaming(
 
   // 第二遍：等待所有已提交的工具完成，收集结果
   const results = await streamingExecutor.flush();
+  const siblingToolMutationPaths = new Set<string>();
+  for (const { toolCall, result } of results) {
+    if (!result.success || toolCall.name === 'run_command') continue;
+    for (const touched of collectSessionTouchedPaths(toolCall.name, toolCall.arguments)) {
+      const remapped = remapPathToWorkspace(deps.workspaceRoot, touched) ?? touched;
+      siblingToolMutationPaths.add(normalizeInventoryPath(remapped));
+    }
+  }
   const processedIds = new Set<string>();
   let failedCount = directFailedCount;
   const failedSignatures: string[] = [...directFailedSignatures];
@@ -773,14 +806,31 @@ export async function executeToolCallsStreaming(
     if (inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot);
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
-      taskState?.recordCommandWorkspaceMutation([
+      const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
+      const touchedPaths = [
         ...commandInventoryDiff.created,
         ...commandInventoryDiff.changed,
         ...commandInventoryDiff.deleted,
-        ...(commandInventoryDiff.incomplete ? ['[workspace-inventory-incomplete]'] : []),
-      ]);
+      ].filter(touched =>
+        !siblingToolMutationPaths.has(normalizeInventoryPath(touched)),
+      );
+      if (commandInventoryDiff.incomplete) {
+        touchedPaths.push('[workspace-inventory-incomplete]');
+      }
+      taskState?.recordCommandWorkspaceMutation(touchedPaths);
+      if (tc.name === 'run_command' && touchedPaths.length > 0) {
+        workspaceMutatedRunCommandIds.add(tc.id);
+        if (mutationVersionBefore !== undefined) {
+          workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
+        }
+      }
     } else if (commandInventoryScope && taskId && backgroundTerminal) {
+      const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
       taskState?.recordCommandWorkspaceMutation(['[background-inventory-missing]']);
+      workspaceMutatedRunCommandIds.add(tc.id);
+      if (mutationVersionBefore !== undefined) {
+        workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
+      }
     }
     if (result.success && deps.sessionDir && deps.sessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
@@ -875,7 +925,14 @@ export async function executeToolCallsStreaming(
     failedSignatures,
     policyBlockedSignatures,
     budgetBlockedFilePaths,
+    workspaceMutatedRunCommandIds: [...workspaceMutatedRunCommandIds],
+    workspaceMutationVersionBeforeRunCommand,
   };
+}
+
+function normalizeInventoryPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 

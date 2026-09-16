@@ -1658,8 +1658,51 @@ window.ChatExecutionPlan = (function () {
     return last || 0;
   }
 
+  function latestUserSentAt() {
+    try {
+      if (!window.ChatSession || typeof window.ChatSession.getMessages !== 'function') return null;
+      var msgs = window.ChatSession.getMessages() || [];
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        var msg = msgs[i];
+        if (!msg || msg.role !== 'user') continue;
+        if (typeof msg.sentAt === 'number' && isFinite(msg.sentAt)) return msg.sentAt;
+      }
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+
+  function inferTurnStartTs(fallbackTs) {
+    if (typeof turnStartedAt === 'number') return turnStartedAt;
+    if (liveChapterMeta && typeof liveChapterMeta.startedAt === 'number') return liveChapterMeta.startedAt;
+    var fromUser = latestUserSentAt();
+    if (typeof fromUser === 'number') return fromUser;
+    if (typeof fallbackTs === 'number' && isFinite(fallbackTs)) return fallbackTs;
+    return Date.now();
+  }
+
+  /** 任务还在跑但没走过 beginTurnTimer（F5 / 重连 / 同轮封章）时把底栏钟拉起来。 */
+  function ensureTurnTimerRunning(ts) {
+    if (liveChapterHasStopped()) return;
+    if (typeof turnStartedAt !== 'number') {
+      turnStartedAt = inferTurnStartTs(ts);
+      turnEndedAt = null;
+      if (liveChapterMeta && typeof liveChapterMeta.startedAt !== 'number') {
+        liveChapterMeta.startedAt = turnStartedAt;
+      }
+      renderFooter();
+      startTick();
+      return;
+    }
+    reopenTurnIfModelStillWorking();
+  }
+
   function liveChapterDurationMs() {
-    if (typeof turnStartedAt !== 'number') return 0;
+    var start = typeof turnStartedAt === 'number'
+      ? turnStartedAt
+      : (liveChapterMeta && typeof liveChapterMeta.startedAt === 'number'
+        ? liveChapterMeta.startedAt
+        : null);
+    if (typeof start !== 'number') return 0;
     var end;
     if (typeof turnEndedAt === 'number') {
       end = turnEndedAt;
@@ -1667,9 +1710,9 @@ window.ChatExecutionPlan = (function () {
       end = Date.now();
     } else {
       var work = lastLiveWorkTs();
-      end = work > turnStartedAt ? work : turnStartedAt;
+      end = work > start ? work : start;
     }
-    return Math.max(0, end - turnStartedAt);
+    return Math.max(0, end - start);
   }
 
   function sealedDurationTotal() {
@@ -2454,15 +2497,33 @@ window.ChatExecutionPlan = (function () {
     turnEndedAt = null;
   }
 
+  function restoreInFlightTurnClock(savedStart, savedEnd, resetTimer) {
+    if (resetTimer) {
+      turnStartedAt = null;
+      turnEndedAt = null;
+      stopTick();
+      return;
+    }
+    if (typeof savedStart === 'number' && savedEnd === null) {
+      turnStartedAt = savedStart;
+      turnEndedAt = null;
+    }
+  }
+
   function sealLiveChapter(opts) {
     opts = opts || {};
+    var resetTimer = !!opts.resetTimer;
+    var savedStart = turnStartedAt;
+    var savedEnd = turnEndedAt;
     try {
       if (!hasSealableWork()) {
         currentPlan = null;
         frozenPlanId = null;
         currentExecutionMode = null;
         bannerDetailOpen = false;
+        restoreInFlightTurnClock(savedStart, savedEnd, resetTimer);
         markLiveChapterRunning(opts.nextMeta || {});
+        if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
         focusNewestChapter();
         if (hostEl) {
           renderChapterDirectory();
@@ -2502,7 +2563,9 @@ window.ChatExecutionPlan = (function () {
         if (chapter.messageId) userPinnedChapter = false;
       }
       resetLiveChapterState();
+      restoreInFlightTurnClock(savedStart, savedEnd, resetTimer);
       markLiveChapterRunning(opts.nextMeta || {});
+      if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
       focusNewestChapter();
       if (hostEl) {
         renderChapterDirectory();
@@ -2575,7 +2638,11 @@ window.ChatExecutionPlan = (function () {
     else if (chapter.status && chapter.status !== 'running') {
       turnEndedAt = turnStartedAt ? turnStartedAt + (chapter.durationMs || 0) : Date.now();
     }
-    if (chapter.status && chapter.status !== 'running') stopTick();
+    if (chapter.status === 'running' || (typeof turnStartedAt === 'number' && turnEndedAt === null)) {
+      startTick();
+    } else if (chapter.status && chapter.status !== 'running') {
+      stopTick();
+    }
   }
 
   function applyAssembledChapters(chapters, options) {
@@ -2696,7 +2763,9 @@ window.ChatExecutionPlan = (function () {
   function applyRoundActivity(evt) {
     try {
       if (!evt || !evt.type) return;
-      if (evt.type !== 'model_task_final') reopenTurnIfModelStillWorking();
+      if (evt.type !== 'model_task_final') {
+        ensureTurnTimerRunning(typeof evt.ts === 'number' ? evt.ts : undefined);
+      }
       markLiveChapterRunning();
       var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
       var roundResult = ensureRoundRecord(evt.iteration, ts);
@@ -3187,7 +3256,13 @@ window.ChatExecutionPlan = (function () {
         if (lastCh && hasLiveProgress()) overlayRicherLiveChapter(lastCh);
         var keepLive = hasLiveWork && !lastIsSameDone;
         applyAssembledChapters(assembled && assembled.chapters, { keepLive: keepLive });
-        if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
+        if (typeof turnStartedAt !== 'number' && lastCh && typeof lastCh.startTs === 'number'
+          && (keepLive || lastAssembledStatus === 'running')) {
+          turnStartedAt = lastCh.startTs;
+          turnEndedAt = null;
+        }
+        if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+        else if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
       } else {
         var slice = sliceCurrentTurnStructured(structured);
         if (!slice.length) return false;
@@ -3961,7 +4036,7 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!step || !step.type) return;
       recoverPanelAfterFatal();
-      reopenTurnIfModelStillWorking();
+      ensureTurnTimerRunning(typeof step.ts === 'number' ? step.ts : undefined);
       markLiveChapterRunning();
       if (step.type === 'tool_call') {
         var callId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
@@ -4278,9 +4353,9 @@ window.ChatExecutionPlan = (function () {
 
       if (isPlanComplete(currentPlan)) {
         visible = !isPanelSuppressed();
-        stopTick();
+        if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
         applyVisibility();
-      } else if (hasRunningStep()) {
+      } else if (hasRunningStep() || (typeof turnStartedAt === 'number' && turnEndedAt === null)) {
         startTick();
       }
       notifyPetFoot();
@@ -4705,7 +4780,8 @@ window.ChatExecutionPlan = (function () {
       } else {
         applyVisibility();
       }
-      if (hasRunningStep()) startTick();
+      if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+      else if (hasRunningStep()) startTick();
       else if (isPlanComplete(currentPlan)) stopTick();
       notifyPetFoot();
       return true;
@@ -4789,7 +4865,7 @@ window.ChatExecutionPlan = (function () {
       if (isPlanComplete(currentPlan)) {
         currentPlan.updatedAt = Date.now();
         frozenPlanId = currentPlan.planId;
-        stopTick();
+        if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
       }
       if (listEl) {
         var items = listEl.querySelectorAll('.exec-plan-step');
@@ -4835,7 +4911,7 @@ window.ChatExecutionPlan = (function () {
       visible = !isPanelSuppressed();
       renderCurrentStep();
       renderFooter();
-      stopTick();
+      if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
       applyVisibility();
       notifyPetFoot();
       scheduleFlowPersist();

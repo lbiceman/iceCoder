@@ -106,7 +106,7 @@ Three layers: **L0** is the supervision tier you pick in the sidebar footer (`of
 > Legacy **L2** (takeover / PassiveObserver / CorrectionPort / EventTimeline) was removed on 2026-08-31 — see [`docs/L2监管层详解.md`](./docs/L2监管层详解.md).
 
 - **adaptive** (default) balances freedom and enforcement; **strict** stays near forced and builds the graph on round 1 for critical engineering tasks.
-- Tied to **TaskGraph** and **Verification Gate** — engineering source changes prompt unit tests; Gate and supervision stay separate.
+- Tied to **TaskGraph** and **D′ stop-time verification** — engineering edits may run a bounded acceptance plan via `run_command`; supervision does not decide completion.
 - Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only).
 
 ### Harness loop & TaskGraph
@@ -247,7 +247,7 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 
 | Piece | Role |
 |-------|------|
-| **Harness** | Main agent loop, verification gate, compaction, telemetry |
+| **Harness** | Main agent loop, D′ stop-time verification, compaction, telemetry |
 | **Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard |
 | **TaskGraph** | Structured plan injection |
 | **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |

@@ -22,7 +22,10 @@ import {
 } from './text-tool-call-salvage.js';
 import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
 import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
-import type { CompletionStatus } from './completion-gate.js';
+import type {
+  CompletionReason,
+  CompletionStatus,
+} from './completion-state.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -51,27 +54,51 @@ export async function handleHarnessStop(
   deps.loopController.stop(reason);
   const state = deps.loopController.getState();
   logger.loopStop(reason, state.currentRound, state.totalToolCalls);
+  const keepsCurrentDecision = reason === 'completion_failed'
+    || reason === 'completion_paused';
+  const completionStatus = keepsCurrentDecision
+    ? runtimeState?.completionStatus ?? completionStatusForStop(reason)
+    : completionStatusForStop(reason);
+  const completionReason = keepsCurrentDecision
+    ? runtimeState?.completionReason ?? completionReasonForStop(reason)
+    : completionReasonForStop(reason);
+  if (runtimeState) {
+    runtimeState.completionStatus = completionStatus;
+    runtimeState.completionReason = completionReason;
+  }
   // currentPlanTracker.onFinal removed (Phase 11)
   await saveTaskCheckpoint(
     deps,
-    reason === 'user_abort' ? 'aborted' : reason === 'error' ? 'failed' : 'paused',
+    checkpointStatusForCompletion(completionStatus),
     resolveCheckpointUserGoal(runtimeState, ''),
     messages,
     runtimeState,
     reason,
   );
   await resilienceSaveCheckpoint(deps, 'final_draft', runtimeState, reason);
-  if (runtimeState) recordTelemetrySummary(deps, reason, runtimeState);
+  if (runtimeState) {
+    recordTelemetrySummary(deps, reason, runtimeState, {
+      status: completionStatus,
+      reason: completionReason,
+    });
+  }
 
   // 如果是用户中断，直接返回
   if (reason === 'user_abort') {
-    onStep?.({ type: 'final', stopReason: reason, totalToolCalls: state.totalToolCalls });
+    onStep?.({
+      type: 'final',
+      stopReason: reason,
+      totalToolCalls: state.totalToolCalls,
+      completionStatus,
+      completionReason,
+    });
     return {
       content: '',
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
-      completionStatus: 'interrupted',
+      completionStatus,
+      completionReason,
     };
   }
 
@@ -87,6 +114,8 @@ export async function handleHarnessStop(
       totalToolCalls: state.totalToolCalls,
       content: finalContent,
       stopReason: reason,
+      completionStatus,
+      completionReason,
     });
 
     return {
@@ -94,7 +123,8 @@ export async function handleHarnessStop(
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
-      completionStatus: 'interrupted',
+      completionStatus,
+      completionReason,
     };
   }
 
@@ -110,6 +140,8 @@ export async function handleHarnessStop(
       totalToolCalls: state.totalToolCalls,
       content: finalContent,
       stopReason: reason,
+      completionStatus,
+      completionReason,
     });
 
     return {
@@ -117,7 +149,8 @@ export async function handleHarnessStop(
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
-      completionStatus: 'paused',
+      completionStatus,
+      completionReason,
     };
   }
 
@@ -180,6 +213,8 @@ export async function handleHarnessStop(
     totalToolCalls: state.totalToolCalls,
     content: finalContent,
     stopReason: reason,
+    completionStatus,
+    completionReason,
   });
 
   return {
@@ -187,7 +222,8 @@ export async function handleHarnessStop(
     loopState: state,
     messages: [...messages],
     log: logger.getEntries(),
-    completionStatus: completionStatusForStop(reason),
+    completionStatus,
+    completionReason,
   };
 }
 
@@ -204,5 +240,31 @@ function completionStatusForStop(reason: StopReason): CompletionStatus {
   ) {
     return 'interrupted';
   }
+  return 'paused';
+}
+
+function completionReasonForStop(reason: StopReason): CompletionReason {
+  if (
+    reason === 'user_abort'
+    || reason === 'user_checkpoint'
+    || reason === 'token_budget'
+    || reason === 'max_rounds'
+    || reason === 'timeout'
+    || reason === 'max_output_tokens'
+    || reason === 'stop_hook'
+    || reason === 'circuit_breaker'
+    || reason === 'error'
+  ) {
+    return reason;
+  }
+  return reason === 'completion_failed' ? 'error' : 'user_checkpoint';
+}
+
+function checkpointStatusForCompletion(
+  status: CompletionStatus,
+): 'completed' | 'paused' | 'failed' | 'aborted' {
+  if (status === 'completed' || status === 'completed_unverified') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'interrupted') return 'aborted';
   return 'paused';
 }

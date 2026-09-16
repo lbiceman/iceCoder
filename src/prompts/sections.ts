@@ -143,7 +143,7 @@ export function createDoingTasksSection(): PromptSection {
   3. Your answer is ready and all operations are settled; a successful low-risk tool result is sufficient unless the user required additional verification.
 - You know what you changed or operated. When useful, proactively choose one relevant observation. Do not run unrelated checks, repeat successful actions, or expand scope merely to appear thorough.
 - Additional checks are optional unless the user explicitly requires them. If a check fails, try one materially different correction when practical; otherwise stop and report the failure plainly.
-- Do NOT stop while any \`[System / Completion Gate]\` message asks you to re-run verification. Run those commands; if they pass, finish.
+- Do NOT stop while any \`[System / Stop Verification]\` message asks you to re-run verification. Run those commands; if they pass, finish.
 - Do NOT claim completion while an operation is pending, awaiting approval, interrupted, or missing a required high-risk receipt.
 - Extra git diff / file listing / unrelated checks do not replace the verification commands.`,
     isStatic: true,

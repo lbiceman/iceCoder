@@ -44,7 +44,6 @@ import { RepoContext } from './repo-context.js';
 import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
 import { isFreshQueryMessage, syncHydratedTaskState } from './resume-task-state.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { OperationOutcomeLedger } from './operation-outcome.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
@@ -78,7 +77,6 @@ import type { HarnessRunState } from './harness-run-state.js';
 import { callHarnessLlm } from './harness-llm-call.js';
 import { prepareHarnessRound } from './harness-round-prep.js';
 import { handleNoToolCalls } from './harness-round-no-tools.js';
-import { tryGraphTerminalStop } from './harness-graph-stop.js';
 import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
@@ -92,6 +90,12 @@ import {
 } from './verification-exempt-config.js';
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
+import { resolveVerificationPlan } from './verification-plan.js';
+import {
+  createVerificationRuntimeState,
+  sanitizeVerificationRuntimeState,
+  syncVerificationWorkspaceMutation,
+} from './verification-state.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 import {
   dumpHarnessTiming,
@@ -422,7 +426,7 @@ export class Harness {
   }
 
   /**
-   * 执行核心 while 循环：prep →（可选）图终止 → 模式评估 → LLM → 无工具/有工具分支 → 直至 stop。
+   * 执行核心 while 循环：prep → 模式评估 → LLM → 无工具/有工具分支 → 直至 stop。
    * 负责会话初始化、工作区锁定、检查点/resilience 恢复、记忆 hydrate，并在 finally 中收尾记忆写入。
    */
   async run(
@@ -533,11 +537,25 @@ export class Harness {
     }
     logger.loopStart(tools.length, messages.length);
 
+    const persistedGoalForAnchor = projectCheckpoint
+      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal)
+      ? projectCheckpoint.execution.taskState.goal
+      : activeCheckpoint?.userGoal;
     const sessionGoalAnchor = resolveSessionGoalAnchor(
       userMessage,
       messages,
-      activeCheckpoint?.userGoal,
+      persistedGoalForAnchor,
     );
+    const verificationPlanResolution = await resolveVerificationPlan({
+      goal: sessionGoalAnchor,
+      workspaceRoot: this.workspaceRoot,
+      onWarning: warning => {
+        console.debug(
+          `[harness] verification plan ${warning.kind} (${warning.source}):`,
+          warning.message,
+        );
+      },
+    });
 
     if (!this.shellCollabActive) {
       this.memoryIntegration.onLoopStart(
@@ -584,8 +602,9 @@ export class Harness {
       sessionGoalAnchor,
       buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
-      taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
       operationOutcomes: new OperationOutcomeLedger(),
+      verificationPlanResolution,
+      verificationState: createVerificationRuntimeState(),
       completionGateContinuationCount: 0,
       consecutiveNoToolRounds: 0,
       missingFileAttempts: new Map(),
@@ -688,6 +707,10 @@ export class Harness {
       state.taskState.applySnapshot(projectCheckpoint.execution.taskState);
       state.repoContext.applySnapshot(projectCheckpoint.workspace.repoContext);
       state.operationOutcomes?.replace(projectCheckpoint.completion.operationOutcomes);
+      state.verificationState = sanitizeVerificationRuntimeState(
+        projectCheckpoint.completion.verificationState,
+      );
+      syncVerificationWorkspaceMutation(state.verificationState, state.taskState);
       state.restoredCompletionConditions = completion.conditionSnapshot();
       state.completionGateContinuationCount = projectCheckpoint.completion.continuationCount ?? 0;
       state.completionGateBlockingSignature = projectCheckpoint.completion.blockingSignature;
@@ -776,19 +799,6 @@ export class Harness {
           round: prep.round,
         });
 
-        const graphStopBeforeRound = await timeAsync('graph_stop_check', () => tryGraphTerminalStop(deps, {
-          state,
-          graphExecutor: deps.graphExecutor,
-          userMessage,
-          currentTools: state.tools,
-          logger,
-          onStep,
-        }), prep.round);
-        if (graphStopBeforeRound) {
-          endTiming('round_wall', roundStartedAt, prep.round);
-          return graphStopBeforeRound;
-        }
-
         timeSync('mode_eval', () => {
           this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
         }, prep.round);
@@ -858,19 +868,6 @@ export class Harness {
             onStep,
           }), prep.round);
           if (noTools.action === 'continue') {
-            const graphStopAfterNoTool = await tryGraphTerminalStop(deps, {
-              state,
-              graphExecutor: deps.graphExecutor,
-              userMessage,
-              currentTools: state.tools,
-              logger,
-              onStep,
-            });
-            if (graphStopAfterNoTool) {
-              endTiming('round_wall', roundStartedAt, prep.round);
-              return graphStopAfterNoTool;
-            }
-
             endTiming('round_wall', roundStartedAt, prep.round);
             continue;
           }
@@ -894,7 +891,7 @@ export class Harness {
         endTiming('round_wall', roundStartedAt, prep.round);
         if (toolRound.action === 'return') return toolRound.result;
 
-        // 工具轮后不 graph-stop：让下一轮统一 CompletionGate 读取最新条件与操作回执。
+        // 工具轮后不 graph-stop：让下一轮 LLM 生成正文，再由 D′ 统一收尾。
       }
     } finally {
       endTiming('run_total', runStartedAt);

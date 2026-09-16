@@ -36,6 +36,11 @@ describe('TaskCheckpointManager · resume summary', () => {
     expect(resume.content).toContain('<resume-checkpoint>');
     expect(resume.content).not.toContain('"version": 1');
     expect(resume.content.length).toBeLessThan(5000);
+    expect((await manager.loadProject())?.completion.verificationState).toMatchObject({
+      workspaceMutationVersion: 0,
+      continuationCount: 0,
+      commandProgress: [],
+    });
   });
 
   it('save sanitizes nested resume-checkpoint blocks from task goal', async () => {
@@ -62,5 +67,50 @@ describe('TaskCheckpointManager · resume summary', () => {
 
     expect(saved.taskState.goal).not.toContain('<resume-checkpoint>');
     expect(saved.taskState.goal).toContain('Original goal');
+  });
+
+  it('does not reactivate a D-prime completed checkpoint because of legacy conditions', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-cp-dprime-'));
+    const manager = new TaskCheckpointManager(sessionDir);
+    const taskState = new TaskState('实现功能');
+    taskState.recordToolResult(
+      { id: 'write', name: 'write_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'written' },
+    );
+
+    await manager.save({
+      status: 'completed',
+      userGoal: '实现功能',
+      taskState: taskState.snapshot(),
+      repoContext: new RepoContext().snapshot(),
+      loopState: {
+        currentRound: 2,
+        totalToolCalls: 1,
+        totalInputTokens: 10,
+        totalOutputTokens: 5,
+        lastInputTokens: 5,
+        lastOutputTokens: 2,
+        startTime: 1,
+        stopReason: 'model_done',
+      },
+      messages: [{ role: 'user', content: '实现功能' }],
+      completion: {
+        conditions: [{
+          id: 'legacy:acceptance',
+          label: 'legacy pending condition',
+          required: true,
+          status: 'pending',
+          source: 'user',
+          sourceRef: 'legacy',
+          evidenceRefs: [],
+        }],
+        operationOutcomes: [],
+        status: 'completed_unverified',
+        reason: 'verification_plan_unavailable',
+        continuationCount: 0,
+      },
+    });
+
+    expect(await manager.loadActive()).toBeNull();
   });
 });

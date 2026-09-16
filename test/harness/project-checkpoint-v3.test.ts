@@ -9,6 +9,11 @@ import {
   emitLightweightSnapshotBoundary,
   onLightweightSnapshotBoundary,
 } from '../../src/harness/checkpoint-snapshot.js';
+import { buildVerificationPlan } from '../../src/harness/verification-plan.js';
+import {
+  createVerificationRuntimeState,
+  markVerificationPassed,
+} from '../../src/harness/verification-state.js';
 
 function checkpoint(): ProjectCheckpointV3 {
   return {
@@ -121,6 +126,50 @@ describe('ProjectCheckpointV3', () => {
     });
     expect(original.completion.conditions[0].evidenceRefs).toEqual([]);
     expect(original.conversation.messages[0].content).toBe('Implement it');
+  });
+
+  it('validates and deep-clones persisted verification plan freshness', () => {
+    const original = checkpoint();
+    const plan = buildVerificationPlan({
+      source: 'project',
+      commands: ['npm test'],
+      workspaceRoot: original.workspace.root,
+    })!;
+    const verificationState = createVerificationRuntimeState();
+    verificationState.workspaceMutationVersion = 1;
+    markVerificationPassed(verificationState, {
+      planFingerprint: plan.fingerprint,
+      source: plan.source,
+      command: 'npm test',
+      exitCode: 0,
+      evidenceRef: 'tool-test',
+    });
+    original.completion.verificationPlan = plan;
+    original.completion.verificationState = verificationState;
+
+    expect(isProjectCheckpointV3(original)).toBe(true);
+    const clone = cloneProjectCheckpointV3(original);
+    clone.completion.verificationState!.commandProgress.push({
+      planFingerprint: plan.fingerprint,
+      commandIndex: 0,
+      command: 'npm test',
+      required: true,
+      status: 'passed',
+      mutationVersion: 1,
+    });
+    expect(original.completion.verificationState.commandProgress).toEqual([]);
+
+    const malformed = structuredClone(original) as any;
+    malformed.completion.verificationState.workspaceMutationVersion = -1;
+    expect(isProjectCheckpointV3(malformed)).toBe(false);
+
+    const emptyStateFingerprint = structuredClone(original) as any;
+    emptyStateFingerprint.completion.verificationState.verifiedPlanFingerprint = '';
+    expect(isProjectCheckpointV3(emptyStateFingerprint)).toBe(false);
+
+    const mismatched = structuredClone(original) as any;
+    mismatched.completion.verificationPlan.fingerprint = '';
+    expect(isProjectCheckpointV3(mismatched)).toBe(false);
   });
 
   it('emits lightweight boundaries without retaining history', () => {

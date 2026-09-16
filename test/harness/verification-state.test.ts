@@ -6,11 +6,13 @@ import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
+  recordVerificationCommandResult,
   sanitizeVerificationRuntimeState,
   syncVerificationWorkspaceMutation,
   tryConsumeVerificationContinuation,
 } from '../../src/harness/verification-state.js';
 import { TaskState } from '../../src/harness/task-state.js';
+import { buildVerificationPlan } from '../../src/harness/verification-plan.js';
 
 describe('verification-state', () => {
   it('creates a JSON-persistable non-fresh state with non-negative counters', () => {
@@ -25,6 +27,7 @@ describe('verification-state', () => {
       continuationCount: 0,
       blockingSignature: null,
       lastResult: null,
+      commandProgress: [],
     });
     expect(JSON.parse(JSON.stringify(state))).toEqual(state);
     expect(isVerificationFresh(state, 'plan-a')).toBe(false);
@@ -172,7 +175,7 @@ describe('verification-state', () => {
     expect(state.attemptedPlanFingerprint).toBe('plan-new');
   });
 
-  it('never rolls the verification mirror backward behind TaskState history', () => {
+  it('treats TaskState mutation version as the authoritative source on restore', () => {
     const state = createVerificationRuntimeState();
     state.workspaceMutationVersion = 5;
     state.verifiedMutationVersion = 5;
@@ -181,7 +184,7 @@ describe('verification-state', () => {
 
     syncVerificationWorkspaceMutation(state, new TaskState('legacy snapshot'));
 
-    expect(state.workspaceMutationVersion).toBe(5);
+    expect(state.workspaceMutationVersion).toBe(0);
     expect(state.verifiedMutationVersion).toBeNull();
     expect(state.verifiedPlanFingerprint).toBeNull();
     expect(isVerificationFresh(state, 'plan-a')).toBe(false);
@@ -230,7 +233,182 @@ describe('verification-state', () => {
         source: 'project',
         evidenceRef: 'tool-4',
       },
+      commandProgress: [],
     });
+  });
+
+  it('records exact successful command-chain segments and marks the plan fresh', () => {
+    const plan = buildVerificationPlan({
+      source: 'user',
+      commands: ['npm test', 'npm run lint'],
+      workspaceRoot: process.cwd(),
+    })!;
+    const state = createVerificationRuntimeState();
+
+    const recorded = recordVerificationCommandResult(state, {
+      plan,
+      result: {
+        kind: 'foreground',
+        command: 'cd /d D:\\repo && npm test 2>&1 && npm run lint 2>&1',
+        foregroundSuccess: true,
+        exitCode: 0,
+      },
+      evidenceRef: 'tool-chain',
+    });
+
+    expect(recorded).toEqual({
+      matchedCommands: ['npm test', 'npm run lint'],
+      allRequiredPassed: true,
+    });
+    expect(state.commandProgress).toEqual([
+      expect.objectContaining({
+        command: 'npm test',
+        status: 'passed',
+        mutationVersion: 0,
+        evidenceRef: 'tool-chain',
+      }),
+      expect.objectContaining({
+        command: 'npm run lint',
+        status: 'passed',
+        mutationVersion: 0,
+        evidenceRef: 'tool-chain',
+      }),
+    ]);
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(true);
+  });
+
+  it('records only the exact failed plan command and ignores unrelated probes', () => {
+    const plan = buildVerificationPlan({
+      source: 'project',
+      commands: ['npm test', 'npm run lint'],
+      workspaceRoot: process.cwd(),
+    })!;
+    const state = createVerificationRuntimeState();
+
+    recordVerificationCommandResult(state, {
+      plan,
+      result: {
+        kind: 'foreground',
+        command: 'npm test',
+        foregroundSuccess: true,
+        exitCode: 0,
+      },
+      evidenceRef: 'tool-test',
+    });
+    const unrelated = recordVerificationCommandResult(state, {
+      plan,
+      result: {
+        kind: 'foreground',
+        command: 'git diff --name-only -- test/',
+        foregroundSuccess: false,
+        exitCode: 129,
+      },
+      evidenceRef: 'tool-diff',
+    });
+    const failed = recordVerificationCommandResult(state, {
+      plan,
+      result: {
+        kind: 'foreground',
+        command: 'npm run lint',
+        foregroundSuccess: false,
+        exitCode: 2,
+      },
+      evidenceRef: 'tool-lint',
+    });
+
+    expect(unrelated).toEqual({ matchedCommands: [], allRequiredPassed: false });
+    expect(failed).toEqual({
+      matchedCommands: ['npm run lint'],
+      allRequiredPassed: false,
+    });
+    expect(state.commandProgress.map(item => ({
+      command: item.command,
+      status: item.status,
+      evidenceRef: item.evidenceRef,
+    }))).toEqual([
+      { command: 'npm test', status: 'passed', evidenceRef: 'tool-test' },
+      { command: 'npm run lint', status: 'failed', evidenceRef: 'tool-lint' },
+    ]);
+    expect(state.lastResult).toMatchObject({
+      status: 'failed',
+      command: 'npm run lint',
+      exitCode: 2,
+    });
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(false);
+  });
+
+  it('ignores background start/running and naturally stales progress after mutation', () => {
+    const plan = buildVerificationPlan({
+      source: 'runtime_default',
+      commands: ['npm test'],
+      workspaceRoot: process.cwd(),
+    })!;
+    const state = createVerificationRuntimeState();
+
+    for (const result of [
+      { kind: 'background_start', command: 'npm test' },
+      { kind: 'background_running', command: 'npm test' },
+    ] as const) {
+      expect(recordVerificationCommandResult(state, {
+        plan,
+        result,
+        evidenceRef: `tool-${result.kind}`,
+      })).toEqual({ matchedCommands: [], allRequiredPassed: false });
+    }
+    expect(state.commandProgress).toEqual([]);
+
+    recordVerificationCommandResult(state, {
+      plan,
+      result: {
+        kind: 'background_completed',
+        command: 'npm test',
+        exitCode: 0,
+      },
+      evidenceRef: 'tool-complete',
+    });
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(true);
+
+    const taskState = new TaskState('edit');
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
+
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(false);
+    expect(state.commandProgress[0]?.mutationVersion).toBe(0);
+    expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  });
+
+  it('requires every required command to pass at the same mutation version', () => {
+    const plan = buildVerificationPlan({
+      source: 'user',
+      commands: ['npm test', 'npm run lint'],
+      workspaceRoot: process.cwd(),
+    })!;
+    const state = createVerificationRuntimeState();
+    recordVerificationCommandResult(state, {
+      plan,
+      result: { kind: 'foreground', command: 'npm test', foregroundSuccess: true },
+      evidenceRef: 'test-v0',
+    });
+
+    const taskState = new TaskState('edit');
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
+    const partial = recordVerificationCommandResult(state, {
+      plan,
+      result: { kind: 'foreground', command: 'npm run lint', foregroundSuccess: true },
+      evidenceRef: 'lint-v1',
+    });
+
+    expect(partial.allRequiredPassed).toBe(false);
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(false);
+
+    const complete = recordVerificationCommandResult(state, {
+      plan,
+      result: { kind: 'foreground', command: 'npm test', foregroundSuccess: true },
+      evidenceRef: 'test-v1',
+    });
+    expect(complete.allRequiredPassed).toBe(true);
+    expect(isVerificationFresh(state, plan.fingerprint)).toBe(true);
   });
 
   it.each([

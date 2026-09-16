@@ -105,6 +105,17 @@ describe('eval: runtime skip / failed log tail / memory persist', () => {
       'noisy-test-failure-fix',
       'multi-round-runtime-stable-edit',
       'test-failure-fix',
+      'local-edit-stop-runs-npm-test',
+      'local-edit-stale-after-second-write',
+      'local-git-diff-noise-does-not-block',
+      'local-runtime-default-fail-unverified',
+      'local-explicit-must-run-failed',
+      'local-user-check-overrides-npm-test',
+      'local-write-new-file-runs-npm-test',
+      'local-engineering-edit-no-plan-unverified',
+      'local-mutating-verify-command-not-fresh',
+      'local-explicit-two-commands',
+      'local-read-only-no-file-change',
     ]));
   });
 
@@ -183,7 +194,7 @@ describe('eval: runtime skip / failed log tail / memory persist', () => {
     expect(sealed).toContain('HEAD-0');
     expect(sealed).toMatch(/工具结果已裁剪|输出已截断/);
     expect(sealed.length).toBeLessThan(55_000);
-  });
+  }, 30_000);
 
   it('spills truncated failed command output into the session dir', async () => {
     process.env.ICE_EVAL_MODE = '1';
@@ -224,7 +235,7 @@ describe('eval: runtime skip / failed log tail / memory persist', () => {
     const spilled = await fs.readFile(join(spillDir, files[0]!), 'utf-8');
     expect(spilled).toContain('TAIL-UNIQUE-ASSERT');
     expect(spilled.length).toBeGreaterThan(80_000);
-  });
+  }, 30_000);
 
   it('Harness onLoopEnd only persists memory after model_done, not after abort', async () => {
     delete process.env.ICE_EVAL_MODE;

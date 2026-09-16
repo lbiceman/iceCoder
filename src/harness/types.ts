@@ -17,7 +17,7 @@ import type {
   ModeSignal,
   ResolvedSupervisorConfig,
 } from '../types/supervisor.js';
-import type { CompletionGateReason, CompletionStatus } from './completion-gate.js';
+import type { CompletionReason, CompletionStatus } from './completion-state.js';
 
 // ─── 上下文组装 ───
 
@@ -292,7 +292,7 @@ export interface HarnessStepEvent {
   totalToolCalls?: number;
   stopReason?: StopReason;
   completionStatus?: CompletionStatus;
-  completionReason?: CompletionGateReason;
+  completionReason?: CompletionReason;
   /** TaskGraph (Phase 7) */
   graphGoal?: string;
   graphIntent?: string;
@@ -333,6 +333,8 @@ export interface HarnessResult {
   log: HarnessLogEntry[];
   /** 通用收尾状态；与模型 finish reason 解耦。 */
   completionStatus?: CompletionStatus;
+  /** 通用收尾原因；与 loop stopReason 正交。 */
+  completionReason?: CompletionReason;
 }
 
 /**

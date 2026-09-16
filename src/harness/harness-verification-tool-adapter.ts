@@ -103,7 +103,11 @@ export function createHarnessVerificationToolAdapter(
       failedSignatures: stats.failedSignatures,
       policyBlockedSignatures: stats.policyBlockedSignatures,
     });
-    const outcome = outcomes[0];
+    let outcome = outcomes[0];
+    if (outcome && stats.workspaceMutatedRunCommandIds.includes(toolCall.id)) {
+      outcome = { ...outcome, effect: 'local_change' };
+      state.operationOutcomes?.record(outcome);
+    }
     if (tracksGraphDeviation) {
       graphExecutor?.recordToolResult(
         toolCall.name,

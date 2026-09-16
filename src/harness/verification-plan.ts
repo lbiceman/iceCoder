@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { looksLikeRunnableCommand } from './run-command-result.js';
-import { WORKSPACE_ICECODER_CONFIG_NAMES } from './verification-exempt-config.js';
 
+/** `project` 仅兼容旧 checkpoint；新解析不会再产出。 */
 export type VerificationPlanSource = 'user' | 'project' | 'runtime_default';
 
 export interface VerificationPlanCommand {
@@ -20,17 +20,14 @@ export interface VerificationPlan {
   fingerprint: string;
 }
 
-export type VerificationPlanInvalidReason =
-  | 'unsafe_user_command'
-  | 'invalid_project_commands';
+export type VerificationPlanInvalidReason = 'unsafe_user_command';
 
 export type VerificationPlanResolution =
   | { kind: 'resolved'; plan: VerificationPlan }
-  | { kind: 'disabled'; source: 'project' }
   | { kind: 'unavailable' }
   | {
       kind: 'invalid';
-      source: 'user' | 'project';
+      source: 'user';
       reason: VerificationPlanInvalidReason;
     };
 
@@ -53,7 +50,7 @@ export interface ResolveVerificationPlanOptions {
 
 export interface VerificationPlanWarning {
   kind: 'malformed' | 'read_error' | 'invalid_command';
-  source: 'user_goal' | 'workspace_config' | 'package_manifest' | 'lockfile';
+  source: 'user_goal' | 'package_manifest' | 'lockfile';
   path: string;
   code?: string;
   message: string;
@@ -73,12 +70,6 @@ interface ParsedVerificationCommands {
   commands: string[];
   unsafeCandidateCount: number;
 }
-
-type WorkspaceVerificationCommands =
-  | { kind: 'absent' }
-  | { kind: 'commands'; commands: string[] }
-  | { kind: 'disabled' }
-  | { kind: 'invalid'; reason: 'invalid_project_commands' };
 
 /**
  * 只提取受明确 marker 直接支配的反引号命令。
@@ -204,25 +195,6 @@ export async function resolveVerificationPlan(
   }
   if (userPlan) return { kind: 'resolved', plan: userPlan };
 
-  const projectCommands = await readWorkspaceVerificationCommands(
-    options.workspaceRoot,
-    options.onWarning,
-  );
-  if (projectCommands.kind === 'disabled') {
-    return { kind: 'disabled', source: 'project' };
-  }
-  if (projectCommands.kind === 'invalid') {
-    return { kind: 'invalid', source: 'project', reason: projectCommands.reason };
-  }
-  if (projectCommands.kind === 'commands') {
-    const projectPlan = buildVerificationPlan({
-      source: 'project',
-      commands: projectCommands.commands,
-      workspaceRoot: options.workspaceRoot,
-    });
-    if (projectPlan) return { kind: 'resolved', plan: projectPlan };
-  }
-
   const runtimeCommand = await resolveRuntimeDefaultCommand(
     options.workspaceRoot,
     options.onWarning,
@@ -300,88 +272,6 @@ function isCommandListSeparator(separator: string): boolean {
   return /^[\s,，、;；/|→\-—*+>]*(?:(?:and|then|以及|和)\s*)?$/i.test(separator);
 }
 
-async function readWorkspaceVerificationCommands(
-  workspaceRoot: string,
-  onWarning?: (warning: VerificationPlanWarning) => void,
-): Promise<WorkspaceVerificationCommands> {
-  if (!workspaceRoot.trim()) return { kind: 'absent' };
-  for (const name of WORKSPACE_ICECODER_CONFIG_NAMES) {
-    const configPath = path.join(workspaceRoot, name);
-    let raw: string;
-    try {
-      raw = await fs.readFile(configPath, 'utf8');
-    } catch (error) {
-      if (!isMissingFileError(error)) {
-        emitWarning(onWarning, warningFromError(
-          'read_error',
-          'workspace_config',
-          configPath,
-          error,
-        ));
-      }
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed)) {
-        emitMalformedWarning(onWarning, 'workspace_config', configPath, 'expected JSON object');
-        continue;
-      }
-      if (parsed.verificationCommands === undefined) continue;
-      if (!Array.isArray(parsed.verificationCommands)) {
-        emitMalformedWarning(
-          onWarning,
-          'workspace_config',
-          configPath,
-          'verificationCommands must be an array',
-        );
-        continue;
-      }
-      if (parsed.verificationCommands.length === 0) {
-        return { kind: 'disabled' };
-      }
-      const commands: string[] = [];
-      for (const value of parsed.verificationCommands) {
-        if (typeof value !== 'string') {
-          emitMalformedWarning(
-            onWarning,
-            'workspace_config',
-            configPath,
-            'verificationCommands contains a non-string entry',
-          );
-          continue;
-        }
-        const command = normalizeVerificationCommand(value);
-        if (!command) {
-          emitWarning(onWarning, {
-            kind: 'invalid_command',
-            source: 'workspace_config',
-            path: configPath,
-            message: 'verificationCommands contains an empty or unsafe command',
-          });
-          continue;
-        }
-        commands.push(command);
-      }
-      if (commands.length === 0) {
-        return {
-          kind: 'invalid',
-          reason: 'invalid_project_commands',
-        };
-      }
-      return { kind: 'commands', commands };
-    } catch (error) {
-      emitWarning(onWarning, warningFromError(
-        'malformed',
-        'workspace_config',
-        configPath,
-        error,
-      ));
-    }
-  }
-  return { kind: 'absent' };
-}
-
 async function resolveRuntimeDefaultCommand(
   workspaceRoot: string,
   onWarning?: (warning: VerificationPlanWarning) => void,
@@ -447,15 +337,6 @@ async function resolveRuntimeDefaultCommand(
     }
   }
   return 'npm test';
-}
-
-function emitMalformedWarning(
-  onWarning: ((warning: VerificationPlanWarning) => void) | undefined,
-  source: VerificationPlanWarning['source'],
-  filePath: string,
-  message: string,
-): void {
-  emitWarning(onWarning, { kind: 'malformed', source, path: filePath, message });
 }
 
 function emitWarning(

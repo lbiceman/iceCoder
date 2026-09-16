@@ -19,7 +19,12 @@ describe('run-command-result', () => {
       { command: 'npm test' },
       'Command failed (exit code: 1)',
       false,
-    )).toEqual({ kind: 'foreground', command: 'npm test', foregroundSuccess: false });
+    )).toEqual({
+      kind: 'foreground',
+      command: 'npm test',
+      foregroundSuccess: false,
+      exitCode: 1,
+    });
   });
 
   it.each(['background', 'escalated'])(

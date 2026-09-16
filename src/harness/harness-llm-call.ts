@@ -252,6 +252,20 @@ export async function callHarnessLlm(
     deps.loopController.stop('error');
     const finalState = deps.loopController.getState();
     logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
+    state.completionStatus = 'failed';
+    state.completionReason = 'error';
+    deps.runtimeTelemetry?.recordSummary({
+      stopReason: 'error',
+      completionStatus: 'failed',
+      completionReason: 'error',
+      task: state.taskState.snapshot(),
+      repo: state.repoContext.snapshot(),
+      rounds: finalState.currentRound,
+      toolCalls: finalState.totalToolCalls,
+      verificationRate: 0,
+      noToolFinal: finalState.totalToolCalls === 0,
+      harnessPolicy: state.harnessPolicyStats,
+    });
 
     onStep?.({
       type: 'final',
@@ -259,6 +273,8 @@ export async function callHarnessLlm(
       totalToolCalls: finalState.totalToolCalls,
       content: `LLM 调用错误: ${errorMsg}`,
       stopReason: 'error',
+      completionStatus: 'failed',
+      completionReason: 'error',
     });
 
     return {
@@ -268,6 +284,8 @@ export async function callHarnessLlm(
         loopState: finalState,
         messages: [...state.messages],
         log: logger.getEntries(),
+        completionStatus: 'failed',
+        completionReason: 'error',
       },
     };
   }
