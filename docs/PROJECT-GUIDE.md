@@ -456,7 +456,7 @@ Recent changes:
 5. optionally refine summary with LLM
 6. re-inject recent file content and recovery prompt
 
-Watermarks (relative to context window): **~72%** micro · **~85%** hard · remaining **&lt;18K** also hard · **~93%** aggressive fork.
+Watermarks (relative to context window): **~80%** micro · **~88%** hard · remaining **&lt;18K** also hard · **~93%** aggressive fork.
 
 The context window is selected by priority:
 

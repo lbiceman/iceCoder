@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HARD_COMPACTION_RATIO } from '../../src/harness/compaction-constants.js';
+import { HARD_COMPACTION_RATIO, MICRO_COMPACTION_RATIO } from '../../src/harness/compaction-constants.js';
 import { ContextCompactor } from '../../src/harness/context-compactor.js';
 import { maybeCompact } from '../../src/harness/harness-compaction.js';
 import { HarnessLogger } from '../../src/harness/logger.js';
@@ -138,7 +138,7 @@ describe('maybeCompact · API 双轨硬压缩', () => {
     expect(messages.some(m => typeof m.content === 'string' && m.content.includes('<context-summary>'))).toBe(true);
   });
 
-  it('微压缩节省不足时同轮升档硬压缩', async () => {
+  it('微压缩节省不足时停在本层，不升档硬压缩', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'u0' },
@@ -150,7 +150,7 @@ describe('maybeCompact · API 双轨硬压缩', () => {
       { role: 'user', content: 'u3' },
       { role: 'assistant', content: 'a3' },
     ];
-    const apiPrompt = Math.floor(CONTEXT_WINDOW * 0.72) + 2_000;
+    const apiPrompt = Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO) + 2_000;
 
     const memoryIntegration = new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' });
     vi.spyOn(memoryIntegration, 'getSessionMemoryForCompact').mockResolvedValue('# notes');
@@ -181,8 +181,47 @@ describe('maybeCompact · API 双轨硬压缩', () => {
     });
 
     expect(lightSpy).toHaveBeenCalled();
-    expect(sessionSpy).toHaveBeenCalled();
-    expect(sessionSpy.mock.calls[0][2]?.forceFullCompact).toBe(true);
+    expect(sessionSpy).not.toHaveBeenCalled();
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('<context-summary>'))).toBe(false);
+  });
+
+  it('微压缩清到过时工具正文后保持 micro，不因旧 API prompt 升档', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'system', content: 'sys' }];
+    for (let i = 1; i <= 8; i++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `tc${i}`, name: 'run_command', arguments: {} }],
+        },
+        { role: 'tool', toolCallId: `tc${i}`, content: `OUTPUT${i}`.repeat(80) },
+      );
+    }
+    const apiPrompt = Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO) + 1_000;
+    const beforeLen = messages.length;
+
+    const memoryIntegration = new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' });
+    vi.spyOn(memoryIntegration, 'getSessionMemoryForCompact').mockResolvedValue('# notes');
+    const sessionSpy = vi.spyOn(ContextCompactor.prototype, 'compactWithSessionMemory');
+
+    const compactionEvents: string[] = [];
+    await maybeCompact(buildDeps(memoryIntegration), {
+      messages,
+      chatFn,
+      logger: new HarnessLogger(),
+      lastApiPromptTokens: apiPrompt,
+      tools: [],
+      onStep: event => {
+        if (event.type === 'compaction') compactionEvents.push(event.content ?? '');
+      },
+    });
+
+    expect(sessionSpy).not.toHaveBeenCalled();
+    expect(compactionEvents.some(c => c.startsWith('micro:'))).toBe(true);
+    expect(messages.length).toBe(beforeLen);
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('<context-summary>'))).toBe(false);
+    const firstTool = messages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+    expect(String(firstTool?.content ?? '')).toContain('[Old tool result cleared for context]');
   });
 });
 

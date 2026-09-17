@@ -2,8 +2,8 @@
  * 上下文压缩器
  *
  * 压缩触发（写死常量，见 compaction-constants.ts）：
- * - 硬压缩：effectiveUsed ≥ contextWindow × 0.85，或剩余 < 18K
- * - 微压缩：effectiveUsed ≥ contextWindow × 0.72（且未达硬压缩线）
+ * - 硬压缩：effectiveUsed ≥ contextWindow × 0.88，或剩余 < 18K
+ * - 微压缩：effectiveUsed ≥ contextWindow × 0.80（且未达硬压缩线）
  * - effectiveUsed = max(本地 messages + tools schema 估算, 上一轮 API prompt_tokens)
  *
  * 两条压缩路径：
@@ -301,7 +301,7 @@ export class ContextCompactor {
 
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在 72% 有效占用时触发，纯本地操作，零 LLM 成本。
+   * 微压缩在 80% 有效占用时触发，纯本地操作，零 LLM 成本。
    */
   needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     if (!this.canMicroCompact()) return false;
@@ -320,9 +320,6 @@ export class ContextCompactor {
    * 微压缩后不注入恢复提示，对 LLM 近似透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
-    this.microCompactSessionCount++;
-    this.microCompactRoundCount++;
-
     let assistantRound = 0;
     const msgAssistantRound = new Map<number, number>();
     const toolCallIdToName = new Map<string, string>();
@@ -338,19 +335,25 @@ export class ContextCompactor {
       msgAssistantRound.set(i, assistantRound);
     }
 
-    return applyLightMicrocompactToolClear(messages, {
+    const next = applyLightMicrocompactToolClear(messages, {
       keepLastAssistantToolRounds: 5,
       toolCallIdToName,
       msgAssistantRound,
       currentAssistantRound: assistantRound,
     });
+    const changed = next.some((msg, i) => msg !== messages[i]);
+    if (!changed) return messages;
+
+    this.microCompactSessionCount++;
+    this.microCompactRoundCount++;
+    return next;
   }
 
   /**
    * 检查是否需要硬压缩（双重校验）。
    *
    * 条件：
-   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.85），或
+   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.88），或
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
   needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {

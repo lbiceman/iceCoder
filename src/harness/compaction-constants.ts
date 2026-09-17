@@ -6,10 +6,13 @@
  */
 
 /** 硬压缩：占用 ≥ 窗口 × 此比例 */
-export const HARD_COMPACTION_RATIO = 0.85;
+export const HARD_COMPACTION_RATIO = 0.88;
 
-/** 微压缩：占用 ≥ 窗口 × 此比例（且尚未达到硬压缩线） */
-export const MICRO_COMPACTION_RATIO = 0.72;
+/**
+ * 微压缩：占用 ≥ 窗口 × 此比例（且尚未达到硬压缩线）。
+ * 区间过宽会每轮空转；此值需低于 HARD_COMPACTION_RATIO，且不宜降到 0.5（会更早、更频繁）。
+ */
+export const MICRO_COMPACTION_RATIO = 0.80;
 
 /** 剩余 token 低于此值时触发硬压缩 */
 export const COMPACTION_RESERVE_TOKENS = 18_000;
@@ -22,6 +25,3 @@ export const MICRO_MAX_PER_ROUND = 1;
 
 /** 单会话微压缩累计上限 */
 export const MICRO_MAX_PER_SESSION = 24;
-
-/** 微压缩节省低于占用 × 此比例 → 同轮升档硬压缩 */
-export const MICRO_MIN_SAVINGS_RATIO = 0.05;

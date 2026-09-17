@@ -4,7 +4,6 @@ import type { CompactRunOptions, ContextCompactor } from './context-compactor.js
 import type { CompactionUsageOptions } from './context-compactor.js';
 import {
   MICRO_COMPACTION_RATIO,
-  MICRO_MIN_SAVINGS_RATIO,
   PROACTIVE_FORK_RATIO,
 } from './compaction-constants.js';
 import {
@@ -137,58 +136,47 @@ export async function maybeCompact(
 
   const needsHard = deps.contextCompactor.needsCompaction(messages, usageOptions);
   const needsMicro = deps.contextCompactor.needsMicroCompaction(messages, usageOptions);
-  let mustHardCompact = needsHard;
 
   if (!needsHard && !needsMicro) return;
 
   // ── 第一道防线：轻量微压缩（未达硬压缩线时）
+  // 微压缩是可选 GC：清不到或省不够时停在本层，等真正触硬压缩线再搬家。
+  // 不要用上一轮 API prompt 判断「仍触线」——本地刚改过历史，那组 prompt_tokens 已经过期。
   if (needsMicro && !needsHard && deps.contextCompactor.canMicroCompact()) {
     const before = messages.length;
     const beforeEffective = usage.effectiveUsed;
     const compacted = deps.contextCompactor.doLightCompact(messages);
+    const changed = compacted.some((msg, i) => msg !== messages[i]);
+    if (!changed) {
+      applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
+      return;
+    }
+
     messages.length = 0;
     messages.push(...compacted);
 
-    const postLocalOptions: CompactionUsageOptions = { tools, lastApiPromptTokens: 0 };
-    const afterUsage = resolveCompactionUsage({ messages, ...postLocalOptions });
-    const postDualUsage = resolveCompactionUsage({ messages, ...usageOptions });
-    const saved = beforeEffective - afterUsage.effectiveUsed;
-    const needsHardAfter = deps.contextCompactor.needsCompaction(messages, usageOptions);
-    const weakMicro = saved < beforeEffective * MICRO_MIN_SAVINGS_RATIO;
-    const microThreshold = Math.floor(readEffectiveContextWindowTokens() * MICRO_COMPACTION_RATIO);
-
-    if (!needsHardAfter && !weakMicro && postDualUsage.effectiveUsed < microThreshold) {
-      const afterTok = deps.contextCompactor.getEstimatedTokens(messages);
-      console.log(
-        `[harness] 微压缩: ${before} → ${messages.length} 条消息 `
-        + `(effective ${beforeEffective}→${afterUsage.effectiveUsed}, 纯本地)`,
-      );
-      logger.compaction(before, messages.length, beforeEffective, afterTok);
-      onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
-      logCacheSegmentReset(state?.turnCount, 'micro-compact');
-      applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
-      if (!state?.contextEmergencyCompactUsed) {
-        emitContextUsageStep(onStep, messages, tools);
-      }
-      return;
+    const afterUsage = resolveCompactionUsage({ messages, tools, lastApiPromptTokens: 0 });
+    const afterTok = deps.contextCompactor.getEstimatedTokens(messages);
+    console.log(
+      `[harness] 微压缩: ${before} → ${messages.length} 条消息 `
+      + `(effective ${beforeEffective}→${afterUsage.effectiveUsed}, 纯本地)`,
+    );
+    logger.compaction(before, messages.length, beforeEffective, afterTok);
+    onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
+    logCacheSegmentReset(state?.turnCount, 'micro-compact');
+    applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
+    if (!state?.contextEmergencyCompactUsed) {
+      emitContextUsageStep(onStep, messages, tools);
     }
-    // 节省不足 / 双轨仍触线 / 本地仍触线 → 同轮升档硬压缩
-    mustHardCompact = true;
-  } else if (!needsHard) {
     return;
   }
+
+  if (!needsHard) return;
 
   // ── 第二道防线：硬压缩 ──
-  const stillNeedsHard = mustHardCompact
-    || deps.contextCompactor.needsCompaction(messages, usageOptions);
-  if (!stillNeedsHard) {
-    applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
-    return;
-  }
-
   const hardRunOptions: CompactRunOptions = {
     usageOptions,
-    forceFullCompact: mustHardCompact,
+    forceFullCompact: true,
   };
 
   const before = messages.length;
