@@ -236,8 +236,8 @@ export class BackgroundTaskManager extends EventEmitter {
   /**
    * 把一个已经 spawn 的前台 ChildProcess 转交为后台任务。
    *
-   * Phase 2 软超时 escalate 专用：当前台命令 8s 后仍在跑，
-   * shell-tool 调此方法把 child 引用 + 已收集的输出转给 manager 继续接管。
+   * 软超时 escalate / 显式后台：把已 spawn 的前台 child 转交 manager 继续接管。
+   * 默认 auto 命令不再 8s 切后台；ICE_SHELL_SOFT_ESCALATE=1 时仍走这条路径。
    *
    * @param child  已 spawn 的子进程引用
    * @param options.command       原始命令字符串
@@ -644,15 +644,47 @@ export class BackgroundTaskManager extends EventEmitter {
           || (now - task.lastSummaryEmittedAt) >= intervalMs;
         if (!task.summaryDirty && !due) continue;
       }
-      const summary = this.buildRunningSummary(task);
-      // newLinesSinceLastSummary
-      summary.newLinesSinceLastSummary = Math.max(
-        0,
-        task.totalOutputLines - this.getLastEmittedTotal(task),
-      );
-      out.push(summary);
+      out.push(this.enrichSummary(task));
     }
     return out;
+  }
+
+  /**
+   * 可注入摘要：running 仍受 interval 节流；任意终态且 dirty 的任务立即纳入（忽略 interval）。
+   */
+  getInjectableSummary(options: { onlyDirtyOrDue?: boolean; intervalMs?: number } = {}): RunningTaskSummary[] {
+    const now = Date.now();
+    const onlyDirtyOrDue = options.onlyDirtyOrDue ?? false;
+    const intervalMs = options.intervalMs ?? 0;
+    const out: RunningTaskSummary[] = [];
+    for (const task of this.tasks.values()) {
+      const terminal = task.status === 'completed'
+        || task.status === 'failed'
+        || task.status === 'timeout'
+        || task.status === 'killed';
+      if (task.status === 'running') {
+        if (onlyDirtyOrDue) {
+          const due = task.lastSummaryEmittedAt === 0
+            || (now - task.lastSummaryEmittedAt) >= intervalMs;
+          if (!task.summaryDirty && !due) continue;
+        }
+        out.push(this.enrichSummary(task));
+        continue;
+      }
+      if (terminal && task.summaryDirty) {
+        out.push(this.enrichSummary(task));
+      }
+    }
+    return out;
+  }
+
+  private enrichSummary(task: BackgroundTask): RunningTaskSummary {
+    const summary = this.buildRunningSummary(task);
+    summary.newLinesSinceLastSummary = Math.max(
+      0,
+      task.totalOutputLines - this.getLastEmittedTotal(task),
+    );
+    return summary;
   }
 
   /**
@@ -686,7 +718,7 @@ export class BackgroundTaskManager extends EventEmitter {
   formatRunningSummaryBlock(options: { intervalMs?: number; maxChars?: number } = {}): string | null {
     const intervalMs = options.intervalMs ?? 5 * 60 * 1000;
     const maxChars = options.maxChars ?? 600;
-    const summaries = this.getRunningSummary({ onlyDirtyOrDue: true, intervalMs });
+    const summaries = this.getInjectableSummary({ onlyDirtyOrDue: true, intervalMs });
     if (summaries.length === 0) return null;
 
     const lines: string[] = ['[Background Task Status]'];

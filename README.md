@@ -8,17 +8,21 @@
 
 ### Desktop
 
-**Work / chat** — multi-session sidebar, tool execution trail, **iceCoder Workbench** (execution overlay) on the right, and `#` / `@` composer; repeated tool failures trigger **supervision mode** with round indicators:
+**Work / chat** — multi-session sidebar, transcript, **iceCoder Workbench** on the right, and `#` / `@` composer. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow below; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, files, and current-chapter elapsed time:
 
-![Desktop — work chat: multi-session, tool calls, and execution overlay](./docs/assets/desktop-work-chat.png)
+![Desktop — work chat: checkpoint directory and selected-chapter flow](./docs/assets/desktop-work-chat.png)
 
-**Execution overlay · Flow** — per-round step timeline with pass/fail status; expand a step for **what was done** / **why**, plus live context usage, tool count, and elapsed time in the footer:
+**iceCoder Workbench · footer docks** — **Tools** opens this session’s tool names and counts; **Files** opens this session’s changed files (created / modified / deleted / moved + filename):
 
-![Desktop — execution flow: round timeline and step details](./docs/assets/desktop-workbench-flow-detail.png)
+![Desktop — workbench: session tool names](./docs/assets/desktop-workbench-tools.png)
 
-**Execution overlay · Snapshot** — session checkpoint timeline marking current position and working directory; browse history and roll back:
+![Desktop — workbench: changed files](./docs/assets/desktop-work-snapshot.png)
 
-![Desktop — status snapshot: session checkpoints and current position](./docs/assets/desktop-work-snapshot.png)
+**Empty-session welcome** — “IceCoder ready”: mode / Memory / Harness / Gate, quick start, current context, Ice Bean on the right. The workbench stays closed until there is a turn:
+
+![Desktop — empty-session welcome (dark)](./docs/assets/desktop-welcome.png)
+
+![Desktop — empty-session welcome (light)](./docs/assets/desktop-welcome-light.png)
 
 **Memory map** — tag filters + force-directed graph; click nodes for details:
 
@@ -40,7 +44,7 @@
 
 ![Desktop — MCP settings: server list and unity-mcp detail](./docs/assets/desktop-config-mcp.png)
 
-**Work / chat (light theme)** — same layout with light appearance:
+**Work / chat (light theme)** — same workbench layout with the changed-files dock open:
 
 ![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 
@@ -102,7 +106,7 @@ Three layers: **L0** is the supervision tier you pick in the sidebar footer (`of
 > Legacy **L2** (takeover / PassiveObserver / CorrectionPort / EventTimeline) was removed on 2026-08-31 — see [`docs/L2监管层详解.md`](./docs/L2监管层详解.md).
 
 - **adaptive** (default) balances freedom and enforcement; **strict** stays near forced and builds the graph on round 1 for critical engineering tasks.
-- Tied to **TaskGraph** and **Verification Gate** — engineering source changes prompt unit tests; Gate and supervision stay separate.
+- Tied to **TaskGraph** and **D′ stop-time verification** — engineering edits may run a bounded acceptance plan via `run_command`; supervision does not decide completion.
 - Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only).
 
 ### Harness loop & TaskGraph
@@ -243,7 +247,7 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 
 | Piece | Role |
 |-------|------|
-| **Harness** | Main agent loop, verification gate, compaction, telemetry |
+| **Harness** | Main agent loop, D′ stop-time verification, compaction, telemetry |
 | **Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard |
 | **TaskGraph** | Structured plan injection |
 | **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |

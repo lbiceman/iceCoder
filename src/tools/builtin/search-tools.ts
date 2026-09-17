@@ -36,7 +36,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'glob',
         description:
-          'Find files by path/name glob (e.g. "**/*.ts", "src/**/*.test.js"). Sorted by modification time when supported. Does not search file contents — use grep for that. Prefer this before read_file when you do not know exact paths.',
+          'Find files by path/name glob (e.g. "**/*", "src/**/*"). Sorted by modification time when supported. Does not search file contents — use grep for that. Prefer this before read_file when you do not know exact paths.',
         parameters: {
           type: 'object',
           properties: {

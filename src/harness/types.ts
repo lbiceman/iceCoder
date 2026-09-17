@@ -17,7 +17,7 @@ import type {
   ModeSignal,
   ResolvedSupervisorConfig,
 } from '../types/supervisor.js';
-import type { CompletionGateReason, CompletionStatus } from './completion-gate.js';
+import type { CompletionReason, CompletionStatus } from './completion-state.js';
 
 // ─── 上下文组装 ───
 
@@ -224,7 +224,8 @@ export interface HarnessConfig {
   analysisSupervisor?: import('./supervisor/analysis-supervisor.js').AnalysisSupervisor;
   /**
    * 是否向模型暴露 request_analysis 虚拟工具；默认 true。
-   * 严格工具域（如 Shell 协作模式）必须显式设为 false。
+   * 为 false 时也不自动创建 AnalysisSupervisor / 不拉起后台分析。
+   * 严格工具域（Shell 协作、普通 agent-eval）应显式设为 false。
    */
   enableRequestAnalysis?: boolean;
 }
@@ -260,6 +261,7 @@ export interface HarnessStepEvent {
     | 'final'
     | 'stream_delta'
     | 'reasoning_stream_delta'
+    | 'stream_retry_discard'
     | 'tool_output'
     | 'memory_event'
     | 'execution_plan_init'
@@ -290,7 +292,7 @@ export interface HarnessStepEvent {
   totalToolCalls?: number;
   stopReason?: StopReason;
   completionStatus?: CompletionStatus;
-  completionReason?: CompletionGateReason;
+  completionReason?: CompletionReason;
   /** TaskGraph (Phase 7) */
   graphGoal?: string;
   graphIntent?: string;
@@ -331,6 +333,8 @@ export interface HarnessResult {
   log: HarnessLogEntry[];
   /** 通用收尾状态；与模型 finish reason 解耦。 */
   completionStatus?: CompletionStatus;
+  /** 通用收尾原因；与 loop stopReason 正交。 */
+  completionReason?: CompletionReason;
 }
 
 /**

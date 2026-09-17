@@ -3,6 +3,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { remapPathToWorkspace } from './workspace-snapshot.js';
@@ -12,21 +13,63 @@ const SKIP_DIRS = new Set([
   '.git',
   'dist',
   'build',
+  'out',
   'coverage',
+  'release',
+  'releases',
+  'runtime',
+  'target',
+  'bin',
+  'obj',
+  'artifacts',
+  'tmp',
+  'temp',
+  '.cache',
+  '.turbo',
+  '.nx',
+  '.gradle',
+  '.venv',
+  'venv',
   '.ice',
   '__pycache__',
   '.next',
   'vendor',
 ]);
 
-const MAX_INVENTORY_FILES = 400;
-
-export type WorkspaceFileInventory = Map<string, { size: number; mtimeMs: number }>;
+export interface WorkspaceFileInventory extends Map<string, {
+  size: number;
+  mtimeMs: number;
+  contentHash: string;
+}> {
+  /** false 表示扫描期间至少一个目录或候选文件无法读取。 */
+  complete: boolean;
+}
 
 const preCommandInventories = new Map<string, WorkspaceFileInventory>();
+interface BackgroundInventoryEntry {
+  inventory: WorkspaceFileInventory;
+  expiresAt: number;
+}
+
+export const WORKSPACE_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024;
+export const WORKSPACE_CONTENT_HASH_CACHE_LIMIT = 512;
+export const BACKGROUND_INVENTORY_LIMIT = 128;
+export const BACKGROUND_INVENTORY_TTL_MS = 5 * 60_000;
+
+const backgroundCommandInventories = new Map<string, BackgroundInventoryEntry>();
+const contentHashCache = new Map<string, {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  contentHash: string;
+}>();
 
 function inventoryKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
+}
+
+function backgroundInventoryKey(sessionId: string, taskId: string): string {
+  return `${sessionId}:background:${taskId}`;
 }
 
 function looksLikePathToken(raw: string): boolean {
@@ -98,24 +141,23 @@ export function isShellWorkspaceTouchTool(
   if (toolName !== 'run_command') return false;
   const action = String(args.action || '').toLowerCase();
   if (action === 'check' || action === 'list' || action === 'stop') return false;
-  if (args.background === true) return false;
   return true;
 }
 
 export async function listWorkspaceFileInventory(workspaceRoot: string): Promise<WorkspaceFileInventory> {
-  const out: WorkspaceFileInventory = new Map();
+  const out = Object.assign(new Map(), { complete: true }) as WorkspaceFileInventory;
   const root = path.resolve(workspaceRoot);
+  const files: Array<{ abs: string; rel: string }> = [];
 
   const walk = async (dir: string): Promise<void> => {
-    if (out.size >= MAX_INVENTORY_FILES) return;
     let entries: import('node:fs').Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      out.complete = false;
       return;
     }
     for (const entry of entries) {
-      if (out.size >= MAX_INVENTORY_FILES) return;
       if (entry.name.startsWith('.') && entry.name !== '.env' && entry.name !== '.gitignore') {
         if (entry.isDirectory()) continue;
       }
@@ -126,19 +168,80 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
         continue;
       }
       if (!entry.isFile()) continue;
-      try {
-        const stat = await fs.stat(abs);
-        const rel = path.relative(root, abs).split(path.sep).join('/');
-        if (!rel || rel.startsWith('..')) continue;
-        out.set(rel, { size: stat.size, mtimeMs: stat.mtimeMs });
-      } catch {
-        /* skip */
-      }
+      const rel = path.relative(root, abs).split(path.sep).join('/');
+      if (!rel || rel.startsWith('..')) continue;
+      files.push({ abs, rel });
     }
   };
 
   await walk(root);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(32, files.length) },
+    async () => {
+      while (nextIndex < files.length) {
+        const file = files[nextIndex++]!;
+        try {
+          const stat = await fs.stat(file.abs);
+          const cached = takeCachedContentHash(file.abs, stat);
+          const contentHash = stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES
+            ? `metadata:${stat.size}:${stat.mtimeMs}`
+            : cached ?? createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
+          rememberCachedContentHash(file.abs, {
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+            contentHash,
+          });
+          out.set(file.rel, {
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            contentHash,
+          });
+        } catch {
+          out.complete = false;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
   return out;
+}
+
+function takeCachedContentHash(
+  filePath: string,
+  stat: Pick<import('node:fs').Stats, 'size' | 'mtimeMs' | 'ctimeMs'>,
+): string | null {
+  const cached = contentHashCache.get(filePath);
+  if (
+    !cached
+    || cached.size !== stat.size
+    || cached.mtimeMs !== stat.mtimeMs
+    || cached.ctimeMs !== stat.ctimeMs
+  ) {
+    return null;
+  }
+  contentHashCache.delete(filePath);
+  contentHashCache.set(filePath, cached);
+  return cached.contentHash;
+}
+
+function rememberCachedContentHash(
+  filePath: string,
+  entry: {
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+    contentHash: string;
+  },
+): void {
+  contentHashCache.delete(filePath);
+  contentHashCache.set(filePath, entry);
+  while (contentHashCache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
+    const oldest = contentHashCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    contentHashCache.delete(oldest);
+  }
 }
 
 export function rememberPreCommandInventory(
@@ -160,11 +263,60 @@ export function takePreCommandInventory(
   return inv;
 }
 
+export function rememberBackgroundCommandInventory(
+  sessionId: string,
+  taskId: string,
+  inventory: WorkspaceFileInventory,
+  nowMs = Date.now(),
+): void {
+  if (!sessionId || !taskId) return;
+  purgeExpiredBackgroundInventories(nowMs);
+  const key = backgroundInventoryKey(sessionId, taskId);
+  backgroundCommandInventories.delete(key);
+  while (backgroundCommandInventories.size >= BACKGROUND_INVENTORY_LIMIT) {
+    const oldest = backgroundCommandInventories.keys().next().value as string | undefined;
+    if (!oldest) break;
+    backgroundCommandInventories.delete(oldest);
+  }
+  backgroundCommandInventories.set(key, {
+    inventory,
+    expiresAt: nowMs + BACKGROUND_INVENTORY_TTL_MS,
+  });
+}
+
+export function takeBackgroundCommandInventory(
+  sessionId: string,
+  taskId: string,
+  nowMs = Date.now(),
+): WorkspaceFileInventory | undefined {
+  purgeExpiredBackgroundInventories(nowMs);
+  const key = backgroundInventoryKey(sessionId, taskId);
+  const entry = backgroundCommandInventories.get(key);
+  backgroundCommandInventories.delete(key);
+  return entry?.inventory;
+}
+
+function purgeExpiredBackgroundInventories(nowMs: number): void {
+  for (const [key, entry] of backgroundCommandInventories) {
+    if (entry.expiresAt <= nowMs) backgroundCommandInventories.delete(key);
+  }
+}
+
+export function getWorkspaceInventoryDiagnostics(): {
+  contentHashCacheSize: number;
+  backgroundInventorySize: number;
+} {
+  return {
+    contentHashCacheSize: contentHashCache.size,
+    backgroundInventorySize: backgroundCommandInventories.size,
+  };
+}
+
 export function diffInventoryTouchedPaths(
   workspaceRoot: string,
   before: WorkspaceFileInventory,
   after: WorkspaceFileInventory,
-): { created: string[]; changed: string[]; deleted: string[] } {
+): { created: string[]; changed: string[]; deleted: string[]; incomplete: boolean } {
   const created: string[] = [];
   const changed: string[] = [];
   const deleted: string[] = [];
@@ -174,11 +326,16 @@ export function diffInventoryTouchedPaths(
     const key = remap(rel);
     const prev = before.get(rel) ?? before.get(key);
     if (!prev) created.push(key);
-    else if (prev.size !== info.size || prev.mtimeMs !== info.mtimeMs) changed.push(key);
+    else if (prev.size !== info.size || prev.contentHash !== info.contentHash) changed.push(key);
   }
   for (const rel of before.keys()) {
     const key = remap(rel);
     if (!after.has(rel) && !after.has(key)) deleted.push(key);
   }
-  return { created, changed, deleted };
+  return {
+    created,
+    changed,
+    deleted,
+    incomplete: before.complete !== true || after.complete !== true,
+  };
 }

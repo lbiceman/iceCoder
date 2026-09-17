@@ -26,6 +26,10 @@ import {
   safeParseToolArguments,
 } from './text-sanitize.js';
 import { isAbortError, makeAbortedError } from './abort-error.js';
+import {
+  resolveOpenAiStreamIdleTimeoutMs,
+  withStreamIdleWatchdog,
+} from './stream-idle-watchdog.js';
 import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 import {
   resolveOpenAiApiMode,
@@ -103,7 +107,7 @@ export interface OpenAIAdapterConfig {
   topP?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
-  /** 单次 API 请求超时（毫秒），默认 120000（2 分钟） */
+  /** 单次 API 请求超时（毫秒），默认 600000（10 分钟） */
   timeout?: number;
   /** 是否支持视觉/图片输入（默认自动检测：gpt-4o/gpt-4-vision 等支持，其他不支持） */
   supportsVision?: boolean;
@@ -136,7 +140,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
-    this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
+    this.defaultRequestTimeoutMs = config.timeout ?? 600_000;
     this.requestHeaderTemplates = { ...(config.requestHeaders ?? {}) };
     this.reasoningEffortLevels = [...(config.reasoningEffortLevels ?? [])];
     this.fallbackSessionId = randomUUID();
@@ -316,16 +320,31 @@ export class OpenAIAdapter implements ProviderAdapter {
       if (signal?.aborted) throw makeAbortedError(this.name);
 
       if (this.apiMode === 'responses') {
+        const idleTimeoutMs = resolveOpenAiStreamIdleTimeoutMs();
+        const streamTransportTimeoutMs = Math.max(
+          this.buildRequestOptions(options, signal).timeout,
+          idleTimeoutMs + 30_000,
+        );
         console.log(
-          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个${this.effortLogFrag(options)}`,
+          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个, idleTimeout=${idleTimeoutMs}ms${this.effortLogFrag(options)}`,
         );
         const startTime = Date.now();
-        const result = await responsesStream(
-          this.client,
-          messages,
-          callback,
-          options,
-          this.responsesCtx(options, signal),
+        const result = await withStreamIdleWatchdog(
+          signal,
+          async (watchdog) => responsesStream(
+            this.client,
+            messages,
+            callback,
+            options,
+            {
+              ...this.responsesCtx(options, watchdog.signal),
+              reqOpts: {
+                ...this.responsesCtx(options, watchdog.signal).reqOpts,
+                timeout: streamTransportTimeoutMs,
+              },
+              onStreamActivity: () => watchdog.markActivity(),
+            },
+          ),
         );
         const elapsed = Date.now() - startTime;
         recordHarnessTiming('llm_http', elapsed);
@@ -340,106 +359,117 @@ export class OpenAIAdapter implements ProviderAdapter {
       const params = this.buildRequestParams(openaiMessages, options, true);
       endTiming('llm_serialize', serializeStartedAt);
 
-      const reqOpts = this.buildRequestOptions(options, signal);
-      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个${this.effortLogFrag(options)}${this.extraHeadersLogFrag(reqOpts.headers)}`);
+      const baseReqOpts = this.buildRequestOptions(options, signal);
+      const idleTimeoutMs = resolveOpenAiStreamIdleTimeoutMs();
+      const streamReqOpts = {
+        ...baseReqOpts,
+        timeout: Math.max(baseReqOpts.timeout, idleTimeoutMs + 30_000),
+      };
+      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, idleTimeout=${idleTimeoutMs}ms${this.effortLogFrag(options)}${this.extraHeadersLogFrag(baseReqOpts.headers)}`);
       const startTime = Date.now();
       const timingOn = harnessTimingEnabled();
       let firstTokenMs: number | undefined;
 
-      const stream = await this.client.chat.completions.create(
-        { ...params, stream: true },
-        reqOpts,
-      );
+      return await withStreamIdleWatchdog(
+        signal,
+        async (watchdog) => {
+          const stream = await this.client.chat.completions.create(
+            { ...params, stream: true },
+            { ...streamReqOpts, signal: watchdog.signal },
+          );
 
-      let fullContent = '';
-      let reasoningContent = '';
-      let finishReason: LLMResponse['finishReason'] = 'stop';
-      const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
-      let promptTokens = 0;
-      let completionTokens = 0;
-      let lastUsageExtras: ReturnType<typeof extractPromptCacheFromChatUsage> = {};
+          let fullContent = '';
+          let reasoningContent = '';
+          let finishReason: LLMResponse['finishReason'] = 'stop';
+          const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
+          let promptTokens = 0;
+          let completionTokens = 0;
+          let lastUsageExtras: ReturnType<typeof extractPromptCacheFromChatUsage> = {};
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta;
-        const chunkFinishReason = chunk.choices?.[0]?.finish_reason;
+          for await (const chunk of stream) {
+            watchdog.markActivity();
+            const delta = chunk.choices?.[0]?.delta;
+            const chunkFinishReason = chunk.choices?.[0]?.finish_reason;
 
-        if (delta) {
-          // Handle regular content
-          if (delta.content) {
-            if (timingOn && firstTokenMs === undefined) {
-              firstTokenMs = Date.now() - startTime;
-              recordHarnessTiming('llm_first_token', firstTokenMs);
-            }
-            fullContent += delta.content;
-            callback(delta.content, false);
-          }
-
-          // reasoning_content / reasoning_details：经独立 channel 推前端；不回传 API
-          const deltaAny = delta as any;
-          const reasoningDelta = this.extractStreamReasoningDelta(deltaAny);
-          if (reasoningDelta) {
-            reasoningContent += reasoningDelta;
-            callback({ channel: 'reasoning', delta: reasoningDelta }, false);
-          }
-
-          // Handle tool calls in streaming
-          if (delta.tool_calls) {
-            for (const toolCall of delta.tool_calls) {
-              const index = toolCall.index;
-              if (!toolCalls.has(index)) {
-                toolCalls.set(index, {
-                  id: toolCall.id || '',
-                  name: toolCall.function?.name || '',
-                  arguments: '',
-                });
+            if (delta) {
+              // Handle regular content
+              if (delta.content) {
+                if (timingOn && firstTokenMs === undefined) {
+                  firstTokenMs = Date.now() - startTime;
+                  recordHarnessTiming('llm_first_token', firstTokenMs);
+                }
+                fullContent += delta.content;
+                callback(delta.content, false);
               }
-              const existing = toolCalls.get(index)!;
-              if (toolCall.id) existing.id = toolCall.id;
-              if (toolCall.function?.name) existing.name = toolCall.function.name;
-              if (toolCall.function?.arguments) existing.arguments += toolCall.function.arguments;
+
+              // reasoning_content / reasoning_details：经独立 channel 推前端；不回传 API
+              const deltaAny = delta as any;
+              const reasoningDelta = this.extractStreamReasoningDelta(deltaAny);
+              if (reasoningDelta) {
+                reasoningContent += reasoningDelta;
+                callback({ channel: 'reasoning', delta: reasoningDelta }, false);
+              }
+
+              // Handle tool calls in streaming
+              if (delta.tool_calls) {
+                for (const toolCall of delta.tool_calls) {
+                  const index = toolCall.index;
+                  if (!toolCalls.has(index)) {
+                    toolCalls.set(index, {
+                      id: toolCall.id || '',
+                      name: toolCall.function?.name || '',
+                      arguments: '',
+                    });
+                  }
+                  const existing = toolCalls.get(index)!;
+                  if (toolCall.id) existing.id = toolCall.id;
+                  if (toolCall.function?.name) existing.name = toolCall.function.name;
+                  if (toolCall.function?.arguments) existing.arguments += toolCall.function.arguments;
+                }
+              }
+            }
+
+            if (chunkFinishReason) {
+              finishReason = this.mapFinishReason(chunkFinishReason);
+            }
+
+            // Extract usage from the final chunk if available
+            if (chunk.usage) {
+              promptTokens = chunk.usage.prompt_tokens ?? 0;
+              completionTokens = chunk.usage.completion_tokens ?? 0;
+              lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage);
             }
           }
-        }
 
-        if (chunkFinishReason) {
-          finishReason = this.mapFinishReason(chunkFinishReason);
-        }
+          callback('', true);
 
-        // Extract usage from the final chunk if available
-        if (chunk.usage) {
-          promptTokens = chunk.usage.prompt_tokens ?? 0;
-          completionTokens = chunk.usage.completion_tokens ?? 0;
-          lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage);
-        }
-      }
+          const elapsed = Date.now() - startTime;
+          recordHarnessTiming('llm_http', elapsed);
+          const streamCacheFrag =
+            lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
+              ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
+              : '';
+          console.log(
+            `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} | ${completionTokens}${streamCacheFrag}`,
+          );
 
-      callback('', true);
+          const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
 
-      const elapsed = Date.now() - startTime;
-      recordHarnessTiming('llm_http', elapsed);
-      const streamCacheFrag =
-        lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
-          ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
-          : '';
-      console.log(
-        `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} | ${completionTokens}${streamCacheFrag}`,
-      );
-
-      const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
-
-      return {
-        content: fullContent,
-        reasoningContent: reasoningContent || undefined,
-        toolCalls: parsedToolCalls.length > 0 ? parsedToolCalls : undefined,
-        usage: {
-          inputTokens: promptTokens,
-          outputTokens: completionTokens,
-          totalTokens: promptTokens + completionTokens,
-          provider: this.name,
-          ...lastUsageExtras,
+          return {
+            content: fullContent,
+            reasoningContent: reasoningContent || undefined,
+            toolCalls: parsedToolCalls.length > 0 ? parsedToolCalls : undefined,
+            usage: {
+              inputTokens: promptTokens,
+              outputTokens: completionTokens,
+              totalTokens: promptTokens + completionTokens,
+              provider: this.name,
+              ...lastUsageExtras,
+            },
+            finishReason,
+          };
         },
-        finishReason,
-      };
+      );
     } catch (error) {
       throw this.convertError(error);
     }

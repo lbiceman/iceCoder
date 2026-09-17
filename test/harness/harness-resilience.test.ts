@@ -70,6 +70,7 @@ describe('harness resilience single-axis routing', () => {
         resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
+          stage: () => undefined,
           shouldPersistOnTrigger: () => false,
         } as never,
         enqueueCheckpointPersist: async task => task(),
@@ -99,6 +100,7 @@ describe('harness resilience single-axis routing', () => {
         resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
+          stage: () => undefined,
           shouldPersistOnTrigger: () => false,
         } as never,
         enqueueCheckpointPersist: async task => task(),
@@ -126,6 +128,7 @@ describe('harness resilience single-axis routing', () => {
         resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
+          stage: () => undefined,
           shouldPersistOnTrigger: () => false,
         } as never,
         enqueueCheckpointPersist: async task => task(),

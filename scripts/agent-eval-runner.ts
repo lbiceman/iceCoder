@@ -11,7 +11,8 @@ import { Harness } from '../src/harness/harness.js';
 import type { ChatFunction, HarnessConfig, HarnessResult, HarnessStepEvent } from '../src/harness/types.js';
 import type { RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
 import { initializeToolSystem } from '../src/tools/index.js';
-import type { AgentEvalCase } from './agent-eval-cases.js';
+import type { LLMResponse } from '../src/llm/types.js';
+import type { AgentEvalCase, AgentEvalScriptedTurn } from './agent-eval-cases.js';
 
 export interface EvalMetrics {
   task_success_rate: number;
@@ -36,7 +37,7 @@ export interface CaseResult {
 }
 
 export interface RunAgentEvalCaseOptions {
-  chatFn: ChatFunction;
+  chatFn?: ChatFunction;
   keepWorkspace?: boolean;
 }
 
@@ -113,12 +114,18 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
+      enableRequestAnalysis: testCase.expected.requiresAnalysisArtifact === true,
     };
+
+    const chatFn = options.chatFn ?? createScriptedEvalChat(testCase.scriptedTurns);
+    if (!chatFn) {
+      throw new Error(`eval case ${testCase.id} needs chatFn or scriptedTurns`);
+    }
 
     const harness = new Harness(harnessConfig, executor);
     const result = await harness.run(
       buildPrompt(testCase),
-      options.chatFn,
+      chatFn,
       event => events.push(event),
     );
 
@@ -154,10 +161,52 @@ export async function runAgentEvalCase(
 }
 
 function buildPrompt(testCase: AgentEvalCase): string {
-  const verify = testCase.verifyCommands.length > 0
+  const verify = testCase.verifyCommands.length > 0 && !testCase.scriptedTurns?.length
     ? `\n\nVerification command(s) you should run before final: ${testCase.verifyCommands.join(' && ')}`
     : '';
   return `${testCase.prompt}${verify}`;
+}
+
+function usage(): LLMResponse['usage'] {
+  return { inputTokens: 40, outputTokens: 20, totalTokens: 60, provider: 'eval' };
+}
+
+export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFunction | undefined {
+  if (!turns || turns.length === 0) return undefined;
+  let index = 0;
+  let toolSeq = 0;
+  return async (msgs) => {
+    const isPrimary = msgs.some(message =>
+      typeof message.content === 'string'
+      && message.content.includes('isolated local eval workspace'),
+    );
+    if (!isPrimary) {
+      return { content: 'side-query noop', usage: usage(), finishReason: 'stop' };
+    }
+    if (index >= turns.length) {
+      const last = turns.at(-1);
+      return {
+        content: last && last.type === 'final' ? last.content : 'done',
+        usage: usage(),
+        finishReason: 'stop',
+      };
+    }
+    const turn = turns[index++];
+    if (turn.type === 'final') {
+      return { content: turn.content, usage: usage(), finishReason: 'stop' };
+    }
+    toolSeq += 1;
+    return {
+      content: '',
+      toolCalls: [{
+        id: `scripted-${toolSeq}`,
+        name: turn.name,
+        arguments: turn.arguments,
+      }],
+      usage: usage(),
+      finishReason: 'tool_calls',
+    };
+  };
 }
 
 function buildMemoryPrompt(testCase: AgentEvalCase): string | undefined {
@@ -282,6 +331,35 @@ async function scoreCase(args: {
     failures.push(
       `expected completionStatus=${testCase.expected.completionStatus}, got ${result.completionStatus ?? '(missing)'}`,
     );
+  }
+  if (
+    testCase.expected.completionReason
+    && result.completionReason !== testCase.expected.completionReason
+  ) {
+    failures.push(
+      `expected completionReason=${testCase.expected.completionReason}, got ${result.completionReason ?? '(missing)'}`,
+    );
+  }
+  if (testCase.expected.verificationAfterLastWrite && !didVerificationFollowLastWrite(events, testCase.verifyCommands)) {
+    failures.push('expected successful verification after the last workspace write');
+  }
+  if (testCase.expected.verificationRuns) {
+    for (const [command, bounds] of Object.entries(testCase.expected.verificationRuns)) {
+      const count = countCommandRuns(events, command);
+      if (bounds.min !== undefined && count < bounds.min) {
+        failures.push(`expected at least ${bounds.min} run_command matching ${JSON.stringify(command)}, got ${count}`);
+      }
+      if (bounds.max !== undefined && count > bounds.max) {
+        failures.push(`expected at most ${bounds.max} run_command matching ${JSON.stringify(command)}, got ${count}`);
+      }
+    }
+  }
+  if (testCase.expected.forbidCommands) {
+    for (const command of testCase.expected.forbidCommands) {
+      if (countCommandRuns(events, command) > 0) {
+        failures.push(`unexpected run_command matching ${JSON.stringify(command)}`);
+      }
+    }
   }
   if (
     testCase.expected.finalContains
@@ -434,9 +512,24 @@ async function evaluateCheckpoint(workspace: string, testCase: AgentEvalCase): P
       }
     }
   }
-  const completion = parsed.completion as { conditions?: unknown; operationOutcomes?: unknown } | undefined;
+  const completion = parsed.completion as {
+    conditions?: unknown;
+    operationOutcomes?: unknown;
+    verificationState?: { workspaceMutationVersion?: number };
+  } | undefined;
   if (expected.hasCompletion && (!completion || !Array.isArray(completion.conditions) || !Array.isArray(completion.operationOutcomes))) {
     failures.push('checkpoint is missing V3 completion section');
+  }
+  if (expected.hasVerificationState && !completion?.verificationState) {
+    failures.push('checkpoint is missing completion.verificationState');
+  }
+  if (
+    expected.mutationVersionAtLeast !== undefined
+    && (completion?.verificationState?.workspaceMutationVersion ?? 0) < expected.mutationVersionAtLeast
+  ) {
+    failures.push(
+      `expected workspaceMutationVersion >= ${expected.mutationVersionAtLeast}, got ${String(completion?.verificationState?.workspaceMutationVersion ?? '(missing)')}`,
+    );
   }
   if (expected.migratedFromLegacy) {
     const backupPath = `${checkpointPath}.legacy.backup.json`;
@@ -480,14 +573,53 @@ async function didAnyCaseFileChange(workspace: string, initialFiles: Map<string,
   return false;
 }
 
+function commandFromEvent(event: HarnessStepEvent): string {
+  return String(event.toolArgs?.command ?? event.toolArgs?.cmd ?? '');
+}
+
+function countCommandRuns(events: HarnessStepEvent[], expected: string): number {
+  return events.filter(event =>
+    event.type === 'tool_call'
+    && event.toolName === 'run_command'
+    && commandFromEvent(event).includes(expected),
+  ).length;
+}
+
+const WRITE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'append_file',
+  'patch_file',
+  'batch_edit_file',
+]);
+
+function didVerificationFollowLastWrite(events: HarnessStepEvent[], verifyCommands: string[]): boolean {
+  if (verifyCommands.length === 0) return false;
+  let lastWrite = -1;
+  let lastVerify = -1;
+  events.forEach((event, index) => {
+    if (event.type === 'tool_result' && event.toolSuccess === true && WRITE_TOOLS.has(event.toolName ?? '')) {
+      lastWrite = index;
+    }
+    if (
+      event.type === 'tool_result'
+      && event.toolName === 'run_command'
+      && event.toolSuccess === true
+      && verifyCommands.some(expected => commandFromEvent(event).includes(expected))
+    ) {
+      lastVerify = index;
+    }
+  });
+  return lastWrite >= 0 && lastVerify > lastWrite;
+}
+
 function didAgentRunVerification(events: HarnessStepEvent[], verifyCommands: string[]): boolean {
   if (verifyCommands.length === 0) return false;
   return events.some(event => {
     if (event.type !== 'tool_result' || event.toolName !== 'run_command' || event.toolSuccess !== true) {
       return false;
     }
-    const command = String(event.toolArgs?.command ?? event.toolArgs?.cmd ?? '');
-    return verifyCommands.some(expected => command.includes(expected));
+    return verifyCommands.some(expected => commandFromEvent(event).includes(expected));
   });
 }
 

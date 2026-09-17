@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * 将用户提供的 ICE 立方体原图抠白底，写出 logo.png / logo-dark.png / favicon.svg / logo.svg。
+ * 把任意原图处理成唯一品牌源图 src/public/icons/logo.png，再生成其余尺寸。
+ *
+ *   node desktop/scripts/process-brand-logo.mjs <source-image>
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import sharp from 'sharp';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,35 +55,50 @@ const padded = await sharp({
   .png()
   .toBuffer();
 
-const logo512 = await sharp(padded)
+const { data: padData, info: padInfo } = await sharp(padded)
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
+const whiteMark = Buffer.from(padData);
+for (let i = 0; i < padInfo.width * padInfo.height; i += 1) {
+  const o = i * 4;
+  if (whiteMark[o + 3] > 0) {
+    whiteMark[o] = 255;
+    whiteMark[o + 1] = 255;
+    whiteMark[o + 2] = 255;
+  }
+}
+const whiteOnClear = await sharp(whiteMark, {
+  raw: { width: padInfo.width, height: padInfo.height, channels: 4 },
+})
+  .png()
+  .toBuffer();
+
+const logoMono = await sharp({
+  create: {
+    width: padInfo.width,
+    height: padInfo.height,
+    channels: 4,
+    background: { r: 0, g: 0, b: 0, alpha: 255 },
+  },
+})
+  .composite([{ input: whiteOnClear }])
+  .png()
+  .toBuffer();
+
+const logo512 = await sharp(logoMono)
   .resize(512, 512, {
     fit: 'contain',
-    background: { r: 0, g: 0, b: 0, alpha: 0 },
+    background: { r: 0, g: 0, b: 0, alpha: 255 },
   })
   .png()
   .toBuffer();
 
-const logoDark = await sharp(logo512)
-  .modulate({ brightness: 1.14, saturation: 1.22 })
-  .png()
-  .toBuffer();
-
 fs.writeFileSync(path.join(outDir, 'logo.png'), logo512);
-fs.writeFileSync(path.join(outDir, 'logo-dark.png'), logoDark);
+console.log('[process-brand-logo] wrote src/public/icons/logo.png');
 
-async function writeSvg(fileName, pngBuffer, label) {
-  const fav128 = await sharp(pngBuffer).resize(128, 128).png().toBuffer();
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="${label}">`,
-    `  <title>${label}</title>`,
-    `  <image href="data:image/png;base64,${fav128.toString('base64')}" width="128" height="128"/>`,
-    '</svg>',
-    '',
-  ].join('\n');
-  fs.writeFileSync(path.join(outDir, fileName), svg);
-}
-
-await writeSvg('favicon.svg', logoDark, 'IceCoder');
-await writeSvg('logo.svg', logo512, 'IceCoder');
-
-console.log('[process-brand-logo] wrote logo.png, logo-dark.png, favicon.svg, logo.svg');
+const gen = spawnSync(process.execPath, [path.join(__dirname, 'generate-icons.mjs')], {
+  cwd: repoRoot,
+  stdio: 'inherit',
+});
+if ((gen.status ?? 1) !== 0) process.exit(gen.status ?? 1);

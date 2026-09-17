@@ -12,7 +12,6 @@ import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import { findLastFailedVerification } from './rebuild-escalation.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
 
 export type EphemeralFailureRecoveryKind = 'light' | 'evidence' | 'strong';
 
@@ -186,7 +185,7 @@ export function roundHadSuccessfulVerification(
     if (tc.name !== 'run_command') continue;
     if (failed.has(toolCallSignature(tc))) continue;
     const command = extractRunCommand(tc.arguments);
-    if (command && isHarnessVerificationCommand(command)) return true;
+    if (command) return true;
   }
   return false;
 }

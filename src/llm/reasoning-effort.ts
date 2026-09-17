@@ -97,3 +97,48 @@ export function applyReasoningEffortToResponsesParams(
   }
   params.reasoning = { effort };
 }
+
+/** Anthropic Messages：同一套 reasoningEffort 输入映射为 thinking。 */
+export const ANTHROPIC_THINKING_BUDGET_TOKENS: Record<string, number> = {
+  low: 1024,
+  medium: 4096,
+  high: 8192,
+  max: 16384,
+  xhigh: 32768,
+};
+
+export type AnthropicThinkingParam =
+  | { type: 'adaptive' }
+  | { type: 'enabled'; budget_tokens: number };
+
+export function anthropicThinkingFromEffort(
+  effort: string,
+  maxTokens?: number,
+): AnthropicThinkingParam {
+  if (effort === 'adaptive') return { type: 'adaptive' };
+  const raw = ANTHROPIC_THINKING_BUDGET_TOKENS[effort] ?? 4096;
+  const reserve = 1024;
+  const cap = typeof maxTokens === 'number' && maxTokens > reserve * 2
+    ? maxTokens - reserve
+    : raw;
+  return {
+    type: 'enabled',
+    budget_tokens: Math.max(1024, Math.min(raw, cap)),
+  };
+}
+
+/** Anthropic `/v1/messages`：thinking；开启后强制 temperature=1 并去掉 top_p。 */
+export function applyReasoningEffortToAnthropicParams(
+  params: Record<string, unknown>,
+  effort: string | undefined,
+): void {
+  if (!effort) return;
+  const maxTokens = typeof params.max_tokens === 'number' ? params.max_tokens : undefined;
+  const thinking = anthropicThinkingFromEffort(effort, maxTokens);
+  params.thinking = thinking;
+  params.temperature = 1;
+  delete params.top_p;
+  if (thinking.type === 'enabled' && typeof maxTokens === 'number' && maxTokens <= thinking.budget_tokens) {
+    params.max_tokens = thinking.budget_tokens + 1024;
+  }
+}

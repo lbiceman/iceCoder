@@ -149,12 +149,20 @@ describe('harness-bg-summary — stale reminder defense (CC #11716 防御)', () 
       { timeout: 10_000, interval: 50 },
     ).toBe('killed');
 
-    // dirty 标志已被设置但 status != running → 不应再注入
+    // dirty 标志已被设置 → 终态应立即注入一次
     const second = takeBgStatusForInjection('stale-test', workDir, {
       manager: mgr,
-      intervalMs: 1,
+      intervalMs: 60_000,
     });
-    expect(second).toBeNull();
+    expect(second).not.toBeNull();
+    expect(second!).toMatch(/will-die/);
+    expect(second!).toMatch(/killed/);
+
+    const third = takeBgStatusForInjection('stale-test', workDir, {
+      manager: mgr,
+      intervalMs: 60_000,
+    });
+    expect(third).toBeNull();
   });
 
   it('task completed → no longer appears in subsequent summary', async () => {
@@ -171,11 +179,45 @@ describe('harness-bg-summary — stale reminder defense (CC #11716 防御)', () 
       { timeout: 10_000, interval: 50 },
     ).toBe('completed');
 
-    const result = takeBgStatusForInjection('stale-test', workDir, {
+    const first = takeBgStatusForInjection('stale-test', workDir, {
       manager: mgr,
-      intervalMs: 1,
+      intervalMs: 60_000,
     });
-    // 已经 completed，不应注入
-    expect(result).toBeNull();
+    expect(first).not.toBeNull();
+    expect(first!).toMatch(/instant-task/);
+    expect(first!).toMatch(/completed/);
+
+    const second = takeBgStatusForInjection('stale-test', workDir, {
+      manager: mgr,
+      intervalMs: 60_000,
+    });
+    expect(second).toBeNull();
   }, 15_000);
+
+  it('terminal injection is the same for opaque command labels', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(join(workDir, 'quick.cjs'), 'console.log("instant");\n', 'utf-8');
+
+    for (const label of ['npm test', 'pytest -q', './scripts/ci.sh']) {
+      const spawned = mgr.spawn('node quick.cjs', 10_000, label);
+      await expect.poll(
+        () => mgr.getStatus(spawned.taskId)?.status,
+        { timeout: 10_000, interval: 50 },
+      ).toBe('completed');
+
+      const first = takeBgStatusForInjection('stale-test', workDir, {
+        manager: mgr,
+        intervalMs: 60_000,
+      });
+      expect(first).not.toBeNull();
+      expect(first!).toContain(label);
+      expect(first!).toMatch(/completed/);
+
+      const second = takeBgStatusForInjection('stale-test', workDir, {
+        manager: mgr,
+        intervalMs: 60_000,
+      });
+      expect(second).toBeNull();
+    }
+  }, 30_000);
 });

@@ -1,4 +1,4 @@
-import type { ToolCall } from '../llm/types.js';
+import type { ToolCall, UnifiedMessage } from '../llm/types.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
 import type {
   ToolEffect,
@@ -7,7 +7,10 @@ import type {
   ToolResultStatus,
   ToolRisk,
 } from '../tools/types.js';
-import { isDestructiveToolCall } from './harness-permission-runtime.js';
+import {
+  isDestructiveToolCall,
+  toolCallSignature,
+} from './harness-permission-runtime.js';
 
 export type OperationDisposition =
   | 'executed'
@@ -39,6 +42,14 @@ export interface OperationOutcome {
 
 export interface NormalizeOperationOutcomeOptions {
   disposition?: OperationDisposition;
+  now?: () => number;
+}
+
+export interface CollectToolOperationOutcomesOptions {
+  toolCalls: readonly ToolCall[];
+  messages: readonly UnifiedMessage[];
+  failedSignatures?: readonly string[];
+  policyBlockedSignatures?: readonly string[];
   now?: () => number;
 }
 
@@ -122,6 +133,67 @@ export class OperationOutcomeLedger {
       && hasUsefulReceipt(item.receipt),
     );
   }
+}
+
+/**
+ * 从 Harness 已写入的 tool message 与执行统计提取标准操作结果。
+ * 普通工具轮与停时 synthetic 工具调用共用此处，避免两套 block/approval 判定。
+ */
+export function collectToolOperationOutcomes(
+  options: CollectToolOperationOutcomesOptions,
+): OperationOutcome[] {
+  const failed = new Set(options.failedSignatures ?? []);
+  const policyBlocked = new Set(options.policyBlockedSignatures ?? []);
+  const outcomes: OperationOutcome[] = [];
+
+  for (const toolCall of options.toolCalls) {
+    const toolMessage = [...options.messages].reverse().find(
+      message => message.role === 'tool' && message.toolCallId === toolCall.id,
+    );
+    if (!toolMessage || typeof toolMessage.content !== 'string') continue;
+
+    const output = toolMessage.content;
+    const signature = toolCallSignature(toolCall);
+    const userDenied = /user denied/i.test(output);
+    const implicitPolicyBlock =
+      /denied by policy|\[.*blocked\]|not available in this turn/i.test(output);
+    const isPolicyBlocked = policyBlocked.has(signature) || implicitPolicyBlock;
+    const isFailed = failed.has(signature)
+      || isPolicyBlocked
+      || userDenied
+      || /tool execution was interrupted/i.test(output);
+    const awaitingApproval =
+      /requires? (?:shell mandatory )?confirmation.*no .*handler/i.test(output);
+
+    outcomes.push(normalizeOperationOutcome(toolCall, {
+      success: !isFailed && !awaitingApproval,
+      output,
+      ...(isFailed ? { error: output.slice(0, 500) } : {}),
+      ...(awaitingApproval ? { status: 'awaiting_approval' as const } : {}),
+    }, {
+      disposition: userDenied
+        ? 'user_denied'
+        : isPolicyBlocked
+          ? 'policy_block'
+          : isFailed
+            ? 'execution_fail'
+            : 'executed',
+      now: options.now,
+    }));
+  }
+
+  return outcomes;
+}
+
+export function recordToolOperationOutcomes(
+  ledger: OperationOutcomeLedger | undefined,
+  options: CollectToolOperationOutcomesOptions,
+): OperationOutcome[] {
+  const outcomes = collectToolOperationOutcomes(options);
+  if (ledger) {
+    for (const outcome of outcomes) ledger.record(outcome);
+  }
+  return outcomes;
 }
 
 function cloneOperationOutcome(outcome: OperationOutcome): OperationOutcome {

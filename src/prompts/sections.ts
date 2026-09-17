@@ -143,9 +143,9 @@ export function createDoingTasksSection(): PromptSection {
   3. Your answer is ready and all operations are settled; a successful low-risk tool result is sufficient unless the user required additional verification.
 - You know what you changed or operated. When useful, proactively choose one relevant observation. Do not run unrelated checks, repeat successful actions, or expand scope merely to appear thorough.
 - Additional checks are optional unless the user explicitly requires them. If a check fails, try one materially different correction when practical; otherwise stop and report the failure plainly.
-- Do NOT stop while any \`[System / Completion Gate]\` message shows required conditions as pending.
+- Do NOT stop while any \`[System / Stop Verification]\` message asks you to re-run verification. Run those commands; if they pass, finish.
 - Do NOT claim completion while an operation is pending, awaiting approval, interrupted, or missing a required high-risk receipt.
-- A single condition success means only that condition passed; keep going until all required conditions are satisfied.`,
+- Extra git diff / file listing / unrelated checks do not replace the verification commands.`,
     isStatic: true,
     priority: 20,
     enabled: true,
@@ -183,7 +183,8 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - Run independent tools in parallel and dependent tools in order. Do not repeat calls unless data may have changed.`,
     has('run_command')
       ? `## Shell execution
-- run_command may move long jobs to the background and return a taskId. Do not retry the command; check that task instead.
+- run_command waits in the foreground until the process exits unless the command is a watcher/install/docker job or you set background:true. A background start is not a completed check. Do not retry; poll that task with action:"check" until it exits, then judge by exit code and output.
+- If the user specified a verification command or test framework, use that exact command. Otherwise discover how this repository verifies itself (scripts, README, manifests). Do not assume a default toolchain.
 - When checking a task, pass back its latest cursor. Silence after a server or watcher starts is normal; stop it only on failure, timeout, or user request.`
       : '',
     `## MCP
@@ -191,8 +192,8 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - Open MCP configuration only when the user asks about it or when diagnosing a missing/failing server.`,
     `## Tool arguments
 - Pass parameters as top-level JSON fields exactly as declared by the tool schema; never wrap the payload in a JSON string.
-${has('write_file') ? '- write_file example: `{ "path": "src/foo.ts", "content": "..." }`.' : ''}
-${has('run_command') ? '- run_command example: `{ "command": "npm test" }`.' : ''}
+${has('write_file') ? '- write_file example: `{ "path": "<path>", "content": "..." }`.' : ''}
+${has('run_command') ? '- run_command example: `{ "command": "<command>" }`.' : ''}
 ${hasAny('patch_file', 'edit_file', 'append_file') ? '- If a large write is truncated, switch to a patch or smaller edits instead of repeating the same payload.' : ''}`,
     hasAny('read_file', 'open_file')
       ? `## File reading
@@ -254,7 +255,7 @@ Allowed:
 - Write or update documentation only: \`.md\`, \`.markdown\`, \`.mdx\`, \`.txt\`, \`.rst\`, \`.adoc\`, \`.asciidoc\`.
 
 Forbidden:
-- Any code or config edit (\`.ts\`, \`.js\`, \`.py\`, \`.json\` except docs, etc.).
+- Any code or config edit (anything other than the documentation extensions listed above).
 - \`run_command\`, \`git\`, \`fs_operation\`, \`undo_edit\`, shell tools, and MCP tools.
 
 How to work:
@@ -337,7 +338,9 @@ export function createToolResultClearingSection(): PromptSection {
     // 中文说明：提醒模型及时保留可能被后续裁剪的重要工具结论。
     content: `# Context Management
 
-Tool results may be trimmed or dropped in later turns. Save important conclusions in your reply while you have them; do not assume old tool output is still visible.`,
+Tool results may be trimmed or dropped in later turns. Save important conclusions in your reply while you have them; do not assume old successful output is still visible.
+
+Failed command output is kept longer (head + tail). If it is still truncated, a session log path is included — read or grep that file instead of rerunning blindly.`,
     isStatic: true,
     priority: 55,
     enabled: true,

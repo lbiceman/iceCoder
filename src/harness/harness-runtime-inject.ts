@@ -35,6 +35,8 @@ export function prepareRuntimeContextEphemeral(state: HarnessRunState): string |
     '[/System Runtime State]',
   ].join('\n');
 
+  // 易变块不进主历史：正文未变则本轮不重复贴，前缀/后缀对 prompt cache 字节级稳定。
+  if (content === state.runtimeStateHash) return null;
   state.runtimeStateHash = content;
   return content;
 }

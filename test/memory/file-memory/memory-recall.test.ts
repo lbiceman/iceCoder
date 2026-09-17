@@ -488,12 +488,12 @@ describe('buildIdfMap', () => {
 // ─── 否定查询展开 ───
 
 describe('expandNegationQuery', () => {
-  it('中文 "不要用 Jest" 展开为测试领域词', () => {
+  it('中文 "不要用 Jest" 展开为测试领域词，不扩到 vitest', () => {
     const result = expandNegationQuery('不要用 Jest');
     expect(result).toContain('jest');
     expect(result).toContain('test');
     expect(result).toContain('testing');
-    expect(result).toContain('vitest');
+    expect(result).not.toContain('vitest');
   });
 
   it('英文 "don\'t use Webpack" 展开为构建领域词', () => {

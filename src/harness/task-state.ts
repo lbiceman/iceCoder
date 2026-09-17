@@ -16,8 +16,7 @@ import {
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
-import { classifyRunCommandResult } from './task-acceptance-tracker.js';
-import { isUnitTestVerificationCommand } from './verification-digest.js';
+import { classifyRunCommandResult } from './run-command-result.js';
 import type {
   TaskIntent,
   TaskPhase,
@@ -32,6 +31,7 @@ export type {
 
 const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'glob', 'grep', 'git', 'file_info']);
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
+const FS_MUTATING_OPERATIONS = new Set(['create_dir', 'delete', 'move', 'copy']);
 
 export class TaskState {
   private goal: string;
@@ -40,6 +40,8 @@ export class TaskState {
   private filesRead = new Set<string>();
   private filesChanged = new Set<string>();
   private commandsRun: string[] = [];
+  /** 成功落地到工作区的任务级变更版本；与文件交付物确认版本相互独立。 */
+  private workspaceMutationVersion = 0;
   /** 文件交付物写操作版本（归一化路径 → 版本号，写后递增） */
   private fileDeliverableWriteVersion = new Map<string, number>();
   /** 文件交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
@@ -59,9 +61,6 @@ export class TaskState {
       const effectiveCommand = classified?.command ?? command;
       if (effectiveCommand) {
         this.commandsRun.push(effectiveCommand);
-        if (looksLikeVerificationCommand(effectiveCommand)) {
-          this.phase = 'verification';
-        }
         if (result.success) {
           for (const deletedPath of extractDeletedPathsFromCommand(effectiveCommand)) {
             this.removeChangedFileDeliverable(deletedPath);
@@ -73,10 +72,36 @@ export class TaskState {
 
     if (toolCall.name === 'fs_operation') {
       const op = String(toolCall.arguments?.operation ?? '');
+      if (result.success && FS_MUTATING_OPERATIONS.has(op)) {
+        this.bumpWorkspaceMutationVersion();
+      }
       if (op === 'delete' && result.success) {
         const path = extractPathLikeArg(toolCall.arguments);
         if (path) this.removeChangedFileDeliverable(path);
       }
+      return;
+    }
+
+    if (toolCall.name === 'undo_edit') {
+      if (result.success && toolCall.arguments?.listHistory !== true) {
+        this.bumpWorkspaceMutationVersion();
+      }
+      return;
+    }
+
+    if (toolCall.name === 'interactive_shell') {
+      const action = String(toolCall.arguments?.action ?? '').toLowerCase();
+      const startsCommand = action === 'start'
+        && typeof toolCall.arguments?.command === 'string'
+        && toolCall.arguments.command.trim().length > 0;
+      if (result.success && (action === 'write' || startsCommand)) {
+        this.bumpWorkspaceMutationVersion();
+      }
+      return;
+    }
+
+    if (toolCall.name === 'shell_send_keys') {
+      if (result.success) this.bumpWorkspaceMutationVersion();
       return;
     }
 
@@ -103,11 +128,21 @@ export class TaskState {
 
     if (FILE_WRITE_TOOLS.has(toolCall.name)) {
       this.phase = 'editing';
+      this.bumpWorkspaceMutationVersion();
       if (path) {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
       }
     }
+  }
+
+  /**
+   * 记录单条成功 shell 命令通过清单差异产生的工作区变更。
+   * 一条命令无论触及多少路径都只递增一次。
+   */
+  recordCommandWorkspaceMutation(paths: readonly string[]): void {
+    if (!paths.some(path => typeof path === 'string' && path.trim().length > 0)) return;
+    this.bumpWorkspaceMutationVersion();
   }
 
   deliverableKind(): DeliverableKind {
@@ -217,6 +252,7 @@ export class TaskState {
       filesRead: [...this.filesRead],
       filesChanged: [...this.filesChanged],
       commandsRun: [...this.commandsRun],
+      workspaceMutationVersion: this.workspaceMutationVersion,
     };
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
@@ -235,6 +271,9 @@ export class TaskState {
     this.filesRead = new Set(snapshot.filesRead);
     this.filesChanged = new Set(snapshot.filesChanged);
     this.commandsRun = [...snapshot.commandsRun];
+    this.workspaceMutationVersion = safeWorkspaceMutationVersion(
+      snapshot.workspaceMutationVersion,
+    );
     this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
     this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
     if (this.fileDeliverableWriteVersion.size === 0) {
@@ -247,6 +286,12 @@ export class TaskState {
       }
     }
     this.reconcileOrphanFileDeliverableWriteVersions();
+  }
+
+  private bumpWorkspaceMutationVersion(): void {
+    if (this.workspaceMutationVersion < Number.MAX_SAFE_INTEGER) {
+      this.workspaceMutationVersion += 1;
+    }
   }
 }
 
@@ -268,6 +313,12 @@ function mapToVersionRecord(map: Map<string, number>): Record<string, number> | 
 function recordToVersionMap(record: Record<string, number> | undefined): Map<string, number> {
   if (!record) return new Map();
   return new Map(Object.entries(record));
+}
+
+function safeWorkspaceMutationVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : 0;
 }
 
 /** 纯分析/疑问口吻（无明确「请改/请跑测」侧信号） */
@@ -293,10 +344,9 @@ const EDIT_GOAL_CN = /修改|改|编辑|实现|新增|创建|生成/;
 export function hasExecutableSideSignal(text: string): boolean {
   const t = text.toLowerCase();
   return EDIT_GOAL_CN.test(t)
-    || /运行\s*测试|跑测试|vitest|jest|pytest|mocha/i.test(t)
+    || /运行\s*测试|跑测试|跑一下.*检查|verify|(?:^|[\s,;])run\s+tests?\b/i.test(t)
     || /\b(edit|modify|implement|create|update|fix|investigate|refactor)\b/i.test(t)
-    || /\b(run|execute)\s+\S+/i.test(t)
-    || /(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b/i.test(t);
+    || /\b(run|execute)\s+\S+/i.test(t);
 }
 
 /** 由用户自然语言推断任务意图（与 TaskState 构造逻辑一致，供执行计划等复用） */
@@ -311,7 +361,7 @@ export function inferIntent(text: string): TaskIntent {
 
   // 实现 / 新增 / 创建 / 生成 同义 → edit（避免路径中含 test 被误判为跑测）
   if (EDIT_GOAL_CN.test(t) || /\b(edit|modify|implement|create|update)\b/.test(t)) return 'edit';
-  if (/测试|运行\s*测试|跑测试|verify|(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b|vitest|jest|pytest|\btsc\b/.test(t)) {
+  if (/测试|运行\s*测试|跑测试|跑一下.*检查|verify|(?:^|[\s,;])run\s+tests?\b/.test(t)) {
     return 'test';
   }
   if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
@@ -327,8 +377,4 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return undefined;
-}
-
-export function looksLikeVerificationCommand(command: string): boolean {
-  return isUnitTestVerificationCommand(command);
 }

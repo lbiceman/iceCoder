@@ -46,7 +46,7 @@ export default defineConfig({
           let html = fs.readFileSync(indexPath, 'utf8');
           html = html.replace(
             /<link rel="icon" href="\/assets\/favicon-[^"]+\.svg[^"]*" type="image\/svg\+xml">/,
-            '<link rel="icon" href="/icons/favicon.svg?v=20260908" type="image/svg+xml">',
+            '<link rel="icon" href="/icons/favicon.svg?v=20260915r2" type="image/svg+xml">',
           );
           fs.writeFileSync(indexPath, html);
         }

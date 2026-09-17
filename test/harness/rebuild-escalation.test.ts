@@ -62,12 +62,16 @@ describe('rebuild-escalation guards (P1/P2)', () => {
 });
 
 describe('rebuild-escalation', () => {
-  it('parseFailingTestPaths extracts vitest FAIL lines', () => {
+  it('parseFailingTestPaths extracts FAIL paths without assuming test extensions', () => {
     const output = [
       'FAIL test/unit/tasks.test.ts > TaskScheduler > spawns tasks',
       'AssertionError: expected 0 to be greater than 1',
     ].join('\n');
     expect(parseFailingTestPaths(output)).toEqual(['test/unit/tasks.test.ts']);
+  });
+
+  it('parseFailingTestPaths extracts opaque script paths from FAIL lines', () => {
+    expect(parseFailingTestPaths('FAIL ./scripts/ci.sh')).toEqual(['./scripts/ci.sh']);
   });
 
   it('collectRebuildEscalationContext attaches verification digest', () => {
@@ -123,6 +127,41 @@ describe('rebuild-escalation', () => {
     expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
   });
 
+  it('buildRebuildEscalationMessage uses check-failure-streak header', () => {
+    const msg = buildRebuildEscalationMessage(6, {
+      failingTestPaths: [],
+      verificationDigest: null,
+      lastVerificationCommand: './scripts/ci.sh',
+      recentFailureSnippets: [],
+      writeBypassGranted: false,
+      writeBypassPaths: [],
+      commandBypassGranted: false,
+      stuckCommand: './scripts/ci.sh',
+    }, 'check_failure_streak');
+    expect(msg).toMatch(/same verification command/);
+    expect(msg).toContain('./scripts/ci.sh');
+    expect(msg).toMatch(/failed 6 times/);
+    expect(msg).toMatch(/writes in between do not reset this count/);
+    expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
+    expect(msg).not.toMatch(/ask_user|circuit_breaker/);
+  });
+
+  it('check-failure-streak steps fall back to stuckCommand when history has no last command', () => {
+    const msg = buildRebuildEscalationMessage(6, {
+      failingTestPaths: [],
+      verificationDigest: null,
+      lastVerificationCommand: null,
+      recentFailureSnippets: [],
+      writeBypassGranted: false,
+      writeBypassPaths: [],
+      commandBypassGranted: true,
+      stuckCommand: './scripts/ci.sh',
+    }, 'check_failure_streak');
+    expect(msg).toMatch(/run_command.*\.\/scripts\/ci\.sh/);
+    expect(msg).toMatch(/one retry of `\.\/scripts\/ci\.sh`/);
+    expect(msg).not.toMatch(/Re-run the project's own verification command/);
+  });
+
   it('buildRebuildEscalationMessage uses segment renewal header when triggered by budget segment', () => {
     const msg = buildRebuildEscalationMessage(3, {
       topFile: { path: 'src/game/systems/tasks.ts', count: 4 },
@@ -156,7 +195,7 @@ describe('rebuild-escalation', () => {
       '[BranchBudget / Blocked] 工具未执行：npm run build',
       messages,
     );
-    expect(enriched).toContain('[Build digest]');
+    expect(enriched).toContain('[Verification digest]');
     expect(enriched).toContain('src/scenes/MapSelectScene.ts');
   });
 

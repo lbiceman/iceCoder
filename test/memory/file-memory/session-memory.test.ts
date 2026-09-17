@@ -288,7 +288,7 @@ describe('Runtime Evidence merge & contradiction', () => {
     expect(merged).toContain('fact: test');
   });
 
-  it('buildTestStackContradictionWarning 检测 Jest 幻觉风险', () => {
+  it('buildTestStackContradictionWarning 不再做 Jest/Vitest 栈警告', () => {
     const pkg: PackageJsonTestFacts = {
       resolvedPath: '/x/package.json',
       testScript: 'vitest --run',
@@ -303,7 +303,7 @@ describe('Runtime Evidence merge & contradiction', () => {
 _
 # Worklog
 ok`;
-    expect(buildTestStackContradictionWarning(notes, pkg)).toBeTruthy();
+    expect(buildTestStackContradictionWarning(notes, pkg)).toBeNull();
   });
 });
 
@@ -315,6 +315,7 @@ describe('persisted runtime (icecoder-runtime)', () => {
     filesRead: ['a.ts'],
     filesChanged: [],
     commandsRun: ['npm test'],
+    workspaceMutationVersion: 3,
   };
   const minimalRepo = {
     filesRead: ['a.ts'],
@@ -330,6 +331,7 @@ describe('persisted runtime (icecoder-runtime)', () => {
     const p = parsePersistedRuntime(notes);
     expect(p).not.toBeNull();
     expect(p!.task.goal).toBe('fix login');
+    expect(p!.task.workspaceMutationVersion).toBe(3);
     expect(p!.repo.filesRead).toContain('a.ts');
   });
 
@@ -426,8 +428,22 @@ describe('persisted runtime (icecoder-runtime)', () => {
     });
     const parsed = parsePersistedRuntime(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}\n${legacy}\n\`\`\``);
     expect(parsed?.task.goal).toBe('fix login');
+    expect(parsed?.task.workspaceMutationVersion).toBe(3);
     for (const key of LEGACY_TASK_VERIFICATION_KEYS) {
       expect(parsed?.task).not.toHaveProperty(key);
     }
+  });
+
+  it('defaults missing or malformed legacy mutation versions to zero', () => {
+    const legacy = JSON.stringify({
+      version: 1,
+      task: {
+        ...minimalTask,
+        workspaceMutationVersion: Number.NaN,
+      },
+      repo: minimalRepo,
+    });
+    const parsed = parsePersistedRuntime(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}\n${legacy}\n\`\`\``);
+    expect(parsed?.task.workspaceMutationVersion).toBe(0);
   });
 });

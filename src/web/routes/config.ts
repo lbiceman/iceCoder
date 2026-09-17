@@ -37,6 +37,7 @@ import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config
 import { normalizeProvider } from '../../config/normalize-provider.js';
 import { parseProviderHeaders } from '../../llm/provider-request-headers.js';
 import { parseReasoningEffortLevelsStrict } from '../../llm/reasoning-effort.js';
+import { invalidProviderApiModeError } from '../../llm/provider-protocol.js';
 import {
   normalizeProviderActiveModel,
   parseModelNames,
@@ -154,10 +155,8 @@ function validateProvider(provider: ProviderConfig): string | null {
   if (parseModelNames(provider.modelName).length === 0) {
     return '模型名称不能为空';
   }
-  const apiMode = (provider.apiMode ?? provider.parameters?.apiMode)?.trim();
-  if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
-    return 'apiMode 仅支持 chat_completions 或 responses';
-  }
+  const apiModeError = invalidProviderApiModeError(provider.apiMode ?? provider.parameters?.apiMode);
+  if (apiModeError) return apiModeError;
   const headers = parseProviderHeaders(provider.headers);
   if (!headers.ok) return headers.error;
   const effort = parseReasoningEffortLevelsStrict(provider.reasoningEffort);

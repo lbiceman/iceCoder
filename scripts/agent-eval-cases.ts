@@ -7,7 +7,8 @@ export type AgentEvalCategory =
   | 'tool-failure'
   | 'async-subagent'
   | 'eval-mode'
-  | 'completion-gate';
+  | 'completion-gate'
+  | 'stop-verification';
 
 export interface AgentEvalFileAssertion {
   path: string;
@@ -15,6 +16,17 @@ export interface AgentEvalFileAssertion {
   notContains?: string;
   unchanged?: boolean;
 }
+
+export type AgentEvalScriptedTurn =
+  | {
+      type: 'tool';
+      name: string;
+      arguments: Record<string, unknown>;
+    }
+  | {
+      type: 'final';
+      content: string;
+    };
 
 export interface AgentEvalCase {
   id: string;
@@ -32,14 +44,23 @@ export interface AgentEvalCase {
     forbidVerification?: boolean;
     /** 通用收尾协议的结构化终态。 */
     completionStatus?: 'completed' | 'completed_unverified' | 'paused' | 'failed' | 'interrupted';
+    completionReason?: string;
     /** 最终用户可见文本应包含。 */
     finalContains?: string;
+    /** 最后一次成功写文件之后必须再有一次成功的验收命令。 */
+    verificationAfterLastWrite?: boolean;
+    /** 按子串统计 run_command 调用次数（含失败尝试）。 */
+    verificationRuns?: Record<string, { min?: number; max?: number }>;
+    /** 不允许出现的 run_command 子串。 */
+    forbidCommands?: string[];
     /** 结束后断言活动 checkpoint 为 ProjectCheckpointV3。 */
     checkpoint?: {
       version: 3;
       forbidLegacyFields?: boolean;
       hasCompletion?: boolean;
       migratedFromLegacy?: boolean;
+      hasVerificationState?: boolean;
+      mutationVersionAtLeast?: number;
     };
   };
   assertions: AgentEvalFileAssertion[];
@@ -50,6 +71,11 @@ export interface AgentEvalCase {
   toolsDisabled?: boolean;
   /** 运行前写入旧 v1 checkpoint，验证首次保存升级为 V3。 */
   seedLegacyCheckpoint?: boolean;
+  /**
+   * 脚本化模型轮次。有此字段时，eval 必须走真实 Harness + 真实工作区工具，
+   * mock 指标不得直接判过。
+   */
+  scriptedTurns?: AgentEvalScriptedTurn[];
 }
 
 const basePackageJson = {
@@ -58,8 +84,34 @@ const basePackageJson = {
   },
 };
 
-function packageJson(): string {
-  return `${JSON.stringify(basePackageJson, null, 2)}\n`;
+function packageJson(scripts: Record<string, string> = basePackageJson.scripts): string {
+  return `${JSON.stringify({ scripts }, null, 2)}\n`;
+}
+
+function mathSource(body: string): string {
+  return `function add(a, b) {\n  ${body}\n}\n\nmodule.exports = { add };\n`;
+}
+
+function mathTest(): string {
+  return [
+    "const test = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "const { add } = require('../src/math');",
+    '',
+    "test('adds numbers', () => {",
+    '  assert.equal(add(2, 3), 5);',
+    '});',
+    '',
+  ].join('\n');
+}
+
+function mathWorkspace(impl: string, extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    'package.json': packageJson(),
+    'src/math.js': mathSource(impl),
+    'test/math.test.js': mathTest(),
+    ...extra,
+  };
 }
 
 export const agentEvalCases: AgentEvalCase[] = [
@@ -242,6 +294,54 @@ export const agentEvalCases: AgentEvalCase[] = [
     maxRounds: 10,
   },
   {
+    id: 'noisy-test-failure-fix',
+    category: 'test-fix',
+    prompt: [
+      'npm test currently fails. The failure details are at the END of a very noisy log.',
+      'Fix src/score.js so applyScore returns price * (1 - rate), then run npm test.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'src/score.js': "function applyScore(price, rate) {\n  return price - rate;\n}\n\nmodule.exports = { applyScore };\n",
+      'test/score.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { applyScore } = require('../src/score');",
+        '',
+        "test('applies percentage scores', () => {",
+        "  for (let i = 0; i < 300; i++) console.log('setup-noise-' + i + '-' + 'x'.repeat(40));",
+        "  assert.equal(applyScore(100, 0.2), 80);",
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: { requiresTool: true, requiresVerification: true },
+    assertions: [
+      { path: 'src/score.js', notContains: 'return price - rate;' },
+      { path: 'src/score.js', contains: 'applyScore' },
+    ],
+  },
+  {
+    id: 'multi-round-runtime-stable-edit',
+    category: 'edit',
+    prompt: [
+      'Read src/label.js first, then change exported text() to return "ok".',
+      'Run npm test before finishing.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'src/label.js': "function text() {\n  return 'draft';\n}\n\nmodule.exports = { text };\n",
+      'test/label.test.js': "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst { text } = require('../src/label');\n\ntest('label is ok', () => {\n  assert.equal(text(), 'ok');\n});\n",
+    },
+    verifyCommands: ['npm test'],
+    expected: { requiresTool: true, requiresVerification: true },
+    assertions: [
+      { path: 'src/label.js', contains: "return 'ok'" },
+      { path: 'src/label.js', notContains: "return 'draft'" },
+    ],
+  },
+  {
     id: 'eval-mode-tools-disabled',
     category: 'eval-mode',
     prompt: [
@@ -360,5 +460,498 @@ export const agentEvalCases: AgentEvalCase[] = [
     toolsDisabled: true,
     seedLegacyCheckpoint: true,
     maxRounds: 4,
+  },
+  {
+    id: 'local-edit-stop-runs-npm-test',
+    category: 'stop-verification',
+    prompt: [
+      'Fix add() in src/math.js so 2 + 3 equals 5.',
+      'The surrounding notes mention `README.md`, `tenantId`, `source of truth` and',
+      '`git diff --name-only -- test/`; those are not completion conditions.',
+      'After the file change, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'npm test': { min: 1 } },
+      forbidCommands: ['git diff', 'README.md', 'tenantId'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+        mutationVersionAtLeast: 1,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a + b;' },
+      { path: 'src/math.js', notContains: 'return a - b;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'final', content: 'Fixed add() to return a + b.' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-edit-stale-after-second-write',
+    category: 'stop-verification',
+    prompt: [
+      'Fix add() in src/math.js, run npm test, then add a trailing comment to the same file.',
+      'After the second edit, return the final answer without running tests again.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'npm test': { min: 2 } },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+        mutationVersionAtLeast: 2,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a + b;' },
+      { path: 'src/math.js', contains: 'keep comment' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/math.js',
+          search: 'return a + b;',
+          replace: 'return a + b; // keep comment',
+        },
+      },
+      { type: 'final', content: 'Added a comment after tests passed.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-git-diff-noise-does-not-block',
+    category: 'stop-verification',
+    prompt: [
+      'Fix add() in src/math.js, run npm test, then inspect `git diff --name-only -- test/`.',
+      'Return the final answer after that inspection.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'npm test': { min: 1, max: 1 } },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a + b;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      {
+        type: 'tool',
+        name: 'run_command',
+        arguments: { command: 'git diff --name-only -- test/' },
+      },
+      { type: 'final', content: 'Tests passed; git diff failed and is not required.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-runtime-default-fail-unverified',
+    category: 'stop-verification',
+    prompt: [
+      'Change src/math.js. Do not claim tests passed.',
+      'After the edit, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'completed_unverified',
+      completionReason: 'verification_failed',
+      verificationRuns: { 'npm test': { min: 2 } },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a - b + 0;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/math.js',
+          search: 'return a - b;',
+          replace: 'return a - b + 0;',
+        },
+      },
+      { type: 'final', content: 'First stop proposal.' },
+      { type: 'final', content: 'Second stop proposal after the continuation.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-explicit-must-run-failed',
+    category: 'stop-verification',
+    prompt: [
+      'Change src/math.js.',
+      'Completion condition: you must run `npm test` and it must succeed before finishing.',
+      'After the edit, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'failed',
+      completionReason: 'verification_failed',
+      verificationRuns: { 'npm test': { min: 2 } },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a - b + 0;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/math.js',
+          search: 'return a - b;',
+          replace: 'return a - b + 0;',
+        },
+      },
+      { type: 'final', content: 'First stop proposal.' },
+      { type: 'final', content: 'Second stop proposal after the continuation.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-user-check-overrides-npm-test',
+    category: 'stop-verification',
+    prompt: [
+      'Update src/banner.js so banner() returns ready.',
+      'Completion condition: you must run `node --check src/banner.js`.',
+      'After the edit, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson({ test: 'node -e "process.exit(1)"' }),
+      'src/banner.js': "function banner() {\n  return 'draft';\n}\n\nmodule.exports = { banner };\n",
+    },
+    verifyCommands: ['node --check src/banner.js'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'node --check src/banner.js': { min: 1 } },
+      forbidCommands: ['npm test'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/banner.js', contains: "return 'ready';" },
+      { path: 'src/banner.js', notContains: "return 'draft';" },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/banner.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/banner.js',
+          search: "return 'draft';",
+          replace: "return 'ready';",
+        },
+      },
+      { type: 'final', content: 'Updated banner() to return ready.' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-write-new-file-runs-npm-test',
+    category: 'stop-verification',
+    prompt: [
+      'Create src/sum.js exporting add(a, b) that returns a + b.',
+      'After writing the file, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'test/sum.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { add } = require('../src/sum');",
+        '',
+        "test('adds numbers', () => {",
+        '  assert.equal(add(2, 3), 5);',
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'npm test': { min: 1 } },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+        mutationVersionAtLeast: 1,
+      },
+    },
+    assertions: [
+      { path: 'src/sum.js', contains: 'function add' },
+      { path: 'src/sum.js', contains: 'return a + b' },
+    ],
+    scriptedTurns: [
+      {
+        type: 'tool',
+        name: 'write_file',
+        arguments: {
+          path: 'src/sum.js',
+          content: mathSource('return a + b;'),
+        },
+      },
+      { type: 'final', content: 'Created src/sum.js with add().' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-engineering-edit-no-plan-unverified',
+    category: 'stop-verification',
+    prompt: [
+      'Change src/app.js so label() returns ready.',
+      'After the edit, return the final answer. Do not invent npm ci, build, or test commands.',
+    ].join(' '),
+    files: {
+      'src/app.js': "function label() {\n  return 'draft';\n}\n\nmodule.exports = { label };\n",
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'completed_unverified',
+      completionReason: 'verification_plan_unavailable',
+      forbidCommands: ['npm test', 'npm ci', 'npm run build', 'git diff'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+      },
+    },
+    assertions: [
+      { path: 'src/app.js', contains: "return 'ready';" },
+      { path: 'src/app.js', notContains: "return 'draft';" },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/app.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/app.js',
+          search: "return 'draft';",
+          replace: "return 'ready';",
+        },
+      },
+      { type: 'final', content: 'Updated label() to return ready.' },
+    ],
+    maxRounds: 6,
+    timeoutMs: 60_000,
+  },
+  {
+    id: 'local-mutating-verify-command-not-fresh',
+    category: 'stop-verification',
+    prompt: [
+      'Update src/banner.js so banner() returns ready.',
+      'Completion condition: you must run `node scripts/stamp.js`.',
+      'After the edit, return the final answer without running tests yourself.',
+    ].join(' '),
+    files: {
+      'scripts/stamp.js': [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "fs.mkdirSync('src', { recursive: true });",
+        "fs.writeFileSync(path.join('src', 'stamp.js'), 'module.exports = 1;\\n');",
+        '',
+      ].join('\n'),
+      'src/banner.js': "function banner() {\n  return 'draft';\n}\n\nmodule.exports = { banner };\n",
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'paused',
+      completionReason: 'verification_unavailable',
+      verificationRuns: { 'node scripts/stamp.js': { min: 1 } },
+      forbidCommands: ['npm test', 'npm ci'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/banner.js', contains: "return 'ready';" },
+      { path: 'src/stamp.js', contains: 'module.exports = 1;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/banner.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: {
+          path: 'src/banner.js',
+          search: "return 'draft';",
+          replace: "return 'ready';",
+        },
+      },
+      { type: 'final', content: 'Updated banner() to return ready.' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 60_000,
+  },
+  {
+    id: 'local-explicit-two-commands',
+    category: 'stop-verification',
+    prompt: [
+      'Fix add() in src/math.js so 2 + 3 equals 5.',
+      'Completion condition: you must run `node --check src/math.js` and `npm test`.',
+      'After the edit, return the final answer without running those commands yourself.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['node --check src/math.js', 'npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: {
+        'node --check src/math.js': { min: 1 },
+        'npm test': { min: 1 },
+      },
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+      },
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a + b;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'final', content: 'Fixed add() to return a + b.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'local-read-only-no-file-change',
+    category: 'stop-verification',
+    prompt: [
+      'Read settings.json and answer with the configured region.',
+      'Do not modify files or run shell commands.',
+    ].join(' '),
+    files: {
+      'settings.json': '{\n  "region": "ap-southeast-1"\n}\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      forbidVerification: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_not_required',
+      finalContains: 'ap-southeast-1',
+      forbidCommands: ['npm test', 'npm ci', 'git'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+      },
+    },
+    assertions: [
+      { path: 'settings.json', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'settings.json' } },
+      { type: 'final', content: 'The configured region is ap-southeast-1.' },
+    ],
+    maxRounds: 4,
+    timeoutMs: 30_000,
   },
 ];

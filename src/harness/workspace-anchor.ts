@@ -11,7 +11,7 @@ export function buildWorkspaceAnchorContent(
     WORKSPACE_ANCHOR_OPEN,
     `Repository root: ${lockedRoot}`,
     'All write/edit/run_command operations default to this directory unless reading reference files.',
-    'Shell cwd is already set to the repository root; use `npm test` directly without `cd /d`.',
+    'Shell cwd is already set to the repository root. Run verification commands from here without `cd`; if the user specified a command, use that exact command.',
   ];
   if (referenceReads.length > 0) {
     lines.push('Reference reads (not workspace root):');
@@ -31,10 +31,9 @@ export function prepareWorkspaceAnchorEphemeral(state: HarnessRunState): string 
     state.lockedWorkspaceRoot,
     state.referenceReads ?? [],
   );
-  // ephemeral 不进主历史：内容未变时每轮仍注入同一块，供模型可见
-  if (content === state.workspaceAnchorHash) {
-    return content;
-  }
+  // ephemeral 不进主历史。cwd 已在 Environment 段；root/referenceReads 未变则跳过，
+  // 避免每轮重复贴同一块打穿可缓存前缀。
+  if (content === state.workspaceAnchorHash) return null;
   state.workspaceAnchorHash = content;
   return content;
 }

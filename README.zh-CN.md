@@ -8,17 +8,21 @@
 
 ### 桌面端
 
-**工作 / 聊天** — 侧栏多会话、工具执行记录、右侧 **iceCoder 工作台**（执行透明层）与 `#` / `@` 输入区；工具连续失败时自动进入 **监管模式** 并提示轮次：
+**工作 / 聊天** — 侧栏多会话、聊天区、右侧 **iceCoder 工作台** 与 `#` / `@` 输入区。工作台无 Tab：上半「检查点」按用户句切章（旧上新下；点章看下边执行流；标题右侧 ↩ 回滚），下半「执行流」是该章的 Harness 轮次与工具短预览。底栏：上下文、工具、文件、当前章耗时：
 
-![桌面端 — 工作聊天页：多会话、工具调用与执行透明层](./docs/assets/desktop-work-chat.png)
+![桌面端 — 工作聊天页：检查点目录与选中章执行流](./docs/assets/desktop-work-chat.png)
 
-**执行透明层 · 执行流** — 按模型轮次展示步骤时间轴，标注完成/失败状态；展开单步可查看 **做了什么** / **为什么这么做**，底部实时显示上下文用量、工具数与耗时：
+**iceCoder 工作台 · 底栏层** — 点「工具」弹出本会话用过的工具名与次数；点「文件」弹出本会话变更文件（新建 / 修改 / 删除 / 移动 + 文件名）：
 
-![桌面端 — 执行流：轮次时间轴与步骤详情](./docs/assets/desktop-workbench-flow-detail.png)
+![桌面端 — 工作台：会话工具名单](./docs/assets/desktop-workbench-tools.png)
 
-**执行透明层 · 检查点** — 检查点时间轴，标记当前位置与工作目录，支持查看历史状态与回滚恢复：
+![桌面端 — 工作台：变更文件名单](./docs/assets/desktop-work-snapshot.png)
 
-![桌面端 — 检查点：检查点与当前位置](./docs/assets/desktop-work-snapshot.png)
+**空会话欢迎页** — 「IceCoder 已就绪」：模式 / Memory / Harness / 门控、快速上手、当前上下文；右侧冰豆。尚未发过话时工作台默认不占右侧：
+
+![桌面端 — 空会话欢迎页（深色）](./docs/assets/desktop-welcome.png)
+
+![桌面端 — 空会话欢迎页（浅色）](./docs/assets/desktop-welcome-light.png)
 
 **记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
 
@@ -40,7 +44,7 @@
 
 ![桌面端 — 设置页 MCP 配置：服务器列表与 unity-mcp 详情](./docs/assets/desktop-config-mcp.png)
 
-**工作 / 聊天（浅色主题）** — 相同布局下的浅色外观：
+**工作 / 聊天（浅色主题）** — 相同工作台布局，底栏展开变更文件层：
 
 ![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
@@ -102,7 +106,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 > 原 **L2**（takeover / PassiveObserver / CorrectionPort / EventTimeline）已于 2026-08-31 删除，见 [`docs/L2监管层详解.md`](./docs/L2监管层详解.md)。
 
 - **adaptive**（默认）：按任务风险在自由与强约束间切换，适合日常编码；**strict** 全程偏 forced，关键工程任务首轮即建图。
-- 与 **TaskGraph**、**Verification Gate** 联动：工程源码变更会提示跑单测；Gate 与监管职责分离。
+- 与 **TaskGraph**、**D′ 停时验收** 联动：工程改动可由 `run_command` 跑一次有界验收计划；监管不裁决是否完成。
 - 配置：`data/config.json` 的 `supervisorMode` + `data/supervisor-config.json`（仅 `mode` + `executionMode`）。
 
 ### Harness 主循环与 TaskGraph
@@ -196,7 +200,7 @@ Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`�
 **约 2,000** 条 Vitest（**~225** 个文件；`src/` 行覆盖约 **78%**；Harness **~84%**、Supervisor **~95%**、记忆 **~71%**，以本地 `npm run test:coverage` 为准）。
 
 - 覆盖 Harness 门禁、TaskGraph、双模、记忆生命周期、Web 路由等；长会话与监管有专项用例。
-- **`npm run eval:agent`**：Agent 行为回归评测 — 7 个固定 case 在临时沙箱中真实跑 Harness + 工具，输出 pass/fail 与指标；`--mode=mock` 可无 API Key 烟测。详见 [`docs/使用文档.md`](./docs/使用文档.md)。
+- **`npm run eval:agent`**：Agent 行为回归。`--mode=local` 只跑带 `scriptedTurns` 的本地改文件用例（隔离目录 + 真实工具）；`--mode=mock` 不得给这些用例发假通过分。详见 [`docs/harness/收尾策略-模型停手与验收门控.md`](./docs/harness/收尾策略-模型停手与验收门控.md)。
 - **`npm run telemetry:runtime`**：汇总 runtime 遥测 JSONL，便于长任务排障。
 - 跑测命令见 [`docs/使用文档.md`](./docs/使用文档.md)。
 
@@ -237,13 +241,13 @@ Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`�
 ## 架构（简图）
 
 ```text
-CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、验收、压缩）
+CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、停时验收、压缩）
   → TaskGraph → Supervisor L0/L1/L3 → Checkpoint + BranchBudget → 27 工具 + MCP
 ```
 
 | 模块 | 作用 |
 |------|------|
-| **Harness** | 主循环、验收门禁、压缩、遥测 |
+| **Harness** | 主循环、D′ 停时验收、压缩、遥测 |
 | **Supervisor** | L0 档位 + L1 free/forced + L3 图硬约束 |
 | **TaskGraph** | 结构化计划注入 |
 | **文件记忆** | Memory v2：分级 / 证据强度 / 冲突裁决 + 会话笔记 |

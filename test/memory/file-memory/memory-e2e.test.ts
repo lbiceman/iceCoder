@@ -506,7 +506,7 @@ Designed 5 end-to-end test scenarios.
         await integration.injectMemoryContext(messages);
 
         // onLoopEnd — 需要足够的 token 和轮次来触发提取
-        await integration.onLoopEnd(messages, turn, turn * 5000);
+        await integration.onLoopEnd(messages, turn, turn * 5000, undefined, { stopReason: 'model_done' });
       }
 
       // 验证被动确认通知

@@ -3,7 +3,7 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import { MAX_REBUILD_ESCALATIONS_PER_RUN } from './harness-constants.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { buildVerificationDigest, isBuildVerificationCommand, isHarnessVerificationCommand, parseBuildErrorSourcePaths } from './verification-digest.js';
+import { buildVerificationDigest, parseBuildErrorSourcePaths } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import type { VerificationSignal } from './completion-facts-view.js';
 
@@ -21,7 +21,8 @@ export type RebuildEscalationTrigger =
   | 'consecutive_failures'
   | 'file_cap_verification_failed'
   | 'segment_renewal_budget'
-  | 'missing_file_budget_mismatch';
+  | 'missing_file_budget_mismatch'
+  | 'check_failure_streak';
 
 export interface RebuildEscalationContext {
   topFile?: { path: string; count: number };
@@ -35,6 +36,8 @@ export interface RebuildEscalationContext {
   commandBypassGranted: boolean;
   /** 卡点文件在 workspace 磁盘上不存在（Budget 计数与事实脱节）。 */
   fileMissingOnDisk?: boolean;
+  /** 连续失败的检查命令原文（check_failure_streak）。 */
+  stuckCommand?: string;
 }
 
 function findAssistantToolCall(
@@ -64,20 +67,19 @@ function stripToolErrorPrefix(content: string): string {
   return content.replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
 }
 
-/** 从 vitest / npm test 输出中提取失败测试路径（供 read_file 目标）。 */
+/** 从本轮失败输出中提取路径（不假设测试文件扩展名）。 */
 export function parseFailingTestPaths(output: string): string[] {
   const paths = new Set<string>();
   const patterns = [
-    /\bFAIL\s+(\S+\.test\.(?:ts|tsx|js|jsx))/gi,
-    /\b(test\/\S+\.(?:test\.)?(?:ts|tsx|js|jsx))/gi,
-    /❯\s*(\S+\.test\.(?:ts|tsx|js|jsx))/gi,
+    /\bFAIL\s+(\S+)/gi,
+    /❯\s+(\S+)/gi,
   ];
   for (const re of patterns) {
     re.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(output)) !== null) {
-      const p = match[1].replace(/^[❯>\s]+/, '');
-      if (p && !p.includes('node_modules')) paths.add(p);
+      const p = match[1].replace(/^[❯>\s]+/, '').replace(/[>,:]+$/, '');
+      if (p && !p.includes('node_modules') && /[\\/]|\.\w+$/.test(p)) paths.add(p);
     }
   }
   return [...paths].slice(0, 4);
@@ -102,7 +104,7 @@ export function findLastFailedVerification(
     if (!tc || tc.name !== 'run_command') continue;
 
     const command = extractRunCommand(tc.arguments);
-    if (!command || !isHarnessVerificationCommand(command)) continue;
+    if (!command) continue;
 
     if (!commandOnly) commandOnly = command;
 
@@ -134,7 +136,7 @@ function collectRecentFailureSnippets(messages: UnifiedMessage[], max: number): 
   return snippets;
 }
 
-/** BranchBudget 拦截 write/edit/run 时，附带最近 vitest 失败摘要。 */
+/** BranchBudget 拦截 write/edit/run 时，附带最近失败摘要。 */
 export function appendVerificationEvidenceToBranchBlock(
   baseMessage: string,
   messages: UnifiedMessage[],
@@ -146,15 +148,14 @@ export function appendVerificationEvidenceToBranchBlock(
   const digest = buildVerificationDigest(verification.command, verification.outputBody);
   if (!digest) return baseMessage;
 
-  const paths = isBuildVerificationCommand(verification.command)
-    ? parseBuildErrorSourcePaths(verification.outputBody)
-    : parseFailingTestPaths(verification.outputBody);
+  const paths = [
+    ...parseBuildErrorSourcePaths(verification.outputBody),
+    ...parseFailingTestPaths(verification.outputBody),
+  ];
+  const uniquePaths = [...new Set(paths)];
   const parts = [baseMessage, '', '**Last verification evidence:**', digest];
-  if (paths.length > 0) {
-    const label = isBuildVerificationCommand(verification.command)
-      ? 'Source files (read first)'
-      : 'Failing tests (read first)';
-    parts.push('', `**${label}:** ${paths.map(p => `\`${p}\``).join(', ')}`);
+  if (uniquePaths.length > 0) {
+    parts.push('', `**Failing paths (read first):** ${uniquePaths.map(p => `\`${p}\``).join(', ')}`);
   }
   return parts.join('\n');
 }
@@ -362,6 +363,8 @@ export function applyRebuildEscalationBypasses(
   };
 }
 
+const UNKNOWN_FAILING_PATH = '(from last verification output — locate the FAIL path in this round\'s output)';
+
 export function buildRebuildEscalationMessage(
   failureCount: number,
   ctx: RebuildEscalationContext,
@@ -370,27 +373,28 @@ export function buildRebuildEscalationMessage(
   const implPath = ctx.topFile?.path;
   const readTestTargets = ctx.failingTestPaths.length > 0
     ? ctx.failingTestPaths
-    : ['(from last verification output — locate the FAIL / .test.ts path)'];
+    : [UNKNOWN_FAILING_PATH];
+  const verifyCommand = ctx.stuckCommand || ctx.lastVerificationCommand;
 
   const steps = ctx.fileMissingOnDisk && implPath
     ? [
       `1. \`run_command\` or \`read_file\` an **existing** file in the same directory as a template (do NOT \`read_file\` \`${implPath}\` — missing on disk).`,
       `2. \`write_file\` **create** \`${implPath}\` with the complete file body (no patch / edit_file).`,
-      ctx.lastVerificationCommand
-        ? `3. \`run_command\`: \`${ctx.lastVerificationCommand}\` — only after step 2.`
-        : '3. Re-run verification (e.g. `npm test`) — only after step 2.',
+      verifyCommand
+        ? `3. \`run_command\`: \`${verifyCommand}\` — only after step 2.`
+        : '3. Re-run the project\'s own verification command — only after step 2.',
     ]
     : [
-      `1. \`read_file\` each failing test (do NOT modify anything under \`test/\`): ${readTestTargets.map(p => `\`${p}\``).join(', ')}`,
+      `1. \`read_file\` each failing check (do NOT modify the check fixtures yet): ${readTestTargets.map(p => `\`${p}\``).join(', ')}`,
       implPath
         ? `2. \`read_file\` stuck implementation: \`${implPath}\``
-        : '2. \`read_file\` the implementation file(s) those tests import.',
+        : '2. \`read_file\` the implementation those checks exercise.',
       implPath
         ? `3. \`write_file\` **complete replacement** for \`${implPath}\` (full file body — no patch / edit_file / search_replace on this path).`
         : '3. \`write_file\` **complete replacement** for the stuck implementation (full file body — no patch).',
-      ctx.lastVerificationCommand
-        ? `4. \`run_command\`: \`${ctx.lastVerificationCommand}\` — only after steps 1–3.`
-        : '4. Re-run verification (e.g. `npm test`) — only after steps 1–3.',
+      verifyCommand
+        ? `4. \`run_command\`: \`${verifyCommand}\` — only after steps 1–3.`
+        : '4. Re-run the project\'s own verification command — only after steps 1–3.',
     ];
 
   const platformActions: string[] = [];
@@ -404,19 +408,22 @@ export function buildRebuildEscalationMessage(
       `one \`write_file\` each allowed despite BranchBudget file cap: ${bypassPaths.map(p => `\`${p}\``).join(', ')}`,
     );
   }
-  if (ctx.commandBypassGranted && ctx.lastVerificationCommand) {
-    const short = ctx.lastVerificationCommand.length > 100
-      ? `${ctx.lastVerificationCommand.slice(0, 97)}...`
-      : ctx.lastVerificationCommand;
+  if (ctx.commandBypassGranted && verifyCommand) {
+    const short = verifyCommand.length > 100
+      ? `${verifyCommand.slice(0, 97)}...`
+      : verifyCommand;
     platformActions.push(`one retry of \`${short}\` allowed despite BranchBudget command cap`);
   }
 
+  const stuckCmdBit = verifyCommand ? ` (\`${verifyCommand}\`)` : '';
   const header = trigger === 'segment_renewal_budget'
     ? `[System / Rebuild Escalation] Recovery budget segment exhausted (segment #${failureCount}). Platform continues automatically — mandatory strategy change:`
     : trigger === 'missing_file_budget_mismatch'
     ? `[System / Rebuild Escalation] BranchBudget file cap reached but \`${ctx.topFile?.path ?? 'implementation'}\` was never persisted on disk (edit count includes failed patches).`
     : trigger === 'file_cap_verification_failed'
     ? `[System / Rebuild Escalation] Verification still failing after ${ctx.topFile?.count ?? 'multiple'} edits to the stuck implementation (BranchBudget file cap reached).`
+    : trigger === 'check_failure_streak'
+    ? `[System / Rebuild Escalation] The same verification command${stuckCmdBit} has failed ${failureCount} times (writes in between do not reset this count). Platform continues — mandatory strategy change:`
     : `[System / Rebuild Escalation] ${failureCount} consecutive rounds of tool calls have all failed.`;
 
   const forbiddenStep = ctx.fileMissingOnDisk ? '3' : '4';
@@ -429,7 +436,7 @@ export function buildRebuildEscalationMessage(
     `**Forbidden until step ${forbiddenStep} completes:**`,
     '- `edit_file`, patch, or search_replace on the stuck implementation',
     '- Re-running verification without rewriting implementation first',
-    '- Modifying anything under `test/`',
+    '- Changing check fixtures or test data before the implementation',
     '- Deleting files with shell `rm`',
   ];
 
@@ -441,8 +448,8 @@ export function buildRebuildEscalationMessage(
     parts.push('', `**Stuck implementation:** \`${implPath}\` (edited ${ctx.topFile.count} times).`);
   }
 
-  if (readTestTargets[0] !== '(from last verification output — locate the FAIL / .test.ts path)') {
-    parts.push('', '**Failing tests (read first):**', ...readTestTargets.map(p => `- \`${p}\``));
+  if (readTestTargets[0] !== UNKNOWN_FAILING_PATH) {
+    parts.push('', '**Failing checks (read first):**', ...readTestTargets.map(p => `- \`${p}\``));
   }
 
   if (ctx.verificationDigest) {

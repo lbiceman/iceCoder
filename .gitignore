@@ -29,6 +29,7 @@ output/
 # 编辑器
 .vscode/
 .idea/
+.worktrees/
 *.swp
 *.swo
 
@@ -88,5 +89,11 @@ cookies.txt
 
 # Electron 临时目录
 desktop/_electron_tmp/
+
+# 由 src/public/icons/logo.png 在 npm run icons / build 时生成，不要手改
+/src/public/favicon.ico
+/src/public/icons/favicon.svg
+/desktop/assets/icon.png
+/desktop/assets/icon.ico
 
 # 公开发布安装包纳入版本库：releases/windows/*.exe、releases/npm/*.tgz

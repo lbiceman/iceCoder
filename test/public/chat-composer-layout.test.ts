@@ -51,6 +51,9 @@ describe('聊天输入区与欢迎页布局审计', () => {
     expect(CHAT_CSS).toContain('overscroll-behavior: contain');
     expect(CHAT_CSS).toContain('field-sizing: content');
     expect(CHAT_CSS).toContain('.composer-file-input');
+    expect(CHAT_CSS).toMatch(/\.composer-file-btn:hover\s+\.composer-file-btn-face/);
+    expect(CHAT_CSS).toMatch(/\.composer-file-btn\s*\{[^}]*cursor:\s*pointer/);
+    expect(CHAT_CSS).toMatch(/composer-file-input::(?:-webkit-file-upload-button|file-selector-button)/);
     expect(CHAT_UI_SOURCE).toContain('ice:composer-layout');
     expect(CHAT_UI_SOURCE).toContain("elInput.style.overflowY = 'auto'");
     expect(CHAT_UI_SOURCE).not.toContain("elInput.style.height = '0px'");
@@ -253,6 +256,45 @@ describe('聊天输入区与欢迎页布局审计', () => {
     expect(result.goal).toBe('[Active Skill: examLogin/skill.md]');
     expect(result.goalNotFullSkill).toBe(true);
     expect(result.bannerVisible).toBe(true);
+    await page.close();
+  });
+
+  it('模型下拉左侧上传 + 悬停透明 file input 时图标有 hover 且光标为 pointer', async () => {
+    const page = await browser.newPage({ viewport: { width: 640, height: 320 } });
+    openPages.add(page);
+    await page.setContent(
+      '<!DOCTYPE html><html data-theme="dark"><head></head><body style="margin:24px;background:#111;">' +
+        '<div class="composer-toolbar">' +
+          '<div class="composer-file-btn" id="btn-file">' +
+            '<input type="file" class="composer-file-input" id="file-input" title="上传文件" aria-label="上传文件">' +
+            '<span class="btn-icon btn-icon-ghost composer-file-btn-face" id="face">+</span>' +
+          '</div>' +
+        '</div>' +
+      '</body></html>',
+    );
+    await page.addStyleTag({ content: TOKENS_CSS + CHAT_CSS });
+
+    const idleBg = await page.locator('#face').evaluate((el) => getComputedStyle(el).backgroundColor);
+
+    await page.locator('#file-input').hover();
+
+    const hovered = await page.evaluate(() => {
+      const face = document.getElementById('face') as HTMLElement;
+      const input = document.getElementById('file-input') as HTMLInputElement;
+      const btn = document.getElementById('btn-file') as HTMLElement;
+      return {
+        faceBg: getComputedStyle(face).backgroundColor,
+        btnCursor: getComputedStyle(btn).cursor,
+        inputCursor: getComputedStyle(input).cursor,
+        selectorCursor: getComputedStyle(input, '::file-selector-button').cursor,
+      };
+    });
+
+    expect(hovered.faceBg).not.toBe(idleBg);
+    expect(hovered.faceBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(hovered.btnCursor).toBe('pointer');
+    expect(hovered.inputCursor).toBe('pointer');
+    expect(hovered.selectorCursor).toBe('pointer');
     await page.close();
   });
 });

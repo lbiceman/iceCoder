@@ -15,7 +15,7 @@ import type {
 } from '../types/runtime-snapshot.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type { OperationOutcome } from './operation-outcome.js';
-import type { AcceptanceGateSnapshot } from './task-acceptance-tracker.js';
+import type { AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
 import type { LoopState, StopReason } from './types.js';
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -676,6 +676,7 @@ function sanitizeTask(value: unknown, warnings: string[]): LegacyTaskStateSnapsh
     filesRead: validStrings(record.filesRead),
     filesChanged: validStrings(record.filesChanged),
     commandsRun: validStrings(record.commandsRun),
+    workspaceMutationVersion: safeWorkspaceMutationVersion(record.workspaceMutationVersion),
     verificationRequired: record.verificationRequired === true,
     verificationStatus,
     ...optionalNumberRecord('fileDeliverableWriteVersions', record),
@@ -981,6 +982,7 @@ function emptyTask(): LegacyTaskStateSnapshot {
     filesRead: [],
     filesChanged: [],
     commandsRun: [],
+    workspaceMutationVersion: 0,
     verificationRequired: false,
     verificationStatus: 'not_required',
   };
@@ -1029,6 +1031,12 @@ function optionalNumberRecord(
     typeof entry[1] === 'number' && Number.isFinite(entry[1]),
   );
   return entries.length > 0 ? { [key]: Object.fromEntries(entries) } : {};
+}
+
+function safeWorkspaceMutationVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : 0;
 }
 
 function sanitizeOptionalJsonRecord(

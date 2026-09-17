@@ -27,6 +27,8 @@ export interface UiChatMessage {
   detail?: string;
   status?: string;
   toolCallId?: string;
+  /** Harness 轮次；tool_trace 用它还原执行流步骤 */
+  iteration?: number;
   images?: string[];
   sentAt?: number;
   completedAt?: number;

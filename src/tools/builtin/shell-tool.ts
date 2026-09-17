@@ -20,18 +20,20 @@ import {
   classifyShellCommand,
   pickBackgroundHardTimeout,
   pickForegroundTimeout,
+  shellSoftEscalateEnabled,
   FOREGROUND_DEFAULT_TIMEOUT_MS,
   HARD_TIMEOUT_NONE,
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
 import { assertAgentMemoryShellCommandAllowed } from '../../memory/file-memory/memory-write-pipeline.js';
+import { HeadTailCharBuffer } from '../head-tail-truncate.js';
 
 /** 命令执行超时（毫秒）— 前台一次性命令默认 10 分钟 */
 const DEFAULT_TIMEOUT = FOREGROUND_DEFAULT_TIMEOUT_MS;
 
-/** 最大输出大小（字节） */
-const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
+/** 最大输出大小（字符；超限后保留头+尾，避免测试失败栈被丢掉） */
+const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB 量级
 
 /**
  * 创建 Shell 命令执行工具（含前台和后台任务管理）。
@@ -44,7 +46,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately with no time limit; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap; other foreground commands have a 10min cap. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
+        'Execute shell commands (foreground or background). Watchers/installs/docker classified as long start in the background and return a taskId immediately — that start is not a completed run; poll with task_id + action:"check" until the process exits. Short commands (e.g. git status, ls) run foreground with a 10s cap. Other commands wait in the foreground until exit (10min cap). Use background:true for servers/dev watchers the classifier missed. Pass command as a top-level argument (alias: cmd). Use action:"list" to list background tasks. Use task_id + action:"stop" to kill a running background task. Avoid inline one-liners with long/complex scripts on Windows — write a script file and run it instead.',
       parameters: {
         type: 'object',
         properties: {
@@ -209,11 +211,12 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
       const normalized = normalizeRunCommand(command, { workDir });
 
-      // 软超时 escalate 仅在 classifier === 'auto' 且非显式 foreground 时启用。
-      // - 'short'：10s 必完成，不需要 escalate
-      // - 显式 background:false：用户要求同步等结果，不 escalate
-      // - 'long' 已在上面被分流到后台，走不到这里
-      const enableEscalate = shellClass === 'auto' && !explicitForeground;
+      // auto 默认前台等到 exit（对齐 Claude Code Bash）。8s escalate 会把 npm test
+      // 变成 success:true + 额外一轮 check，墙钟明显长于「工具内等到结束」。
+      // ICE_SHELL_SOFT_ESCALATE=1 可恢复旧行为。
+      const enableEscalate = shellClass === 'auto'
+        && !explicitForeground
+        && shellSoftEscalateEnabled();
 
       return new Promise((resolve) => {
         const isWindows = process.platform === 'win32';
@@ -229,9 +232,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         });
         registerForegroundShell(sessionId, child, command);
 
-        let stdout = '';
-        let stderr = '';
-        let totalSize = 0;
+        const stdoutCap = new HeadTailCharBuffer(Math.floor(MAX_OUTPUT_SIZE / 2));
+        const stderrCap = new HeadTailCharBuffer(Math.floor(MAX_OUTPUT_SIZE / 2));
         let killed = false;
         let escalated = false;
         let settled = false;
@@ -248,7 +250,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
           killShellProcessTree(child.pid ?? null, child);
         }, timeout);
 
-        // Phase 2: 软超时 escalate（仅 'auto' 分支）
+        // 软超时 escalate：仅 ICE_SHELL_SOFT_ESCALATE=1 的 auto 命令
         let softTimer: ReturnType<typeof setTimeout> | null = null;
         if (enableEscalate) {
           softTimer = setTimeout(() => {
@@ -262,7 +264,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
             try { child.removeAllListeners('close'); } catch { /* ignore */ }
             try { child.removeAllListeners('error'); } catch { /* ignore */ }
 
-            const prefix = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
+            const prefix = stdoutCap.toString() + (stderrCap.toString() ? `\n[stderr]\n${stderrCap.toString()}` : '');
             const labelArg = (args.label as string) || command.substring(0, 40);
             const adoptResult = bgManager.adopt(child, {
               command,
@@ -296,7 +298,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
                 taskId: adoptResult.taskId,
                 reason: 'soft_timeout',
                 partialOutput,
-                hint: 'Command still running after 8s; moved to background. Do NOT retry. Poll later with action:"check" and the taskId.',
+                hint: `Command still running after ${SOFT_TIMEOUT_MS / 1000}s; moved to background. Do NOT retry. Poll later with action:"check" and the taskId.`,
               }, null, 2),
             });
           }, SOFT_TIMEOUT_MS);
@@ -304,20 +306,24 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
         child.stdout.on('data', (data: Buffer) => {
           const chunk = data.toString();
-          totalSize += data.length;
-          if (totalSize <= MAX_OUTPUT_SIZE) { stdout += chunk; if (onOutput) onOutput(chunk); }
+          const alreadyTruncated = stdoutCap.truncated;
+          stdoutCap.push(chunk);
+          if (!alreadyTruncated && onOutput) onOutput(chunk);
         });
 
         child.stderr.on('data', (data: Buffer) => {
           const chunk = data.toString();
-          totalSize += data.length;
-          if (totalSize <= MAX_OUTPUT_SIZE) { stderr += chunk; if (onOutput) onOutput('[stderr] ' + chunk); }
+          const alreadyTruncated = stderrCap.truncated;
+          stderrCap.push(chunk);
+          if (!alreadyTruncated && onOutput) onOutput('[stderr] ' + chunk);
         });
 
         child.on('close', (code) => {
           if (escalated || settled) return;
           if (softTimer) clearTimeout(softTimer);
           clearTimeout(hardTimer);
+          const stdout = stdoutCap.toString();
+          const stderr = stderrCap.toString();
           let output = '';
           if (stdout) output += stdout;
           if (stderr) output += (output ? '\n\n[stderr]\n' : '[stderr]\n') + stderr;

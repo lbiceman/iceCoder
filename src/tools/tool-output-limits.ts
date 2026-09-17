@@ -16,6 +16,17 @@ export function getMaxToolOutputChars(): number {
   return clamp(n, 8_000, 200_000);
 }
 
+/**
+ * 失败 run_command 写入 LLM 的字符预算（头尾保留，不是行数）。
+ *
+ * 对齐 Claude Code ~30k 中段裁剪、Codex ~10k tokens、OpenCode bash 默认 50KB 尾部。
+ * 3000 字符只够几十行，会裁掉测试/编译栈。至少 48k；用户把 ICE_MAX_TOOL_OUTPUT_CHARS
+ * 调更高时跟随，上限 200k。
+ */
+export function getFailedRunCommandInlineChars(): number {
+  return clamp(Math.max(getMaxToolOutputChars(), 48_000), 24_000, 200_000);
+}
+
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;

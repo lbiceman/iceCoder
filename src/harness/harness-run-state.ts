@@ -4,14 +4,16 @@ import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import type { CheckFailureStreakState } from './check-failure-streak.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type {
-  CompletionGateReason,
+  CompletionReason,
   CompletionStatus,
-} from './completion-gate.js';
+} from './completion-state.js';
+import type { VerificationPlanResolution } from './verification-plan.js';
+import type { VerificationRuntimeState } from './verification-state.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -70,13 +72,13 @@ export interface HarnessRunState {
   taskState: TaskState;
   /** 当前仓库上下文账本 */
   repoContext: RepoContext;
-  /** 上次注入 runtime state 的内容 hash */
+  /** 上次已注入且模型见过的 runtime 正文；相同则本轮跳过 */
   runtimeStateHash: string;
   /** 锁定的工作区根目录（延迟锁定；unset 时不设） */
   lockedWorkspaceRoot?: string;
   /** 允许只读访问的参考文件路径（不在 workspace 内） */
   referenceReads?: string[];
-  /** 上次注入 Workspace Anchor 的内容 hash */
+  /** 上次已注入的 Workspace Anchor 正文；相同则本轮跳过 */
   workspaceAnchorHash?: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
@@ -86,10 +88,15 @@ export interface HarnessRunState {
   branchBudgetWarnedThisRound: boolean;
   /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
   verificationDigestInjectedThisRound: boolean;
-  /** 文件 cap / 续段等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
+  /** 文件 cap / 续段 / 检查失败 streak 等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
   rebuildEscalationInjections: number;
-  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / 连续失败去重） */
+  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / streak / 连续失败去重） */
   rebuildEscalationInjectedThisRound: boolean;
+  /**
+   * 同一规范化检查命令的连续失败次数。
+   * write 不清零；该键终态成功才清零。新用户消息在 run() 清零。
+   */
+  checkFailureStreak?: CheckFailureStreakState;
   /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
   parallelBudgetBlockHintInjected: boolean;
   /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
@@ -98,10 +105,12 @@ export interface HarnessRunState {
   buildDiagnosticGateActive?: boolean;
   /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
   verificationOutputBuffer: VerificationOutputBuffer;
-  /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
-  taskAcceptance?: TaskAcceptanceTracker;
   /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
   operationOutcomes?: OperationOutcomeLedger;
+  /** 当前目标与工作区解析出的确定性停时验收计划。 */
+  verificationPlanResolution: VerificationPlanResolution;
+  /** 验收 freshness、续轮预算和逐命令证据。 */
+  verificationState: VerificationRuntimeState;
   /** 从 V3 恢复且尚未被本轮 tracker 替代的 completion 条件。 */
   restoredCompletionConditions?: CompletionCondition[];
   /** 统一收尾门控已注入的有界续轮数。 */
@@ -110,7 +119,7 @@ export interface HarnessRunState {
   completionGateBlockingSignature?: string;
   /** 最近一次统一收尾裁决，供 checkpoint 原样恢复。 */
   completionStatus?: CompletionStatus;
-  completionReason?: CompletionGateReason;
+  completionReason?: CompletionReason;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */
@@ -121,7 +130,9 @@ export interface HarnessRunState {
   harnessPolicyStats: HarnessPolicyStats;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
   checkpointResumeForkApplied: boolean;
-  /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */
+  /** context window 超限后的 emergency/proactive fork 已用次数（每 run 最多 3 次） */
+  contextEmergencyCompactCount?: number;
+  /** 配额用尽时为 true（旧 checkpoint 仅有此字段时视为已用尽） */
   contextEmergencyCompactUsed: boolean;
   /** 续跑 checkpoint 短摘要（emergency fork 复用） */
   activeCheckpointResumeSummary?: UnifiedMessage;

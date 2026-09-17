@@ -103,7 +103,7 @@ export function buildCheckpointResumeSummary(
 
   lines.push(
     '',
-    'Resume rules: follow nextStep; read failing tests/source before rerunning blocked commands; do not ask user to continue.',
+    'Resume rules: follow nextStep; read failing output/source before rerunning blocked commands; do not ask user to continue.',
     '</resume-checkpoint>',
   );
 

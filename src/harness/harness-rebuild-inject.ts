@@ -44,11 +44,12 @@ export function tryInjectRebuildEscalation(
   msgs: UnifiedMessage[],
   failureCount: number,
   trigger: RebuildEscalationTrigger,
-): void {
+  extras?: { stuckCommand?: string },
+): boolean {
   if (!canInjectRebuildEscalation({
     rebuildEscalationInjections: state.rebuildEscalationInjections,
     rebuildEscalationInjectedThisRound: state.rebuildEscalationInjectedThisRound,
-  })) return;
+  })) return false;
 
   const topFile = topFileEditFromBranchBudget(state.branchBudget);
   const rebuildCtx = collectRebuildEscalationContext(
@@ -57,20 +58,36 @@ export function tryInjectRebuildEscalation(
     state.verificationOutputBuffer,
     deps.workspaceRoot,
   );
+  const stuckCommand = extras?.stuckCommand;
+  const commandForBypass = stuckCommand || rebuildCtx.lastVerificationCommand;
   const bypasses = applyRebuildEscalationBypasses(
     state.branchBudget,
     topFile,
-    rebuildCtx.lastVerificationCommand,
+    commandForBypass,
     msgs,
     state.verificationOutputBuffer,
     deps.workspaceRoot,
   );
+  if (
+    stuckCommand
+    && rebuildCtx.lastVerificationCommand
+    && stuckCommand !== rebuildCtx.lastVerificationCommand
+    && state.branchBudget?.wouldBlockCommandRetry(rebuildCtx.lastVerificationCommand)
+  ) {
+    state.branchBudget.grantCommandRetryBypass(rebuildCtx.lastVerificationCommand);
+    bypasses.commandBypassGranted = true;
+  }
   deliverRecoveryContent(
     deps,
     msgs,
-    buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }, trigger),
+    buildRebuildEscalationMessage(
+      failureCount,
+      { ...rebuildCtx, ...bypasses, stuckCommand },
+      trigger,
+    ),
   );
   state.rebuildEscalationInjections += 1;
   state.rebuildEscalationInjectedThisRound = true;
   state.harnessPolicyStats.rebuildEscalationCount += 1;
+  return true;
 }

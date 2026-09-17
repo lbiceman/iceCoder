@@ -347,23 +347,30 @@ export class LLMAdapter implements LLMAdapterInterface {
   private sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
     return new Promise((resolve, reject) => {
       const abortSignal = signal ?? this._abortSignal;
-      const timer = setTimeout(resolve, ms);
-      const onAbort = () => {
+      let settled = false;
+      const cleanup = () => {
         clearTimeout(timer);
+        abortSignal?.removeEventListener('abort', onAbort);
+      };
+      const onDone = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(new Error('Interrupted by user'));
       };
+      const timer = setTimeout(onDone, ms);
       if (abortSignal) {
         if (abortSignal.aborted) {
-          clearTimeout(timer);
-          reject(new Error('Interrupted by user'));
+          onAbort();
           return;
         }
         abortSignal.addEventListener('abort', onAbort, { once: true });
-        const origResolve = resolve;
-        resolve = () => {
-          abortSignal.removeEventListener('abort', onAbort);
-          origResolve();
-        };
       }
     });
   }

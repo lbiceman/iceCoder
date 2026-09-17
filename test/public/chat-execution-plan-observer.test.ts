@@ -261,6 +261,131 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('未调用 beginTurnTimer 时工具活动仍启动底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      const startedAt = Date.now() - 65_000;
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'orphan-timer',
+        toolName: 'read_file',
+        toolArgs: { path: 'a.ts' },
+        ts: startedAt,
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const initial = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { initial, afterWait: read() };
+    });
+
+    expect(result.initial).toBe('01:05');
+    expect(result.afterWait).not.toBe('00:00');
+    expect(result.afterWait).not.toBe(result.initial);
+    await page.close();
+  });
+
+  it('同轮封章不清掉进行中的底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 8_000;
+      panel.setVisible(true);
+      panel.beginTurnTimer(startedAt);
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'seal-keep-timer',
+        toolName: 'read_file',
+        toolArgs: { path: 'a.ts' },
+        ts: startedAt + 100,
+      });
+      panel.sealChapter({ status: 'done' });
+      return document.querySelector('.etl-foot-time b')?.textContent;
+    });
+
+    expect(result).toBe('00:08');
+    await page.close();
+  });
+
+  it('计划已全部终态但任务未结束时底栏继续走时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 8_000;
+      plan.createdAt = startedAt;
+      plan.steps[0].startedAt = startedAt;
+      panel.setVisible(true);
+      panel.beginTurnTimer(startedAt);
+      panel.setPlan(plan);
+      panel.applyPatch({
+        stepPatches: [{
+          id: 'step-0',
+          status: 'done',
+          endedAt: startedAt + 4000,
+        }],
+        activeStepId: null,
+        progress: 100,
+        updatedAt: startedAt + 4000,
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const afterComplete = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { afterComplete, afterWait: read() };
+    }, makePlan());
+
+    expect(result.afterComplete).toBe('00:08');
+    expect(result.afterWait).not.toBe(result.afterComplete);
+    expect(result.afterWait).not.toBe('00:00');
+    await page.close();
+  });
+
+  it('restoreFlowSnapshot 在无 running step 时仍恢复进行中底栏计时', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 12_000;
+      panel.setVisible(true);
+      panel.restoreFlowSnapshot({
+        currentPlan: {
+          planId: 'restored-done-plan',
+          progress: 100,
+          activeStepId: null,
+          createdAt: startedAt,
+          updatedAt: startedAt + 3000,
+          steps: [{
+            id: 'step-0',
+            title: '已完成步骤',
+            status: 'done',
+            startedAt,
+            endedAt: startedAt + 3000,
+          }],
+        },
+        turnStartedAt: startedAt,
+        turnEndedAt: null,
+        liveChapterMeta: {
+          messageId: 'u-restore',
+          preview: '继续任务',
+          startedAt,
+          status: 'running',
+        },
+        roundRecords: [],
+        toolRecords: [],
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const initial = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { initial, afterWait: read() };
+    });
+
+    expect(result.initial).toBe('00:12');
+    expect(result.afterWait).not.toBe('00:00');
+    expect(result.afterWait).not.toBe(result.initial);
+    await page.close();
+  });
+
   it('底栏时间只计最近一次任务，且不含回滚系统提示', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
@@ -1226,9 +1351,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         tabs: document.querySelectorAll('.etl-tab').length,
         chapters: !!document.querySelector('#etl-chapter-timeline'),
         flow: !!document.querySelector('#etl-panel-flow'),
+        wbStatus: !!document.querySelector('#etl-wb-status'),
+        snapshotHint: !!document.querySelector('.etl-snapshot-hint'),
       };
     }, makePlan());
-    expect(layout).toEqual({ tabs: 0, chapters: true, flow: true });
+    expect(layout).toEqual({
+      tabs: 0,
+      chapters: true,
+      flow: true,
+      wbStatus: false,
+      snapshotHint: false,
+    });
     await page.close();
 
     const freshPage = await loadPanel();
@@ -1875,11 +2008,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         messageId: 'u-now',
         preview: '看着这个项目的沙箱模块',
       });
+      const chapterRunPhase = () => {
+        const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+        if (!dot) return '';
+        if (dot.classList.contains('is-running')) return 'running';
+        if (dot.classList.contains('is-error')) return 'error';
+        if (dot.classList.contains('is-done')) return 'done';
+        return '';
+      };
       const before = {
         empty: document.querySelector('.etl-round-empty')?.textContent || '',
         emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? true,
         nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: chapterRunPhase(),
       };
       panel.applyToolActivity({
         type: 'tool_call',
@@ -1893,7 +2034,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? false,
         nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
         tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: chapterRunPhase(),
         firstName: document.querySelector('#etl-round-timeline .etl-round-action-name')?.textContent || '',
       };
       panel.applyToolActivity({
@@ -1911,11 +2052,11 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { before, afterFirst, afterSecond };
     });
 
-    expect(result.before.status).toContain('进行中');
+    expect(result.before.status).toBe('running');
     expect(result.afterFirst.emptyHidden).toBe(true);
     expect(result.afterFirst.nodes).toBe(1);
     expect(result.afterFirst.tools).toBeGreaterThanOrEqual(1);
-    expect(result.afterFirst.status).toContain('进行中');
+    expect(result.afterFirst.status).toBe('running');
     expect(result.afterFirst.firstName).toMatch(/读|read_file|读取/i);
     expect(result.afterSecond.nodes).toBe(1);
     expect(result.afterSecond.tools).toBeGreaterThan(result.afterFirst.tools);
@@ -1966,7 +2107,14 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
         waiting: !!(empty && !empty.classList.contains('hidden')
           && (empty.textContent || '').includes('本章暂无执行步骤')),
-        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        status: (function () {
+          const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+          if (!dot) return '';
+          if (dot.classList.contains('is-running')) return 'running';
+          if (dot.classList.contains('is-error')) return 'error';
+          if (dot.classList.contains('is-done')) return 'done';
+          return '';
+        })(),
       };
     });
 
@@ -1974,7 +2122,124 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.waiting).toBe(false);
     expect(result.nodes).toBeGreaterThanOrEqual(1);
     expect(result.tools).toBeGreaterThanOrEqual(1);
-    expect(result.status).toContain('进行中');
+    expect(result.status).toBe('running');
+    await page.close();
+  });
+
+  it('任务未结束时工具失败不把检查点标成失败，模型停止后再更新', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const chapterStatus = () => {
+        const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+        if (!dot) return '';
+        if (dot.classList.contains('is-running')) return 'running';
+        if (dot.classList.contains('is-error')) return 'error';
+        if (dot.classList.contains('is-done')) return 'done';
+        return '';
+      };
+      const roundStatus = () =>
+        document.querySelector('#etl-round-timeline .etl-round-badge')?.textContent || '';
+      panel.setVisible(true);
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-fail-live',
+        preview: '这是一个复杂企业审批流',
+      });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'fail-t1',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test' },
+        ts: Date.now(),
+      });
+      panel.applyToolActivity({
+        type: 'tool_result',
+        iteration: 1,
+        toolCallId: 'fail-t1',
+        toolName: 'run_command',
+        toolSuccess: false,
+        ts: Date.now() + 10,
+      });
+      const duringRun = {
+        chapter: chapterStatus(),
+        round: roundStatus(),
+      };
+      panel.endTurnTimer(Date.now() + 20);
+      const afterPrematureEnd = chapterStatus();
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 2,
+        toolCallId: 'fail-t2',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/a.ts' },
+        ts: Date.now() + 30,
+      });
+      const afterMoreWork = chapterStatus();
+      panel.applyRoundActivity({
+        type: 'model_task_final',
+        iteration: 2,
+        stopReason: 'circuit_breaker',
+        ts: Date.now() + 40,
+      });
+      return {
+        duringRun,
+        afterPrematureEnd,
+        afterMoreWork,
+        afterStop: chapterStatus(),
+      };
+    });
+
+    expect(result.duringRun.chapter).toBe('running');
+    expect(result.duringRun.round).toContain('失败');
+    expect(result.afterPrematureEnd).toBe('running');
+    expect(result.afterMoreWork).toBe('running');
+    expect(result.afterStop).toBe('error');
+    await page.close();
+  });
+
+  it('模型正常收尾时，中间工具失败不把检查点标成失败', async () => {
+    const page = await loadPanel();
+    const status = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-fail-done',
+        preview: '修失败用例',
+      });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'ok-fail',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test' },
+        ts: Date.now(),
+      });
+      panel.applyToolActivity({
+        type: 'tool_result',
+        iteration: 1,
+        toolCallId: 'ok-fail',
+        toolName: 'run_command',
+        toolSuccess: false,
+        ts: Date.now() + 10,
+      });
+      panel.applyRoundActivity({
+        type: 'model_task_final',
+        iteration: 2,
+        stopReason: 'model_done',
+        ts: Date.now() + 20,
+      });
+      const dot = document.querySelector('.etl-chapter-node.is-selected .chat-sidebar-item-run-dot');
+      return {
+        running: !!dot?.classList.contains('is-running'),
+        done: !!dot?.classList.contains('is-done'),
+        error: !!dot?.classList.contains('is-error'),
+      };
+    });
+
+    expect(status.done).toBe(true);
+    expect(status.error).toBe(false);
+    expect(status.running).toBe(false);
     await page.close();
   });
 

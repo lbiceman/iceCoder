@@ -1,28 +1,25 @@
 import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
-import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
-import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
   hasUnfulfilledFileDeliverableGoal,
 } from './document-deliverable.js';
 
-/** 兼容事实查询：是否仍有显式条件或交付目标未完成。 */
+/** 是否仍有明确文件交付目标未完成。验收计划不在这里硬拦。 */
 export function hasPendingWork(
   task: TaskStateSnapshot,
-  acceptance?: TaskAcceptanceTracker,
-  workspaceRoot?: string,
+  _workspaceRoot?: string,
 ): boolean {
-  if (hasPendingAcceptanceWork(acceptance)) return true;
-
-  if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
-    return true;
-  }
-
-  return false;
+  return hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent);
 }
 
 export function checkpointHasPendingWork(checkpoint: ProjectCheckpointV3): boolean {
+  if (
+    checkpoint.completion.status === 'completed'
+    || checkpoint.completion.status === 'completed_unverified'
+  ) {
+    return false;
+  }
   const completedOutcomeIds = new Set(
     checkpoint.completion.operationOutcomes
       .filter(outcome => outcome.status === 'completed')
@@ -54,13 +51,8 @@ export function isReasoningOnlyResponse(response: LLMResponse): boolean {
 export function buildIncompleteContinuationPrompt(
   task: TaskStateSnapshot,
   repo: RepoContextSnapshot,
-  acceptance?: TaskAcceptanceTracker,
-  workspaceRoot?: string,
+  _workspaceRoot?: string,
 ): string {
-  if (hasPendingAcceptanceWork(acceptance) && acceptance) {
-    return acceptance.buildAcceptancePrompt();
-  }
-
   const lines = [
     '[System] The task is NOT complete. Do not stop without calling tools.',
     '',

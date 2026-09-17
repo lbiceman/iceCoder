@@ -21,7 +21,7 @@
 
 import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
-import type { HarnessStepEvent, MemoryStepKind } from './types.js';
+import type { HarnessStepEvent, MemoryStepKind, StopReason } from './types.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -515,8 +515,8 @@ If session notes contradict a long-term memory, trust session notes. If you dete
  *
  * 生命周期：
  * 1. onLoopStart(userMessage, llmAdapter) — 循环开始，启动预取
- * 2. injectMemoryContext(messages) — 工具调用后注入记忆（话题切换时重新召回）
- * 3. onLoopEnd(messages, turnCount) — 循环结束，提取 + 整合（带互斥）
+ * 2. injectMemoryContext(messages) — 工作中只读召回，不写盘
+ * 3. onLoopEnd(..., { stopReason }) — 仅 model_done 后后台提取 + 会话笔记 + dream
  * 4. getSessionMemoryForCompact() — 压缩时获取会话笔记（保持连续性）
  * 5. dispose() — 清理资源
  */
@@ -933,8 +933,8 @@ export class HarnessMemoryIntegration {
   }
 
   /**
-   * 首轮工具前：仅关键词召回 top-K，不调用侧边 LLM。
-   * 不设置 injectedForCurrentMessage，以便 post-tool 全量召回仍可进行。
+   * 每轮 LLM 前：仅关键词召回 top-K，不调用侧边 LLM。
+   * 不设置 injectedForCurrentMessage；标准召回改在 onLoopEnd 后台进行。
    */
   private async injectCoarseKeywordRecall(
     messages: UnifiedMessage[],
@@ -1086,17 +1086,24 @@ ${candidateList}`;
   }
 
   /**
-   * 循环结束时调用。条件触发 LLM 提取 + 会话记忆更新 + autoDream。
-   * 带主代理互斥：如果主代理已直接写入记忆，跳过后台提取。
+   * 循环结束时调用。长期记忆提取 / 会话笔记 LLM / autoDream **只在 model_done 后**后台执行，
+   * 不阻塞本次 run 返回。abort / 超时 / 熔断等未完成任务不写记忆。
    */
   async onLoopEnd(
     messages: UnifiedMessage[],
     turnCount: number,
     totalInputTokens?: number,
     runtimeSnapshots?: { task: TaskStateSnapshot; repo: RepoContextSnapshot },
+    options?: { stopReason?: StopReason },
   ): Promise<void> {
     // Eval mode: skip all memory extraction to save tokens
     if (process.env.ICE_EVAL_MODE === '1') {
+      return;
+    }
+    if (options?.stopReason !== 'model_done') {
+      console.debug(
+        `[harness-memory] skip persist — stopReason=${options?.stopReason ?? 'unset'} (only model_done writes memory)`,
+      );
       return;
     }
 

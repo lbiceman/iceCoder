@@ -2,8 +2,8 @@
  * 上下文压缩器
  *
  * 压缩触发（写死常量，见 compaction-constants.ts）：
- * - 硬压缩：effectiveUsed ≥ contextWindow × 0.85，或剩余 < 18K
- * - 微压缩：effectiveUsed ≥ contextWindow × 0.72（且未达硬压缩线）
+ * - 硬压缩：effectiveUsed ≥ contextWindow × 0.88，或剩余 < 18K
+ * - 微压缩：effectiveUsed ≥ contextWindow × 0.80（且未达硬压缩线）
  * - effectiveUsed = max(本地 messages + tools schema 估算, 上一轮 API prompt_tokens)
  *
  * 两条压缩路径：
@@ -54,6 +54,9 @@ import {
   MICRO_MAX_PER_ROUND,
   MICRO_MAX_PER_SESSION,
 } from './compaction-constants.js';
+import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
+import { getFailedRunCommandInlineChars } from '../tools/tool-output-limits.js';
+import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 
 /** 去掉 recent 前缀中无前置 assistant(tool_calls) 的孤立 tool 消息（fork 切片可能留下）。 */
 function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage[] {
@@ -298,7 +301,7 @@ export class ContextCompactor {
 
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在 72% 有效占用时触发，纯本地操作，零 LLM 成本。
+   * 微压缩在 80% 有效占用时触发，纯本地操作，零 LLM 成本。
    */
   needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     if (!this.canMicroCompact()) return false;
@@ -317,9 +320,6 @@ export class ContextCompactor {
    * 微压缩后不注入恢复提示，对 LLM 近似透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
-    this.microCompactSessionCount++;
-    this.microCompactRoundCount++;
-
     let assistantRound = 0;
     const msgAssistantRound = new Map<number, number>();
     const toolCallIdToName = new Map<string, string>();
@@ -335,19 +335,25 @@ export class ContextCompactor {
       msgAssistantRound.set(i, assistantRound);
     }
 
-    return applyLightMicrocompactToolClear(messages, {
+    const next = applyLightMicrocompactToolClear(messages, {
       keepLastAssistantToolRounds: 5,
       toolCallIdToName,
       msgAssistantRound,
       currentAssistantRound: assistantRound,
     });
+    const changed = next.some((msg, i) => msg !== messages[i]);
+    if (!changed) return messages;
+
+    this.microCompactSessionCount++;
+    this.microCompactRoundCount++;
+    return next;
   }
 
   /**
    * 检查是否需要硬压缩（双重校验）。
    *
    * 条件：
-   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.85），或
+   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.88），或
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
   needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
@@ -988,6 +994,15 @@ Continue the conversation from where it left off without asking the user any fur
         if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
 
         const content = msg.content;
+        if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(content)) {
+          const budget = getFailedRunCommandInlineChars();
+          if (content.length <= budget) return msg;
+          return {
+            ...msg,
+            content: truncateHeadTail(content, budget, { headRatio: 0.2 }),
+          };
+        }
+
         const isError = content.startsWith('Tool execution error')
           || content.startsWith('工具执行错误')
           || content.startsWith('工具调用被拒绝');
@@ -1023,15 +1038,17 @@ Continue the conversation from where it left off without asking the user any fur
       if (msg.role === 'tool' && typeof msg.content === 'string') {
         const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
         const isFileOp = toolName && FILE_TOOLS.has(toolName);
-        const limit = isFileOp
-          ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
-          : this.config.maxToolResultLength;      // 其他工具：3000 字符
+        const isFailedCommand = toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content);
+        const limit = isFailedCommand
+          ? getFailedRunCommandInlineChars()
+          : isFileOp
+            ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
+            : this.config.maxToolResultLength;      // 其他工具：3000 字符
 
         if (msg.content.length > limit) {
           return {
             ...msg,
-            content: msg.content.substring(0, limit) +
-              `\n...[truncated, original length: ${msg.content.length} chars]`,
+            content: truncateHeadTail(msg.content, limit, { headRatio: isFailedCommand ? 0.2 : 0.3 }),
           };
         }
       }

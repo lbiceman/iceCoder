@@ -1,7 +1,7 @@
 /**
  * 交付物类型判定 — 与 TaskIntent 解耦。
  *
- * - engineering：源码/样式白名单 → 收尾 Gate 提示跑单元测试
+ * - engineering：源码白名单 → 停时验收可走 runtime_default
  * - file_deliverable：其余一切写文件（含未知扩展名、无扩展名、脚本、数据/json/sql）
  * - none：无写文件
  */
@@ -9,7 +9,7 @@
 import type { ToolResult } from '../tools/types.js';
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import type { VerificationSignalStatus } from './completion-facts-view.js';
-import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
+import { stripLeadingCdPrefix } from './run-command-result.js';
 import { isProjectCustomExemptPath } from './verification-exempt-config.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 

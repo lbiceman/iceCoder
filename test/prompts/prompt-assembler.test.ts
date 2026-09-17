@@ -60,7 +60,7 @@ describe('prompt assembly safeguards', () => {
     expect(content).toContain('Fix root causes instead of hiding symptoms');
     expect(content).toContain('Never weaken, delete, or skip existing checks');
     expect(content).toContain('prefer one focused check of that result');
-    expect(content).toContain('[System / Completion Gate]');
+    expect(content).toContain('[System / Stop Verification]');
     expect(content).toContain('Add what correctness, existing interfaces, and real boundaries require');
   });
 

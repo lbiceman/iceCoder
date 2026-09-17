@@ -228,8 +228,8 @@ window.ModelConfigPanel = (function () {
       errors.modelName = '请填写模型名称';
     }
     var apiMode = normalizeApiModeInput(prov.apiMode);
-    if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
-      errors.apiMode = 'apiMode 仅支持 chat_completions 或 responses';
+    if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses' && apiMode !== 'anthropic_messages') {
+      errors.apiMode = 'apiMode 仅支持 chat_completions、responses 或 anthropic_messages';
     }
     if (original && original._headersParseError) {
       errors.headers = original._headersParseError;
@@ -452,13 +452,13 @@ window.ModelConfigPanel = (function () {
         '<div class="form-group full-width">' +
           '<label for="model-reasoningEffort-' + index + '">推理强度</label>' +
           '<input type="text" id="model-reasoningEffort-' + index + '" data-field="reasoningEffort" placeholder="low,high,max" value="' + escapeAttr(prov.reasoningEffort || '') + '">' +
-          '<span class="field-hint">英文逗号分隔，例如 <code>low,high,max</code>。选中值原样作为 <code>reasoning_effort</code> 发送；留空则不发送。</span>' +
+          '<span class="field-hint">英文逗号分隔，例如 <code>low,high,max</code>。选中值作为推理强度发送（OpenAI 兼容为 <code>reasoning_effort</code>，Anthropic 为 <code>thinking</code>）；留空则不发送。</span>' +
           '<span class="error-msg" data-error="reasoningEffort"></span>' +
         '</div>' +
         '<div class="form-group full-width">' +
           '<label for="model-apiMode-' + index + '">API 模式（apiMode）</label>' +
           '<input type="text" id="model-apiMode-' + index + '" data-field="apiMode" placeholder="chat_completions" value="' + escapeAttr(resolveApiMode(prov) === 'chat_completions' ? '' : resolveApiMode(prov)) + '">' +
-          '<span class="field-hint">默认 <code>chat_completions</code>；仅 Responses 端点填写 <code>responses</code>（如 DeepSeek-V4-Flash-0731）</span>' +
+          '<span class="field-hint">默认 <code>chat_completions</code>（OpenAI 兼容）；Responses 端点填 <code>responses</code>；Anthropic 原生协议填 <code>anthropic_messages</code>（<code>api.anthropic.com</code> 会自动识别）</span>' +
           '<span class="error-msg" data-error="apiMode"></span>' +
         '</div>' +
         '<div class="form-group">' +
@@ -557,6 +557,7 @@ window.ModelConfigPanel = (function () {
             ? original.parameters.temperature : 1
         });
       delete params.apiMode;
+      var apiMode = normalizeApiModeInput(resolveApiMode(original));
       result.push({
         id: original.id || generateId(),
         apiUrl: original.apiUrl || '',
@@ -572,9 +573,7 @@ window.ModelConfigPanel = (function () {
           ? { headers: original.headers }
           : {}),
         ...(original.reasoningEffort ? { reasoningEffort: original.reasoningEffort } : {}),
-        ...(normalizeApiModeInput(resolveApiMode(original)) === 'responses'
-          ? { apiMode: 'responses' }
-          : {}),
+        ...(apiMode && apiMode !== 'chat_completions' ? { apiMode: apiMode } : {}),
         apiKeySource: original.apiKeySource,
         apiKeyEnvVar: original.apiKeyEnvVar
       });

@@ -11,8 +11,7 @@
 import fs from 'fs/promises';
 
 import { LLMAdapter } from '../llm/llm-adapter.js';
-import { OpenAIAdapter } from '../llm/openai-adapter.js';
-import { openAiAdapterConfigFromProvider } from '../llm/provider-adapter-config.js';
+import { createProviderAdapter } from '../llm/provider-adapter-config.js';
 import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
@@ -74,7 +73,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
-    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
+    llmAdapter.registerProvider(createProviderAdapter(provider));
   }
 
   if (providers.length > 0) {
@@ -92,7 +91,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   const providers = await loadConfig(configPath);
 
   for (const provider of providers) {
-    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
+    llmAdapter.registerProvider(createProviderAdapter(provider));
   }
 
   // 清理已从配置中删除/改名的陈旧 provider，避免它们继续残留可被选中

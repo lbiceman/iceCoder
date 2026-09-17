@@ -40,11 +40,15 @@ describe('harness-tool-preflight', () => {
     expect(isDistArtifactPath('build/out.js')).toBe(true);
   });
 
-  it('blocks build commands under diagnostic gate but allows tsc --noEmit', () => {
+  it('blocks the failed command under diagnostic gate, not a toolchain allowlist', () => {
+    const budget = new BranchBudgetTracker({ commandRetryMax: 2 });
+    budget.recordFailedCommandAttempt('./scripts/ci.sh');
+    budget.recordFailedCommandAttempt('./scripts/ci.sh');
     const blocked = checkToolPreflight({
       toolName: 'run_command',
-      args: { command: 'npm run build 2>&1' },
+      args: { command: './scripts/ci.sh' },
       buildDiagnosticGateActive: true,
+      branchBudget: budget,
     });
     expect(blocked.blocked).toBe(true);
 
@@ -52,6 +56,7 @@ describe('harness-tool-preflight', () => {
       toolName: 'run_command',
       args: { command: 'npx tsc --noEmit 2>&1' },
       buildDiagnosticGateActive: true,
+      branchBudget: budget,
     });
     expect(allowed.blocked).toBe(false);
   });

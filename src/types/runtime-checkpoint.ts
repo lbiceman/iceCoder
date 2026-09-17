@@ -16,21 +16,24 @@ import type {
   CompletionCondition,
 } from '../harness/completion-condition.js';
 import type {
-  CompletionGateReason,
+  CompletionReason,
   CompletionStatus,
-} from '../harness/completion-gate.js';
+} from '../harness/completion-state.js';
 import type {
   OperationOutcome,
 } from '../harness/operation-outcome.js';
+import type {
+  VerificationPlan,
+} from '../harness/verification-plan.js';
+import type {
+  VerificationRuntimeState,
+} from '../harness/verification-state.js';
 import type { LoopState, StopReason } from '../harness/types.js';
-import type { AcceptanceGateSnapshot } from '../harness/task-acceptance-tracker.js';
 import type {
   RepoContextSnapshot,
   TaskStateSnapshot,
 } from './runtime-snapshot.js';
 import { LEGACY_TASK_VERIFICATION_KEYS } from './legacy-runtime-schema.js';
-
-export type { AcceptanceGateSnapshot };
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -70,6 +73,18 @@ export interface VerificationOutputTailEntry {
   command: string;
   outputBody: string;
   at: number;
+}
+
+/** Legacy v2 验收清单镜像；仅 adapter / checkpoint-engine 读取，生产路径不再写入。 */
+export interface AcceptanceGateSnapshot {
+  active: boolean;
+  commands: Array<{
+    key: string;
+    label: string;
+    status: 'pending' | 'passed' | 'failed';
+    lastRunAt?: number;
+    evidenceRefs?: string[];
+  }>;
 }
 
 /** 分支预算追踪器持久化快照 */
@@ -294,8 +309,11 @@ export interface ProjectCheckpointResumableExecution {
 export interface ProjectCheckpointCompletion {
   conditions: CompletionCondition[];
   operationOutcomes: OperationOutcome[];
+  /** Persist only a resolved plan; invalid/unavailable resolutions are re-resolved. */
+  verificationPlan?: VerificationPlan;
+  verificationState?: VerificationRuntimeState;
   status?: CompletionStatus;
-  reason?: CompletionGateReason;
+  reason?: CompletionReason;
   continuationCount?: number;
   blockingSignature?: string;
 }
@@ -417,8 +435,10 @@ function isProjectCompletion(value: unknown): value is ProjectCheckpointCompleti
     && value.conditions.every(isCompletionCondition)
     && Array.isArray(value.operationOutcomes)
     && value.operationOutcomes.every(isOperationOutcome)
+    && (value.verificationPlan === undefined || isVerificationPlan(value.verificationPlan))
+    && (value.verificationState === undefined || isVerificationRuntimeState(value.verificationState))
     && (value.status === undefined || isCompletionStatus(value.status))
-    && (value.reason === undefined || isCompletionGateReason(value.reason))
+    && (value.reason === undefined || isCompletionReason(value.reason))
     && (value.continuationCount === undefined || isNonNegativeInteger(value.continuationCount))
     && isOptionalString(value.blockingSignature)
     && !Object.prototype.hasOwnProperty.call(value, 'verificationPending');
@@ -526,6 +546,76 @@ function isCompletionCondition(value: unknown): value is CompletionCondition {
     && isStringArray(value.evidenceRefs);
 }
 
+function isVerificationPlan(value: unknown): value is VerificationPlan {
+  return isRecord(value)
+    && isNonEmptyString(value.id)
+    && ['user', 'project', 'runtime_default'].includes(String(value.source))
+    && Array.isArray(value.commands)
+    && value.commands.length > 0
+    && value.commands.every(command =>
+      isRecord(command)
+      && isNonEmptyString(command.command)
+      && typeof command.required === 'boolean'
+      && typeof command.timeoutMs === 'number'
+      && Number.isSafeInteger(command.timeoutMs)
+      && command.timeoutMs > 0
+    )
+    && isNonEmptyString(value.fingerprint);
+}
+
+function isVerificationRuntimeState(value: unknown): value is VerificationRuntimeState {
+  if (!isRecord(value)) return false;
+  if (!isNonNegativeInteger(value.workspaceMutationVersion)) return false;
+  if (!isNullableVersion(value.verifiedMutationVersion)) return false;
+  if (!isNullableVersion(value.attemptedMutationVersion)) return false;
+  if (!isNullableNonEmptyString(value.verifiedPlanFingerprint)) return false;
+  if (!isNullableNonEmptyString(value.attemptedPlanFingerprint)) return false;
+  if (!isNonNegativeInteger(value.continuationCount)) return false;
+  if (!isNullableString(value.blockingSignature)) return false;
+  if (!isVerificationLastResult(value.lastResult)) return false;
+  if (
+    !Array.isArray(value.commandProgress)
+    || !value.commandProgress.every(isVerificationCommandProgress)
+  ) {
+    return false;
+  }
+  const verifiedVersion = value.verifiedMutationVersion;
+  const attemptedVersion = value.attemptedMutationVersion;
+  if (verifiedVersion !== null && verifiedVersion > value.workspaceMutationVersion) return false;
+  if (attemptedVersion !== null && attemptedVersion > value.workspaceMutationVersion) return false;
+  if ((verifiedVersion === null) !== (value.verifiedPlanFingerprint === null)) return false;
+  if ((attemptedVersion === null) !== (value.attemptedPlanFingerprint === null)) return false;
+  return true;
+}
+
+function isVerificationLastResult(value: unknown): boolean {
+  if (value === null) return true;
+  return isRecord(value)
+    && ['passed', 'failed', 'unavailable'].includes(String(value.status))
+    && ['user', 'project', 'runtime_default'].includes(String(value.source))
+    && isOptionalString(value.command)
+    && (
+      value.exitCode === undefined
+      || (typeof value.exitCode === 'number' && Number.isFinite(value.exitCode))
+    )
+    && isOptionalString(value.evidenceRef);
+}
+
+function isVerificationCommandProgress(value: unknown): boolean {
+  return isRecord(value)
+    && isNonEmptyString(value.planFingerprint)
+    && isNonNegativeInteger(value.commandIndex)
+    && isNonEmptyString(value.command)
+    && typeof value.required === 'boolean'
+    && (value.status === 'passed' || value.status === 'failed')
+    && isNonNegativeInteger(value.mutationVersion)
+    && isOptionalString(value.evidenceRef)
+    && (
+      value.exitCode === undefined
+      || (typeof value.exitCode === 'number' && Number.isFinite(value.exitCode))
+    );
+}
+
 function isOperationOutcome(value: unknown): value is OperationOutcome {
   return isRecord(value)
     && isNonEmptyString(value.toolCallId)
@@ -609,8 +699,26 @@ function isCompletionStatus(value: unknown): value is CompletionStatus {
   ].includes(String(value));
 }
 
-function isCompletionGateReason(value: unknown): value is CompletionGateReason {
+function isCompletionReason(value: unknown): value is CompletionReason {
   return [
+    'verification_passed',
+    'verification_not_required',
+    'verification_plan_unavailable',
+    'verification_plan_invalid',
+    'verification_failed',
+    'verification_unavailable',
+    'user_abort',
+    'user_checkpoint',
+    'token_budget',
+    'max_rounds',
+    'timeout',
+    'max_output_tokens',
+    'stop_hook',
+    'circuit_breaker',
+    'error',
+    'operation_user_denied',
+    'operation_policy_blocked',
+    'operation_write_failed',
     'condition_pending',
     'condition_failed',
     'condition_unverifiable',
@@ -652,6 +760,18 @@ function isStringArray(value: unknown): value is string[] {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isNullableVersion(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isNullableNonEmptyString(value: unknown): value is string | null {
+  return value === null || isNonEmptyString(value);
 }
 
 function isOptionalNumberRecord(value: unknown): boolean {

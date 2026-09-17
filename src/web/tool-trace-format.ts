@@ -2,8 +2,6 @@ export type ToolTraceStatus = 'pending' | 'success' | 'error' | 'warn' | 'backgr
 
 /** 与 shell-runtime-classifier LONG_RUNNING 保持语义一致（浏览器侧轻量副本） */
 const LONG_RUNNING_COMMAND: RegExp[] = [
-  /^(npm|pnpm|yarn|bun)\s+(test|t\b|run\s+(test|dev|start|serve|preview|watch|build))/,
-  /^(vitest|jest|playwright|cypress)\b(?!\s+--?(version|help))/,
   /^tsc\s+(--watch|-w)\b/,
   /^docker\s+(build|run|compose\s+up)\b/,
   /^(pip|poetry|conda)\s+install\b/,

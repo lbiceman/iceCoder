@@ -123,7 +123,8 @@ export interface LLMOptions {
   skipVisionFallback?: boolean;
   /**
    * 当前请求的推理强度档位（须落在该 provider 配置的逗号列表中）。
-   * Chat Completions 写入 reasoning_effort；Responses API 写入 reasoning.effort。
+   * Chat Completions 写入 reasoning_effort；Responses API 写入 reasoning.effort；
+   * Anthropic Messages 写入 thinking。
    */
   reasoningEffort?: ReasoningEffort;
   [key: string]: any;

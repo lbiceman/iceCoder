@@ -22,6 +22,9 @@ export function getModelMaxContext(modelName: string): number {
   if (name.includes('deepseek-v4')) return 1000000;
   if (name.includes('deepseek')) return 131072;
 
+  // Anthropic Claude
+  if (name.includes('claude')) return 200000;
+
   // OpenAI GPT-4o 系列
   if (name.includes('gpt-4o')) return 128000;
   if (name.includes('gpt-4-turbo')) return 128000;
@@ -74,6 +77,9 @@ export function getModelMaxOutputTokens(modelName: string): number {
   // Qwen 系列
   if (name.includes('qwen')) return 16384;
 
+  // Anthropic Claude
+  if (name.includes('claude')) return 16384;
+
   // MiniMax / MiMo 系列
   if (name.includes('minimax') || name.includes('mimo')) return 16384;
 
@@ -89,7 +95,7 @@ export function getModelMaxOutputTokens(modelName: string): number {
 
 /**
  * 解析 OpenAI 兼容提供者的单次请求超时（毫秒）。
- * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 120s 处理）。
+ * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 10 分钟处理）。
  */
 export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number | undefined {
   if (

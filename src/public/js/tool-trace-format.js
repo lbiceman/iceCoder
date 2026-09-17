@@ -4,8 +4,6 @@
  */
 
 var LONG_RUNNING_COMMAND = [
-  /^(npm|pnpm|yarn|bun)\s+(test|t\b|run\s+(test|dev|start|serve|preview|watch|build))/,
-  /^(vitest|jest|playwright|cypress)\b(?!\s+--?(version|help))/,
   /^tsc\s+(--watch|-w)\b/,
   /^docker\s+(build|run|compose\s+up)\b/,
   /^(pip|poetry|conda)\s+install\b/,

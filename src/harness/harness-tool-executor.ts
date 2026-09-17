@@ -1,7 +1,8 @@
 import type { UnifiedMessage, ToolCall, ToolDefinition } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
-import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
+import { getFailedRunCommandInlineChars, getMaxToolOutputChars } from '../tools/tool-output-limits.js';
+import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
@@ -32,7 +33,6 @@ import {
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 import {
@@ -49,12 +49,19 @@ import {
   diffInventoryTouchedPaths,
   isShellWorkspaceTouchTool,
   listWorkspaceFileInventory,
+  rememberBackgroundCommandInventory,
   rememberPreCommandInventory,
+  takeBackgroundCommandInventory,
   takePreCommandInventory,
 } from './workspace-command-touch.js';
+import {
+  classifyRunCommandResult,
+  extractRunCommandTaskId,
+} from './run-command-result.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
+import { spillToolOutputToSession } from './tool-output-spill.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -239,6 +246,29 @@ export interface ToolExecutionStats {
   policyBlockedSignatures: string[];
   /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
   budgetBlockedFilePaths: string[];
+  /** 通过执行前后工作区清单确认产生修改的 run_command 调用。 */
+  workspaceMutatedRunCommandIds: string[];
+  /** mutating run_command 的执行前 TaskState mutation version。 */
+  workspaceMutationVersionBeforeRunCommand: Record<string, number>;
+}
+
+const taskStateInventoryScopes = new WeakMap<TaskState, string>();
+let taskStateInventoryScopeSequence = 0;
+
+function commandInventoryScopeFor(
+  deps: ToolExecutorDeps,
+  taskState: TaskState | undefined,
+): string {
+  const base = `${deps.workspaceRoot.replace(/\\/g, '/')}::${deps.sessionId ?? 'default'}`;
+  if (!taskState) return base;
+  const existing = taskStateInventoryScopes.get(taskState);
+  if (existing) return existing;
+  taskStateInventoryScopeSequence = taskStateInventoryScopeSequence >= Number.MAX_SAFE_INTEGER
+    ? 1
+    : taskStateInventoryScopeSequence + 1;
+  const scope = `${base}::run-${taskStateInventoryScopeSequence}`;
+  taskStateInventoryScopes.set(taskState, scope);
+  return scope;
 }
 
 /**
@@ -290,6 +320,9 @@ export async function executeToolCallsStreaming(
   const policyBlockedSignatures: string[] = [];
   const budgetBlockedFilePaths: string[] = [];
   const budgetBlockedPathSet = new Set<string>();
+  const workspaceMutatedRunCommandIds = new Set<string>();
+  const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
+  const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -668,12 +701,12 @@ export async function executeToolCallsStreaming(
       await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, p);
     }
     if (
-      deps.sessionId
+      commandInventoryScope
       && tc.id
       && isShellWorkspaceTouchTool(tc.name, tc.arguments)
     ) {
       rememberPreCommandInventory(
-        deps.sessionId,
+        commandInventoryScope,
         tc.id,
         await listWorkspaceFileInventory(deps.workspaceRoot),
       );
@@ -695,6 +728,14 @@ export async function executeToolCallsStreaming(
 
   // 第二遍：等待所有已提交的工具完成，收集结果
   const results = await streamingExecutor.flush();
+  const siblingToolMutationPaths = new Set<string>();
+  for (const { toolCall, result } of results) {
+    if (!result.success || toolCall.name === 'run_command') continue;
+    for (const touched of collectSessionTouchedPaths(toolCall.name, toolCall.arguments)) {
+      const remapped = remapPathToWorkspace(deps.workspaceRoot, touched) ?? touched;
+      siblingToolMutationPaths.add(normalizeInventoryPath(remapped));
+    }
+  }
   const processedIds = new Set<string>();
   let failedCount = directFailedCount;
   const failedSignatures: string[] = [...directFailedSignatures];
@@ -729,23 +770,74 @@ export async function executeToolCallsStreaming(
       }
       if (tc.name === 'run_command' && verificationOutputBuffer) {
         const command = extractRunCommand(tc.arguments);
-        if (command && isHarnessVerificationCommand(command)) {
+        if (command) {
           verificationOutputBuffer.recordFailed(command, output);
         }
       }
     }
 
-    const preInv = deps.sessionId && tc.id
-      ? takePreCommandInventory(deps.sessionId, tc.id)
+    let preInv = commandInventoryScope && tc.id
+      ? takePreCommandInventory(commandInventoryScope, tc.id)
       : undefined;
+    const runClassification = tc.name === 'run_command'
+      ? classifyRunCommandResult(tc.arguments, output, result.success)
+      : null;
+    const taskId = tc.name === 'run_command'
+      ? extractRunCommandTaskId(tc.arguments, output)
+      : null;
+    if (
+      preInv
+      && commandInventoryScope
+      && taskId
+      && runClassification?.kind === 'background_start'
+    ) {
+      rememberBackgroundCommandInventory(commandInventoryScope, taskId, preInv);
+      preInv = undefined;
+    }
+    const action = String(tc.arguments?.action ?? '').toLowerCase();
+    const backgroundTerminal = runClassification?.kind === 'background_completed'
+      || runClassification?.kind === 'background_failed'
+      || action === 'stop';
+    const backgroundInv = commandInventoryScope && taskId && backgroundTerminal
+      ? takeBackgroundCommandInventory(commandInventoryScope, taskId)
+      : undefined;
+    const inventoryBefore = preInv ?? backgroundInv;
+    let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
+    if (inventoryBefore) {
+      const after = await listWorkspaceFileInventory(deps.workspaceRoot);
+      commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
+      const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
+      const touchedPaths = [
+        ...commandInventoryDiff.created,
+        ...commandInventoryDiff.changed,
+        ...commandInventoryDiff.deleted,
+      ].filter(touched =>
+        !siblingToolMutationPaths.has(normalizeInventoryPath(touched)),
+      );
+      if (commandInventoryDiff.incomplete) {
+        touchedPaths.push('[workspace-inventory-incomplete]');
+      }
+      taskState?.recordCommandWorkspaceMutation(touchedPaths);
+      if (tc.name === 'run_command' && touchedPaths.length > 0) {
+        workspaceMutatedRunCommandIds.add(tc.id);
+        if (mutationVersionBefore !== undefined) {
+          workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
+        }
+      }
+    } else if (commandInventoryScope && taskId && backgroundTerminal) {
+      const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
+      taskState?.recordCommandWorkspaceMutation(['[background-inventory-missing]']);
+      workspaceMutatedRunCommandIds.add(tc.id);
+      if (mutationVersionBefore !== undefined) {
+        workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
+      }
+    }
     if (result.success && deps.sessionDir && deps.sessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
         .map((p) => remapPathToWorkspace(deps.workspaceRoot, p) ?? p)
         .filter(Boolean);
-      if (preInv) {
-        const after = await listWorkspaceFileInventory(deps.workspaceRoot);
-        const diff = diffInventoryTouchedPaths(deps.workspaceRoot, preInv, after);
-        for (const created of diff.created) {
+      if (commandInventoryDiff) {
+        for (const created of commandInventoryDiff.created) {
           recordPreTurnMissingFile(deps.sessionId, deps.workspaceRoot, created);
           touchedPaths.push(created);
         }
@@ -781,10 +873,30 @@ export async function executeToolCallsStreaming(
 
     const toolMeta = getToolMetadata(tc.name);
     const maxCap = getMaxToolOutputChars();
-    const maxOutput = toolMeta.maxResultSizeChars === Infinity ? maxCap : Math.min(toolMeta.maxResultSizeChars, maxCap);
-    const truncatedOutput = output.length > maxOutput
-      ? output.substring(0, maxOutput) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
-      : output;
+    const defaultMax = toolMeta.maxResultSizeChars === Infinity
+      ? maxCap
+      : Math.min(toolMeta.maxResultSizeChars, maxCap);
+    const maxOutput = !result.success && tc.name === 'run_command'
+      ? Math.max(defaultMax, getFailedRunCommandInlineChars())
+      : defaultMax;
+
+    let truncatedOutput = output;
+    if (output.length > maxOutput) {
+      let spillPath: string | undefined;
+      if (deps.sessionDir && deps.sessionId && tc.id) {
+        spillPath = await spillToolOutputToSession({
+          sessionDir: deps.sessionDir,
+          sessionId: deps.sessionId,
+          toolCallId: tc.id,
+          content: output,
+        }) ?? undefined;
+      }
+      truncatedOutput = truncateHeadTail(output, maxOutput, {
+        headRatio: !result.success && tc.name === 'run_command' ? 0.2 : 0.3,
+        spillPath,
+        marker: `\n...[输出已截断，原始长度 ${output.length} 字符]...\n`,
+      });
+    }
 
     messages.push({
       role: 'tool',
@@ -813,8 +925,16 @@ export async function executeToolCallsStreaming(
     failedSignatures,
     policyBlockedSignatures,
     budgetBlockedFilePaths,
+    workspaceMutatedRunCommandIds: [...workspaceMutatedRunCommandIds],
+    workspaceMutationVersionBeforeRunCommand,
   };
 }
+
+function normalizeInventoryPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 
 /**
  * 为未完成的 tool_use 补齐错误 tool_result。

@@ -20,7 +20,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 | Area | Status |
 |------|--------|
-| **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, verification gate, no-tool recovery, repeat-failure detection |
+| **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, D′ stop-time verification, no-tool recovery, repeat-failure detection |
 | **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
 | **Single-axis Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard; L2 takeover stack retired on 2026-08-31; overview [`docs/双模机制详解.md`](./双模机制详解.md) |
@@ -29,6 +29,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
 | **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
 | **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
+| **Workbench (ETL UI)** | Right-hand panel, no tabs: chapter directory (rollback on title) + selected-chapter flow; footer docks for files and tool names. Chronicle from session data (`etl-chronicle.js`). Spec: [`requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) |
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` classifier (long → background, short → foreground + soft-timeout escalate); **detached** background tasks survive Agent Stop / session switch; ETL Shell Dock + `bgTasks` WS snapshot — see **Tool Runtime** |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
@@ -83,7 +84,7 @@ while running:
     continue
   else:
     recover no-tool executable tasks
-    enforce verification gate
+    hard state / D′ stop-time verification
     run stop hooks
     finalize
 ```
@@ -104,7 +105,7 @@ Key components:
 Key runtime protections:
 
 - No-tool recovery for executable tasks
-- Verification gate after file-changing tools
+- D′ stop-time verification: no-tool body proposes stop; stale plan runs once via `run_command` ToolGate
 - Permission rules before tool execution
 - Confirmation-required tools are denied if no confirmation callback exists
 - Repeated failed tool signature detection
@@ -455,7 +456,7 @@ Recent changes:
 5. optionally refine summary with LLM
 6. re-inject recent file content and recovery prompt
 
-Watermarks (relative to context window): **~72%** micro · **~85%** hard · remaining **&lt;18K** also hard · **~93%** aggressive fork.
+Watermarks (relative to context window): **~80%** micro · **~88%** hard · remaining **&lt;18K** also hard · **~93%** aggressive fork.
 
 The context window is selected by priority:
 
@@ -585,15 +586,17 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 
 ```bash
 npm run eval:agent                              # default real — configured LLM required
-npm run eval:agent -- --mode=mock               # no-API smoke
+npm run eval:agent -- --mode=mock               # no-API smoke; scripted local cases still run for real
+npm run eval:agent -- --mode=local              # scriptedTurns only: isolated workspace + real tools
 npm run eval:agent -- --case=single-file-edit
 npm run eval:agent -- --format=markdown --keep-workspaces
 ```
 
-- Case definitions: `scripts/agent-eval-cases.ts` (7 fixed scenarios).
-- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, rule-based scoring.
+- Case definitions: `scripts/agent-eval-cases.ts` (catalog + `stop-verification` local-edit cases).
+- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, file/command judges. Cases with `scriptedTurns` must not be fake-passed by mock metrics.
 - History: `data/eval/agent-eval-history.jsonl`.
 - Non-zero exit when any case fails or P0 metrics regress.
+- Stop-time verification design: [`harness/收尾策略-模型停手与验收门控.md`](./harness/收尾策略-模型停手与验收门控.md).
 
 Metrics per case and aggregate:
 
@@ -634,7 +637,17 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 **Desktop**
 
-![Work chat](./assets/desktop-work-chat.png)
+![Work chat — checkpoints and selected-chapter flow](./assets/desktop-work-chat.png)
+
+![Workbench — session tool names](./assets/desktop-workbench-tools.png)
+
+![Workbench — changed files](./assets/desktop-work-snapshot.png)
+
+![Empty-session welcome (dark)](./assets/desktop-welcome.png)
+
+![Empty-session welcome (light)](./assets/desktop-welcome-light.png)
+
+![Work chat (light) — changed-files dock](./assets/desktop-work-chat-light.png)
 
 ![Memory graph](./assets/desktop-memory-graph.png)
 
@@ -759,9 +772,9 @@ Quick reference:
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness, compaction, task/repo state, TaskGraph, task-domain, sub-agent, tool planner,
+  harness/          # Harness, compaction, task/repo state, TaskGraph, D′ stop-time verification,
                     # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
-  llm/              # OpenAI-compatible adapters
+  llm/              # OpenAI-compatible + Anthropic Messages adapters
   memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction
   skills/             # skill-loader, SkillRegistry helpers
   parser/           # FileParser strategies (HTML, Office, XMind)
@@ -812,7 +825,9 @@ Higher-level prose (beyond this README):
 - [`docs/双模机制详解.md`](./双模机制详解.md) — current L0 / L1 / L3 single-axis supervisor
 - [`docs/L2监管层详解.md`](./L2监管层详解.md) — retired L2 migration note
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
-- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
+- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (prompt injection superseded by TaskGraph; the **UI panel** is now the workbench)
+- [`docs/requirement/执行流-最终效果-finish.md`](./requirement/执行流-最终效果-finish.md) — chronicle data meaning (chapter = user turn)
+- [`docs/requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) — **current** workbench UI (no tabs; aligned to 2026-09-14 code)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments (changelog)
 - [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) — **dual-mode test playbook** (~2,000 automated + 15 manual Web scenarios)

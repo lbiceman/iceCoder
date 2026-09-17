@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openAiAdapterConfigFromProvider } from '../../src/llm/provider-adapter-config.js';
+import { openAiAdapterConfigFromProvider, anthropicAdapterConfigFromProvider, createProviderAdapter } from '../../src/llm/provider-adapter-config.js';
+import { OpenAIAdapter } from '../../src/llm/openai-adapter.js';
+import { AnthropicAdapter } from '../../src/llm/anthropic-adapter.js';
 import type { ProviderConfig } from '../../src/web/types.js';
 
 describe('openAiAdapterConfigFromProvider', () => {
@@ -94,5 +96,58 @@ describe('openAiAdapterConfigFromProvider', () => {
   it('omits reasoningEffortLevels when provider leaves the field empty', () => {
     const cfg = openAiAdapterConfigFromProvider(base);
     expect(cfg.reasoningEffortLevels).toBeUndefined();
+  });
+});
+
+describe('createProviderAdapter', () => {
+  const openaiProvider: ProviderConfig = {
+    id: 'default',
+    apiUrl: 'https://api.openai.com/v1',
+    apiKey: 'sk-test',
+    modelName: 'gpt-4o',
+    parameters: {},
+  };
+
+  it('builds OpenAIAdapter for chat_completions providers', () => {
+    const adapter = createProviderAdapter(openaiProvider);
+    expect(adapter).toBeInstanceOf(OpenAIAdapter);
+    expect(adapter.name).toBe('default');
+  });
+
+  it('builds AnthropicAdapter when apiMode is anthropic_messages', () => {
+    const adapter = createProviderAdapter({
+      ...openaiProvider,
+      id: 'claude',
+      apiUrl: 'https://proxy.example.com',
+      apiMode: 'anthropic_messages',
+      modelName: 'claude-sonnet-4-5',
+    });
+    expect(adapter).toBeInstanceOf(AnthropicAdapter);
+    expect(adapter.name).toBe('claude');
+  });
+
+  it('builds AnthropicAdapter for api.anthropic.com even without apiMode', () => {
+    const adapter = createProviderAdapter({
+      ...openaiProvider,
+      id: 'anthropic',
+      apiUrl: 'https://api.anthropic.com',
+      modelName: 'claude-sonnet-4-5',
+    });
+    expect(adapter).toBeInstanceOf(AnthropicAdapter);
+  });
+});
+
+describe('anthropicAdapterConfigFromProvider', () => {
+  it('keeps reasoningEffortLevels for Anthropic thinking mapping', () => {
+    const cfg = anthropicAdapterConfigFromProvider({
+      id: 'opencode-go-anthropic',
+      apiUrl: 'https://opencode.ai/zen/go/v1',
+      apiKey: 'key',
+      modelName: 'union-alpha',
+      apiMode: 'anthropic_messages',
+      parameters: { temperature: 1 },
+      reasoningEffort: 'low,high,max',
+    });
+    expect(cfg.reasoningEffortLevels).toEqual(['low', 'high', 'max']);
   });
 });

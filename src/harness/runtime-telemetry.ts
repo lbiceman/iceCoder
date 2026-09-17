@@ -5,7 +5,7 @@ import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-sn
 import type { ExecutionModeTelemetryPayload } from '../types/supervisor.js';
 import type { ToolOutcome } from './types.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
-import type { CompletionStatus, CompletionGateReason } from './completion-gate.js';
+import type { CompletionReason, CompletionStatus } from './completion-state.js';
 
 export type RuntimeTelemetryEvent =
   | {
@@ -65,7 +65,7 @@ export type RuntimeTelemetryEvent =
       sessionId: string;
       stopReason?: StopReason;
       completionStatus?: CompletionStatus;
-      completionReason?: CompletionGateReason;
+      completionReason?: CompletionReason;
       task: TaskStateSnapshot;
       repo: RepoContextSnapshot;
       rounds: number;

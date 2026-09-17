@@ -59,6 +59,40 @@ export function stripEmbeddedThinking(content: string): string {
   return result.replace(/^\s*\n+/, '').trimEnd();
 }
 
+/** 从正文抽出嵌入思考，避免剥掉后既无 content 也无 reasoningContent。 */
+export function extractEmbeddedThinking(content: string): { visible: string; thinking: string } {
+  if (!content) return { visible: '', thinking: '' };
+  const parts: string[] = [];
+  const closed = [
+    /<(?:redacted_)?think(?:ing)?>([\s\S]*?)<\/(?:redacted_)?think(?:ing)?>/gi,
+    /<reasoning>([\s\S]*?)<\/reasoning>/gi,
+  ];
+  for (const re of closed) {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(content)) !== null) {
+      const inner = match[1]?.trim();
+      if (inner) parts.push(inner);
+    }
+  }
+  THINKING_BLOCK_RE.lastIndex = 0;
+  REASONING_BLOCK_RE.lastIndex = 0;
+  const withoutClosed = content
+    .replace(THINKING_BLOCK_RE, '')
+    .replace(REASONING_BLOCK_RE, '');
+  const tail = withoutClosed.match(THINKING_TAIL_RE) || withoutClosed.match(REASONING_TAIL_RE);
+  if (tail) {
+    const inner = tail[0]
+      .replace(/^<(?:redacted_)?think(?:ing)?>/i, '')
+      .replace(/^<reasoning>/i, '')
+      .trim();
+    if (inner) parts.push(inner);
+  }
+  return {
+    visible: stripEmbeddedThinking(content),
+    thinking: parts.join('\n\n'),
+  };
+}
+
 /** 去掉泄漏的 system / system-reminder / system-context 标签（思考链与可见正文共用）。 */
 export function stripSystemTagsFromReasoning(content: string): string {
   if (!content) return '';

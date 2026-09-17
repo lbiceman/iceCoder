@@ -1,4 +1,8 @@
-import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
+import type {
+  UnifiedMessage,
+  ToolDefinition,
+  LLMResponse,
+} from '../llm/types.js';
 import {
   LLM_MAX_RETRIES,
   LLM_RETRY_BASE_DELAY,
@@ -21,6 +25,7 @@ import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { canUseEmergencyCompact, consumeEmergencyCompact } from './emergency-compact-quota.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { TokenBudgetTracker } from './token-budget.js';
@@ -33,6 +38,7 @@ import type {
   StreamFunction,
 } from './types.js';
 import { endTiming, markTimingStart, timeSync } from './harness-timing.js';
+import { isStreamIdleTimeoutError } from '../llm/stream-idle-watchdog.js';
 
 export interface LlmCallDeps {
   loopController: LoopController;
@@ -77,7 +83,7 @@ export async function callHarnessLlm(
   const precheckStartedAt = markTimingStart();
   if (
     deps.contextCompactor
-    && !state.contextEmergencyCompactUsed
+    && canUseEmergencyCompact(state)
     && !deps.loopController.isAborted()
   ) {
     const ctxWindow = readEffectiveContextWindowTokens();
@@ -88,7 +94,7 @@ export async function callHarnessLlm(
       lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
     });
     if (usage.effectiveUsed >= proactiveLine) {
-      state.contextEmergencyCompactUsed = true;
+      consumeEmergencyCompact(state);
       state.checkpointResumeForkApplied = true;
       const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
       const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
@@ -113,32 +119,46 @@ export async function callHarnessLlm(
   endTiming('llm_precheck', precheckStartedAt, round);
 
   let response: LLMResponse;
-  const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal; sessionId?: string } = {
+  const llmOpts: {
+    tools: ToolDefinition[];
+    signal?: AbortSignal;
+    sessionId?: string;
+    skipRetry: boolean;
+  } = {
     tools: currentTools,
     signal: deps.loopController.getAbortSignal(),
+    // Harness 是生产执行链的唯一重试负责人，避免 LLMAdapter × Harness 乘法重试。
+    skipRetry: true,
     ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
   };
   try {
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
       const reasoningSanitizer = new ReasoningSystemTagStreamFilter();
+      let streamedAny = false;
       try {
         const llmWaitStartedAt = markTimingStart();
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
+          if (typeof chunk === 'string' ? chunk.length > 0 : !!chunk) {
+            streamedAny = true;
+          }
           dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep, reasoningSanitizer);
         }, llmOpts);
         endTiming('llm_wait', llmWaitStartedAt, round);
         timeSync('llm_stream_filter', () => {
           const tail = streamFilter.flush();
           if (tail.thinking) {
+            streamedAny = true;
             onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
           }
           const reasoningTail = reasoningSanitizer.flush();
           if (reasoningTail) {
+            streamedAny = true;
             onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: reasoningTail });
           }
           if (tail.visible) {
+            streamedAny = true;
             onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });
           }
         }, round);
@@ -150,6 +170,9 @@ export async function callHarnessLlm(
           response = await chatFn(normalizedMsgs, llmOpts);
           endTiming('llm_wait', llmWaitStartedAt, round);
         } else {
+          if (streamedAny) {
+            onStep?.({ type: 'stream_retry_discard', iteration: round });
+          }
           throw streamError;
         }
       }
@@ -172,11 +195,11 @@ export async function callHarnessLlm(
     const pairingBroken = isToolCallPairingError(error);
     if (
       (isContextWindowExceededError(error) || pairingBroken)
-      && !state.contextEmergencyCompactUsed
+      && canUseEmergencyCompact(state)
       && deps.contextCompactor
       && !deps.loopController.isAborted()
     ) {
-      state.contextEmergencyCompactUsed = true;
+      consumeEmergencyCompact(state);
       state.checkpointResumeForkApplied = true;
       if (pairingBroken) {
         const repaired = finalizeMessagesForApi(state.messages);
@@ -208,24 +231,16 @@ export async function callHarnessLlm(
       return { action: 'retry' };
     }
 
-    if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES && !deps.loopController.isAborted()) {
+    const maxRetries = isStreamIdleTimeoutError(error) ? 1 : LLM_MAX_RETRIES;
+    if (isRetryableError(error) && state.llmRetryCount < maxRetries && !deps.loopController.isAborted()) {
       state.llmRetryCount++;
       const delay = Math.min(
         LLM_RETRY_BASE_DELAY * Math.pow(2, state.llmRetryCount - 1),
         LLM_RETRY_MAX_DELAY,
       );
       const errorMsg = error instanceof Error ? error.message : String(error);
-      logger.error(`LLM 调用失败 (${state.llmRetryCount}/${LLM_MAX_RETRIES}): ${errorMsg}，${delay}ms 后重试`);
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delay);
-        const checkAbort = () => { clearTimeout(timer); resolve(); };
-        if (deps.loopController.isAborted()) { checkAbort(); return; }
-        const interval = setInterval(() => {
-          if (deps.loopController.isAborted()) { clearInterval(interval); checkAbort(); }
-        }, 500);
-        const origResolve = resolve;
-        resolve = () => { clearInterval(interval); origResolve(); };
-      });
+      logger.error(`LLM 调用失败 (${state.llmRetryCount}/${maxRetries}): ${errorMsg}，${delay}ms 后重试`);
+      await waitForRetry(delay, deps.loopController.getAbortSignal());
       state.transition = 'llm_error_retry';
       deps.loopController.rewindRound();
       state.turnCount--;
@@ -237,6 +252,20 @@ export async function callHarnessLlm(
     deps.loopController.stop('error');
     const finalState = deps.loopController.getState();
     logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
+    state.completionStatus = 'failed';
+    state.completionReason = 'error';
+    deps.runtimeTelemetry?.recordSummary({
+      stopReason: 'error',
+      completionStatus: 'failed',
+      completionReason: 'error',
+      task: state.taskState.snapshot(),
+      repo: state.repoContext.snapshot(),
+      rounds: finalState.currentRound,
+      toolCalls: finalState.totalToolCalls,
+      verificationRate: 0,
+      noToolFinal: finalState.totalToolCalls === 0,
+      harnessPolicy: state.harnessPolicyStats,
+    });
 
     onStep?.({
       type: 'final',
@@ -244,6 +273,8 @@ export async function callHarnessLlm(
       totalToolCalls: finalState.totalToolCalls,
       content: `LLM 调用错误: ${errorMsg}`,
       stopReason: 'error',
+      completionStatus: 'failed',
+      completionReason: 'error',
     });
 
     return {
@@ -253,6 +284,8 @@ export async function callHarnessLlm(
         loopState: finalState,
         messages: [...state.messages],
         log: logger.getEntries(),
+        completionStatus: 'failed',
+        completionReason: 'error',
       },
     };
   }
@@ -275,4 +308,24 @@ export async function callHarnessLlm(
   }
 
   return { action: 'response', response, llmRoundLog, tokenUsage };
+}
+
+/** 可中断的重试等待；结束时同时清理 timer 和 AbortSignal listener。 */
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    if (signal?.aborted) {
+      finish();
+      return;
+    }
+    signal?.addEventListener('abort', finish, { once: true });
+  });
 }

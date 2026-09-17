@@ -1,0 +1,379 @@
+import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+
+import { looksLikeRunnableCommand } from './run-command-result.js';
+
+/** `project` 仅兼容旧 checkpoint；新解析不会再产出。 */
+export type VerificationPlanSource = 'user' | 'project' | 'runtime_default';
+
+export interface VerificationPlanCommand {
+  command: string;
+  required: boolean;
+  timeoutMs: number;
+}
+
+export interface VerificationPlan {
+  id: string;
+  source: VerificationPlanSource;
+  commands: VerificationPlanCommand[];
+  fingerprint: string;
+}
+
+export type VerificationPlanInvalidReason = 'unsafe_user_command';
+
+export type VerificationPlanResolution =
+  | { kind: 'resolved'; plan: VerificationPlan }
+  | { kind: 'unavailable' }
+  | {
+      kind: 'invalid';
+      source: 'user';
+      reason: VerificationPlanInvalidReason;
+    };
+
+export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000;
+export const MAX_VERIFICATION_COMMAND_LENGTH = 500;
+
+type VerificationCommandInput = string | VerificationPlanCommand;
+
+export interface BuildVerificationPlanOptions {
+  source: VerificationPlanSource;
+  commands: readonly VerificationCommandInput[];
+  workspaceRoot: string;
+}
+
+export interface ResolveVerificationPlanOptions {
+  goal: string;
+  workspaceRoot: string;
+  onWarning?: (warning: VerificationPlanWarning) => void;
+}
+
+export interface VerificationPlanWarning {
+  kind: 'malformed' | 'read_error' | 'invalid_command';
+  source: 'user_goal' | 'package_manifest' | 'lockfile';
+  path: string;
+  code?: string;
+  message: string;
+}
+
+interface LocatedCommand {
+  index: number;
+  command: string;
+}
+
+const STRICT_MARKER =
+  /验收命令(?:\s*(?:[:：]|是|为))?|完成条件(?:\s*(?:[:：]|是|为))?(?:\s*必须(?:运行|通过))?|(?:你\s*)?必须(?:运行|通过)|\bacceptance\s*:|\bcompletion\s+condition\s*:\s*(?:must\s+(?:run|pass)\s*)?|\bmust\s+(?:run|pass)|\bbefore\s+(?:you\s+)?finish(?:\s*[:：])?/gi;
+const CODE_SPAN = /`([^`]*)`/g;
+const POSTFIX_BEFORE_FINISH = /`([^`]*)`\s+before\s+(?:you\s+)?finish/gi;
+
+interface ParsedVerificationCommands {
+  commands: string[];
+  unsafeCandidateCount: number;
+}
+
+/**
+ * 只提取受明确 marker 直接支配的反引号命令。
+ * marker 后可跟一个由常见分隔符连接的命令列表；普通反引号不会被全局扫描进计划。
+ */
+export function parseVerificationCommandsFromGoal(
+  goal: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): string[] {
+  return parseVerificationCommands(goal, onWarning).commands;
+}
+
+function parseVerificationCommands(
+  goal: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): ParsedVerificationCommands {
+  const codeSpans = Array.from(goal.matchAll(CODE_SPAN), match => ({
+    index: match.index,
+    end: match.index + match[0].length,
+    command: match[1] ?? '',
+  }));
+  const located: LocatedCommand[] = [];
+
+  for (const marker of goal.matchAll(STRICT_MARKER)) {
+    const markerEnd = marker.index + marker[0].length;
+    const following = codeSpans.filter(span => span.index >= markerEnd);
+    let cursor = markerEnd;
+    let acceptedAny = false;
+
+    for (const span of following) {
+      const separator = goal.slice(cursor, span.index);
+      if (hasScopeBoundary(separator)) break;
+      if (
+        acceptedAny
+          ? !isCommandListSeparator(separator)
+          : !isMarkerCommandSeparator(separator)
+      ) {
+        break;
+      }
+      located.push({ index: span.index, command: span.command });
+      acceptedAny = true;
+      cursor = span.end;
+    }
+  }
+
+  for (const match of goal.matchAll(POSTFIX_BEFORE_FINISH)) {
+    located.push({ index: match.index, command: match[1] ?? '' });
+  }
+
+  located.sort((left, right) => left.index - right.index);
+  const commands: string[] = [];
+  const seen = new Set<string>();
+  let unsafeCandidateCount = 0;
+  for (const item of located) {
+    const command = normalizeVerificationCommand(item.command);
+    if (!command) {
+      unsafeCandidateCount += 1;
+      emitWarning(onWarning, {
+        kind: 'invalid_command',
+        source: 'user_goal',
+        path: '<goal>',
+        message: 'explicit verification command is empty, too long, or contains newline/NUL',
+      });
+      continue;
+    }
+    if (!looksLikeRunnableCommand(command)) {
+      emitWarning(onWarning, {
+        kind: 'invalid_command',
+        source: 'user_goal',
+        path: '<goal>',
+        message: 'explicit marker value is not plausibly executable',
+      });
+      continue;
+    }
+    if (seen.has(command)) continue;
+    seen.add(command);
+    commands.push(command);
+  }
+  return {
+    commands,
+    unsafeCandidateCount,
+  };
+}
+
+export function buildVerificationPlan(
+  options: BuildVerificationPlanOptions,
+): VerificationPlan | null {
+  const commands = normalizePlanCommands(options.commands);
+  if (commands.length === 0) return null;
+
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({
+      version: 1,
+      source: options.source,
+      cwd: normalizeWorkspaceRoot(options.workspaceRoot),
+      commands: commands.map(command => ({
+        command: normalizeCommandForFingerprint(command.command),
+        required: command.required,
+        timeoutMs: command.timeoutMs,
+      })),
+    }))
+    .digest('hex');
+
+  return {
+    id: `verification:${fingerprint.slice(0, 16)}`,
+    source: options.source,
+    commands,
+    fingerprint,
+  };
+}
+
+export async function resolveVerificationPlan(
+  options: ResolveVerificationPlanOptions,
+): Promise<VerificationPlanResolution> {
+  const parsedUserCommands = parseVerificationCommands(options.goal, options.onWarning);
+  const userPlan = buildVerificationPlan({
+    source: 'user',
+    commands: parsedUserCommands.commands,
+    workspaceRoot: options.workspaceRoot,
+  });
+  if (parsedUserCommands.unsafeCandidateCount > 0) {
+    return { kind: 'invalid', source: 'user', reason: 'unsafe_user_command' };
+  }
+  if (userPlan) return { kind: 'resolved', plan: userPlan };
+
+  const runtimeCommand = await resolveRuntimeDefaultCommand(
+    options.workspaceRoot,
+    options.onWarning,
+  );
+  const runtimePlan = buildVerificationPlan({
+    source: 'runtime_default',
+    commands: runtimeCommand ? [runtimeCommand] : [],
+    workspaceRoot: options.workspaceRoot,
+  });
+  return runtimePlan
+    ? { kind: 'resolved', plan: runtimePlan }
+    : { kind: 'unavailable' };
+}
+
+function normalizePlanCommands(
+  inputs: readonly VerificationCommandInput[],
+): VerificationPlanCommand[] {
+  const commands: VerificationPlanCommand[] = [];
+  const seen = new Set<string>();
+
+  for (const input of inputs) {
+    const rawCommand = typeof input === 'string' ? input : input.command;
+    const command = normalizeVerificationCommand(rawCommand);
+    if (!command || seen.has(command)) continue;
+    seen.add(command);
+    commands.push({
+      command,
+      required: typeof input === 'string' ? true : input.required,
+      timeoutMs: typeof input === 'string'
+        ? DEFAULT_VERIFICATION_TIMEOUT_MS
+        : normalizeTimeout(input.timeoutMs),
+    });
+  }
+  return commands;
+}
+
+function normalizeVerificationCommand(command: unknown): string | null {
+  if (typeof command !== 'string') return null;
+  const normalized = command.trim();
+  if (
+    !normalized
+    || normalized.length > MAX_VERIFICATION_COMMAND_LENGTH
+    || /[\r\n\u0000]/.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeCommandForFingerprint(command: string): string {
+  return command.trim();
+}
+
+function normalizeWorkspaceRoot(workspaceRoot: string): string {
+  const resolved = path.resolve(workspaceRoot || '.').replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeTimeout(timeoutMs: number): number {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_VERIFICATION_TIMEOUT_MS;
+  }
+  return Math.floor(timeoutMs);
+}
+
+function hasScopeBoundary(separator: string): boolean {
+  return /[。.!?！？]/.test(separator) || /\r?\n\s*\r?\n/.test(separator);
+}
+
+function isMarkerCommandSeparator(separator: string): boolean {
+  return /^[\s:：\-—*+>]*$/i.test(separator);
+}
+
+function isCommandListSeparator(separator: string): boolean {
+  return /^[\s,，、;；/|→\-—*+>]*(?:(?:and|then|以及|和)\s*)?$/i.test(separator);
+}
+
+async function resolveRuntimeDefaultCommand(
+  workspaceRoot: string,
+  onWarning?: (warning: VerificationPlanWarning) => void,
+): Promise<string | null> {
+  if (!workspaceRoot.trim()) return null;
+  const manifestPath = path.join(workspaceRoot, 'package.json');
+  let rawManifest: string;
+  try {
+    rawManifest = await fs.readFile(manifestPath, 'utf8');
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      emitWarning(onWarning, warningFromError(
+        'read_error',
+        'package_manifest',
+        manifestPath,
+        error,
+      ));
+    }
+    return null;
+  }
+
+  try {
+    const packageJson = JSON.parse(rawManifest) as { scripts?: { test?: unknown } };
+    if (
+      !packageJson.scripts
+      || typeof packageJson.scripts.test !== 'string'
+      || !packageJson.scripts.test.trim()
+    ) {
+      return null;
+    }
+  } catch (error) {
+    emitWarning(onWarning, warningFromError(
+      'malformed',
+      'package_manifest',
+      manifestPath,
+      error,
+    ));
+    return null;
+  }
+
+  const lockfileCommands = [
+    ['pnpm-lock.yaml', 'pnpm test'],
+    ['yarn.lock', 'yarn test'],
+    ['bun.lock', 'bun test'],
+    ['bun.lockb', 'bun test'],
+    ['package-lock.json', 'npm test'],
+  ] as const;
+
+  for (const [lockfile, command] of lockfileCommands) {
+    const lockfilePath = path.join(workspaceRoot, lockfile);
+    try {
+      await fs.access(lockfilePath);
+      return command;
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        emitWarning(onWarning, warningFromError(
+          'read_error',
+          'lockfile',
+          lockfilePath,
+          error,
+        ));
+      }
+    }
+  }
+  return 'npm test';
+}
+
+function emitWarning(
+  onWarning: ((warning: VerificationPlanWarning) => void) | undefined,
+  warning: VerificationPlanWarning,
+): void {
+  try {
+    onWarning?.(warning);
+  } catch {
+    // 可观测回调不得改变解析器的 fallback 语义。
+  }
+}
+
+function warningFromError(
+  kind: VerificationPlanWarning['kind'],
+  source: VerificationPlanWarning['source'],
+  filePath: string,
+  error: unknown,
+): VerificationPlanWarning {
+  const code = errorCode(error);
+  return {
+    kind,
+    source,
+    path: filePath,
+    ...(code ? { code } : {}),
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function errorCode(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return errorCode(error) === 'ENOENT';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}

@@ -15,10 +15,13 @@ export interface ProviderConfig {
   /** 当前选中的模型名（须在 modelName 解析结果内）；未设置时使用第一个 */
   activeModelName?: string;
   /**
-   * OpenAI 兼容 API 模式：`chat_completions`（默认）或 `responses`（Bedrock GPT-5.4/5.5 等）。
-   * 也可在 `parameters.apiMode` 中设置。
+   * 协议模式：
+   * - `chat_completions`（默认，OpenAI 兼容）
+   * - `responses`（Bedrock GPT-5.4/5.5 等 OpenAI Responses API）
+   * - `anthropic_messages`（Anthropic 原生 `/v1/messages`，`x-api-key` 鉴权）
+   * 也可在 `parameters.apiMode` 中设置。`api.anthropic.com` 未填时会自动识别。
    */
-  apiMode?: 'chat_completions' | 'responses';
+  apiMode?: 'chat_completions' | 'responses' | 'anthropic_messages';
   /**
    * OpenAI 兼容适配器：单次 HTTP 请求超时（毫秒）。
    * 未设置时可用环境变量 ICE_OPENAI_REQUEST_TIMEOUT_MS；再高才回退 SDK 默认。

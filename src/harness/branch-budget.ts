@@ -14,8 +14,8 @@
  *   - **验收失败**：write/edit 已成功，但 `npm test` 等 `run_command` exit≠0 —— 根因通常是
  *     任务难或改法未对准断言，不是 edit 工具坏了。
  *   - **本模块拦截**：同文件 edit 达 fileEditMax（默认 3）后，写工具 **未执行**（telemetry 仍
- *     记 `success: false`）。file/command/error 三维计数在 **每次用户发送** 与 **每轮 harness 工具轮**
- *     开始时归零（不继承 checkpoint 计数）。
+   *     记 `success: false`）。file/command/error 三维计数在 **每次用户发送 / 每次 `harness.run()`**
+   *     归零（不继承 checkpoint 计数），**不**在每轮工具开始时归零。
  *   - **工具真坏**：patch 对不上、路径不存在等 —— 与 BranchBudget 无关，success:false 且无 Blocked 前缀。
  *   典型链：验收失败 → tool_failure → forced → 本模块拦同文件第 4 次 edit（后果，非独立根因）。
  *
@@ -27,7 +27,6 @@ import type {
   RecoverySignal,
 } from '../types/runtime-checkpoint.js';
 import { emptyBranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import {
   canonicalBudgetPath,
@@ -336,8 +335,8 @@ export class BranchBudgetTracker {
     return [
       `[BranchBudget / Blocked] Tool not executed: ${path} has been edited ${currentCount} times (limit ${this.limits.fileEditMax}).`,
       bypassHint,
-      'Read failing e2e/test output first; fix only what verification requires. Do not bulk-rewrite capped scene files without bypass.',
-      'Do not rewrite this file again until you have read the failing test and documented expected vs actual behavior.',
+      'Read this round\'s failing output first; fix only what that check requires. Do not bulk-rewrite capped files without bypass.',
+      'Do not rewrite this file again until you have read the failing output and documented expected vs actual behavior.',
     ].join('\n');
   }
 
@@ -346,8 +345,8 @@ export class BranchBudgetTracker {
     return [
       `[BranchBudget / Blocked] Tool not executed: this command has failed ${failedAttempts} times (limit ${this.limits.commandRetryMax}).`,
       `Command: ${short}`,
-      'Read the source or tests referenced by the failure, diagnose the error, and then change the code. Use npx tsc --noEmit for compiler evidence when appropriate. Do not rerun the same build or test unchanged.',
-      'Do not rerun the same command until you have new evidence from source or compiler output.',
+      'Read the source referenced by this round\'s failing output, diagnose the error, then change the implementation. Do not rerun the same command unchanged.',
+      'Do not rerun the same command until you have new evidence from source or this round\'s output.',
     ].join('\n');
   }
 
@@ -461,7 +460,8 @@ export class BranchBudgetTracker {
   }
 
   /**
-   * 新用户消息 / 新 harness 工具轮 — file/command/error 三维计数与豁免归零。
+   * 新用户消息 / 每次 `harness.run()` — file/command/error 三维计数与豁免归零。
+   * 同一次 run 内连续多轮工具调用会跨轮累加，不在工具轮开头调用本方法。
    * recoverTriggers 保留（跨轮 recovery 去重用）。
    */
   resetRoundBudget(): void {
@@ -477,16 +477,16 @@ export class BranchBudgetTracker {
     this.resetRoundBudget();
   }
 
+  resetCommandRetries(): void {
+    this.commandRetries.clear();
+    this.commandRetryBypassKeys.clear();
+  }
+
   /**
-   * Segment Renewal / 续段后：清除验收命令失败计数，保留文件编辑计数。
+   * Segment Renewal / 续段后：清除全部命令失败计数，保留文件编辑计数。
    */
   resetCommandRetriesForVerificationCommands(): void {
-    for (const [key] of [...this.commandRetries.entries()]) {
-      if (isHarnessVerificationCommand(key)) {
-        this.commandRetries.delete(key);
-      }
-    }
-    this.commandRetryBypassKeys.clear();
+    this.resetCommandRetries();
   }
 
   // ─── 持久化 ───

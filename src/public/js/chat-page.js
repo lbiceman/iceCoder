@@ -1249,9 +1249,18 @@ window.ChatPage = (function () {
     if (Array.isArray(runningTurn.planEvents) && window.ChatExecutionPlanBridge
         && typeof window.ChatExecutionPlanBridge.handleStep === 'function') {
       for (var j = 0; j < runningTurn.planEvents.length; j++) {
-        try { window.ChatExecutionPlanBridge.handleStep(runningTurn.planEvents[j]); }
+        var planEvt = runningTurn.planEvents[j];
+        // 开跑时的 clear 会把刚恢复的活章封掉并清掉计时；当前回合快照里不应再封一次。
+        if (planEvt && planEvt.type === 'execution_plan_clear') continue;
+        try { window.ChatExecutionPlanBridge.handleStep(planEvt); }
         catch (_e) { /* ignore */ }
       }
+    }
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+      window.ChatExecutionPlan.beginTurnTimer(
+        typeof runningTurn.startedAt === 'number' ? runningTurn.startedAt : undefined,
+      );
     }
 
     UI.scheduleScrollIfSticky();

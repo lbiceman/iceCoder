@@ -2,7 +2,6 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { ToolCall } from '../llm/types.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
-import { isBuildVerificationCommand, isHarnessVerificationCommand } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import {
   checkHostGuardWritePreflight,
@@ -36,7 +35,6 @@ function sandboxBlockPreflightReason(
 
 const MISSING_FILE_TARGET_TOOLS = new Set(['read_file', 'edit_file', 'patch_file', 'append_file']);
 const DIST_ARTIFACT_RE = /^(?:dist|build|out)\//i;
-const SOURCE_FILE_RE = /^src\/.*\.(ts|tsx|js|jsx)$/i;
 
 export function isDistArtifactPath(path: string | undefined): boolean {
   if (!path) return false;
@@ -44,17 +42,11 @@ export function isDistArtifactPath(path: string | undefined): boolean {
 }
 
 export function isBuildLikeCommand(command: string | undefined): boolean {
-  if (!command) return false;
-  return isBuildVerificationCommand(command)
-    && !/\btsc\b.*--no-emit|\btsc\b.*--noEmit/i.test(command);
+  return !!command?.trim();
 }
 
-export function isDiagnosticAllowedCommand(command: string | undefined): boolean {
-  if (!command) return false;
-  const c = command.toLowerCase();
-  return /\bnpx\s+tsc\b/.test(c)
-    || /\btsc\s+--no-emit\b/.test(c)
-    || /\btsc\s+--noEmit\b/.test(c);
+export function isDiagnosticAllowedCommand(_command: string | undefined): boolean {
+  return true;
 }
 
 function extractTargetPath(args: Record<string, unknown>): string | undefined {
@@ -154,7 +146,7 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
         message: [
           '[Harness / Preflight] read_file blocked: build artifacts are unavailable until verification passes.',
           `Path: ${path}`,
-          'Run npx tsc --noEmit or npm run build first; read source under src/ instead of dist/.',
+          'Path is a build artifact. Read sources in the workspace instead of dist/build/out.',
         ].join('\n'),
       };
     }
@@ -162,19 +154,15 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
 
   if (input.toolName === 'run_command' && input.buildDiagnosticGateActive) {
     const command = extractRunCommand(input.args);
-    if (isBuildLikeCommand(command) && !isDiagnosticAllowedCommand(command)) {
+    if (command && input.branchBudget?.wouldBlockCommandRetry(command)) {
       return {
         blocked: true,
         reason: 'build_diagnostic_gate',
         message: [
-          '[Harness / Diagnostic Gate] build commands are paused until you diagnose the failure.',
+          '[Harness / Diagnostic Gate] the failed command is paused until you diagnose the failure.',
           `Blocked command: ${command}`,
-          'Required next steps:',
-          '1. read_file the TypeScript sources referenced in the last build/tsc error',
-          '2. run npx tsc --noEmit 2>&1 to collect compiler errors',
-          '3. edit source files under src/',
-          '4. only then retry npm run build',
-          'Do not use Python/shell workaround scripts or read dist/ until build succeeds.',
+          'Read this round\'s output, fix the cause, then re-run the project\'s own verification command.',
+          'Do not rerun the same failed command until the implementation changes.',
         ].join('\n'),
       };
     }
@@ -263,7 +251,7 @@ export function shouldClearBuildDiagnosticGate(args: {
     const path = typeof tc.arguments.path === 'string'
       ? tc.arguments.path
       : (typeof tc.arguments.file_path === 'string' ? tc.arguments.file_path : undefined);
-    if (path && SOURCE_FILE_RE.test(path.replace(/\\/g, '/'))) return true;
+    if (path) return true;
   }
   return false;
 }
@@ -271,8 +259,8 @@ export function shouldClearBuildDiagnosticGate(args: {
 export function buildDiagnosticGateMessage(): string {
   return [
     '[System / Build Diagnostic Gate]',
-    'Build verification is blocked by BranchBudget after repeated failures.',
-    'Switch to diagnosis mode: read failing src files, run npx tsc --noEmit, fix TypeScript errors, then retry build.',
-    'Do not rerun the same npm run build, read dist/, or add Python workaround scripts.',
+    'A verification command is blocked by BranchBudget after repeated failures.',
+    'Switch to diagnosis: read this round\'s failing output, fix the cause, then re-run the project\'s own verification command.',
+    'Do not rerun the same failed command until the implementation changes.',
   ].join('\n');
 }

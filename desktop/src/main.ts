@@ -96,7 +96,7 @@ async function createStartupWindow(): Promise<BrowserWindow> {
   await win.loadURL(
     `data:text/html;charset=UTF-8,${encodeURIComponent(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>${APP_NAME}</title>
-<style>body{margin:0;background:#0e0f12;color:#e6e8ee;font:14px system-ui,sans-serif;display:grid;place-items:center;height:100vh}.loading{display:flex;gap:12px;align-items:center}.dot{width:10px;height:10px;border:2px solid #7ca7ff;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style>
+<style>body{margin:0;background:#0e0f12;color:#e6e8ee;font:14px system-ui,sans-serif;display:grid;place-items:center;height:100vh}.loading{display:flex;gap:12px;align-items:center}.dot{width:10px;height:10px;border:2px solid #f2f2f3;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style>
 </head><body><div class="loading"><span class="dot"></span><span>正在启动 ${APP_NAME}…</span></div></body></html>`)}`,
   );
   logStartupTiming('startup-window-visible');

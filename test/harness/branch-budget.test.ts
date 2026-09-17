@@ -181,6 +181,32 @@ describe('BranchBudgetTracker - snapshot / 恢复', () => {
     t.recordFileEdit('a.ts');
     expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
   });
+
+  it('跨模拟两轮不 reset 时第 fileEditMax+1 次 wouldBlockFileEdit', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 3 });
+    // 模拟工具轮 1：同文件连打 2 次（不 reset）
+    t.recordFileEdit('src/a.ts');
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(false);
+    // 模拟工具轮 2：继续累加，不调用 resetRoundBudget
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(true);
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(true);
+    expect(t.inspect().fileEdits['src/a.ts']).toBe(4);
+  });
+
+  it('新用户消息 resetRoundBudget 后同一路径可再 edit', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 3 });
+    t.recordFileEdit('src/a.ts');
+    t.recordFileEdit('src/a.ts');
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(true);
+    t.resetRoundBudget();
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(false);
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(false);
+  });
 });
 
 describe('BranchBudgetTracker - 维度优先级', () => {
@@ -206,18 +232,21 @@ describe('BranchBudgetTracker - 维度优先级', () => {
 });
 
 describe('BranchBudgetTracker - verification command reset', () => {
-  it('resetCommandRetriesForVerificationCommands clears build/test counters only', () => {
+  it('resetCommandRetriesForVerificationCommands clears all command retry keys', () => {
     const t = new BranchBudgetTracker({ commandRetryMax: 2 });
     t.recordFailedCommandAttempt('npm run build 2>&1');
     t.recordFailedCommandAttempt('npm test');
     t.recordFailedCommandAttempt('ls');
+    t.recordFailedCommandAttempt('./scripts/ci.sh');
     t.grantCommandRetryBypass('npm run build 2>&1');
 
     t.resetCommandRetriesForVerificationCommands();
 
-    expect(t.inspect().commandRetries).toEqual({ ls: 1 });
+    expect(t.inspect().commandRetries).toEqual({});
     expect(t.wouldBlockCommandRetry('npm run build 2>&1')).toBe(false);
     expect(t.wouldBlockCommandRetry('npm test')).toBe(false);
+    expect(t.wouldBlockCommandRetry('ls')).toBe(false);
+    expect(t.wouldBlockCommandRetry('./scripts/ci.sh')).toBe(false);
   });
   it('persists pending write/command bypass paths in snapshot', () => {
     const t = new BranchBudgetTracker({ fileEditMax: 2, commandRetryMax: 2 });

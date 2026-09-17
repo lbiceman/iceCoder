@@ -102,7 +102,6 @@ window.ChatWelcome = (function () {
       '<div class="chat-welcome-inner">' +
         '<header class="chat-welcome-header">' +
           '<div class="chat-welcome-brand">' +
-            '<span class="chat-welcome-logo ice-brand-logo" aria-hidden="true"></span>' +
             '<div class="chat-welcome-headings">' +
               '<h1 class="chat-welcome-title">IceCoder 已就绪</h1>' +
               '<p class="chat-welcome-subtitle" data-welcome-subtitle></p>' +
@@ -134,8 +133,8 @@ window.ChatWelcome = (function () {
           '<div class="chat-welcome-stat">' +
             '<span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>' + statIconSvg('l2') + '</span>' +
             '<div class="chat-welcome-stat-body">' +
-              '<span class="chat-welcome-stat-label">L2 · Gate</span>' +
-              '<span class="chat-welcome-stat-value" data-welcome-pipeline title="L2 过程监管与 Gate 收尾验收">—</span>' +
+              '<span class="chat-welcome-stat-label">验收门控</span>' +
+              '<span class="chat-welcome-stat-value" data-welcome-pipeline title="工具执行前的审批：allow / confirm / deny">—</span>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -481,17 +480,13 @@ window.ChatWelcome = (function () {
     if (!r) return;
     var el = r.querySelector('[data-welcome-pipeline]');
     var iconEl = r.querySelector('[data-welcome-pipeline-icon]');
-    var mode = opts.supervisorMode || 'adaptive';
     var connected = opts.connectionState === 'connected';
     var setupRequired = !!opts.setupRequired;
-    var l2Text = '待命';
-    if (mode === 'off') l2Text = '已关闭';
-    else if (mode === 'strict') l2Text = '严格';
-    var gateText = (!connected || setupRequired) ? '未激活' : '待触发';
-    var tone = 'accent';
-    if (mode === 'off' || !connected || setupRequired) tone = 'muted';
-    else if (gateText === '待触发') tone = 'success';
-    setStatValue(el, iconEl, l2Text + ' · ' + gateText, tone);
+    if (!connected || setupRequired) {
+      setStatValue(el, iconEl, '未激活', 'muted');
+      return;
+    }
+    setStatValue(el, iconEl, '就绪', 'success');
   }
 
   function resolveRoot(root) {

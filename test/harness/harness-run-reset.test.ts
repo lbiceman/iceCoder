@@ -289,14 +289,53 @@ describe('harness.run() per-user-message reset', () => {
         finalResponse('done'),
       ]),
       (e) => {
-        if (e.type === 'tool_result' && typeof e.output === 'string' && e.output.includes('[BranchBudget / Blocked]')) {
-          blocked.push(e.output);
+        const text = [e.toolOutput, e.toolError, e.content]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n');
+        if (e.type === 'tool_result' && text.includes('[BranchBudget / Blocked]')) {
+          blocked.push(text);
         }
       },
     );
 
     expect(editAttempts).toBe(1);
     expect(blocked).toHaveLength(0);
+  });
+
+  it('accumulates same-path edit_file across two tool rounds in one run', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('edit_file')];
+    let editAttempts = 0;
+    const blocked: string[] = [];
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+    }), createToolExecutor(tools, async (name) => {
+      if (name === 'edit_file') editAttempts += 1;
+      return { success: true, output: 'ok' };
+    }));
+
+    await harness.run(
+      'fix package.json',
+      createChatFn([
+        toolCallResponse([{ id: 'e1', name: 'edit_file', args: { path: 'package.json', content: 'a' } }]),
+        toolCallResponse([{ id: 'e2', name: 'edit_file', args: { path: 'package.json', content: 'b' } }]),
+        toolCallResponse([{ id: 'e3', name: 'edit_file', args: { path: 'package.json', content: 'c' } }]),
+        toolCallResponse([{ id: 'e4', name: 'edit_file', args: { path: 'package.json', content: 'd' } }]),
+        finalResponse('done'),
+      ]),
+      (e) => {
+        const text = [e.toolOutput, e.toolError, e.content]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n');
+        if (e.type === 'tool_result' && text.includes('[BranchBudget / Blocked]')) {
+          blocked.push(text);
+        }
+      },
+    );
+
+    expect(editAttempts).toBe(DEFAULT_BRANCH_BUDGET.fileEditMax);
+    expect(blocked.length).toBeGreaterThan(0);
   });
 
   it('resetGraph at run() clears graph seeded before run()', async () => {

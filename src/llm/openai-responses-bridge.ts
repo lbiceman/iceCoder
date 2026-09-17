@@ -258,6 +258,7 @@ export async function responsesStream(
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
     reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
+    onStreamActivity?: () => void;
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(
@@ -282,6 +283,7 @@ export async function responsesStream(
   const pendingCalls = new Map<string, { call_id: string; name: string; arguments: string }>();
 
   for await (const event of stream) {
+    ctx.onStreamActivity?.();
     const type = event.type;
 
     if (type === 'response.output_text.delta') {

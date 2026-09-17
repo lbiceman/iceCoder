@@ -3,6 +3,7 @@ import {
   containsEmbeddedThinking,
   EmbeddedThinkingStreamFilter,
   ReasoningSystemTagStreamFilter,
+  extractEmbeddedThinking,
   stripEmbeddedThinking,
   stripSystemTagsFromReasoning,
 } from '../../src/harness/thinking-content-strip.js';
@@ -41,6 +42,19 @@ describe('thinking-content-strip', () => {
     const filter = new AssistantVisibleStreamFilter();
     expect(filter.feed('<system>\n</system>\n\n正文')).toEqual({ visible: '\n\n正文', thinking: '' });
     expect(filter.flush()).toEqual({ visible: '', thinking: '' });
+  });
+
+  it('extractEmbeddedThinking keeps visible text and captures think blocks', () => {
+    const extracted = extractEmbeddedThinking(MIMO_SAMPLE);
+    expect(extracted.visible).toContain('iceCoder');
+    expect(extracted.thinking).toContain('自我介绍问题');
+    expect(extracted.thinking).not.toContain('iceCoder');
+  });
+
+  it('extractEmbeddedThinking captures think-only replies', () => {
+    const extracted = extractEmbeddedThinking('<think>只思考没有正文</think>');
+    expect(extracted.visible).toBe('');
+    expect(extracted.thinking).toBe('只思考没有正文');
   });
 
   it('sanitizeAssistantContentForUser removes thinking for display', () => {

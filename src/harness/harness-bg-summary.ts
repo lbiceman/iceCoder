@@ -54,7 +54,7 @@ export function composeBgStatusUserMessage(
   const maxChars = options.maxChars ?? 600;
   const mgr = options.manager ?? getBackgroundTaskManagerFor(sessionId, workDir);
 
-  const summaries = mgr.getRunningSummary({ onlyDirtyOrDue: true, intervalMs });
+  const summaries = mgr.getInjectableSummary({ onlyDirtyOrDue: true, intervalMs });
   if (summaries.length === 0) return null;
 
   const content = mgr.formatRunningSummaryBlock({ intervalMs, maxChars });

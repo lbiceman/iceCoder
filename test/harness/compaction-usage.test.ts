@@ -72,6 +72,19 @@ describe('ContextCompactor 双轨占用判定', () => {
     ).toBe(false);
   });
 
+  it('占用仅 50% 时不触发微压缩', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [{ role: 'user', content: 'ok' }];
+    const half = Math.floor(CONTEXT_WINDOW * 0.5);
+
+    expect(
+      compactor.needsMicroCompaction(messages, { lastApiPromptTokens: half }),
+    ).toBe(false);
+    expect(
+      compactor.needsCompaction(messages, { lastApiPromptTokens: half }),
+    ).toBe(false);
+  });
+
   it('显式 tokenThreshold 仍仅看 messages 本地估算（测试兼容）', () => {
     const compactor = new ContextCompactor({ tokenThreshold: 100 });
     const messages: UnifiedMessage[] = [

@@ -13,8 +13,8 @@ function resolveTrayIcon(): Electron.NativeImage {
   const assetsDir = path.join(__dirname, '..', 'assets');
   const candidates =
     process.platform === 'win32'
-      ? ['tray-icon.png', 'icon.ico', 'icon.png']
-      : ['tray-icon.png', 'icon.png', 'icon.ico'];
+      ? ['icon.ico', 'icon.png']
+      : ['icon.png', 'icon.ico'];
   for (const name of candidates) {
     const image = nativeImage.createFromPath(path.join(assetsDir, name));
     if (!image.isEmpty()) {

@@ -8,11 +8,22 @@ import {
   FOREGROUND_DEFAULT_TIMEOUT_MS,
   SHORT_TIMEOUT_MAX_MS,
   BG_SUMMARY_INTERVAL_MS,
+  shellSoftEscalateEnabled,
 } from '../../src/tools/shell-runtime-classifier.js';
 
 describe('shell-runtime-classifier — constants', () => {
-  it('SOFT_TIMEOUT_MS is 8 seconds', () => {
+  it('SOFT_TIMEOUT_MS is 8 seconds (opt-in escalate only)', () => {
     expect(SOFT_TIMEOUT_MS).toBe(8_000);
+  });
+
+  it('shellSoftEscalateEnabled defaults off', () => {
+    const prev = process.env.ICE_SHELL_SOFT_ESCALATE;
+    delete process.env.ICE_SHELL_SOFT_ESCALATE;
+    expect(shellSoftEscalateEnabled()).toBe(false);
+    process.env.ICE_SHELL_SOFT_ESCALATE = '1';
+    expect(shellSoftEscalateEnabled()).toBe(true);
+    if (prev === undefined) delete process.env.ICE_SHELL_SOFT_ESCALATE;
+    else process.env.ICE_SHELL_SOFT_ESCALATE = prev;
   });
 
   it('HARD_TIMEOUT_NONE is 0 (unlimited background)', () => {
@@ -34,22 +45,6 @@ describe('shell-runtime-classifier — constants', () => {
 
 describe('classifyShellCommand — long', () => {
   it.each([
-    ['npm test'],
-    ['npm t'],
-    ['npm run test'],
-    ['npm run dev'],
-    ['npm run start'],
-    ['npm run build'],
-    ['npm run watch'],
-    ['pnpm test'],
-    ['yarn test'],
-    ['bun test'],
-    ['pnpm run dev'],
-    ['vitest'],
-    ['vitest run'],
-    ['jest'],
-    ['playwright test'],
-    ['cypress run'],
     ['tsc --watch'],
     ['tsc -w'],
     ['docker build .'],
@@ -66,7 +61,7 @@ describe('classifyShellCommand — long', () => {
   });
 
   it('treats leading whitespace', () => {
-    expect(classifyShellCommand('   npm test   ')).toBe('long');
+    expect(classifyShellCommand('   docker build .   ')).toBe('long');
   });
 });
 
@@ -114,27 +109,46 @@ describe('classifyShellCommand — auto (fallback)', () => {
   it.each([
     ['some-unknown-command --flag'],
     ['./scripts/custom.sh'],
+    ['./scripts/ci.sh'],
     ['node scripts/check.mjs'],
     ['python my-script.py'],
     ['make'],
     ['mvn install'],          // not in either list; falls through
     ['gradlew build'],
+    ['npm test'],
+    ['npm t'],
+    ['npm run test'],
+    ['npm run dev'],
+    ['npm run start'],
+    ['npm run build'],
+    ['pnpm test'],
+    ['yarn test'],
+    ['bun test'],
+    ['vitest'],
+    ['vitest run'],
+    ['jest'],
+    ['playwright test'],
+    ['cypress run'],
     [''],                      // empty → auto
     ['   '],                   // whitespace only → auto
   ])('classifies "%s" as auto', (cmd) => {
     expect(classifyShellCommand(cmd)).toBe('auto');
   });
+
+  it('npm test and ./scripts/ci.sh share the same auto class', () => {
+    expect(classifyShellCommand('npm test')).toBe('auto');
+    expect(classifyShellCommand('./scripts/ci.sh')).toBe('auto');
+  });
 });
 
 describe('classifyShellCommand — edge cases', () => {
   it('npm --version is short, not long (specificity)', () => {
-    // long pattern excludes `--version` / `--help` via the version regex
     expect(classifyShellCommand('npm --version')).toBe('short');
-    expect(classifyShellCommand('vitest --version')).not.toBe('long');
+    expect(classifyShellCommand('vitest --version')).toBe('auto');
   });
 
   it('vitest --help is not long', () => {
-    expect(classifyShellCommand('vitest --help')).not.toBe('long');
+    expect(classifyShellCommand('vitest --help')).toBe('auto');
   });
 
   it('git status with extra args is short', () => {

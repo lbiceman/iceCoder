@@ -4,6 +4,7 @@
 
 import type { UnifiedMessage } from '../llm/types.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
+import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
 
 /** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
 export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
@@ -188,6 +189,7 @@ export function applyLightMicrocompactToolClear(
     const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
     if (!toolName || FILE_TOOLS_NEVER_MICROCLEAR.has(toolName)) return msg;
     if (!LIGHT_MICROCLEAR_TOOLS.has(toolName)) return msg;
+    if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content)) return msg;
 
     const len = msg.content.length;
     return {

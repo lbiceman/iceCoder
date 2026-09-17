@@ -4,7 +4,6 @@ import type { CompactRunOptions, ContextCompactor } from './context-compactor.js
 import type { CompactionUsageOptions } from './context-compactor.js';
 import {
   MICRO_COMPACTION_RATIO,
-  MICRO_MIN_SAVINGS_RATIO,
   PROACTIVE_FORK_RATIO,
 } from './compaction-constants.js';
 import {
@@ -14,10 +13,6 @@ import {
 } from './checkpoint-resume-compact.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import {
-  PRE_COMPACT_SESSION_MEMORY_WAIT_MS,
-  PRE_COMPACT_SESSION_TIMEOUT_MSG,
-} from './harness-constants.js';
 import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { logCacheSegmentReset } from './harness-cache-segment.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -27,6 +22,11 @@ import type { HarnessLogger } from './logger.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import type { ChatFunction, HarnessStepEvent } from './types.js';
 import { CompletionFactsView } from './completion-facts-view.js';
+import {
+  canUseEmergencyCompact,
+  consumeEmergencyCompact,
+  refundEmergencyCompact,
+} from './emergency-compact-quota.js';
 
 export interface CompactionDeps extends ResilienceBridgeDeps {
   contextCompactor: ContextCompactor;
@@ -61,7 +61,7 @@ function applyProactiveForkIfNeeded(
   usageOptions: CompactionUsageOptions,
   onStep?: (event: HarnessStepEvent) => void,
 ): boolean {
-  if (!state || state.contextEmergencyCompactUsed) return false;
+  if (!state || !canUseEmergencyCompact(state)) return false;
 
   const ctxWindow = readEffectiveContextWindowTokens();
   const proactiveLine = Math.floor(ctxWindow * PROACTIVE_FORK_RATIO);
@@ -72,7 +72,7 @@ function applyProactiveForkIfNeeded(
   });
   if (usage.effectiveUsed < proactiveLine) return false;
 
-  state.contextEmergencyCompactUsed = true;
+  consumeEmergencyCompact(state);
   state.checkpointResumeForkApplied = true;
   const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
   const fork = applyCheckpointResumeFork(deps.contextCompactor, messages, summary, { aggressive: true });
@@ -136,98 +136,53 @@ export async function maybeCompact(
 
   const needsHard = deps.contextCompactor.needsCompaction(messages, usageOptions);
   const needsMicro = deps.contextCompactor.needsMicroCompaction(messages, usageOptions);
-  let mustHardCompact = needsHard;
 
   if (!needsHard && !needsMicro) return;
 
   // ── 第一道防线：轻量微压缩（未达硬压缩线时）
+  // 微压缩是可选 GC：清不到或省不够时停在本层，等真正触硬压缩线再搬家。
+  // 不要用上一轮 API prompt 判断「仍触线」——本地刚改过历史，那组 prompt_tokens 已经过期。
   if (needsMicro && !needsHard && deps.contextCompactor.canMicroCompact()) {
     const before = messages.length;
     const beforeEffective = usage.effectiveUsed;
     const compacted = deps.contextCompactor.doLightCompact(messages);
+    const changed = compacted.some((msg, i) => msg !== messages[i]);
+    if (!changed) {
+      applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
+      return;
+    }
+
     messages.length = 0;
     messages.push(...compacted);
 
-    const postLocalOptions: CompactionUsageOptions = { tools, lastApiPromptTokens: 0 };
-    const afterUsage = resolveCompactionUsage({ messages, ...postLocalOptions });
-    const postDualUsage = resolveCompactionUsage({ messages, ...usageOptions });
-    const saved = beforeEffective - afterUsage.effectiveUsed;
-    const needsHardAfter = deps.contextCompactor.needsCompaction(messages, usageOptions);
-    const weakMicro = saved < beforeEffective * MICRO_MIN_SAVINGS_RATIO;
-    const microThreshold = Math.floor(readEffectiveContextWindowTokens() * MICRO_COMPACTION_RATIO);
-
-    if (!needsHardAfter && !weakMicro && postDualUsage.effectiveUsed < microThreshold) {
-      const afterTok = deps.contextCompactor.getEstimatedTokens(messages);
-      console.log(
-        `[harness] 微压缩: ${before} → ${messages.length} 条消息 `
-        + `(effective ${beforeEffective}→${afterUsage.effectiveUsed}, 纯本地)`,
-      );
-      logger.compaction(before, messages.length, beforeEffective, afterTok);
-      onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
-      logCacheSegmentReset(state?.turnCount, 'micro-compact');
-      applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
-      if (!state?.contextEmergencyCompactUsed) {
-        emitContextUsageStep(onStep, messages, tools);
-      }
-      return;
+    const afterUsage = resolveCompactionUsage({ messages, tools, lastApiPromptTokens: 0 });
+    const afterTok = deps.contextCompactor.getEstimatedTokens(messages);
+    console.log(
+      `[harness] 微压缩: ${before} → ${messages.length} 条消息 `
+      + `(effective ${beforeEffective}→${afterUsage.effectiveUsed}, 纯本地)`,
+    );
+    logger.compaction(before, messages.length, beforeEffective, afterTok);
+    onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
+    logCacheSegmentReset(state?.turnCount, 'micro-compact');
+    applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
+    if (!state?.contextEmergencyCompactUsed) {
+      emitContextUsageStep(onStep, messages, tools);
     }
-    // 节省不足 / 双轨仍触线 / 本地仍触线 → 同轮升档硬压缩
-    mustHardCompact = true;
-  } else if (!needsHard) {
     return;
   }
+
+  if (!needsHard) return;
 
   // ── 第二道防线：硬压缩 ──
-  const stillNeedsHard = mustHardCompact
-    || deps.contextCompactor.needsCompaction(messages, usageOptions);
-  if (!stillNeedsHard) {
-    applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
-    return;
-  }
-
   const hardRunOptions: CompactRunOptions = {
     usageOptions,
-    forceFullCompact: mustHardCompact,
+    forceFullCompact: true,
   };
 
   const before = messages.length;
   const beforeTokens = deps.contextCompactor.getEffectiveUsed(messages, usageOptions);
 
-  // 压缩前备份任务目标到会话笔记：等待完成后再读盘，避免与硬压缩读到旧笔记竞态（带超时降级）
-  const taskDesc = deps.contextCompactor.getTaskDescription(messages);
-  if (taskDesc) {
-    const waitMs = PRE_COMPACT_SESSION_MEMORY_WAIT_MS;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(PRE_COMPACT_SESSION_TIMEOUT_MSG)), waitMs);
-    });
-    try {
-      await Promise.race([
-        deps.memoryIntegration.maybeUpdateSessionMemory(
-          messages,
-          0,
-          true,
-          state
-            ? { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() }
-            : undefined,
-        ),
-        timeoutPromise,
-      ]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg === PRE_COMPACT_SESSION_TIMEOUT_MSG) {
-        console.log(
-          `[harness] 压缩前会话笔记更新超时（>${waitMs}ms），使用磁盘上现有内容继续压缩`,
-        );
-      } else {
-        console.debug('[harness] 压缩前等待会话笔记更新失败:', msg);
-      }
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
-  }
-
-  // 压缩前获取会话笔记
+  // 压缩只读已有会话笔记，不在工作中打会话笔记 LLM（写入等到 model_done）。
   const sessionNotes = await deps.memoryIntegration.getSessionMemoryForCompact();
 
   // 压缩前保存最近注入的记忆消息
@@ -325,6 +280,16 @@ export async function maybeCompact(
   onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
   logCacheSegmentReset(state?.turnCount, 'hard-compact');
   await resilienceSaveCheckpoint(deps, 'compaction', state);
+
+  const afterHardUsage = resolveCompactionUsage({
+    messages,
+    tools,
+    lastApiPromptTokens: 0,
+  });
+  const microLine = Math.floor(readEffectiveContextWindowTokens() * MICRO_COMPACTION_RATIO);
+  if (afterHardUsage.effectiveUsed < microLine) {
+    refundEmergencyCompact(state);
+  }
 
   emitContextUsageStep(onStep, messages, tools);
   applyProactiveForkIfNeeded(

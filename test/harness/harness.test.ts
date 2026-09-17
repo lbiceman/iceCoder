@@ -45,13 +45,6 @@ function finalResponse(content: string, tokens = { input: 100, output: 50 }): LL
   return { content, usage: makeUsage(tokens.input, tokens.output), finishReason: 'stop' };
 }
 
-/** step-review 启发式不确定时会额外消费一次 chatFn；队列中插入本桩避免抢走主对话的 mock。 */
-function stepReviewLlmStub(): LLMResponse {
-  return finalResponse(
-    '{"progressMade":false,"repeatedPattern":false,"fallbackSuggested":false,"reason":"test-stub"}',
-  );
-}
-
 function toolCallResponse(calls: { id: string; name: string; args?: Record<string, any> }[], content = ''): LLMResponse {
   return {
     content,
@@ -229,46 +222,69 @@ describe('Harness - 工具调用循环', () => {
     )).toBe(false);
   });
 
-  it('简单修改有成功回执时不强制追加测试', async () => {
-    const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
-    const executor = createToolExecutor(tools);
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+  it('简单工程修改在 runtime-default 过期时自动追加一次测试', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-default-stop-test-'));
+    try {
+      await fs.writeFile(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        scripts: { test: 'vitest run' },
+      }), 'utf8');
+      const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
+      const executor = createToolExecutor(tools);
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), executor);
 
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      finalResponse('已修复'),
-      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('已修复'),
-    ], finalResponse('已修复'));
+      const chatFn = createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+        finalResponse('已修复'),
+        toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('已修复'),
+      ], finalResponse('已修复'));
 
-    const result = await harness.run('修复失败用例', chatFn);
+      const result = await harness.run('修复失败用例', chatFn);
 
-    expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(1);
-    expect(result.loopState.stopReason).toBe('model_done');
-    expect(result.messages.some(m =>
-      m.role === 'user'
-      && typeof m.content === 'string'
-      && /unit tests/i.test(m.content)
-    )).toBe(false);
+      expect(result.content).toBe('已修复');
+      expect(result.loopState.totalToolCalls).toBe(2);
+      expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.completionStatus).toBe('completed');
+      expect(result.messages.some(m =>
+        m.role === 'user'
+        && typeof m.content === 'string'
+        && /unit tests/i.test(m.content)
+      )).toBe(false);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('修改代码且 npm test 通过后允许完成', async () => {
-    const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
-    const executor = createToolExecutor(tools);
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-explicit-test-'));
+    try {
+      await fs.writeFile(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        scripts: { test: 'vitest run' },
+      }), 'utf8');
+      const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
+      const executor = createToolExecutor(tools);
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), executor);
 
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('已修复并验证'),
-    ], finalResponse('已修复并验证'));
+      const chatFn = createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+        toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('已修复并验证'),
+      ], finalResponse('已修复并验证'));
 
-    const result = await harness.run('修复失败用例', chatFn);
+      const result = await harness.run('修复失败用例', chatFn);
 
-    expect(result.content).toBe('已修复并验证');
-    expect(result.loopState.totalToolCalls).toBe(2);
-    expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.content).toBe('已修复并验证');
+      expect(result.loopState.totalToolCalls).toBe(2);
+      expect(result.loopState.stopReason).toBe('model_done');
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('工具执行后通过发送管道注入 Runtime State 和 Repo Context', async () => {
@@ -381,15 +397,15 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       finalResponse('File does not exist'),
       finalResponse('File does not exist'),
     ]);
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('File does not exist');
-    expect(result.completionStatus).toBe('failed');
+    expect(result.content).toBe('File does not exist');
+    expect(result.completionStatus).toBe('completed');
+    expect(result.completionReason).toBe('verification_not_required');
     // 消息中应该包含工具错误
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
     expect(toolMsg).toBeDefined();
@@ -484,6 +500,8 @@ describe('Harness - max-output-tokens 恢复', () => {
     const result = await harness.run('Very long text', chatFn);
 
     expect(result.loopState.stopReason).toBe('max_output_tokens');
+    expect(result.completionStatus).toBe('interrupted');
+    expect(result.completionReason).toBe('max_output_tokens');
   });
 });
 
@@ -567,8 +585,8 @@ describe('Harness - LLM 错误重试', () => {
 
     expect(result.loopState.stopReason).toBe('error');
     expect(result.content).toContain('timeout');
-    // LLM_MAX_RETRIES=1, 所以 1 初始 + 1 重试 = 2 次
-    expect(chatFn).toHaveBeenCalledTimes(2);
+    // LLM_MAX_RETRIES=3, 所以 1 初始 + 3 重试 = 4 次
+    expect(chatFn).toHaveBeenCalledTimes(4);
   }, 60000);
 
   it('各种可重试错误类型都能识别', async () => {
@@ -758,7 +776,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harnessWithExecutor.run('Read file', chatFn);
 
-    expect(result.content).toContain('Cannot read');
+    expect(result.content).toBe('Cannot read');
     expect(result.completionStatus).toBe('paused');
     expect(result.loopState.stopReason).toBe('completion_paused');
     expect(handler).not.toHaveBeenCalled();
@@ -787,7 +805,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('User declined');
+    expect(result.content).toBe('User declined');
     expect(result.completionStatus).toBe('paused');
     expect(onConfirm).toHaveBeenCalledWith('read_file', {});
     expect(handler).not.toHaveBeenCalled();
@@ -809,7 +827,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('Need confirmation');
+    expect(result.content).toBe('Need confirmation');
     expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
@@ -878,7 +896,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Delete important.txt', chatFn);
 
-    expect(result.content).toContain('OK, I will not delete it');
+    expect(result.content).toBe('OK, I will not delete it');
     expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('User denied'));
@@ -1017,11 +1035,15 @@ describe('Harness - onStep 回调', () => {
     const chatFn: ChatFunction = vi.fn().mockRejectedValue(new Error('Invalid key'));
 
     const events: HarnessStepEvent[] = [];
-    await harness.run('test', chatFn, (e) => events.push(e));
+    const result = await harness.run('test', chatFn, (e) => events.push(e));
 
     const finalEvent = events.find(e => e.type === 'final');
     expect(finalEvent).toBeDefined();
     expect(finalEvent!.stopReason).toBe('error');
+    expect(finalEvent!.completionStatus).toBe('failed');
+    expect(finalEvent!.completionReason).toBe('error');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.completionReason).toBe('error');
   });
 
   it('max_output_tokens 停止时 final 事件包含正确 stopReason', async () => {
@@ -1042,6 +1064,8 @@ describe('Harness - onStep 回调', () => {
     const finalEvent = events.find(e => e.type === 'final');
     expect(finalEvent!.stopReason).toBe('max_output_tokens');
     expect(finalEvent!.tokenUsage).toBeDefined();
+    expect(finalEvent!.completionStatus).toBe('interrupted');
+    expect(finalEvent!.completionReason).toBe('max_output_tokens');
   });
 });
 
@@ -1148,6 +1172,32 @@ describe('ContextCompactor - 微压缩', () => {
     const t6 = compacted.find(m => m.role === 'tool' && m.toolCallId === 'tc6');
     expect((t1!.content as string).startsWith('[Old tool result cleared for context]')).toBe(true);
     expect(t6!.content).toContain('KEEPTHIS6');
+  });
+
+  it('微压缩不清空失败的 run_command 输出', () => {
+    const failBody = 'Tool execution error: Command failed (exit code: 1)\n\n'
+      + 'FAIL src/foo.test.ts\nAssertionError: expected 1 to be 2\n';
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'fail1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+      { role: 'tool', toolCallId: 'fail1', content: failBody },
+    ];
+    for (let i = 2; i <= 8; i++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `ok${i}`, name: 'run_command', arguments: {} }],
+        },
+        { role: 'tool', toolCallId: `ok${i}`, content: 'ok' },
+      );
+    }
+    const compacted = new ContextCompactor().doLightCompact(messages);
+    expect(compacted.find(m => m.toolCallId === 'fail1')!.content).toBe(failBody);
   });
 
   it('微压缩不清空 read_file 结果（即便轮次很旧）', () => {
@@ -1412,6 +1462,8 @@ describe('Harness - 边界情况', () => {
 
     expect(result.content).toBe('LLM returned empty response, please retry.');
     expect(result.loopState.stopReason).toBe('error');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.completionReason).toBe('error');
   });
 
   it('LLM 空响应重试后成功', async () => {
@@ -1424,6 +1476,24 @@ describe('Harness - 边界情况', () => {
     const result = await harness.run('test', chatFn);
 
     expect(result.content).toBe('recovered');
+    expect(result.loopState.stopReason).toBe('model_done');
+  });
+
+  it('工具执行后的空响应会再续跑而不是直接报错', async () => {
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse(''),
+      finalResponse(''),
+      finalResponse(''),
+      finalResponse('recovered after tools'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.content).toBe('recovered after tools');
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
@@ -1581,7 +1651,7 @@ describe('Harness - 边界情况', () => {
 // 17. 连续工具失败熔断
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 连续工具失败熔断', () => {
-  it('连续 3 轮工具全部失败后注入策略调整提示', async () => {
+  it('连续普通只读失败不否决模型最终正文', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
     const executor = createToolExecutor(tools, failHandler);
@@ -1590,7 +1660,6 @@ describe('Harness - 连续工具失败熔断', () => {
     // 3 轮工具调用（全部失败）+ 1 次最终总结
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       finalResponse('summary'),
@@ -1598,10 +1667,9 @@ describe('Harness - 连续工具失败熔断', () => {
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 模型仍可输出总结，但结构化终态必须保留最后一次失败。
-    expect(result.loopState.stopReason).toBe('completion_failed');
-    expect(result.completionStatus).toBe('failed');
-    expect(result.content).toContain('summary');
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.completionStatus).toBe('completed');
+    expect(result.content).toBe('summary');
   });
 
   it('重复同参工具失败时注入换策略提示', async () => {
@@ -1612,7 +1680,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'missing.ts' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'missing.ts' } }]),
       finalResponse('blocked'),
     ]);
@@ -1642,9 +1709,7 @@ describe('Harness - 连续工具失败熔断', () => {
       toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc3', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc4', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc5', name: 'read_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       finalResponse('done'),
     ]);
     const result = await harness.run('test', chatFn);
@@ -1660,7 +1725,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
@@ -1694,7 +1758,6 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
@@ -1727,13 +1790,9 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'a.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w2', name: 'write_file', args: { path: 'b.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w3', name: 'write_file', args: { path: 'c.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w4', name: 'write_file', args: { path: 'd.ts', content: 'x' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'w5', name: 'write_file', args: { path: 'e.ts', content: 'x' } }]),
       finalResponse('done'),
     ]);

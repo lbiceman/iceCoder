@@ -59,12 +59,16 @@ window.ChatSession = (function () {
       }
       localStorage.setItem(getLiveToolStorageKey(), JSON.stringify({
         tools: currentToolBatch.map(function (t) {
-          return {
+          var row = {
             toolName: t.toolName || '',
             detail: t.detail || '',
             status: t.status || 'pending',
             toolCallId: t.toolCallId || '',
           };
+          if (typeof t.iteration === 'number' && isFinite(t.iteration) && t.iteration > 0) {
+            row.iteration = Math.floor(t.iteration);
+          }
+          return row;
         }),
         savedAt: Date.now(),
       }));
@@ -85,6 +89,7 @@ window.ChatSession = (function () {
           detail: typeof t.detail === 'string' ? t.detail : '',
           status: t.status || 'pending',
           toolCallId: t.toolCallId || '',
+          iteration: typeof t.iteration === 'number' && t.iteration > 0 ? t.iteration : undefined,
         };
       });
     } catch (_e) {
@@ -546,6 +551,9 @@ window.ChatSession = (function () {
         };
         if (typeof m.diffSource === 'string' && m.diffSource) {
           traceRow.diffSource = m.diffSource;
+        }
+        if (typeof m.iteration === 'number' && isFinite(m.iteration) && m.iteration > 0) {
+          traceRow.iteration = Math.floor(m.iteration);
         }
         traces[m.parentId].push(traceRow);
       } else {

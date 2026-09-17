@@ -374,6 +374,7 @@ export class CheckpointEngine {
         filesRead: [],
         filesChanged: [],
         commandsRun: [],
+        workspaceMutationVersion: 0,
       },
       repoContext: {
         filesRead: [],

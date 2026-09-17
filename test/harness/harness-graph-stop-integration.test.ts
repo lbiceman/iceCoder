@@ -1,5 +1,5 @@
 /**
- * Harness 全链路：任务图 done 强制 stop 闸门。
+ * Harness 全链路：任务图 done 回到正常 LLM/no-tool D′ 收尾。
  */
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -95,7 +95,7 @@ function harnessGraph(harness: Harness): GraphExecutor {
 }
 
 describe('Harness graph terminal stop (integration)', () => {
-  it('图已 done 且无 pendingWork：首轮 prep 后即 model_done，不调 LLM', async () => {
+  it('图已 done 仍调用一次 LLM 生成最终正文', async () => {
     const tools = [makeTool('read_file')];
     const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' });
     const harness = new Harness(minConfig({
@@ -110,19 +110,20 @@ describe('Harness graph terminal stop (integration)', () => {
     });
 
     const chatFn = vi.fn(createChatFn([
-      toolCallResponse([{ id: 't1', name: 'read_file' }]),
+      finalResponse('graph final body'),
     ]));
     const events: HarnessStepEvent[] = [];
 
     const result = await harness.run('implement auth module', chatFn, e => events.push(e));
 
-    expect(chatFn).not.toHaveBeenCalled();
+    expect(chatFn).toHaveBeenCalledTimes(1);
     expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.content).toBe('graph final body');
     expect(events.some(e => e.type === 'task_graph_done')).toBe(true);
     expect(events.some(e => e.type === 'final' && e.stopReason === 'model_done')).toBe(true);
   });
 
-  it('工具轮结束后图变 done：强制 model_done，不再进入下一轮 LLM', async () => {
+  it('工具轮结束后图变 done：进入下一轮 LLM 生成最终正文', async () => {
     const tools = [makeTool('read_file')];
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), createToolExecutor(tools));
     const ge = harnessGraph(harness);
@@ -131,7 +132,7 @@ describe('Harness graph terminal stop (integration)', () => {
 
     const chatFn = vi.fn(createChatFn([
       toolCallResponse([{ id: 't1', name: 'read_file' }]),
-      toolCallResponse([{ id: 't2', name: 'read_file' }]),
+      finalResponse('normal final body'),
     ]));
     const events: HarnessStepEvent[] = [];
 
@@ -142,12 +143,13 @@ describe('Harness graph terminal stop (integration)', () => {
       }
     });
 
-    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(chatFn).toHaveBeenCalledTimes(2);
     expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.content).toBe('normal final body');
     expect(events.filter(e => e.type === 'final')).toHaveLength(1);
   });
 
-  it('图 done 且低风险写入已有回执：不强制追加验证轮', async () => {
+  it('图 done 且工程写入无计划：经 D′ 结束为 unverified', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'ice-graph-stop-'));
     try {
       const tools = [makeTool('write_file')];
@@ -169,9 +171,9 @@ describe('Harness graph terminal stop (integration)', () => {
         }
       });
 
-      expect(chatFn).toHaveBeenCalledTimes(1);
+      expect(chatFn).toHaveBeenCalledTimes(2);
       expect(result.loopState.stopReason).toBe('model_done');
-      expect(result.completionStatus).toBe('completed');
+      expect(result.completionStatus).toBe('completed_unverified');
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }
