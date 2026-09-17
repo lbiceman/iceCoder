@@ -774,7 +774,7 @@ src/
   core/             # Orchestrator (shared file parser + LLM adapter)
   harness/          # Harness, compaction, task/repo state, TaskGraph, D′ stop-time verification,
                     # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
-  llm/              # OpenAI-compatible adapters
+  llm/              # OpenAI-compatible + Anthropic Messages adapters
   memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction
   skills/             # skill-loader, SkillRegistry helpers
   parser/           # FileParser strategies (HTML, Office, XMind)

@@ -245,14 +245,22 @@ export async function handleNoToolCalls(
     pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
-      content: 'Continue the requested task with relevant available tools. Do not stop with thinking only.',
+      content: '[System] Continue the requested task with relevant available tools. Do not stop with thinking only.',
     });
     state.transition = 'max_output_tokens_recovery';
     return { action: 'continue' };
   }
 
+  const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
   if (
-    isReasoningOnlyResponse(response)
+    (
+      isReasoningOnlyResponse(response)
+      || (
+        (!response.content || !response.content.trim())
+        && !hasEmbeddedToolText
+        && hasToolCallSinceUser
+      )
+    )
     && state.reasoningOnlyRecoveryCount < MAX_REASONING_ONLY_RECOVERY
   ) {
     state.reasoningOnlyRecoveryCount++;
@@ -295,7 +303,6 @@ export async function handleNoToolCalls(
   const pendingWork = hasPendingWork(taskSnap, workspaceRoot);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
-  const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
 
   // 实现任务从未真正调用工具时，保留一次协议恢复；验收计划不消费这份预算。
   if (

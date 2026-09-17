@@ -45,11 +45,13 @@ export interface StreamIdleWatchdog {
 export async function withStreamIdleWatchdog<T>(
   userSignal: AbortSignal | undefined,
   run: (watchdog: StreamIdleWatchdog) => Promise<T>,
+  opts?: { label?: string },
 ): Promise<T> {
   const timeoutMs = resolveOpenAiStreamIdleTimeoutMs();
   const watchdog = createStreamIdleWatchdog({
     timeoutMs,
     userSignal,
+    label: opts?.label,
     log: (message) => console.log(message),
   });
   try {
@@ -68,6 +70,7 @@ export function createStreamIdleWatchdog(opts: {
   log?: (message: string) => void;
   now?: () => number;
   heartbeatMs?: number;
+  label?: string;
 }): StreamIdleWatchdog {
   const controller = new AbortController();
   const now = opts.now ?? Date.now;
@@ -81,10 +84,12 @@ export function createStreamIdleWatchdog(opts: {
   };
   userSignal?.addEventListener('abort', onUserAbort, { once: true });
 
+  const label = opts.label || 'OpenAI';
+
   const onIdleTimeout = (): void => {
     if (timedOut || userSignal?.aborted) return;
     timedOut = true;
-    opts.log?.(`[OpenAI] stream 连续 ${opts.timeoutMs}ms 无响应，中止本次请求`);
+    opts.log?.(`[${label}] stream 连续 ${opts.timeoutMs}ms 无响应，中止本次请求`);
     if (!controller.signal.aborted) controller.abort();
   };
 
@@ -100,7 +105,7 @@ export function createStreamIdleWatchdog(opts: {
     if (timedOut || userSignal?.aborted) return;
     const idleMs = now() - lastActivityAt;
     if (idleMs < heartbeatMs) return;
-    opts.log?.(`[OpenAI] stream 已 ${idleMs}ms 无新响应`);
+    opts.log?.(`[${label}] stream 已 ${idleMs}ms 无新响应`);
   }, heartbeatMs);
   unrefTimer(heartbeat);
 

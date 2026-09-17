@@ -16,6 +16,8 @@ import {
   EmbeddedThinkingStreamFilter,
   ReasoningSystemTagStreamFilter,
   type StreamSplitChunk,
+  containsEmbeddedThinking,
+  extractEmbeddedThinking,
   stripEmbeddedThinking,
   stripSystemTagsFromReasoning,
 } from './thinking-content-strip.js';
@@ -38,25 +40,39 @@ export function parseTextFormatToolCalls(content: string) {
 /** @deprecated 使用 {@link stripEmbeddedToolCalls} */
 export const stripTextFormatToolCalls = stripEmbeddedToolCalls;
 
+/** 把正文里的 <think> 等块挪到 reasoningContent，避免 salvage 后变成「空回复」。 */
+export function absorbEmbeddedThinking(response: LLMResponse): LLMResponse {
+  const raw = response.content ?? '';
+  if (!raw || !containsEmbeddedThinking(raw)) return response;
+  const extracted = extractEmbeddedThinking(raw);
+  if (extracted.visible === raw && !extracted.thinking) return response;
+  const reasoningParts = [response.reasoningContent, extracted.thinking]
+    .map((part) => (typeof part === 'string' ? part.trim() : ''))
+    .filter(Boolean);
+  return {
+    ...response,
+    content: extracted.visible,
+    ...(reasoningParts.length > 0 ? { reasoningContent: reasoningParts.join('\n\n') } : {}),
+  };
+}
+
 /**
  * 统一抢救入口：原生 tool_calls 时净化正文；否则从嵌入文本解析 toolCalls。
  * 净化后若仍像工具正文但未解析出调用，由 harness 走 no_tool 恢复（见 handleNoToolCalls）。
  */
 export function salvageTextToolCallsInResponse(response: LLMResponse): LLMResponse {
+  response = absorbEmbeddedThinking(response);
   if (response.toolCalls?.length) {
     return { ...response, content: prepareAssistantContentForHistory(response.content ?? '') };
   }
-  const raw = stripEmbeddedThinking(response.content?.trim() ?? '');
+  const raw = response.content?.trim() ?? '';
   if (!raw || !containsEmbeddedToolCalls(raw)) {
-    if (raw !== (response.content?.trim() ?? '')) {
-      return { ...response, content: raw };
-    }
     return response;
   }
 
   const { calls } = parseEmbeddedToolCallsFromText(raw);
   if (calls.length === 0) {
-    return raw !== (response.content?.trim() ?? '') ? { ...response, content: raw } : response;
+    return response;
   }
 
   const cleaned = stripEmbeddedToolCalls(raw);

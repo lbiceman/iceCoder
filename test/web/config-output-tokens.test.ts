@@ -13,5 +13,6 @@ describe('getModelMaxOutputTokens', () => {
   it('已知老模型仍保留保守上限', () => {
     expect(getModelMaxOutputTokens('gpt-3.5-turbo')).toBe(4096);
     expect(getModelMaxOutputTokens('gpt-4o')).toBe(16384);
+    expect(getModelMaxOutputTokens('claude-sonnet-4-5')).toBe(16384);
   });
 });

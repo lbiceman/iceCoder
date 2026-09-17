@@ -44,6 +44,8 @@ describe('envKeyCandidatesForProvider', () => {
       .toEqual(['DEEPSEEK_API_KEY']);
     expect(envKeyCandidatesForProvider({ id: '', apiUrl: 'https://api.openai.com/v1' }))
       .toEqual(['OPENAI_API_KEY']);
+    expect(envKeyCandidatesForProvider({ id: '', apiUrl: 'https://api.anthropic.com' }))
+      .toEqual(['ANTHROPIC_API_KEY']);
     expect(envKeyCandidatesForProvider({ id: '', apiUrl: 'https://openrouter.ai/api/v1' }))
       .toEqual(['OPENROUTER_API_KEY']);
   });

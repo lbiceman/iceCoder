@@ -1479,6 +1479,24 @@ describe('Harness - 边界情况', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
+  it('工具执行后的空响应会再续跑而不是直接报错', async () => {
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse(''),
+      finalResponse(''),
+      finalResponse(''),
+      finalResponse('recovered after tools'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.content).toBe('recovered after tools');
+    expect(result.loopState.stopReason).toBe('model_done');
+  });
+
   it('工具调用带 reasoningContent 时不写入会话历史', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);

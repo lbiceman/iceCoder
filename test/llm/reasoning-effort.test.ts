@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyReasoningEffortToAnthropicParams,
   applyReasoningEffortToChatParams,
   applyReasoningEffortToResponsesParams,
+  anthropicThinkingFromEffort,
   parseReasoningEffort,
   parseReasoningEffortLevels,
   parseReasoningEffortLevelsStrict,
@@ -80,5 +82,22 @@ describe('applyReasoningEffort', () => {
     const params: Record<string, unknown> = { reasoning: { summary: 'auto' } };
     applyReasoningEffortToResponsesParams(params, 'max');
     expect(params.reasoning).toEqual({ summary: 'auto', effort: 'max' });
+  });
+
+  it('maps the same effort tokens onto Anthropic thinking budgets', () => {
+    expect(anthropicThinkingFromEffort('low', 16384)).toEqual({ type: 'enabled', budget_tokens: 1024 });
+    expect(anthropicThinkingFromEffort('high', 16384)).toEqual({ type: 'enabled', budget_tokens: 8192 });
+    expect(anthropicThinkingFromEffort('max', 16384)).toEqual({ type: 'enabled', budget_tokens: 15360 });
+    expect(anthropicThinkingFromEffort('adaptive')).toEqual({ type: 'adaptive' });
+  });
+
+  it('writes thinking on Anthropic params and drops top_p', () => {
+    const params: Record<string, unknown> = { max_tokens: 16384, temperature: 0.3, top_p: 0.8 };
+    applyReasoningEffortToAnthropicParams(params, 'high');
+    expect(params.thinking).toEqual({ type: 'enabled', budget_tokens: 8192 });
+    expect(params.temperature).toBe(1);
+    expect(params.top_p).toBeUndefined();
+    applyReasoningEffortToAnthropicParams(params, undefined);
+    expect(params.thinking).toEqual({ type: 'enabled', budget_tokens: 8192 });
   });
 });

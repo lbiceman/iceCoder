@@ -7,6 +7,7 @@ import {
 } from '../../src/harness/text-format-tool-call-parsers.js';
 import {
   parseTextFormatToolCalls,
+  absorbEmbeddedThinking,
   salvageTextToolCallsInResponse,
   sanitizeAssistantContentForUser,
   stripTextFormatToolCalls,
@@ -88,6 +89,16 @@ describe('channel-delimiter / bracket-param tool markup', () => {
 });
 
 describe('text-tool-call-salvage orchestration', () => {
+  it('moves think-only XML into reasoningContent so harness will not treat it as empty', () => {
+    const out = absorbEmbeddedThinking({
+      content: '<think>先看测试结果再下结论</think>',
+      finishReason: 'stop',
+      usage: { inputTokens: 1, outputTokens: 40, totalTokens: 41, provider: 'test' },
+    });
+    expect(out.content).toBe('');
+    expect(out.reasoningContent).toBe('先看测试结果再下结论');
+  });
+
   it('backward-compatible aliases work', () => {
     expect(parseTextFormatToolCalls(XML_SAMPLE)).toHaveLength(2);
     expect(stripTextFormatToolCalls(XML_SAMPLE)).toBe('前缀说明');
