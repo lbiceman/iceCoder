@@ -12,7 +12,7 @@ describe('session-flow-eval', () => {
     try {
       const report = await runSessionFlowEval({ workspaceRoot: workspace });
 
-      expect(report.caseCount).toBeGreaterThanOrEqual(9);
+      expect(report.caseCount).toBeGreaterThanOrEqual(11);
       expect(report.passRate).toBe(1);
       expect(report.results.every((result) => result.passed)).toBe(true);
       expect(report.results.map((result) => result.id)).toEqual(expect.arrayContaining([
@@ -25,6 +25,8 @@ describe('session-flow-eval', () => {
         'next-explicit-fifo-persistence',
         'task-queue-four-item-drain-keeps-tail',
         'task-queue-session-isolation',
+        'mcp-browser-ext-detach-keeps-process-ready',
+        'mcp-runtime-detached-does-not-change-puppeteer-line',
       ]));
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });

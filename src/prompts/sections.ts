@@ -168,6 +168,52 @@ Examples: deleting branches/data, force-push, reset --hard, publishing side effe
   };
 }
 
+/** 从本轮工具名判断要不要写 browsermcp / puppeteer 分流。未传列表时按「两边都可能有」写全。 */
+export function detectMcpBrowserStacks(toolNames?: readonly string[]): {
+  anyMcp: boolean;
+  browserExt: boolean;
+  puppeteer: boolean;
+} {
+  if (!toolNames) {
+    return { anyMcp: true, browserExt: true, puppeteer: true };
+  }
+  const mcp = toolNames.filter((name) => name.startsWith('mcp_'));
+  return {
+    anyMcp: mcp.length > 0,
+    browserExt: mcp.some((name) =>
+      /browsermcp|browser_navigate|browser_snapshot|browser_click|browser_type/i.test(name)
+      && !/puppeteer/i.test(name),
+    ),
+    puppeteer: mcp.some((name) => /puppeteer/i.test(name)),
+  };
+}
+
+function buildMcpToolUsageBlock(toolNames?: readonly string[]): string {
+  const stacks = detectMcpBrowserStacks(toolNames);
+  const lines = [
+    '## MCP',
+    '- When `mcp_*` tools are listed, they are registered for this turn. Call them directly. Do not open MCP config or claim they are unconfigured.',
+    '- Server `ready` means the MCP process is up, not that every backend session is attached.',
+  ];
+  if (stacks.browserExt) {
+    lines.push(
+      '- Extension-browser MCP (browsermcp / `browser_*`): drives the user\'s current tab. `No connection to browser extension` is a tab-attach error, not a missing server. Retry that same tool once; if it still fails, ask the user to attach the extension to the tab. Do not treat a still-ready server as permanently dead.',
+    );
+  }
+  if (stacks.puppeteer) {
+    lines.push(
+      '- Puppeteer MCP launches a separate Chrome. Use it when you need a new browser, or after the extension retry failed. It does not replace inspecting the page the user is looking at.',
+    );
+  }
+  if (stacks.browserExt && stacks.puppeteer) {
+    lines.push(
+      '- If both are listed, prefer extension-browser tools to verify what the user sees. A later successful puppeteer call does not forbid going back to extension-browser while it stays ready.',
+    );
+  }
+  lines.push('- Open MCP configuration only when the user asks about it or when a server is missing/error (not ready).');
+  return lines.join('\n');
+}
+
 export function createToolUsageSection(toolNames?: readonly string[]): PromptSection {
   const available = toolNames ? new Set(toolNames) : null;
   const has = (name: string) => available === null || available.has(name);
@@ -187,9 +233,9 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - If the user specified a verification command or test framework, use that exact command. Otherwise discover how this repository verifies itself (scripts, README, manifests). Do not assume a default toolchain.
 - When checking a task, pass back its latest cursor. Silence after a server or watcher starts is normal; stop it only on failure, timeout, or user request.`
       : '',
-    `## MCP
-- When \`mcp_*\` tools are available, they are already connected; call them directly.
-- Open MCP configuration only when the user asks about it or when diagnosing a missing/failing server.`,
+    (toolNames === undefined || detectMcpBrowserStacks(toolNames).anyMcp)
+      ? buildMcpToolUsageBlock(toolNames)
+      : '',
     `## Tool arguments
 - Pass parameters as top-level JSON fields exactly as declared by the tool schema; never wrap the payload in a JSON string.
 ${has('write_file') ? '- write_file example: `{ "path": "<path>", "content": "..." }`.' : ''}

@@ -140,6 +140,7 @@ export function buildLightFailureHintMessage(failureCount: number): string {
   return [
     `[System] ${failureCount} consecutive round(s) with all tool calls failed.`,
     'Check parameters, paths, and command syntax; do not repeat the identical call.',
+    'An MCP transport/extension error is not a missing server: retry the same listed mcp_* tool once before switching tool families.',
   ].join(' ');
 }
 
@@ -149,10 +150,11 @@ export function buildStrongFailureWarningMessage(failureCount: number): string {
     '',
     'You must:',
     '1. Stop retrying the same failed tool calls, commands, paths, or parameters',
-    '2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input',
+    '2. Switch strategy: change parameters/paths, attach a required backend (e.g. browser extension), simplify the command, or ask for missing input',
     '3. If blocked, explain the exact blocker and evidence to the user',
     '',
     'You may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.',
+    'Do not permanently abandon a still-listed ready mcp_* server after one transport or extension error.',
   ].join('\n');
 }
 

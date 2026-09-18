@@ -21,6 +21,13 @@ import type { RegisteredTool, ToolResult } from '../tools/types.js';
 import { resolveMcpConfigPath } from '../cli/paths.js';
 import { formatMcpToolResult } from './mcp-result-formatter.js';
 import { setMcpServerDisabled } from './persist-mcp-config.js';
+import {
+  annotateBrowserExtensionDetachedOutput,
+  applyMcpToolOutcome,
+  createMcpBackendState,
+  isBrowserExtensionDetachedError,
+  type McpBackendState,
+} from './mcp-backend-session.js';
 
 /**
  * MCP Manager 配置。
@@ -43,6 +50,7 @@ interface ServerRecord {
   status: MCPServerStatus;
   tools: MCPToolDefinition[];
   error?: string;
+  backend: McpBackendState;
 }
 
 /**
@@ -97,6 +105,7 @@ export class MCPManager {
           client: null,
           status: 'disabled',
           tools: [],
+          backend: createMcpBackendState(name),
         });
         console.log(`[mcp-manager] 已注册（未启动）禁用的服务器: ${name}`);
         continue;
@@ -127,6 +136,7 @@ export class MCPManager {
       client,
       status: 'starting',
       tools: [],
+      backend: createMcpBackendState(name),
     };
     this.servers.set(name, record);
 
@@ -137,6 +147,7 @@ export class MCPManager {
       // 获取工具列表
       const tools = await client.listTools();
       record.tools = tools;
+      record.backend = createMcpBackendState(name, tools.map((tool) => tool.name));
 
       console.log(`[mcp-manager] 服务器 ${name} 就绪, ${tools.length} 个工具`);
     } catch (err) {
@@ -245,14 +256,22 @@ export class MCPManager {
       try {
         const result = await record.client.callTool(toolName, args);
         const formatted = await formatMcpToolResult(result);
-
+        const output = this.settleBrowserBackend(record, !result.isError, formatted.output);
         return {
           success: !result.isError,
-          output: formatted.output,
-          error: result.isError ? formatted.output : undefined,
+          output,
+          error: result.isError ? output : undefined,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (record.backend.kind === 'browser_extension' && isBrowserExtensionDetachedError(message)) {
+          const output = this.settleBrowserBackend(record, false, message);
+          return {
+            success: false,
+            output,
+            error: output,
+          };
+        }
         // 仅传输/进程级故障才降级 server 状态；工具级 JSON-RPC 错误已在 callTool 转为 isError
         record.status = 'error';
         record.error = message;
@@ -263,6 +282,18 @@ export class MCPManager {
         };
       }
     };
+  }
+
+  /**
+   * 仅更新 browsermcp 后端会话；其它 MCP 原样返回工具输出，进程 status 不变。
+   */
+  private settleBrowserBackend(record: ServerRecord, success: boolean, output: string): string {
+    if (record.backend.kind !== 'browser_extension') return output;
+    record.backend = applyMcpToolOutcome(record.backend, { success, output });
+    if (!success && record.backend.session === 'detached') {
+      return annotateBrowserExtensionDetachedOutput(output);
+    }
+    return output;
   }
 
   /**
@@ -282,6 +313,9 @@ export class MCPManager {
       status: record.status,
       tools: record.tools,
       error: record.error,
+      backendKind: record.backend.kind,
+      backendSession: record.backend.session,
+      ...(record.backend.lastError ? { backendDetail: record.backend.lastError } : {}),
     }));
   }
 

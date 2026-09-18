@@ -70,7 +70,22 @@ describe('prompt assembly safeguards', () => {
     expect(section.content).toContain('grep');
     expect(section.content).not.toContain('run_command');
     expect(section.content).not.toContain('write_file');
-    expect(section.content).toContain('When `mcp_*` tools are available');
+    expect(section.content).not.toContain('## MCP');
+  });
+
+  it('同时有 browsermcp 与 puppeteer 时写清 ready 与分流', () => {
+    const section = createToolUsageSection([
+      'read_file',
+      'mcp_browsermcp_browser_navigate',
+      'mcp_browsermcp_browser_snapshot',
+      'mcp_puppeteer_puppeteer_navigate',
+    ]);
+    expect(section.content).toContain('When `mcp_*` tools are listed');
+    expect(section.content).toContain('ready` means the MCP process is up');
+    expect(section.content).toContain('No connection to browser extension');
+    expect(section.content).toContain('prefer extension-browser tools');
+    expect(section.content).toContain('Puppeteer MCP launches a separate Chrome');
+    expect(section.content).not.toContain('already connected');
   });
 
   it('toolNames 为空时不注入工具说明，并可按本轮工具重新对齐', () => {

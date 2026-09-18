@@ -324,6 +324,7 @@
 }
 
 .config-status-dot.dot-green { background: var(--success); }
+.config-status-dot.dot-warn { background: var(--warning); }
 .config-status-dot.dot-red { background: var(--danger); }
 .config-status-dot.dot-gray { background: var(--text-muted); }
 

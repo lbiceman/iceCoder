@@ -162,4 +162,66 @@ describe('workspace-lock', () => {
     expect(preprocessWorkspaceMessage('D;//foo')).toBe('D://foo');
     expect(normalizeDetectedPath('D;//foo/bar')).toBe('D:\\foo\\bar');
   });
+
+  it('does not treat /src/core as a workspace root', () => {
+    const prev = {
+      lockedRoot: 'E:\\test\\happyHide2',
+      referenceReads: [] as string[],
+    };
+    const result = detectWorkspaceFromUserMessage(
+      '请继续在 /src/core 里实现关卡数据和碰撞',
+      prev,
+    );
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\test\\happyhide2');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
+  it('does not unlock for 换到下一关 plus a project-relative path', () => {
+    const prev = {
+      lockedRoot: 'E:\\test\\happyHide2',
+      referenceReads: [] as string[],
+    };
+    const result = detectWorkspaceFromUserMessage(
+      '换到第4关，修改 /src/core 的实现',
+      prev,
+    );
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\test\\happyhide2');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
+  it('does not switch when a later message only talks about 实现 in another repo', () => {
+    const prev = {
+      lockedRoot: 'E:\\test\\happyHide2',
+      referenceReads: [] as string[],
+    };
+    const result = detectWorkspaceFromUserMessage(
+      '可以参考 E:\\other\\demo 的实现，继续改当前项目',
+      prev,
+    );
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\test\\happyhide2');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
+  it('ignores skill-injected paths and only reads [User Request]', () => {
+    const prev = {
+      lockedRoot: 'E:\\test\\happyHide2',
+      referenceReads: [] as string[],
+    };
+    const msg = [
+      '[Active Skill: 创建技能.md]',
+      '请在 /src/core 中实现新模块',
+      '',
+      '[User Request]',
+      '当前工作区是什么？',
+    ].join('\n');
+    const result = detectWorkspaceFromUserMessage(msg, prev);
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\test\\happyhide2');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
+  it('does not initially lock onto /src/core', () => {
+    const result = detectWorkspaceFromUserMessage('请在 /src/core 中实现碰撞检测');
+    expect(result.lockedRoot).toBeUndefined();
+    expect(result.changed).toBe(false);
+  });
 });

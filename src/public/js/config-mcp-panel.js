@@ -98,6 +98,14 @@ window.McpConfigPanel = (function () {
     }
   }
 
+  function mcpStatusPresentation(srv) {
+    var status = srv && srv.status;
+    if (status === 'ready' && srv.backendSession === 'detached') {
+      return { label: '运行中 · 未挂上标签', dot: 'dot-warn' };
+    }
+    return { label: statusLabel(status), dot: dotClass(status) };
+  }
+
   function dotClass(status) {
     switch (status) {
       case 'ready': return 'dot-green';
@@ -211,13 +219,16 @@ window.McpConfigPanel = (function () {
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'config-list-item' + (isListItemActive(srv.name) ? ' is-active' : '');
+        var present = mcpStatusPresentation(srv);
         var toolText = srv.status === 'draft'
           ? '未保存'
-          : (srv.toolCount != null ? srv.toolCount + ' 个工具' : '—');
+          : (srv.backendSession === 'detached'
+            ? '未挂上标签' + (srv.toolCount != null ? ' · ' + srv.toolCount + ' 个工具' : '')
+            : (srv.toolCount != null ? srv.toolCount + ' 个工具' : '—'));
         btn.innerHTML =
           '<div class="config-list-item-head">' +
             '<span class="config-list-item-name">' + escapeHtml(srv.name) + '</span>' +
-            '<span class="config-status-dot ' + dotClass(srv.status) + '" aria-hidden="true"></span>' +
+            '<span class="config-status-dot ' + present.dot + '" aria-hidden="true"></span>' +
           '</div>' +
           '<div class="config-list-item-sub">' + escapeHtml(toolText) + '</div>';
         btn.addEventListener('click', function (e) {
@@ -564,6 +575,7 @@ window.McpConfigPanel = (function () {
     var launchValue = urlLine || cmdLine;
     var isDraft = isDraftName(srv.name);
 
+    var present = mcpStatusPresentation(srv);
     return (
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
@@ -578,7 +590,7 @@ window.McpConfigPanel = (function () {
         '<dl class="mcp-info-grid">' +
           '<dt>' + launchLabel + '</dt><dd><code>' + escapeHtml(launchValue || '—') + '</code></dd>' +
           '<dt>配置文件</dt><dd><code>' + escapeHtml(configPath || '.iceCoder/mcp.json') + '</code></dd>' +
-          '<dt>连接状态</dt><dd><span class="config-status-dot ' + dotClass(srv.status) + '"></span> ' + escapeHtml(statusLabel(srv.status)) + '</dd>' +
+          '<dt>连接状态</dt><dd><span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label) + '</dd>' +
           (srv.error ? '<dt>错误信息</dt><dd class="mcp-error-text">' + escapeHtml(srv.error) + '</dd>' : '') +
         '</dl>' +
       '</div>' +
@@ -718,11 +730,12 @@ window.McpConfigPanel = (function () {
     if (!srv) return;
     var detailEl = getActiveDetailEl();
     if (!detailEl) return;
+    var present = mcpStatusPresentation(srv);
     var dot = detailEl.querySelector('.mcp-info-grid .config-status-dot');
-    if (dot) dot.className = 'config-status-dot ' + dotClass(srv.status);
+    if (dot) dot.className = 'config-status-dot ' + present.dot;
     var statusText = detailEl.querySelector('.mcp-info-grid dd:nth-of-type(3)');
     if (statusText) {
-      statusText.innerHTML = '<span class="config-status-dot ' + dotClass(srv.status) + '"></span> ' + escapeHtml(statusLabel(srv.status));
+      statusText.innerHTML = '<span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label);
     }
   }
 

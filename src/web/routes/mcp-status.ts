@@ -52,6 +52,9 @@ export function createMcpStatusRouter(
         description: t.description ?? '',
       })),
       disabled: s.config.disabled ?? false,
+      backendKind: s.backendKind ?? 'none',
+      backendSession: s.backendSession ?? 'unknown',
+      backendDetail: s.backendDetail ?? null,
       config: {
         command: s.config.command,
         args: s.config.args ?? [],
