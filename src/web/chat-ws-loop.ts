@@ -123,6 +123,23 @@ const ERROR_LIKE_STOP = new Set<StopReason>([
   'stop_hook',
 ]);
 
+/**
+ * 本轮已经收口、可以 dequeue 下一条的 stopReason。
+ * ask 任务几乎总是 model_done；带写文件 / 后台命令的任务常被 D′ 收成
+ * completion_paused（后台未退出、审批未决）或 completion_failed（写失败），
+ * UI 仍会走「整理结论」并释放会话锁，这两类也必须接力，否则队列会卡住。
+ * user_abort / user_checkpoint / 资源上限等仍按规格不自动接力。
+ */
+const QUEUE_RELAY_STOP = new Set<StopReason>([
+  'model_done',
+  'completion_paused',
+  'completion_failed',
+]);
+
+function shouldRelayQueuedTask(stopReason?: StopReason): boolean {
+  return !!stopReason && QUEUE_RELAY_STOP.has(stopReason);
+}
+
 function publishRunState(
   sessionId: string,
   phase: SessionRunPhase,
@@ -138,7 +155,7 @@ function publishRunState(
 }
 
 function resolveTerminalPhase(stopReason?: StopReason): SessionRunPhase {
-  if (stopReason === 'model_done') return 'done';
+  if (stopReason === 'model_done' || stopReason === 'completion_paused') return 'done';
   if (stopReason === 'user_abort') return 'idle';
   if (stopReason === 'user_checkpoint') return 'running';
   if (!stopReason || ERROR_LIKE_STOP.has(stopReason)) return 'error';
@@ -193,7 +210,7 @@ async function tryKickoffSessionLoop(
 }
 
 /**
- * 会话级运行循环：一次只跑一条。model_done 后释放锁再扫队列 kickoff 下一条。
+ * 会话级运行循环：一次只跑一条。收口后（见 QUEUE_RELAY_STOP）释放锁再扫队列 kickoff 下一条。
  */
 export async function enqueueAndMaybeKickoff(
   deps: ChatRunDeps,
@@ -268,7 +285,7 @@ export async function runSessionMessageLoop(
   } finally {
     sessionProcessing.delete(runSid);
     // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。
-    if (terminalPhase === 'done') {
+    if (shouldRelayQueuedTask(terminalReason)) {
       const next = await claimNextQueuedTask(runSid, ws, true);
       if (next) {
         await runSessionMessageLoop(deps, runSid, next.ws, next);

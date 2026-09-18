@@ -230,6 +230,84 @@ describe('chat-ws-loop', () => {
     expect(leftover[0].text).toBe('second');
   });
 
+  it.each(['completion_paused', 'completion_failed'] as const)(
+    '%s 视为本轮已收口，继续执行队列中下一项',
+    async (firstStop) => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      subscribeWsToSession(ws, sid);
+      addChatClient(ws);
+      vi.mocked(handleChatMessage)
+        .mockResolvedValueOnce(firstStop)
+        .mockResolvedValueOnce('model_done');
+      await getTaskQueueManager(getSessionsDir()).enqueue(sid, {
+        text: 'second',
+        source: 'explicit',
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, {
+        content: 'first',
+        images: [],
+        referencePaths: [],
+        source: 'implicit',
+        ws,
+      });
+      expect(handleChatMessage).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(handleChatMessage).mock.calls[1]?.[0]).toMatchObject({
+        message: 'second',
+      });
+      expect(await getTaskQueueManager(getSessionsDir()).list(sid)).toHaveLength(0);
+      expect(ws.sent.some((m) =>
+        (m as { type?: string }).type === 'info'
+        && String((m as { message?: string }).message).includes('正在执行排队任务'),
+      )).toBe(true);
+    },
+  );
+
+  it.each(['user_checkpoint', 'circuit_breaker'] as const)(
+    '%s 不自动接力，保留剩余队列',
+    async (firstStop) => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      subscribeWsToSession(ws, sid);
+      vi.mocked(handleChatMessage).mockResolvedValue(firstStop);
+      await getTaskQueueManager(getSessionsDir()).enqueue(sid, {
+        text: 'second',
+        source: 'explicit',
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, {
+        content: 'first',
+        images: [],
+        referencePaths: [],
+        source: 'implicit',
+        ws,
+      });
+      expect(handleChatMessage).toHaveBeenCalledTimes(1);
+      const leftover = await getTaskQueueManager(getSessionsDir()).list(sid);
+      expect(leftover).toHaveLength(1);
+      expect(leftover[0].text).toBe('second');
+    },
+  );
+
+  it('completion_paused 且队列为空时发布 done 而不是 error', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(ws);
+    vi.mocked(handleChatMessage).mockResolvedValue('completion_paused');
+    await runSessionMessageLoop(dummyDeps, sid, ws, {
+      content: 'first',
+      images: [],
+      referencePaths: [],
+      source: 'implicit',
+      ws,
+    });
+    const phases = ws.sent
+      .filter((m) => (m as { type?: string }).type === 'session_run_state')
+      .map((m) => (m as { phase: string }).phase);
+    expect(phases[phases.length - 1]).toBe('done');
+    expect(phases.includes('error')).toBe(false);
+  });
+
   it('本轮执行期间入队的最后一项会在循环结束后 kickoff', async () => {
     const sid = uniqueSid();
     const ws = fakeWs();

@@ -226,6 +226,21 @@ window.ChatExecutionPlan = (function () {
     return pad2(m) + ':' + pad2(s);
   }
 
+  /** 检查点耗时：带单位，避免 09:09 被看成钟点。 */
+  function formatElapsedHuman(ms) {
+    if (!isFinite(ms) || ms < 0) ms = 0;
+    var total = Math.floor(ms / 1000);
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var s = total % 60;
+    if (h > 0) return h + '小时' + m + '分' + s + '秒';
+    if (m > 0) {
+      if (s === 0) return m + '分';
+      return m + '分' + s + '秒';
+    }
+    return s + '秒';
+  }
+
   function formatStepDuration(step) {
     if (!step || typeof step.startedAt !== 'number') return '';
     var end = typeof step.endedAt === 'number' ? step.endedAt : Date.now();
@@ -803,8 +818,8 @@ window.ChatExecutionPlan = (function () {
         if (roundTime) roundTime.textContent = roundDuration(roundRecords[rr]);
       }
     }
-    var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time b');
-    if (timeElFoot) timeElFoot.textContent = formatTurnElapsed();
+    var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time');
+    if (timeElFoot && timeElFoot.parentNode) timeElFoot.parentNode.removeChild(timeElFoot);
     patchCurrentChapterChrome();
     // 移动端顶部条进度计数
     if (mountedMode === 'mobile') updateMobileBar();
@@ -1035,9 +1050,9 @@ window.ChatExecutionPlan = (function () {
     return formatClock(e - start);
   }
 
-  /** 右下角时间：最近一次对话（当前任务）从发出到做完的耗时，不是整段 session。 */
+  /** 检查点序号右侧：最近一次对话从发出到做完的耗时。 */
   function formatTurnElapsed() {
-    return formatClock(liveChapterDurationMs());
+    return formatElapsedHuman(liveChapterDurationMs());
   }
 
   function formatTokenStat(compact) {
@@ -1053,7 +1068,10 @@ window.ChatExecutionPlan = (function () {
   }
 
   function ensureFooterSkeleton() {
-    if (!footerEl || footerEl.querySelector('.etl-foot-token')) return;
+    if (!footerEl) return;
+    var leftoverTime = footerEl.querySelector('.etl-foot-time');
+    if (leftoverTime && leftoverTime.parentNode) leftoverTime.parentNode.removeChild(leftoverTime);
+    if (footerEl.querySelector('.etl-foot-token')) return;
     footerEl.innerHTML = '';
     footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', '—'));
     footerEl.appendChild(makeFootToggleItem(
@@ -1064,7 +1082,6 @@ window.ChatExecutionPlan = (function () {
       'etl-foot-files', 'etl-foot-files', '文件', '0',
       '本会话变更的文件，点击查看', 'files'
     ));
-    footerEl.appendChild(makeFootItem('etl-foot-time', '时间', '00:00'));
   }
 
   function makeFootToggleItem(id, extraClass, label, initial, title, kind) {
@@ -1094,16 +1111,13 @@ window.ChatExecutionPlan = (function () {
     var tokenDetail = formatTokenStat(false);
     var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
-    var timeTxt = formatTurnElapsed();
     var tokenEl = footerEl.querySelector('.etl-foot-token b');
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
-    var timeEl = footerEl.querySelector('.etl-foot-time b');
     var fileEl = footerEl.querySelector('.etl-foot-files b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
     var tokenItem = footerEl.querySelector('.etl-foot-token');
     if (tokenItem) safeSetTitle(tokenItem, tokenDetail && tokenDetail !== '—' ? ('上下文 ' + tokenDetail) : '');
     if (toolEl) toolEl.textContent = toolTxt;
-    if (timeEl) timeEl.textContent = timeTxt;
     var fileCount = snapshotChangedFiles.length;
     if (fileEl) fileEl.textContent = String(fileCount);
     var fileBtn = footerEl.querySelector('#etl-foot-files');
@@ -1680,7 +1694,7 @@ window.ChatExecutionPlan = (function () {
     return Date.now();
   }
 
-  /** 任务还在跑但没走过 beginTurnTimer（F5 / 重连 / 同轮封章）时把底栏钟拉起来。 */
+  /** 任务还在跑但没走过 beginTurnTimer（F5 / 重连 / 同轮封章）时把检查点计时拉起来。 */
   function ensureTurnTimerRunning(ts) {
     if (liveChapterHasStopped()) return;
     if (typeof turnStartedAt !== 'number') {
@@ -1948,10 +1962,12 @@ window.ChatExecutionPlan = (function () {
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
   }
 
-  function formatChapterClock(ts) {
-    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
-    var d = new Date(ts);
-    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  function chapterElapsedLabel(chapter) {
+    if (chapter && (chapter.live || (chapterMatchesLive(chapter) && isTurnInFlight()))) {
+      return formatTurnElapsed();
+    }
+    if (chapter && typeof chapter.durationMs === 'number') return formatElapsedHuman(chapter.durationMs);
+    return formatElapsedHuman(0);
   }
 
   function toolPreviewLine(tool) {
@@ -2282,9 +2298,8 @@ window.ChatExecutionPlan = (function () {
     main.className = 'etl-chapter-main';
     var timeEl = document.createElement('time');
     timeEl.className = 'etl-snapshot-time etl-chapter-clock';
-    var stamp = formatChapterClock(chapter.startTs);
-    timeEl.textContent = stamp;
-    timeEl.classList.toggle('hidden', !stamp);
+    timeEl.textContent = chapterElapsedLabel(chapter);
+    timeEl.setAttribute('title', '本轮运行 ' + timeEl.textContent);
     var clockRow = document.createElement('div');
     clockRow.className = 'etl-chapter-clock-row';
     clockRow.appendChild(timeEl);
@@ -2383,9 +2398,9 @@ window.ChatExecutionPlan = (function () {
     node.classList.add('status-' + (live.status || 'done'));
     var clock = node.querySelector('.etl-chapter-clock');
     if (clock) {
-      var stamp = formatChapterClock(live.startTs);
-      clock.textContent = stamp;
-      clock.classList.toggle('hidden', !stamp);
+      clock.textContent = chapterElapsedLabel(live);
+      clock.setAttribute('title', '本轮运行 ' + clock.textContent);
+      clock.classList.remove('hidden');
     }
     renderWorkbenchStatus();
   }
@@ -2634,8 +2649,11 @@ window.ChatExecutionPlan = (function () {
       }
     }
     if (typeof chapter.startTs === 'number') turnStartedAt = chapter.startTs;
-    if (typeof chapter.endTs === 'number') turnEndedAt = chapter.endTs;
-    else if (chapter.status && chapter.status !== 'running') {
+    if (chapter.status === 'running') {
+      turnEndedAt = null;
+    } else if (typeof chapter.endTs === 'number') {
+      turnEndedAt = chapter.endTs;
+    } else if (chapter.status && chapter.status !== 'running') {
       turnEndedAt = turnStartedAt ? turnStartedAt + (chapter.durationMs || 0) : Date.now();
     }
     if (chapter.status === 'running' || (typeof turnStartedAt === 'number' && turnEndedAt === null)) {

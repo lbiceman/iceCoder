@@ -97,6 +97,13 @@ async function loadPanel(
   }, { showPanel: showTransparencyPanel });
   await page.addScriptTag({ content: CHRONICLE_SOURCE });
   await page.addScriptTag({ content: PANEL_SOURCE });
+  await page.evaluate(() => {
+    (window as any).__chapterElapsed = () => {
+      const el = document.querySelector('.etl-chapter-node.is-current .etl-chapter-clock')
+        || document.querySelector('.etl-chapter-clock');
+      return el ? el.textContent : null;
+    };
+  });
   return page;
 }
 
@@ -178,7 +185,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const read = () => ({
         panelOpen: document.body.classList.contains('etl-panel-open'),
         currentStatus: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
-        footerTime: document.querySelector('.etl-foot-time b')?.textContent,
+        footerTime: (window as any).__chapterElapsed(),
       });
       const before = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -188,7 +195,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.before).toEqual({
       panelOpen: true,
       currentStatus: '✅ 已完成 · 用时 00:05',
-      footerTime: '00:05',
+      footerTime: '5秒',
     });
     expect(result.after).toEqual(result.before);
     await page.close();
@@ -236,7 +243,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('model_done 时定格 Footer 模型工作时间，后台仍 processing 也不再累加', async () => {
+  it('model_done 时定格检查点运行时间，后台仍 processing 也不再累加', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async () => {
       const panel = (window as any).ChatExecutionPlan;
@@ -250,18 +257,37 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         stopReason: 'model_done',
         ts: modelDoneAt,
       });
-      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const read = () => (window as any).__chapterElapsed();
       const frozen = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
       return { frozen, afterWait: read() };
     });
 
-    expect(result.frozen).toBe('01:05');
-    expect(result.afterWait).toBe('01:05');
+    expect(result.frozen).toBe('1分5秒');
+    expect(result.afterWait).toBe('1分5秒');
     await page.close();
   });
 
-  it('未调用 beginTurnTimer 时工具活动仍启动底栏计时', async () => {
+  it('超过1小时带秒，超过24小时仍按小时累计', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      const hour = 3_600_000;
+      panel.beginTurnTimer(0);
+      panel.endTurnTimer(hour + 9 * 60_000 + 20_000);
+      const overHour = (window as any).__chapterElapsed();
+      panel.beginTurnTimer(0);
+      panel.endTurnTimer(25 * hour + 9 * 60_000 + 20_000);
+      return { overHour, overDay: (window as any).__chapterElapsed() };
+    });
+
+    expect(result.overHour).toBe('1小时9分20秒');
+    expect(result.overDay).toBe('25小时9分20秒');
+    await page.close();
+  });
+
+  it('未调用 beginTurnTimer 时工具活动仍启动检查点计时', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async () => {
       const panel = (window as any).ChatExecutionPlan;
@@ -275,19 +301,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         toolArgs: { path: 'a.ts' },
         ts: startedAt,
       });
-      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const read = () => (window as any).__chapterElapsed();
       const initial = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
       return { initial, afterWait: read() };
     });
 
-    expect(result.initial).toBe('01:05');
+    expect(result.initial).toBe('1分5秒');
     expect(result.afterWait).not.toBe('00:00');
     expect(result.afterWait).not.toBe(result.initial);
     await page.close();
   });
 
-  it('同轮封章不清掉进行中的底栏计时', async () => {
+  it('同轮封章不清掉进行中的检查点计时', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
       const panel = (window as any).ChatExecutionPlan;
@@ -303,14 +329,14 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         ts: startedAt + 100,
       });
       panel.sealChapter({ status: 'done' });
-      return document.querySelector('.etl-foot-time b')?.textContent;
+      return (window as any).__chapterElapsed();
     });
 
-    expect(result).toBe('00:08');
+    expect(result).toBe('8秒');
     await page.close();
   });
 
-  it('计划已全部终态但任务未结束时底栏继续走时', async () => {
+  it('计划已全部终态但任务未结束时检查点继续走时', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async (plan) => {
       const panel = (window as any).ChatExecutionPlan;
@@ -330,19 +356,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: 100,
         updatedAt: startedAt + 4000,
       });
-      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const read = () => (window as any).__chapterElapsed();
       const afterComplete = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
       return { afterComplete, afterWait: read() };
     }, makePlan());
 
-    expect(result.afterComplete).toBe('00:08');
+    expect(result.afterComplete).toBe('8秒');
     expect(result.afterWait).not.toBe(result.afterComplete);
     expect(result.afterWait).not.toBe('00:00');
     await page.close();
   });
 
-  it('restoreFlowSnapshot 在无 running step 时仍恢复进行中底栏计时', async () => {
+  it('restoreFlowSnapshot 在无 running step 时仍恢复进行中检查点计时', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async () => {
       const panel = (window as any).ChatExecutionPlan;
@@ -374,19 +400,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         roundRecords: [],
         toolRecords: [],
       });
-      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const read = () => (window as any).__chapterElapsed();
       const initial = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
       return { initial, afterWait: read() };
     });
 
-    expect(result.initial).toBe('00:12');
+    expect(result.initial).toBe('12秒');
     expect(result.afterWait).not.toBe('00:00');
     expect(result.afterWait).not.toBe(result.initial);
     await page.close();
   });
 
-  it('底栏时间只计最近一次任务，且不含回滚系统提示', async () => {
+  it('检查点时间只计最近一次任务，且不含回滚系统提示', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
       const panel = (window as any).ChatExecutionPlan;
@@ -411,9 +437,9 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
           { role: 'agent', id: 'a2', content: '已创建', sentAt: 9_012_000, completedAt: 9_012_000 },
         ],
       );
-      return document.querySelector('.etl-foot-time b')?.textContent;
+      return (window as any).__chapterElapsed();
     });
-    expect(result).toBe('00:12');
+    expect(result).toBe('12秒');
     await page.close();
   });
 
@@ -437,7 +463,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: panel.getPlan()?.progress,
         open: document.body.classList.contains('etl-panel-open'),
         currentStatus: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
-        footerTime: document.querySelector('.etl-foot-time b')?.textContent,
+        footerTime: (window as any).__chapterElapsed(),
       };
     }, makePlan());
 
@@ -445,7 +471,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       progress: 0,
       open: true,
       currentStatus: '✅ 已完成 · 用时 00:04',
-      footerTime: '00:04',
+      footerTime: '4秒',
     });
     await page.close();
   });
@@ -465,7 +491,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         updatedAt: completedAt,
       });
       panel.endTurnTimer(completedAt);
-      const frozenFooter = document.querySelector('.etl-foot-time b')?.textContent;
+      const frozenFooter = (window as any).__chapterElapsed();
       panel.applyPatch({
         stepPatches: [{
           id: 'step-0',
@@ -492,7 +518,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: panel.getPlan()?.progress,
         status: panel.getPlan()?.steps[0]?.status,
         updatedAtDelta: panel.getPlan()?.updatedAt - completedAt,
-        footerTime: document.querySelector('.etl-foot-time b')?.textContent,
+        footerTime: (window as any).__chapterElapsed(),
         frozenFooter,
       };
       panel.setPlan({
@@ -523,8 +549,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: 100,
         status: 'done',
         updatedAtDelta: 0,
-        footerTime: '00:05',
-        frozenFooter: '00:05',
+        footerTime: '5秒',
+        frozenFooter: '5秒',
       },
       next: {
         planId: 'next-plan',
@@ -1071,7 +1097,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('Footer 展示本轮对话耗时，并接收运行统计', async () => {
+  it('检查点展示本轮对话耗时，Footer 不再显示时间，并接收运行统计', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
@@ -1089,7 +1115,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         totalToolCalls: 3,
       });
       return {
-        footerTime: document.querySelector('.etl-foot-time b')?.textContent,
+        footerTime: (window as any).__chapterElapsed(),
+        footerHasTime: !!document.querySelector('.etl-foot-time'),
         contextLabel: document.querySelector('.etl-foot-token')?.textContent,
         token: compact,
         tokenLarge: document.querySelector('.etl-foot-token b')?.textContent,
@@ -1099,13 +1126,44 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     }, makePlan());
 
-    expect(result.footerTime).toBe('00:05');
+    expect(result.footerTime).toBe('5秒');
+    expect(result.footerHasTime).toBe(false);
     expect(result.contextLabel).toContain('上下文');
     expect(result.token).toBe('1.2K/8K (15.0%)');
     expect(result.tokenLarge).toBe('222K/1M (22.2%)');
     expect(result.titleSmall).toBe('上下文 1,200/8,000 (15.0%)');
     expect(result.titleLarge).toBe('上下文 221,612/1,000,000 (22.2%)');
     expect(result.tools).toBe('3');
+    await page.close();
+  });
+
+  it('运行中检查点每秒更新，对话结束定格且不写入 session 字段', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const startedAt = Date.now() - 5_000;
+      const msgs = [{ role: 'user', id: 'u-live', content: '做这件事', sentAt: startedAt }];
+      (window as any).ChatSession = { getMessages: () => msgs };
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.beginTurnTimer(startedAt, { messageId: 'u-live', preview: '做这件事' });
+      const running = (window as any).__chapterElapsed();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      const ticking = (window as any).__chapterElapsed();
+      panel.endTurnTimer(startedAt + 65_000);
+      return {
+        running,
+        ticking,
+        frozen: (window as any).__chapterElapsed(),
+        durationMs: msgs[0].durationMs,
+        footerHasTime: !!document.querySelector('.etl-foot-time'),
+      };
+    });
+
+    expect(result.running).toMatch(/^\d+秒$/);
+    expect(result.ticking).not.toBe(result.running);
+    expect(result.frozen).toBe('1分5秒');
+    expect(result.durationMs).toBeUndefined();
+    expect(result.footerHasTime).toBe(false);
     await page.close();
   });
 
