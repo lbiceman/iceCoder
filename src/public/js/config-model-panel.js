@@ -634,16 +634,10 @@ window.ModelConfigPanel = (function () {
     if (!target) return;
     var deleteId = target.id;
     var deleteName = providerDisplayName(target);
-    var confirmFn = (window.Modal && typeof window.Modal.confirm === 'function')
-      ? window.Modal.confirm
-      : function (opts) {
-        return Promise.resolve(window.confirm((opts && opts.message) || '确认？'));
-      };
-
-    confirmFn({
+    window.Modal.confirm({
       title: '移除提供者',
       message: '确定要移除「' + deleteName + '」吗？',
-      type: 'warning',
+      type: 'danger',
       confirmText: '移除',
       cancelText: '取消',
       dangerConfirm: true,

@@ -929,63 +929,6 @@
   opacity: 0.85;
 }
 
-.restore-confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-
-.restore-confirm-dialog {
-  min-width: 320px;
-  max-width: 420px;
-  padding: 20px 22px;
-  border-radius: 10px;
-  background: var(--bg-primary, #1e1e1e);
-  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.35));
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-}
-
-.restore-confirm-dialog h3 {
-  margin: 0 0 10px;
-  font-size: 16px;
-}
-
-.restore-confirm-dialog p {
-  margin: 0 0 18px;
-  font-size: 13px;
-  line-height: 1.5;
-  opacity: 0.85;
-}
-
-.restore-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.restore-confirm-actions button {
-  padding: 6px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.restore-confirm-actions .restore-confirm-cancel {
-  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.35));
-  background: transparent;
-  color: inherit;
-}
-
-.restore-confirm-actions .restore-confirm-ok {
-  border: none;
-  background: var(--accent);
-  color: var(--text-on-accent, #fff);
-}
-
 /* ── Chat Input Area (Codex desktop-style composer) ── */
 .chat-input-area {
   background: var(--chat-bg, var(--bg-primary));
@@ -1502,14 +1445,6 @@
 }
 
 .image-preview-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 12000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.82);
   cursor: zoom-out;
 }
 .image-preview-full {
@@ -2145,87 +2080,6 @@
   border: 0;
   opacity: 0;
 }
-
-/* ===== QR Code Modal ===== */
-.qr-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  padding: 20px;
-}
-.qr-modal {
-  background: var(--surface-raised);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  padding: 28px;
-  text-align: center;
-  max-width: 360px;
-  width: 100%;
-  box-shadow: var(--shadow-md);
-}
-.qr-modal h3 {
-  font-size: 17px;
-  margin-bottom: 6px;
-  color: var(--text-primary);
-}
-.qr-desc {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 20px;
-}
-.qr-canvas-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 16px;
-  min-height: 220px;
-}
-.qr-canvas-container canvas { border-radius: 8px; }
-.qr-loading {
-  font-size: 14px;
-  color: var(--text-muted);
-  margin: 0;
-}
-.qr-error {
-  font-size: 13px;
-  color: var(--danger, #e57373);
-  margin: 0;
-  word-break: break-word;
-}
-.qr-url {
-  font-size: 11px;
-  color: var(--text-muted);
-  word-break: break-all;
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  background: var(--bg-hover);
-  border-radius: 8px;
-}
-.qr-info {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-.qr-timer {
-  font-size: 13px;
-  color: var(--success);
-  margin-bottom: 16px;
-  font-weight: 500;
-}
-.qr-close-btn {
-  padding: 8px 24px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 14px;
-  transition: background var(--transition);
-}
-.qr-close-btn:hover { background: var(--bg-hover); }
 
 /* ===== Chat Session Sidebar ===== */
 

@@ -192,15 +192,27 @@ window.McpConfigPanel = (function () {
     return items;
   }
 
-  function selectServer(name) {
-    if (configDirty && name !== selectedName) {
-      if (!window.confirm('当前配置尚未保存，切换将丢弃修改，是否继续？')) {
-        return;
-      }
-      configDirty = false;
-    }
+  function applySelectedServer(name) {
     selectedName = name;
     renderAll();
+  }
+
+  function selectServer(name) {
+    if (configDirty && name !== selectedName) {
+      window.Modal.confirm({
+        title: '未保存的修改',
+        message: '当前配置尚未保存，切换将丢弃修改，是否继续？',
+        type: 'warning',
+        confirmText: '继续',
+        cancelText: '取消',
+      }).then(function (ok) {
+        if (!ok) return;
+        configDirty = false;
+        applySelectedServer(name);
+      });
+      return;
+    }
+    applySelectedServer(name);
   }
 
   function renderList() {
@@ -472,20 +484,16 @@ window.McpConfigPanel = (function () {
           });
       };
 
-      if (window.Modal && typeof window.Modal.confirm === 'function') {
-        Modal.confirm({
-          title: '删除 MCP 服务器',
-          message: '确定要删除「' + displayName + '」吗？此操作不可恢复。',
-          type: 'danger',
-          confirmText: '删除',
-          cancelText: '取消',
-          dangerConfirm: true,
-        }).then(function (ok) {
-          if (ok) doDelete();
-        });
-      } else if (window.confirm('确定要删除「' + displayName + '」吗？此操作不可恢复。')) {
-        doDelete();
-      }
+      window.Modal.confirm({
+        title: '删除 MCP 服务器',
+        message: '确定要删除「' + displayName + '」吗？此操作不可恢复。',
+        type: 'danger',
+        confirmText: '删除',
+        cancelText: '取消',
+        dangerConfirm: true,
+      }).then(function (ok) {
+        if (ok) doDelete();
+      });
     });
   }
 
@@ -674,13 +682,7 @@ window.McpConfigPanel = (function () {
     renderDetail();
   }
 
-  function handleAddServer() {
-    if (configDirty) {
-      if (!window.confirm('当前配置尚未保存，新增将丢弃修改，是否继续？')) {
-        return;
-      }
-      configDirty = false;
-    }
+  function addDraftServer() {
     var name = 'new-mcp-' + (nextDraftId++);
     while (draftServers[name] || servers.some(function (s) { return s.name === name; })) {
       name = 'new-mcp-' + (nextDraftId++);
@@ -689,6 +691,24 @@ window.McpConfigPanel = (function () {
     selectedName = name;
     if (isMobile()) mobileExpanded = true;
     renderAll();
+  }
+
+  function handleAddServer() {
+    if (configDirty) {
+      window.Modal.confirm({
+        title: '未保存的修改',
+        message: '当前配置尚未保存，新增将丢弃修改，是否继续？',
+        type: 'warning',
+        confirmText: '继续',
+        cancelText: '取消',
+      }).then(function (ok) {
+        if (!ok) return;
+        configDirty = false;
+        addDraftServer();
+      });
+      return;
+    }
+    addDraftServer();
   }
 
   function reloadData() {

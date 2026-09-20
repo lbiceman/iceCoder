@@ -1,12 +1,14 @@
 /* ===== Modal Component ===== */
 
+/* 所有弹框共用遮罩：确认框、信息面板、回滚/删除、图片预览 */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 24px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(4px);
   opacity: 0;
@@ -138,4 +140,191 @@
 
 .modal-btn.danger:hover {
   opacity: 0.9;
+}
+
+/* ===== Panel dialog（扫码 / Token 统计等共用） ===== */
+.modal-panel-box {
+  width: 380px;
+}
+
+.modal-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 16px 0 20px;
+}
+
+.modal-panel-heading {
+  min-width: 0;
+}
+
+.modal-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.modal-panel-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.modal-panel-close {
+  margin-top: -2px;
+}
+
+.modal-panel-body {
+  padding: 14px 18px 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  overflow-y: auto;
+}
+
+.modal-panel-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  overflow: hidden;
+}
+
+.modal-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-panel-row:last-child {
+  border-bottom: 0;
+}
+
+.modal-panel-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modal-panel-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.modal-panel-row-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.modal-panel-row-value {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.modal-panel-media {
+  display: flex;
+  justify-content: center;
+  padding: 16px 16px 8px;
+}
+
+.modal-panel-media img {
+  width: 220px;
+  height: 220px;
+  border-radius: 8px;
+  display: block;
+}
+
+.modal-panel-code-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0 10px 8px 14px;
+}
+
+.modal-panel-code-row .modal-panel-code {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-panel-code {
+  margin: 0 14px 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  word-break: break-all;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.modal-panel-copy {
+  margin-top: 2px;
+}
+
+.modal-panel-note {
+  margin: 0 14px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.modal-panel-note:last-child {
+  margin-bottom: 14px;
+}
+
+.modal-panel-note.is-success {
+  color: var(--success);
+  font-weight: 500;
+}
+
+.modal-panel-muted,
+.modal-panel-error {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.modal-panel-muted {
+  color: var(--text-muted);
+}
+
+.modal-panel-error {
+  color: var(--danger);
+}
+
+.modal-panel-skel {
+  display: block;
+  height: 10px;
+  width: 72px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  animation: modal-panel-pulse 1.2s ease-in-out infinite;
+}
+
+.modal-panel-skel.is-value {
+  width: 56px;
+  margin-left: auto;
+}
+
+@keyframes modal-panel-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
 }

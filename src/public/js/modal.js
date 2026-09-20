@@ -1,9 +1,11 @@
 /**
  * 通用 Modal 组件
- * 提供 confirm / alert 弹框，Promise 风格调用，适配 dark/light 主题。
+ * 确认框一律走 Modal.confirm：回滚、消息/会话/记忆/技能删除、
+ * 模型提供者移除、MCP 删除与未保存、权限 / Shell 确认。
+ * 信息面板（扫码 / Token 统计）走 Modal.panel。
  *
  * 用法：
- *   Modal.confirm({ title, message, type, confirmText, cancelText })
+ *   Modal.confirm({ title, message, type, confirmText, cancelText, dangerConfirm })
  *   Modal.alert({ title, message, type, confirmText })
  */
 
@@ -35,7 +37,7 @@ window.Modal = (function () {
   function confirm(opts) {
     return new Promise(function (resolve) {
       opts = opts || {};
-      var type = opts.type || 'warning';
+      var type = opts.type || (opts.dangerConfirm ? 'danger' : 'warning');
 
       // overlay
       var overlay = document.createElement('div');
@@ -44,6 +46,8 @@ window.Modal = (function () {
       // box
       var box = document.createElement('div');
       box.className = 'modal-box';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-modal', 'true');
 
       // header
       var header = document.createElement('div');
@@ -56,9 +60,11 @@ window.Modal = (function () {
 
       var titleEl = document.createElement('div');
       titleEl.className = 'modal-title';
+      titleEl.id = 'modal-confirm-title';
       titleEl.textContent = opts.title || '确认';
       header.appendChild(titleEl);
       box.appendChild(header);
+      box.setAttribute('aria-labelledby', 'modal-confirm-title');
 
       // body
       if (opts.message) {
@@ -155,5 +161,136 @@ window.Modal = (function () {
     return true;
   }
 
-  return { confirm: confirm, alert: alert, dismissActive: dismissActive };
+  var CLOSE_ICON =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M18 6 6 18M6 6l12 12"/>' +
+    '</svg>';
+
+  var activePanel = null;
+
+  /**
+   * 信息展示弹层（扫码 / Token 统计等共用）。
+   * @param {object} opts
+   * @param {string} opts.title
+   * @param {string} [opts.description]
+   * @param {string} [opts.bodyHtml]
+   * @returns {{ overlay: HTMLElement, body: HTMLElement, close: Function, setBody: Function }}
+   */
+  function panel(opts) {
+    opts = opts || {};
+    closePanel(true);
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-panel';
+
+    var box = document.createElement('div');
+    box.className = 'modal-box modal-panel-box';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+
+    var titleId = 'modal-panel-title';
+    var descId = 'modal-panel-desc';
+    box.setAttribute('aria-labelledby', titleId);
+
+    var header = document.createElement('div');
+    header.className = 'modal-panel-header';
+
+    var heading = document.createElement('div');
+    heading.className = 'modal-panel-heading';
+
+    var titleEl = document.createElement('h3');
+    titleEl.className = 'modal-panel-title';
+    titleEl.id = titleId;
+    titleEl.textContent = opts.title || '';
+    heading.appendChild(titleEl);
+
+    if (opts.description) {
+      var descEl = document.createElement('p');
+      descEl.className = 'modal-panel-desc';
+      descEl.id = descId;
+      descEl.textContent = opts.description;
+      heading.appendChild(descEl);
+      box.setAttribute('aria-describedby', descId);
+    }
+
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn-icon btn-icon-ghost modal-panel-close';
+    closeBtn.setAttribute('aria-label', '关闭');
+    closeBtn.innerHTML = CLOSE_ICON;
+
+    header.appendChild(heading);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement('div');
+    body.className = 'modal-panel-body';
+    if (opts.bodyHtml) body.innerHTML = opts.bodyHtml;
+
+    box.appendChild(header);
+    box.appendChild(body);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    var closed = false;
+    var closeTimer = null;
+
+    function close(immediate) {
+      document.removeEventListener('keydown', onKeydown);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+        closeTimer = null;
+      }
+      if (immediate) {
+        closed = true;
+        if (activePanel && activePanel.overlay === overlay) activePanel = null;
+        if (overlay.parentNode) overlay.remove();
+        return;
+      }
+      if (closed) return;
+      closed = true;
+      overlay.classList.remove('visible');
+      closeTimer = setTimeout(function () {
+        closeTimer = null;
+        if (activePanel && activePanel.overlay === overlay) activePanel = null;
+        if (overlay.parentNode) overlay.remove();
+      }, 200);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    }
+
+    closeBtn.addEventListener('click', function () { close(); });
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKeydown);
+
+    requestAnimationFrame(function () {
+      overlay.classList.add('visible');
+      closeBtn.focus();
+    });
+
+    var handle = {
+      overlay: overlay,
+      body: body,
+      close: close,
+      setBody: function (html) {
+        if (!overlay.parentNode) return;
+        body.innerHTML = html || '';
+      },
+    };
+    activePanel = handle;
+    return handle;
+  }
+
+  function closePanel(immediate) {
+    if (!activePanel) return;
+    activePanel.close(immediate);
+  }
+
+  return { confirm: confirm, alert: alert, dismissActive: dismissActive, panel: panel, closePanel: closePanel };
 })();

@@ -44,7 +44,7 @@ window.ChatImagePreview = (function () {
     close();
 
     overlay = document.createElement('div');
-    overlay.className = 'image-preview-overlay';
+    overlay.className = 'modal-overlay image-preview-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-label', '图片预览');
@@ -70,6 +70,7 @@ window.ChatImagePreview = (function () {
     });
 
     document.body.appendChild(overlay);
+    requestAnimationFrame(function () { overlay.classList.add('visible'); });
     document.addEventListener('keydown', onKeyDown, true);
     closeBtn.focus();
   }

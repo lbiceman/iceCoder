@@ -38,11 +38,13 @@ window.ChatCommands = (function () {
 
   var TILDE_PC_COMMANDS = [
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
+    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
   var TILDE_REMOTE_COMMANDS = [
+    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
@@ -411,6 +413,145 @@ window.ChatCommands = (function () {
       });
   }
 
+  function formatTokenCount(n) {
+    var num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+    try {
+      return num.toLocaleString();
+    } catch (_err) {
+      return String(num);
+    }
+  }
+
+  function escapeTokenStatsText(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function renderTokenStatsWindows(windows) {
+    var rows = [
+      { key: 'day', label: '最近一天', hint: '24 小时' },
+      { key: 'week', label: '最近一周', hint: '7 天' },
+      { key: 'month', label: '最近一个月', hint: '30 天' },
+    ];
+    var html = '<div class="modal-panel-card">';
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var usage = windows && windows[row.key] ? windows[row.key] : {};
+      var total = typeof usage.totalTokens === 'number' ? usage.totalTokens : 0;
+      html +=
+        '<div class="modal-panel-row">' +
+          '<div class="modal-panel-row-meta">' +
+            '<span class="modal-panel-row-label">' + row.label + '</span>' +
+            '<span class="modal-panel-row-hint">' + row.hint + '</span>' +
+          '</div>' +
+          '<span class="modal-panel-row-value">' + formatTokenCount(total) + '</span>' +
+        '</div>';
+    }
+    return html + '</div>';
+  }
+
+  function tokenStatsLoadingHtml() {
+    return (
+      '<div class="modal-panel-card" aria-busy="true">' +
+        '<div class="modal-panel-row"><span class="modal-panel-skel"></span><span class="modal-panel-skel is-value"></span></div>' +
+        '<div class="modal-panel-row"><span class="modal-panel-skel"></span><span class="modal-panel-skel is-value"></span></div>' +
+        '<div class="modal-panel-row"><span class="modal-panel-skel"></span><span class="modal-panel-skel is-value"></span></div>' +
+      '</div>'
+    );
+  }
+
+  function extractTurnTokenRecords(messages) {
+    var records = [];
+    if (!Array.isArray(messages)) return records;
+    for (var i = 0; i < messages.length; i++) {
+      var msg = messages[i];
+      if (!msg || typeof msg !== 'object' || !msg.turnTokenUsage) continue;
+      var input = typeof msg.turnTokenUsage.inputTokens === 'number' ? msg.turnTokenUsage.inputTokens : 0;
+      var output = typeof msg.turnTokenUsage.outputTokens === 'number' ? msg.turnTokenUsage.outputTokens : 0;
+      if (input <= 0 && output <= 0) continue;
+      var ts = typeof msg.completedAt === 'number' && isFinite(msg.completedAt) && msg.completedAt > 0
+        ? msg.completedAt
+        : (typeof msg.sentAt === 'number' && isFinite(msg.sentAt) && msg.sentAt > 0 ? msg.sentAt : 0);
+      if (ts <= 0) continue;
+      records.push({ timestamp: ts, inputTokens: input, outputTokens: output });
+    }
+    return records;
+  }
+
+  function aggregateTurnTokenWindows(records) {
+    var now = Date.now();
+    var dayMs = 86400000;
+    var empty = function () { return { inputTokens: 0, outputTokens: 0, totalTokens: 0 }; };
+    var windows = { day: empty(), week: empty(), month: empty() };
+    function add(target, rec) {
+      target.inputTokens += rec.inputTokens;
+      target.outputTokens += rec.outputTokens;
+      target.totalTokens += rec.inputTokens + rec.outputTokens;
+    }
+    for (var i = 0; i < records.length; i++) {
+      var rec = records[i];
+      if (rec.timestamp >= now - 30 * dayMs) add(windows.month, rec);
+      if (rec.timestamp >= now - 7 * dayMs) add(windows.week, rec);
+      if (rec.timestamp >= now - dayMs) add(windows.day, rec);
+    }
+    return windows;
+  }
+
+  function loadTokenStatsFromSessionMessages() {
+    return fetchJsonWithTimeout('/api/sessions', 30000).then(function (body) {
+      var sessions = (body && body.sessions) || [];
+      return Promise.all(sessions.map(function (session) {
+        if (!session || !session.id) return [];
+        return fetchJsonWithTimeout('/api/sessions/' + encodeURIComponent(session.id), 30000)
+          .then(function (msgBody) {
+            return extractTurnTokenRecords((msgBody && msgBody.messages) || []);
+          })
+          .catch(function () { return []; });
+      })).then(function (batches) {
+        var records = [];
+        for (var i = 0; i < batches.length; i++) {
+          for (var j = 0; j < batches[i].length; j++) records.push(batches[i][j]);
+        }
+        return aggregateTurnTokenWindows(records);
+      });
+    });
+  }
+
+  function showTokenStatsError(panel, message) {
+    panel.setBody('<p class="modal-panel-error">统计失败：' + escapeTokenStatsText(message) + '</p>');
+  }
+
+  function handleTokenStats() {
+    if (!window.Modal || typeof window.Modal.panel !== 'function') return;
+    var panel = window.Modal.panel({
+      title: 'Token 消耗',
+      description: '按各会话气泡合计汇总',
+      bodyHtml: tokenStatsLoadingHtml(),
+    });
+
+    fetchJsonWithTimeout('/api/token-usage', 30000)
+      .then(function (body) {
+        if (body && body.success) {
+          panel.setBody(renderTokenStatsWindows(body));
+          return;
+        }
+        return loadTokenStatsFromSessionMessages().then(function (windows) {
+          panel.setBody(renderTokenStatsWindows(windows));
+        });
+      })
+      .catch(function () {
+        return loadTokenStatsFromSessionMessages().then(function (windows) {
+          panel.setBody(renderTokenStatsWindows(windows));
+        });
+      })
+      .catch(function (err) {
+        showTokenStatsError(panel, err && err.message ? err.message : '网络错误');
+      });
+  }
+
   return {
     init: init,
     setAnchor: setAnchor,
@@ -426,5 +567,6 @@ window.ChatCommands = (function () {
     applySelection: applySelection,
     handleTelemetry: handleTelemetry,
     handleSupervisor: handleSupervisor,
+    handleTokenStats: handleTokenStats,
   };
 })();
