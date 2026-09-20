@@ -60,6 +60,10 @@ import {
   isMemoryToolPath,
   shellCommandTargetsMemoryWrite,
   resolveMessageForRememberWriteGuard,
+  getOrCreateSessionLongTermMemoryWriteCap,
+  registerLongTermMemoryWriteCap,
+  recordLongTermMemoryWriteSuccess,
+  type LongTermMemoryWriteCap,
 } from '../memory/file-memory/memory-write-pipeline.js';
 
 /** 话题切换 Jaccard 阈值 */
@@ -277,7 +281,8 @@ function hasMemoryWritesSince(
         const args = tc.arguments as Record<string, unknown>;
         if (
           tc.name === 'write_file' || tc.name === 'edit_file' ||
-          tc.name === 'append_file'
+          tc.name === 'append_file' || tc.name === 'patch_file' ||
+          tc.name === 'batch_edit_file'
         ) {
           const filePath = extractToolMemoryPath(args);
           if (filePath && isMemoryToolPath(filePath, workspaceRoot)) {
@@ -597,6 +602,8 @@ export class HarnessMemoryIntegration {
   private sessionSuccessfulExtractCount = 0;
   /** 本会话 Extract 累计写盘条数 */
   private sessionExtractWrittenCount = 0;
+  /** 本会话主代理+Extract 共用的长期记忆写配额（按 sessionId 跨 Harness 实例保留） */
+  private sessionMemoryWriteCap!: LongTermMemoryWriteCap;
   /** 上次提取时的工具调用计数 cursor */
   private toolCallsAtLastExtract = 0;
 
@@ -617,8 +624,12 @@ export class HarnessMemoryIntegration {
     this.memoryDream = new MemoryDream();
     this.llmExtractor = new LLMMemoryExtractor({ enablePromptCache: true });
 
+    this.sessionMemoryWriteCap = getOrCreateSessionLongTermMemoryWriteCap(this.sessionId);
+    registerLongTermMemoryWriteCap(this.sessionMemoryWriteCap);
+
     registerAgentMemoryWriteGuard(
       createRememberSignalWriteGuard(() => this.messageForRememberWriteGuard()),
+      this.sessionId,
     );
 
     // 并发控制：sequential 包装确保提取不重叠
@@ -1279,7 +1290,8 @@ ${candidateList}`;
    * 清理资源。
    */
   dispose(): void {
-    registerAgentMemoryWriteGuard(null);
+    registerAgentMemoryWriteGuard(null, this.sessionId);
+    registerLongTermMemoryWriteCap(null);
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
@@ -1530,6 +1542,7 @@ ${candidateList}`;
       extractionTurnCounter: this.extractionTurnCounter,
       sessionSuccessfulExtractCount: this.sessionSuccessfulExtractCount,
       sessionExtractWrittenCount: this.sessionExtractWrittenCount,
+      sessionLongTermWriteCount: this.sessionMemoryWriteCap.writtenBasenames.size,
       taskIntent: ctx.taskIntent,
       commandsRun: ctx.commandsRun,
       extractionConfig: cfg,
@@ -1769,6 +1782,9 @@ ${candidateList}`;
       }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
 
       if (totalWritten > 0) {
+        for (const writtenPath of allWrittenPaths) {
+          recordLongTermMemoryWriteSuccess(writtenPath, this.sessionId);
+        }
         this.sessionSuccessfulExtractCount++;
         this.sessionExtractWrittenCount += totalWritten;
         this.toolCallsAtLastExtract = countToolCallsSince(messages, 0);

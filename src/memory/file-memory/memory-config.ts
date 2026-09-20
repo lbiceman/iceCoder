@@ -571,7 +571,7 @@ export const MIN_EXTRACTION_CONFIDENCE = 0.6;
 /** 推断类 user 偏好写盘最低置信度（非 feedback） */
 export const INFERRED_PREFERENCE_MIN_CONFIDENCE = 0.75;
 
-/** 每会话最多成功 Extract 次数（含信号词路径） */
+/** 每会话最多成功 Extract 次数；与主代理长期记忆写盘共用配额 */
 export const SESSION_MAX_SUCCESSFUL_EXTRACTS = 1;
 
 /** 每会话 Extract 写盘条数上限 */

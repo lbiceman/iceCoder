@@ -28,6 +28,7 @@ import {
 } from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
 import { upsertIndexRow } from './memory-index-maintainer.js';
+import { shouldRejectMixedTopicMemory, recordLongTermMemoryWriteSuccess } from './memory-write-pipeline.js';
 import { checkExtractDedupSync } from './memory-dedup.js';
 
 /** 消息内容截断字符数 */
@@ -146,6 +147,13 @@ export function shouldRejectExtractedMemory(memory: ExtractedMemoryCandidate): s
   ) {
     return 'inferred_preference_low_confidence';
   }
+  if (memory.type === 'user') {
+    const mixed = shouldRejectMixedTopicMemory(
+      `${memory.description}\n${memory.content}`,
+      'user',
+    );
+    if (mixed) return mixed;
+  }
   return null;
 }
 
@@ -237,6 +245,8 @@ Long-term memory whitelist (ONLY these three):
 - Session task progress, install logs, command transcripts → **omit** (session-notes handles those).
 
 **Never**: model identity; one-off task blow-by-blow; ops/install/deploy progress; pure chit-chat; keyword-triggered guesses (docker/mysql/vite mentioned ≠ preference).
+
+**One file = one topic.** Never combine unrelated user habits (e.g. temp-file cleanup + Unity ProjectVersion). Prefer updating an existing same-topic file.
 
 **Reusability**: only facts useful across **≥3 future sessions**.
 
@@ -658,6 +668,7 @@ ${memory.content}
 
         await writeFileAtomic(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
+        recordLongTermMemoryWriteSuccess(filePath);
 
         // Phase 1: 写后维护 MEMORY.md 索引
         const indexDir = isExplicitUser ? userMemoryDir : memoryDir;

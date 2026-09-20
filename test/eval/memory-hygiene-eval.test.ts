@@ -18,6 +18,17 @@ import {
   resetMemoryTelemetry,
   type ExtractTelemetry,
 } from '../../src/memory/file-memory/memory-telemetry.js';
+import {
+  createRememberSignalWriteGuard,
+  registerAgentMemoryWriteGuard,
+  registerLongTermMemoryWriteCap,
+  resetSessionLongTermMemoryWriteCaps,
+} from '../../src/memory/file-memory/memory-write-pipeline.js';
+import { SESSION_PROGRESS_TOOL_SKIP_MESSAGE } from '../../src/memory/file-memory/memory-tool-access.js';
+import { createFileTools } from '../../src/tools/builtin/file-tools.js';
+import { createPatchTool } from '../../src/tools/builtin/patch-tool.js';
+import { createShellTool } from '../../src/tools/builtin/shell-tool.js';
+import { markFileRead } from '../../src/tools/read-before-edit.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../src/llm/types.js';
 
 let root: string;
@@ -70,6 +81,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   resetMemoryTelemetry();
+  registerAgentMemoryWriteGuard(null);
+  registerLongTermMemoryWriteCap(null);
+  resetSessionLongTermMemoryWriteCaps();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -234,8 +248,15 @@ tags: topic:weekly-report
 
     const downgraded = await downgradeSessionProgressOverviews(projectDir);
     expect(downgraded.downgraded).toEqual(['icecoder-chat-page-ws-split-overview.md']);
+    expect(downgraded.archived).toEqual(['icecoder-chat-page-ws-split-overview.md']);
 
-    const progress = await fs.readFile(path.join(projectDir, 'icecoder-chat-page-ws-split-overview.md'), 'utf-8');
+    await expect(
+      fs.access(path.join(projectDir, 'icecoder-chat-page-ws-split-overview.md')),
+    ).rejects.toThrow();
+    const progress = await fs.readFile(
+      path.join(root, 'memory-evicted', 'memory-files', 'icecoder-chat-page-ws-split-overview.md'),
+      'utf-8',
+    );
     expect(progress).toContain('level: session_state');
     const lesson = await fs.readFile(path.join(projectDir, 'icecoder-deep-analysis-overview.md'), 'utf-8');
     expect(lesson).toContain('level: project_fact');
@@ -364,7 +385,295 @@ tags: topic:feat
     await manager.initialize();
 
     await expect(fs.access(path.join(userDir, 'user-b.md'))).rejects.toThrow();
-    const overview = await fs.readFile(path.join(projectDir, 'feat-overview.md'), 'utf-8');
+    await expect(fs.access(path.join(projectDir, 'feat-overview.md'))).rejects.toThrow();
+    const overview = await fs.readFile(
+      path.join(root, 'memory-evicted', 'memory-files', 'feat-overview.md'),
+      'utf-8',
+    );
     expect(overview).toContain('level: session_state');
+  });
+});
+
+describe('eval: E6a write tools land type:user in user-memory', () => {
+  it('write_file / append_file / patch_file 误写 memory-files/user_*.md 后项目库无残留', async () => {
+    registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '记住，测试'));
+    const tools = createFileTools(root);
+    const writeTool = tools.find(t => t.definition.name === 'write_file')!;
+    const appendTool = tools.find(t => t.definition.name === 'append_file')!;
+
+    const written = await writeTool.handler({
+      path: 'memory-files/user_eval_write.md',
+      content: '---\ntype: user\ndescription: eval write\n---\nfrom write_file\n',
+    });
+    expect(written.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'user_eval_write.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, 'user_eval_write.md'))).rejects.toThrow();
+
+    const appended = await appendTool.handler({
+      path: 'memory-files/user_eval_append.md',
+      content: '---\ntype: user\ndescription: eval append\n---\nfrom append_file\n',
+    });
+    expect(appended.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'user_eval_append.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, 'user_eval_append.md'))).rejects.toThrow();
+
+    await fs.writeFile(
+      path.join(projectDir, 'user_eval_patch.md'),
+      '---\ntype: user\ndescription: eval patch\n---\nkeep\n',
+      'utf-8',
+    );
+    markFileRead(root, 'memory-files/user_eval_patch.md');
+    const patched = await createPatchTool(root).handler({
+      path: 'memory-files/user_eval_patch.md',
+      patch: '@@ -5,1 +5,2 @@\n keep\n+patched\n',
+    });
+    expect(patched.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'user_eval_patch.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, 'user_eval_patch.md'))).rejects.toThrow();
+  });
+});
+
+describe('eval: session long-term write cap', () => {
+  it('remember 轮主代理写成功后，本会话第二次不同文件写入被拒绝', async () => {
+    const harness = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+    });
+    harness.onLoopStart('记住，commit 用中文', dummyLlm, { triggerUserMessage: '记住，commit 用中文' });
+    const tools = createFileTools(root);
+    const writeTool = tools.find(t => t.definition.name === 'write_file')!;
+
+    const first = await writeTool.handler({
+      path: 'user-memory/user_work_style.md',
+      content: '---\ntype: user\n---\ngit commit 用中文\n',
+    });
+    expect(first.success).toBe(true);
+
+    const second = await writeTool.handler({
+      path: 'user-memory/user_other_habit.md',
+      content: '---\ntype: user\n---\n另一个习惯\n',
+    });
+    expect(second.success).toBe(false);
+    expect(second.error).toMatch(/session_memory_write_cap/);
+
+    await (harness as unknown as {
+      _extractMemoriesImpl: (ctx: {
+        messages: UnifiedMessage[];
+        turnCount: number;
+        gateUserMessage: string;
+        conversationStartIndex: number;
+        commandsRun: string[];
+      }) => Promise<void>;
+    })._extractMemoriesImpl({
+      messages: [
+        { role: 'user', content: '记住，commit 用中文' },
+        { role: 'assistant', content: 'ok' },
+      ],
+      turnCount: 5,
+      gateUserMessage: '记住，commit 用中文',
+      conversationStartIndex: 0,
+      commandsRun: [],
+    });
+    expect(extractEvents.at(-1)?.skipReason).toBe('session_extract_cap');
+    harness.dispose();
+  });
+
+  it('每轮 new Harness 后同一 sessionId 仍受写配额约束', async () => {
+    const sessionId = `cap-${randomUUID()}`;
+    const firstHarness = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId,
+    });
+    firstHarness.onLoopStart('记住，commit 用中文', dummyLlm, { triggerUserMessage: '记住，commit 用中文' });
+    const writeTool = createFileTools(root, sessionId).find(t => t.definition.name === 'write_file')!;
+    const first = await writeTool.handler({
+      path: 'user-memory/user_persist_a.md',
+      content: '---\ntype: user\n---\nfirst\n',
+    });
+    expect(first.success).toBe(true);
+    firstHarness.dispose();
+
+    const secondHarness = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId,
+    });
+    secondHarness.onLoopStart('记住，另一个习惯', dummyLlm, { triggerUserMessage: '记住，另一个习惯' });
+    const writeTool2 = createFileTools(root, sessionId).find(t => t.definition.name === 'write_file')!;
+    const second = await writeTool2.handler({
+      path: 'user-memory/user_persist_b.md',
+      content: '---\ntype: user\n---\nsecond\n',
+    });
+    expect(second.success).toBe(false);
+    expect(second.error).toMatch(/session_memory_write_cap/);
+    secondHarness.dispose();
+  });
+
+  it('并发会话 remember 门控互不覆盖', async () => {
+    const sessionA = `rem-a-${randomUUID()}`;
+    const sessionB = `rem-b-${randomUUID()}`;
+    const harnessA = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId: sessionA,
+    });
+    harnessA.onLoopStart('记住，commit 用中文', dummyLlm, { triggerUserMessage: '记住，commit 用中文' });
+    const harnessB = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId: sessionB,
+    });
+    harnessB.onLoopStart('帮我装 mysql', dummyLlm, { triggerUserMessage: '帮我装 mysql' });
+
+    const writeB = createFileTools(root, sessionB).find(t => t.definition.name === 'write_file')!;
+    const blocked = await writeB.handler({
+      path: 'user-memory/user_session_b.md',
+      content: '---\ntype: user\n---\nshould not write\n',
+    });
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toMatch(/remember_required/);
+
+    const writeA = createFileTools(root, sessionA).find(t => t.definition.name === 'write_file')!;
+    const allowed = await writeA.handler({
+      path: 'user-memory/user_session_a.md',
+      content: '---\ntype: user\n---\ngit commit 用中文\n',
+    });
+    expect(allowed.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'user_session_a.md'))).resolves.toBeUndefined();
+
+    harnessA.dispose();
+    harnessB.dispose();
+  });
+
+  it('前台 run_command 成功写记忆后计入会话 cap；失败不占', async () => {
+    const sessionId = `shell-${randomUUID()}`;
+    const failHarness = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId,
+    });
+    failHarness.onLoopStart('记住，commit 用中文', dummyLlm, { triggerUserMessage: '记住，commit 用中文' });
+    const shell = createShellTool(root, sessionId);
+
+    const failed = await shell.handler({
+      command: 'echo remembered > user-memory/missing-dir/fail.md',
+      background: false,
+      timeout: 8_000,
+    });
+    expect(failed.success).toBe(false);
+
+    const writeTool = createFileTools(root, sessionId).find(t => t.definition.name === 'write_file')!;
+    const afterFail = await writeTool.handler({
+      path: 'user-memory/user_after_fail.md',
+      content: '---\ntype: user\n---\nstill first write\n',
+    });
+    expect(afterFail.success).toBe(true);
+    failHarness.dispose();
+
+    const successSession = `shell-ok-${randomUUID()}`;
+    const okHarness = new HarnessMemoryIntegration({
+      memoryDir: projectDir,
+      workspaceRoot: root,
+      sessionId: successSession,
+    });
+    okHarness.onLoopStart('记住，commit 用中文', dummyLlm, { triggerUserMessage: '记住，commit 用中文' });
+    const okShell = createShellTool(root, successSession);
+    const written = await okShell.handler({
+      command: 'echo remembered > user-memory/from_shell.md',
+      background: false,
+      timeout: 8_000,
+    });
+    expect(written.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'from_shell.md'))).resolves.toBeUndefined();
+
+    const writeTool2 = createFileTools(root, successSession).find(t => t.definition.name === 'write_file')!;
+    const second = await writeTool2.handler({
+      path: 'user-memory/user_after_shell.md',
+      content: '---\ntype: user\n---\nshould cap\n',
+    });
+    expect(second.success).toBe(false);
+    expect(second.error).toMatch(/session_memory_write_cap/);
+    okHarness.dispose();
+  });
+});
+
+describe('eval: filename heuristic does not dump docs into user-memory', () => {
+  it('user_guide.md 无 type:user 留在项目库；user_hygiene_cleanup.md 仍进用户库', async () => {
+    registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '记住，测试'));
+    const writeTool = createFileTools(root).find(t => t.definition.name === 'write_file')!;
+
+    const guide = await writeTool.handler({
+      path: 'memory-files/user_guide.md',
+      content: '---\nname: guide\n---\nhow to use iceCoder\n',
+    });
+    expect(guide.success).toBe(true);
+    await expect(fs.access(path.join(projectDir, 'user_guide.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(userDir, 'user_guide.md'))).rejects.toThrow();
+
+    const hygiene = await writeTool.handler({
+      path: 'memory-files/user_hygiene_cleanup.md',
+      content: '---\nname: hygiene\n---\n零残留：删除临时文件\n',
+    });
+    expect(hygiene.success).toBe(true);
+    await expect(fs.access(path.join(userDir, 'user_hygiene_cleanup.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, 'user_hygiene_cleanup.md'))).rejects.toThrow();
+  });
+
+  it('git 习惯与 pwsh 习惯不得写进同一用户条', async () => {
+    registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '记住，测试'));
+    const writeTool = createFileTools(root).find(t => t.definition.name === 'write_file')!;
+    const mixed = await writeTool.handler({
+      path: 'user-memory/user_mixed_shell_git.md',
+      content: '---\ntype: user\n---\ngit commit message 必须用中文。命令必须使用 pwsh.exe。\n',
+    });
+    expect(mixed.success).toBe(false);
+    expect(mixed.error).toMatch(/mixed_user_topics/);
+  });
+});
+
+describe('eval: session_progress is hidden from read_file', () => {
+  it('已降级的 *-overview.md 不能再被 read_file 当活跃记忆读到', async () => {
+    await writeMem(projectDir, 'icecoder-chat-page-ws-split-overview.md', `
+name: chat-page WS 拆分已全部完成（块1-4）
+description: 已完成并提交；测试全绿
+type: project
+memoryCategory: project_convention
+level: project_fact
+evidenceStrength: explicit
+confidence: 0.85
+tags: project:icecoder
+`.trim(), '块1-4 全部完成并提交');
+
+    await downgradeSessionProgressOverviews(projectDir);
+
+    const tools = createFileTools(root);
+    const readTool = tools.find(t => t.definition.name === 'read_file')!;
+    const archivedRead = await readTool.handler({
+      path: path.join(root, 'memory-evicted', 'memory-files', 'icecoder-chat-page-ws-split-overview.md'),
+    });
+    expect(archivedRead.success).toBe(true);
+    expect(archivedRead.output).toContain('level: session_state');
+
+    await fs.writeFile(
+      path.join(projectDir, 'still-active-progress-overview.md'),
+      `---
+name: 功能已全部完成
+description: 已完成并提交，测试全绿
+type: project
+memoryCategory: session_progress
+level: session_state
+progressSnapshot: true
+tags: status:session_progress
+---
+
+stale snapshot
+`,
+      'utf-8',
+    );
+    const hidden = await readTool.handler({ path: 'memory-files/still-active-progress-overview.md' });
+    expect(hidden.success).toBe(true);
+    expect(hidden.output).toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
+    expect(hidden.output).not.toContain('stale snapshot');
   });
 });

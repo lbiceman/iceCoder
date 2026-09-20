@@ -381,15 +381,19 @@ tags: project:icecoder
 `.trim(), '测试字面量是第 10 个同步点');
   const { downgradeSessionProgressOverviews } = await import('../src/memory/file-memory/memory-progress-overview.js');
   const downgraded = await downgradeSessionProgressOverviews(projectDir);
-  const progressFile = await fs.readFile(path.join(projectDir, 'icecoder-chat-page-ws-split-overview.md'), 'utf-8');
+  const progressFile = await fs.readFile(
+    path.join(root, 'memory-evicted', 'memory-files', 'icecoder-chat-page-ws-split-overview.md'),
+    'utf-8',
+  );
   const lessonFile = await fs.readFile(path.join(projectDir, 'icecoder-deep-analysis-overview.md'), 'utf-8');
   if (
     downgraded.downgraded.includes('icecoder-chat-page-ws-split-overview.md')
+    && downgraded.archived.includes('icecoder-chat-page-ws-split-overview.md')
     && !downgraded.downgraded.includes('icecoder-deep-analysis-overview.md')
     && progressFile.includes('level: session_state')
     && lessonFile.includes('level: project_fact')
   ) {
-    ok('进度 overview 已降级，checklist 教训保留');
+    ok('进度 overview 已降级并归档，checklist 教训保留');
   } else {
     ng('进度 overview 降级不符合预期', JSON.stringify(downgraded));
   }

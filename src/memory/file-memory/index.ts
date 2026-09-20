@@ -77,7 +77,13 @@ export {
   downgradeSessionProgressOverviews,
   isSessionProgressOverview,
   SESSION_PROGRESS_CONFIDENCE_CAP,
+  SESSION_PROGRESS_CATEGORY,
 } from './memory-progress-overview.js';
+export {
+  isHiddenSessionProgressMemoryContent,
+  gateMemoryToolRead,
+  SESSION_PROGRESS_TOOL_SKIP_MESSAGE,
+} from './memory-tool-access.js';
 
 export {
   auditMemoryIndexHealth,

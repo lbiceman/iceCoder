@@ -1,12 +1,14 @@
 /**
- * 将会话进度型 *-overview.md 降级为 session_state，避免把「已提交 / 全绿」快照当成长久项目约定召回。
- * 不删除文件；约定型 overview（周报技能、模型配置、checklist 教训等）不改。
+ * 将会话进度型 *-overview.md 降级为 session_state，并归档出活跃项目库。
+ * 约定型 overview（周报技能、模型配置、checklist 教训等）不改。
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
 import { getScannerCache } from './memory-scanner-cache.js';
+import { archiveMemoryFile } from './memory-eviction.js';
+import { removeIndexRows } from './memory-index-maintainer.js';
 
 export const SESSION_PROGRESS_CONFIDENCE_CAP = 0.45;
 export const SESSION_PROGRESS_LEVEL = 'session_state';
@@ -30,6 +32,7 @@ export function isSessionProgressOverview(input: SessionProgressOverviewInput): 
 
 export interface ProgressOverviewDowngradeResult {
   downgraded: string[];
+  archived: string[];
 }
 
 function frontmatterValue(content: string, key: string): string | null {
@@ -73,18 +76,33 @@ function capConfidence(raw: string | null): string {
   return String(Math.min(current, SESSION_PROGRESS_CONFIDENCE_CAP));
 }
 
+function defaultProgressEvictedDir(memoryDir: string): string {
+  return path.join(path.dirname(path.resolve(memoryDir)), 'memory-evicted', 'memory-files');
+}
+
+function applyProgressDowngrade(content: string): string {
+  let next = upsertFrontmatterField(content, 'level', SESSION_PROGRESS_LEVEL);
+  next = upsertFrontmatterField(next, 'memoryCategory', SESSION_PROGRESS_CATEGORY);
+  next = upsertFrontmatterField(next, 'confidence', capConfidence(frontmatterValue(next, 'confidence')));
+  next = withProgressTag(next);
+  next = upsertFrontmatterField(next, 'progressSnapshot', 'true');
+  return next;
+}
+
 /**
- * 扫描项目记忆目录，把进度快照型 overview 降级为 session_state。
+ * 扫描项目记忆目录，把进度快照型 overview 降级为 session_state 并归档到 memory-evicted。
  */
 export async function downgradeSessionProgressOverviews(
   memoryDir: string,
+  evictedDir: string = defaultProgressEvictedDir(memoryDir),
 ): Promise<ProgressOverviewDowngradeResult> {
   const downgraded: string[] = [];
+  const archived: string[] = [];
   let names: string[];
   try {
     names = await fs.readdir(memoryDir);
   } catch {
-    return { downgraded };
+    return { downgraded, archived };
   }
 
   for (const name of names) {
@@ -97,31 +115,39 @@ export async function downgradeSessionProgressOverviews(
       continue;
     }
 
-    if (!isSessionProgressOverview({
+    const looksLikeProgress = isSessionProgressOverview({
       filename: name,
       name: frontmatterValue(content, 'name'),
       description: frontmatterValue(content, 'description'),
-    })) {
-      continue;
+    }) || alreadyDowngraded(content);
+    if (!looksLikeProgress) continue;
+
+    let next = content;
+    if (!alreadyDowngraded(content)) {
+      next = applyProgressDowngrade(content);
+      if (next !== content) {
+        await writeFileAtomic(filePath, next, 'utf-8');
+        downgraded.push(name);
+      }
     }
-    if (alreadyDowngraded(content)) continue;
 
-    let next = upsertFrontmatterField(content, 'level', SESSION_PROGRESS_LEVEL);
-    next = upsertFrontmatterField(next, 'memoryCategory', SESSION_PROGRESS_CATEGORY);
-    next = upsertFrontmatterField(next, 'confidence', capConfidence(frontmatterValue(next, 'confidence')));
-    next = withProgressTag(next);
-    next = upsertFrontmatterField(next, 'progressSnapshot', 'true');
-
-    if (next !== content) {
-      await writeFileAtomic(filePath, next, 'utf-8');
-      downgraded.push(name);
+    const moved = await archiveMemoryFile(filePath, evictedDir, 'session_progress_snapshot');
+    if (moved) {
+      archived.push(name);
+      try {
+        await removeIndexRows(memoryDir, [name]);
+      } catch {
+        /* index may be missing */
+      }
     }
   }
 
-  if (downgraded.length > 0) {
+  if (downgraded.length > 0 || archived.length > 0) {
     getScannerCache().invalidate(memoryDir);
-    console.log(`[memory-progress-overview] downgraded ${downgraded.join(', ')}`);
+    console.log(
+      `[memory-progress-overview] downgraded ${downgraded.join(', ') || '(none)'}; archived ${archived.join(', ') || '(none)'}`,
+    );
   }
 
-  return { downgraded };
+  return { downgraded, archived };
 }

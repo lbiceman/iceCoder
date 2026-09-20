@@ -10,9 +10,14 @@ import type { RegisteredTool } from '../types.js';
 import { formatToolOutputWithDiff } from '../file-change-diff.js';
 import { checkReadBeforeEdit } from '../read-before-edit.js';
 import {
+  afterSuccessfulMemoryMarkdownWrite,
   assertAgentMemoryWriteAllowed,
-  canonicalizeMemoryToolPath,
+  formatMemoryWritePathNote,
+  removeStaleMemoryFileIfMoved,
+  resolveExistingMemoryToolPath,
   resolveMemoryRootForPath,
+  resolveMemoryWritePath,
+  sanitizeMemoryContentBeforeWrite,
 } from '../../memory/file-memory/memory-write-pipeline.js';
 
 function safePath(filePath: string, baseDir: string): string {
@@ -162,19 +167,24 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
     },
     handler: async (args) => {
       const rawPath = args.path as string;
-      const resolvedMemoryPath = canonicalizeMemoryToolPath(rawPath, workDir);
-      if (resolveMemoryRootForPath(resolvedMemoryPath)) {
-        const guardErr = await assertAgentMemoryWriteAllowed(resolvedMemoryPath);
+      const sourcePath = await resolveExistingMemoryToolPath(rawPath, workDir);
+      if (resolveMemoryRootForPath(sourcePath)) {
+        const guardErr = await assertAgentMemoryWriteAllowed(sourcePath, { sessionId });
         if (guardErr) return { success: false, output: '', error: guardErr };
       }
       const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
       if (readErr) return { success: false, output: '', error: readErr };
-      const filePath = safePath(rawPath, workDir);
+      let readPath = sourcePath;
+      try {
+        await fs.access(readPath);
+      } catch {
+        readPath = safePath(rawPath, workDir);
+      }
       const patch = args.patch as string;
       const dryRun = args.dryRun || false;
 
       try {
-        const content = await fs.readFile(filePath, 'utf-8');
+        const content = await fs.readFile(readPath, 'utf-8');
         const originalLines = content.split('\n');
 
         const hunks = parseUnifiedDiff(patch);
@@ -193,9 +203,23 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
         }
 
         const newContent = lines.join('\n');
+        const destPath = resolveMemoryWritePath(rawPath, workDir, newContent);
+        if (resolveMemoryRootForPath(destPath)) {
+          const destGuard = await assertAgentMemoryWriteAllowed(destPath, { content: newContent, sessionId });
+          if (destGuard) return { success: false, output: '', error: destGuard };
+        }
 
         if (!dryRun) {
-          await fs.writeFile(filePath, newContent, 'utf-8');
+          let writeContent = newContent;
+          if (resolveMemoryRootForPath(destPath)) {
+            writeContent = sanitizeMemoryContentBeforeWrite(newContent).content;
+          }
+          await fs.mkdir(path.dirname(destPath), { recursive: true });
+          await fs.writeFile(destPath, writeContent, 'utf-8');
+          await removeStaleMemoryFileIfMoved(readPath, destPath);
+          if (resolveMemoryRootForPath(destPath)) {
+            await afterSuccessfulMemoryMarkdownWrite(destPath, writeContent, sessionId);
+          }
         }
 
         const status = dryRun ? '[预览模式] ' : '';
@@ -204,6 +228,7 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
         if (failed > 0) {
           summary += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
         }
+        if (!dryRun) summary += formatMemoryWritePathNote(destPath);
 
         return { success: true, output: formatToolOutputWithDiff(summary, patch) };
       } catch (error) {

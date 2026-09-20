@@ -63,7 +63,7 @@ describe('isSessionProgressOverview', () => {
 });
 
 describe('downgradeSessionProgressOverviews', () => {
-  it('只降级进度型 overview，可重复执行', async () => {
+  it('只降级进度型 overview，归档出活跃库，可重复执行', async () => {
     await writeOverview('icecoder-chat-page-ws-split-overview.md', {
       name: 'chat-page WS 拆分已全部完成（块1-4）',
       description: 'UPDATE 既有条目：块4 已完成并提交；测试全绿结果',
@@ -79,10 +79,16 @@ describe('downgradeSessionProgressOverviews', () => {
       body: '验证结果 45/45 全绿。教训：测试字面量是第 10 个同步点',
     });
 
-    const first = await downgradeSessionProgressOverviews(tempDir);
+    const evictedDir = path.join(tempDir, '..', `progress-evicted-${path.basename(tempDir)}`);
+    const first = await downgradeSessionProgressOverviews(tempDir, evictedDir);
     expect(first.downgraded).toEqual(['icecoder-chat-page-ws-split-overview.md']);
+    expect(first.archived).toEqual(['icecoder-chat-page-ws-split-overview.md']);
 
-    const progress = await fs.readFile(path.join(tempDir, 'icecoder-chat-page-ws-split-overview.md'), 'utf-8');
+    await expect(fs.access(path.join(tempDir, 'icecoder-chat-page-ws-split-overview.md'))).rejects.toThrow();
+    const progress = await fs.readFile(
+      path.join(evictedDir, 'icecoder-chat-page-ws-split-overview.md'),
+      'utf-8',
+    );
     expect(progress).toContain('level: session_state');
     expect(progress).toContain('memoryCategory: session_progress');
     expect(progress).toContain(`confidence: ${SESSION_PROGRESS_CONFIDENCE_CAP}`);
@@ -95,7 +101,10 @@ describe('downgradeSessionProgressOverviews', () => {
     const lesson = await fs.readFile(path.join(tempDir, 'icecoder-deep-analysis-overview.md'), 'utf-8');
     expect(lesson).toContain('level: project_fact');
 
-    const second = await downgradeSessionProgressOverviews(tempDir);
+    const second = await downgradeSessionProgressOverviews(tempDir, evictedDir);
     expect(second.downgraded).toHaveLength(0);
+    expect(second.archived).toHaveLength(0);
+
+    await fs.rm(evictedDir, { recursive: true, force: true }).catch(() => {});
   });
 });

@@ -10,6 +10,16 @@ import { getEditHistory } from './undo-edit-tool.js';
 import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
 import { buildFileChangeDiff, formatToolOutputWithDiff } from '../file-change-diff.js';
 import { checkReadBeforeEdit } from '../read-before-edit.js';
+import {
+  afterSuccessfulMemoryMarkdownWrite,
+  assertAgentMemoryWriteAllowed,
+  formatMemoryWritePathNote,
+  removeStaleMemoryFileIfMoved,
+  resolveMemoryRootForPath,
+  resolveMemoryWritePath,
+  resolveExistingMemoryToolPath,
+  sanitizeMemoryContentBeforeWrite,
+} from '../../memory/file-memory/memory-write-pipeline.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -54,9 +64,19 @@ export function createBatchEditTool(workDir: string, sessionId = 'default'): Reg
     },
     handler: async (args) => {
       const rawPath = args.path as string;
+      const earlyPath = await resolveExistingMemoryToolPath(rawPath, workDir);
+      if (resolveMemoryRootForPath(earlyPath)) {
+        const earlyGuard = await assertAgentMemoryWriteAllowed(earlyPath, { sessionId });
+        if (earlyGuard) return { success: false, output: '', error: earlyGuard };
+      }
       const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
       if (readErr) return { success: false, output: '', error: readErr };
-      const filePath = safePath(rawPath, workDir);
+      let sourcePath = earlyPath;
+      try {
+        await fs.access(sourcePath);
+      } catch {
+        sourcePath = safePath(rawPath, workDir);
+      }
       const edits = args.edits as Array<{
         search: string;
         replace: string;
@@ -70,11 +90,11 @@ export function createBatchEditTool(workDir: string, sessionId = 'default'): Reg
       }
 
       try {
-        let content = await fs.readFile(filePath, 'utf-8');
+        let content = await fs.readFile(sourcePath, 'utf-8');
         const originalContent = content;
 
         // 保存快照（在实际修改前）
-        await getEditHistory().saveSnapshot(filePath, 'batch_edit_file');
+        await getEditHistory().saveSnapshot(sourcePath, 'batch_edit_file');
         const results: string[] = [];
 
         for (let i = 0; i < edits.length; i++) {
@@ -102,20 +122,35 @@ export function createBatchEditTool(workDir: string, sessionId = 'default'): Reg
         }
 
         const totalChanged = originalContent !== content;
+        const destPath = resolveMemoryWritePath(rawPath, workDir, content);
+        if (resolveMemoryRootForPath(destPath)) {
+          const destGuard = await assertAgentMemoryWriteAllowed(destPath, { content, sessionId });
+          if (destGuard) return { success: false, output: '', error: destGuard };
+        }
 
         if (!dryRun && totalChanged) {
-          await fs.writeFile(filePath, content, 'utf-8');
+          let writeContent = content;
+          if (resolveMemoryRootForPath(destPath)) {
+            writeContent = sanitizeMemoryContentBeforeWrite(content).content;
+          }
+          await fs.mkdir(path.dirname(destPath), { recursive: true });
+          await fs.writeFile(destPath, writeContent, 'utf-8');
+          await removeStaleMemoryFileIfMoved(sourcePath, destPath);
+          if (resolveMemoryRootForPath(destPath)) {
+            await afterSuccessfulMemoryMarkdownWrite(destPath, writeContent, sessionId);
+          }
         }
 
         const header = dryRun
           ? `[预览模式] ${args.path} (${edits.length} 处编辑)`
           : `${args.path} (${edits.length} 处编辑${totalChanged ? ', 已保存' : ', 无变更'})`;
+        const storedNote = !dryRun && totalChanged ? formatMemoryWritePathNote(destPath) : '';
 
         const diff = totalChanged ? buildFileChangeDiff(originalContent, content, args.path as string) : null;
 
         return {
           success: true,
-          output: formatToolOutputWithDiff(`${header}\n${results.join('\n')}`, diff),
+          output: formatToolOutputWithDiff(`${header}${storedNote}\n${results.join('\n')}`, diff),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -13,6 +13,11 @@ import {
   resetMemoryTelemetry,
   type ExtractTelemetry,
 } from '../../src/memory/file-memory/memory-telemetry.js';
+import {
+  registerAgentMemoryWriteGuard,
+  registerLongTermMemoryWriteCap,
+  resetSessionLongTermMemoryWriteCaps,
+} from '../../src/memory/file-memory/memory-write-pipeline.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../src/llm/types.js';
 
 let tempDir: string;
@@ -45,6 +50,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   resetMemoryTelemetry();
+  registerAgentMemoryWriteGuard(null);
+  registerLongTermMemoryWriteCap(null);
+  resetSessionLongTermMemoryWriteCaps();
   await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
 });
 
