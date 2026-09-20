@@ -4,7 +4,7 @@ import { ContextCompactor } from '../../src/harness/context-compactor.js';
 import { maybeCompact } from '../../src/harness/harness-compaction.js';
 import { HarnessLogger } from '../../src/harness/logger.js';
 import { HarnessMemoryIntegration } from '../../src/harness/harness-memory.js';
-import { prepareHarnessRound } from '../../src/harness/harness-round-prep.js';
+import { prepareHarnessRound, resolveRecallInjectMode } from '../../src/harness/harness-round-prep.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
@@ -156,5 +156,31 @@ describe('prepareHarnessRound · post-fork skip', () => {
     expect(state.turnCount).toBe(2);
     expect(injectSpy).toHaveBeenCalledOnce();
     injectSpy.mockRestore();
+  });
+
+  it('second round after tools uses standard recall mode', async () => {
+    const messages = filler(5);
+    const state = baseState(messages, { hadToolRoundThisRun: true, turnCount: 1 });
+    const injectSpy = vi.spyOn(baseDeps.memoryIntegration, 'injectMemoryContext').mockResolvedValue();
+
+    await prepareHarnessRound(baseDeps, {
+      state,
+      userMessage: '继续修这个 bug',
+      chatFn,
+      logger: new HarnessLogger(),
+    });
+
+    expect(injectSpy).toHaveBeenCalledOnce();
+    expect(injectSpy.mock.calls[0][1]).toMatchObject({ mode: 'default' });
+    injectSpy.mockRestore();
+  });
+});
+
+describe('resolveRecallInjectMode', () => {
+  it('maps casual / first round / post-tool to the designed phases', () => {
+    expect(resolveRecallInjectMode({ casual: true, hadToolRoundThisRun: false })).toBe('casual_light');
+    expect(resolveRecallInjectMode({ casual: true, hadToolRoundThisRun: true })).toBe('casual_light');
+    expect(resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: false })).toBe('coarse_pre_llm');
+    expect(resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: true })).toBe('default');
   });
 });

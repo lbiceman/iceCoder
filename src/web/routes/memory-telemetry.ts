@@ -63,6 +63,8 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
   let extractCacheHits = 0;
   let extractTotalMs = 0;
   let extractTotalMemories = 0;
+  let extractSkipCount = 0;
+  const extractSkipReasons: Record<string, number> = {};
 
   let dreamCount = 0;
   let dreamTotalModified = 0;
@@ -83,10 +85,16 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
         recallTotalSelected += e.selectedCount || 0;
         break;
       case 'memory_extract':
-        extractCount++;
-        if (e.usedPromptCache) extractCacheHits++;
-        extractTotalMs += e.durationMs || 0;
-        extractTotalMemories += e.extractedCount || 0;
+        if (e.skipReason) {
+          extractSkipCount++;
+          const reason = String(e.skipReason);
+          extractSkipReasons[reason] = (extractSkipReasons[reason] || 0) + 1;
+        } else {
+          extractCount++;
+          if (e.usedPromptCache) extractCacheHits++;
+          extractTotalMs += e.durationMs || 0;
+          extractTotalMemories += e.extractedCount || 0;
+        }
         break;
       case 'memory_dream':
         if (e.executed) {
@@ -117,6 +125,8 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
       cacheHitRate: extractCount > 0 ? Math.round(extractCacheHits / extractCount * 100) : 0,
       avgMs: extractCount > 0 ? Math.round(extractTotalMs / extractCount) : 0,
       totalMemories: extractTotalMemories,
+      skipCount: extractSkipCount,
+      skipReasons: extractSkipReasons,
     },
     dream: {
       count: dreamCount,
@@ -197,7 +207,12 @@ function formatReport(
     const cacheRate = log.extract.count > 0 ? log.extract.cacheHitRate : processSummary.cacheHitRate;
     const avgMs = log.extract.count > 0 ? log.extract.avgMs : processSummary.avgExtractMs;
     const total = log.extract.totalMemories || processSummary.totalMemoriesExtracted;
-    lines.push(`**提取** ${count} 次 | prompt cache 命中 ${cacheRate}% | 平均 ${avgMs}ms | 共提取 ${total} 条`);
+    const skipPart = log.extract.skipCount > 0
+      ? ` | 跳过 ${log.extract.skipCount}`
+      : '';
+    lines.push(`**提取** ${count} 次 | prompt cache 命中 ${cacheRate}% | 平均 ${avgMs}ms | 共提取 ${total} 条${skipPart}`);
+  } else if (log.extract.skipCount > 0) {
+    lines.push(`**提取** 0 次 | 跳过 ${log.extract.skipCount}`);
   } else {
     lines.push('**提取** 暂无数据');
   }

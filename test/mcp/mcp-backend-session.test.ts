@@ -16,6 +16,7 @@ describe('mcp-backend-session', () => {
     expect(isBrowserExtensionMcp('github', ['create_issue'])).toBe(false);
     expect(isBrowserExtensionMcp('puppeteer', ['puppeteer_navigate'])).toBe(false);
     expect(isBrowserExtensionMcp('chrome-devtools', ['puppeteer_screenshot'])).toBe(false);
+    expect(isBrowserExtensionMcp('chrome-devtools', ['navigate_page', 'take_snapshot'])).toBe(false);
     expect(createMcpBackendState('puppeteer', ['puppeteer_navigate']).kind).toBe('none');
     expect(createMcpBackendState('browsermcp', ['browser_click']).kind).toBe('browser_extension');
   });

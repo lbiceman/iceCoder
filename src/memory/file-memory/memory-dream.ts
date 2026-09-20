@@ -52,8 +52,10 @@ import {
   repairDeadLinksInMemoryIndex,
   type MemoryIndexHealthReport,
 } from './memory-index-health.js';
-import { removeIndexRows, rebuildIndexIfDrifted } from './memory-index-maintainer.js';
+import { removeIndexRows, rebuildIndexIfDrifted, repairMemoryIndexIfUnhealthy } from './memory-index-maintainer.js';
 import { isProtectedFromAutoDelete, findMergeCandidates, performRuleMerge } from './memory-dedup.js';
+import { dedupeUserMemoryDuplicates } from './memory-user-dedup.js';
+import { downgradeSessionProgressOverviews } from './memory-progress-overview.js';
 
 /** Dream 读取文件数上限 */
 const DREAM_READ_LIMIT = 80;
@@ -75,17 +77,16 @@ const USER_PROMOTE_MIN_RECALL = 3;
 const DREAM_STATE_FILE_PATH = getRuntimeMemoryAuxPath('dream-state.json');
 /** 因 stale_index 跑完 Dream 后，在此时间内不再仅因死链再次触发（避免 LLM 未修好索引时连打） */
 const STALE_INDEX_DREAM_COOLDOWN_MS = 12 * 60 * 1000;
-/** 规则层偏好合并只处理带明确主题标签的记忆，避免按自然语言猜测误合并。 */
+/**
+ * 规则层偏好合并只认真正的偏好主题标签。
+ * 禁止用 lang:/tool:/framework: 当主题键——扫描器会把 feedback 默认标成 preference，
+ * 否则会把互不相关的排错事实压进同一条。
+ */
 const PREFERENCE_TOPIC_TAG_PREFIXES = [
   'pref:',
   'preference:',
   'style:',
-  'tool:',
-  'lang:',
-  'framework:',
   'communication:',
-  'format:',
-  'test:',
 ];
 /** 被同主题新偏好覆盖后，旧偏好仍保留审计痕迹，但降低召回权重。 */
 const SUPERSEDED_PREFERENCE_CONFIDENCE_CAP = 0.45;
@@ -260,9 +261,13 @@ function truncateDreamIndexPrompt(content: string): string {
 type DreamInputMode = 'full' | 'manifest' | 'batch';
 
 function isPreferenceLikeMemory(mem: MemoryHeader): boolean {
-  return mem.level === 'preference'
-    || mem.type === 'feedback'
-    || mem.tags.some(tag => tag === 'preference' || tag.startsWith('preference:') || tag.startsWith('pref:'));
+  // 不把 type=feedback / scanner 默认的 level=preference 当成可合并偏好。
+  return mem.tags.some(tag => {
+    const lower = tag.toLowerCase();
+    return lower === 'preference'
+      || lower.startsWith('preference:')
+      || lower.startsWith('pref:');
+  });
 }
 
 function preferenceTopicKey(mem: MemoryHeader): string | null {
@@ -271,6 +276,16 @@ function preferenceTopicKey(mem: MemoryHeader): string | null {
     return PREFERENCE_TOPIC_TAG_PREFIXES.some(prefix => lower.startsWith(prefix));
   });
   return tag ? tag.toLowerCase() : null;
+}
+
+/** 测试 / 修复脚本用：当前规则层是否会把这条记忆纳入同主题合并。 */
+export function isPreferenceLikeForConsolidation(mem: MemoryHeader): boolean {
+  return isPreferenceLikeMemory(mem);
+}
+
+/** 测试 / 修复脚本用：规则层合并主题键；过粗标签返回 null。 */
+export function preferenceTopicKeyForConsolidation(mem: MemoryHeader): string | null {
+  return preferenceTopicKey(mem);
 }
 
 function preferenceRank(mem: MemoryHeader): number {
@@ -441,6 +456,8 @@ export class MemoryDream {
     if (!remoteCfg.enabled) return { shouldRun: false, trigger: null, skipReason: 'disabled' };
 
     await this.restoreState();
+    await this.repairUserMemoryIndexIfNeeded();
+    await this.maintainMemoryHygiene(memoryDir);
 
     if (!this.lock) {
       this.lock = new ConsolidationLock(memoryDir);
@@ -652,6 +669,55 @@ export class MemoryDream {
     this.logPostDreamEviction('project pre-dream', out, cap);
     if (out.executed) getScannerCache().invalidate(memoryDir);
     return out;
+  }
+
+  /**
+   * 用户库去重 + 进度型 overview 降级（规则层，不调 LLM）。
+   */
+  async maintainMemoryHygiene(memoryDir: string): Promise<void> {
+    try {
+      await downgradeSessionProgressOverviews(memoryDir);
+    } catch (err) {
+      console.debug(
+        '[MemoryDream] progress overview downgrade failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+    if (!process.env.ICE_USER_MEMORY_DIR?.trim()) return;
+    try {
+      await dedupeUserMemoryDuplicates(resolveUserMemoryDir());
+    } catch (err) {
+      console.debug(
+        '[MemoryDream] user memory dedup failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * 用户库 MEMORY.md 有孤儿/死链时规则重建（不调 LLM）。
+   */
+  async repairUserMemoryIndexIfNeeded(): Promise<void> {
+    if (!process.env.ICE_USER_MEMORY_DIR?.trim()) return;
+    const userDir = resolveUserMemoryDir();
+    try {
+      await fs.access(userDir);
+    } catch {
+      return;
+    }
+    try {
+      const result = await repairMemoryIndexIfUnhealthy(userDir);
+      if (result.rebuilt || result.repairedDeadLinks > 0) {
+        console.log(
+          `[MemoryDream] user index repaired: rebuilt=${result.rebuilt} deadLinks=${result.repairedDeadLinks} orphans=${result.orphans}`,
+        );
+      }
+    } catch (err) {
+      console.debug(
+        '[MemoryDream] user index repair failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /**

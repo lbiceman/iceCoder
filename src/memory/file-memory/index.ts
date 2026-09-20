@@ -62,8 +62,22 @@ export type { RecallResult, TimeRange } from './memory-recall.js';
 export { LLMMemoryExtractor, createLLMMemoryExtractor, ALLOWED_MEMORY_CATEGORIES, isAllowedMemoryCategory } from './memory-llm-extractor.js';
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
 
-export { MemoryDream, createMemoryDream, shouldAutoPromoteToUserLevel } from './memory-dream.js';
+export { MemoryDream, createMemoryDream, shouldAutoPromoteToUserLevel, isPreferenceLikeForConsolidation, preferenceTopicKeyForConsolidation } from './memory-dream.js';
 export type { DreamResult, DreamTrigger } from './memory-dream.js';
+export { filterMemoriesByWorkspace, inferMemoryProjectKeys, inferWorkspaceProjectKeys } from './memory-workspace-filter.js';
+export { repairCoarseTopicSupersessions, isCoarseConsolidationTopic } from './memory-false-merge-repair.js';
+export {
+  dedupeUserMemoryDuplicates,
+  classifyUserMemoryDuplicate,
+  extractQuotedUserSpeech,
+  pickUserDedupKeeper,
+} from './memory-user-dedup.js';
+export type { UserDedupResult, UserDedupMerge, UserDedupReason } from './memory-user-dedup.js';
+export {
+  downgradeSessionProgressOverviews,
+  isSessionProgressOverview,
+  SESSION_PROGRESS_CONFIDENCE_CAP,
+} from './memory-progress-overview.js';
 
 export {
   auditMemoryIndexHealth,
@@ -177,5 +191,6 @@ export {
   computeEvictionScore,
   restoreEvicted,
   listEvictedFiles,
+  archiveMemoryFile,
 } from './memory-eviction.js';
 export type { EvictionConfig, EvictionResult } from './memory-eviction.js';

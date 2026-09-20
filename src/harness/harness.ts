@@ -579,6 +579,7 @@ export class Harness {
       emptyResponseRetryCount: 0,
       consecutiveToolFailures: 0,
       consecutiveReadOnlyRounds: 0,
+      hadToolRoundThisRun: false,
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,

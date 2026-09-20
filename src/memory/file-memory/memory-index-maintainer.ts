@@ -300,3 +300,40 @@ export async function rebuildIndexIfDrifted(
   }
   return result;
 }
+
+export interface UnhealthyIndexRepairResult {
+  rebuilt: boolean;
+  repairedDeadLinks: number;
+  orphans: number;
+  dead: number;
+}
+
+/**
+ * 小库（尤其用户级）只要有孤儿或死链就规则修复，不等 Dream 比例门控。
+ */
+export async function repairMemoryIndexIfUnhealthy(
+  memoryDir: string,
+  opts?: RebuildOpts,
+): Promise<UnhealthyIndexRepairResult> {
+  const memories = await scanMemoryFiles(memoryDir, 500);
+  const health = await auditMemoryIndexHealth(
+    memoryDir,
+    memories.map(m => m.filename),
+  );
+  let repairedDeadLinks = 0;
+  if (health.dead > 0) {
+    const repair = await repairDeadLinksInMemoryIndex(memoryDir);
+    repairedDeadLinks = repair.removedLinks;
+  }
+  let rebuilt = false;
+  if (health.orphans > 0 || !health.checked) {
+    const result = await rebuildIndexIfDrifted(memoryDir, opts);
+    rebuilt = result.wrote;
+  }
+  return {
+    rebuilt,
+    repairedDeadLinks,
+    orphans: health.orphans,
+    dead: health.dead,
+  };
+}

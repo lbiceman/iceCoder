@@ -28,6 +28,7 @@ export function isBrowserExtensionMcp(
   toolNames: readonly string[] = [],
 ): boolean {
   if (/puppeteer/i.test(serverName)) return false;
+  if (/chrome[-_]?devtools/i.test(serverName)) return false;
   if (/browsermcp|browser[-_]?mcp/i.test(serverName)) return true;
   return toolNames.some((tool) =>
     !/puppeteer/i.test(tool)

@@ -84,6 +84,8 @@ export interface ExtractTelemetry {
   durationMs: number;
   /** 写入的文件名列表 */
   writtenFiles: string[];
+  /** 门控/空跑跳过原因；有值表示本次未真正提取 */
+  skipReason?: string;
 }
 
 /**
@@ -251,13 +253,15 @@ export class MemoryTelemetry extends EventEmitter {
       ...data,
     };
 
-    this.stats.totalExtracts++;
-    this.stats.totalExtractDurationMs += data.durationMs;
-    this.stats.totalMemoriesExtracted += data.extractedCount;
-    if (data.usedPromptCache) {
-      this.stats.promptCacheHits++;
-    } else {
-      this.stats.promptCacheMisses++;
+    if (!data.skipReason) {
+      this.stats.totalExtracts++;
+      this.stats.totalExtractDurationMs += data.durationMs;
+      this.stats.totalMemoriesExtracted += data.extractedCount;
+      if (data.usedPromptCache) {
+        this.stats.promptCacheHits++;
+      } else {
+        this.stats.promptCacheMisses++;
+      }
     }
 
     await this.writeEvent(event);
@@ -394,7 +398,9 @@ export class MemoryTelemetry extends EventEmitter {
       case 'memory_recall':
         return `recall: ${event.selectedCount}/${event.candidateCount} selected, ${event.usedLLM ? 'LLM' : 'keyword'}, ${event.durationMs}ms${event.recallPhase ? ` [${event.recallPhase}]` : ''}`;
       case 'memory_extract':
-        return `extract: ${event.extractedCount} from ${event.messageCount} msgs, cache=${event.usedPromptCache}, prefix=${event.contextPrefixLength}, ${event.durationMs}ms`;
+        return event.skipReason
+          ? `extract: skipped (${event.skipReason})`
+          : `extract: ${event.extractedCount} from ${event.messageCount} msgs, cache=${event.usedPromptCache}, prefix=${event.contextPrefixLength}, ${event.durationMs}ms`;
       case 'memory_dream':
         return `dream: ${event.executed ? `${event.filesModified} modified, ${event.filesDeleted} deleted${event.filesEvicted ? `, ${event.filesEvicted} evicted` : ''} [${event.trigger}]` : 'skipped'}, ${event.durationMs}ms`;
       case 'memory_cap_evict':
