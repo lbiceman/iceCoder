@@ -666,6 +666,9 @@ export async function runHarnessToolRound(
 
   const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
   const hadWriteTool = executableToolCalls.some(tc => WRITE_TOOLS.has(tc.name));
+  if (executableToolCalls.length > 0) {
+    state.hadToolRoundThisRun = true;
+  }
   if (hadWriteTool) {
     state.consecutiveReadOnlyRounds = 0;
   } else if (executableToolCalls.length) {
@@ -679,8 +682,8 @@ export async function runHarnessToolRound(
     }
   }
 
-  // 工具轮后不再同步全量 LLM 召回：会堵住下一轮 2–30s。
-  // 下一轮 prep 仍走 coarse_pre_llm；标准召回放到 onLoopEnd 后台。
+  // 工具轮后不在这里同步标准召回（会堵住 2–30s）。
+  // 下一轮 prep 见过 hadToolRoundThisRun 后改走 default（标准召回）。
 
   const nextStop = deps.loopController.shouldContinue();
   if (nextStop) {

@@ -97,6 +97,7 @@ import {
   syncVerificationWorkspaceMutation,
 } from './verification-state.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
+import { isPlausibleWorkspaceRoot } from './workspace-lock.js';
 import {
   dumpHarnessTiming,
   endTiming,
@@ -498,7 +499,7 @@ export class Harness {
       if (applied.detection.changeNotice) {
         messages.push({ role: 'user', content: applied.detection.changeNotice });
       }
-      if (lockedWorkspaceRoot) {
+      if (lockedWorkspaceRoot && isPlausibleWorkspaceRoot(lockedWorkspaceRoot)) {
         this.workspaceRoot = lockedWorkspaceRoot;
       }
     }
@@ -578,6 +579,7 @@ export class Harness {
       emptyResponseRetryCount: 0,
       consecutiveToolFailures: 0,
       consecutiveReadOnlyRounds: 0,
+      hadToolRoundThisRun: false,
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,

@@ -38,7 +38,7 @@ import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/mem
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
-import { evaluateMemoryExtractionGate } from './memory-extraction-gate.js';
+import { evaluateMemoryExtractionGate, type MemoryExtractionGateResult } from './memory-extraction-gate.js';
 import {
   isSessionContextWriteStale,
   sessionContextWriteEpoch,
@@ -60,6 +60,10 @@ import {
   isMemoryToolPath,
   shellCommandTargetsMemoryWrite,
   resolveMessageForRememberWriteGuard,
+  getOrCreateSessionLongTermMemoryWriteCap,
+  registerLongTermMemoryWriteCap,
+  recordLongTermMemoryWriteSuccess,
+  type LongTermMemoryWriteCap,
 } from '../memory/file-memory/memory-write-pipeline.js';
 
 /** 话题切换 Jaccard 阈值 */
@@ -277,7 +281,8 @@ function hasMemoryWritesSince(
         const args = tc.arguments as Record<string, unknown>;
         if (
           tc.name === 'write_file' || tc.name === 'edit_file' ||
-          tc.name === 'append_file'
+          tc.name === 'append_file' || tc.name === 'patch_file' ||
+          tc.name === 'batch_edit_file'
         ) {
           const filePath = extractToolMemoryPath(args);
           if (filePath && isMemoryToolPath(filePath, workspaceRoot)) {
@@ -597,6 +602,8 @@ export class HarnessMemoryIntegration {
   private sessionSuccessfulExtractCount = 0;
   /** 本会话 Extract 累计写盘条数 */
   private sessionExtractWrittenCount = 0;
+  /** 本会话主代理+Extract 共用的长期记忆写配额（按 sessionId 跨 Harness 实例保留） */
+  private sessionMemoryWriteCap!: LongTermMemoryWriteCap;
   /** 上次提取时的工具调用计数 cursor */
   private toolCallsAtLastExtract = 0;
 
@@ -617,8 +624,12 @@ export class HarnessMemoryIntegration {
     this.memoryDream = new MemoryDream();
     this.llmExtractor = new LLMMemoryExtractor({ enablePromptCache: true });
 
+    this.sessionMemoryWriteCap = getOrCreateSessionLongTermMemoryWriteCap(this.sessionId);
+    registerLongTermMemoryWriteCap(this.sessionMemoryWriteCap);
+
     registerAgentMemoryWriteGuard(
       createRememberSignalWriteGuard(() => this.messageForRememberWriteGuard()),
+      this.sessionId,
     );
 
     // 并发控制：sequential 包装确保提取不重叠
@@ -814,6 +825,7 @@ export class HarnessMemoryIntegration {
         coarseK,
         prefetchedPaths,
         topicSwitched,
+        { workspaceRoot: this.workspaceRoot },
       );
 
       if (recallResult.memories.length > 0) {
@@ -934,7 +946,7 @@ export class HarnessMemoryIntegration {
 
   /**
    * 每轮 LLM 前：仅关键词召回 top-K，不调用侧边 LLM。
-   * 不设置 injectedForCurrentMessage；标准召回改在 onLoopEnd 后台进行。
+   * 不设置 injectedForCurrentMessage；工具轮之后由下一轮 prep 走标准召回。
    */
   private async injectCoarseKeywordRecall(
     messages: UnifiedMessage[],
@@ -981,7 +993,7 @@ export class HarnessMemoryIntegration {
         topK,
         prefetchedPaths,
         false,
-        { relaxed: true },
+        { relaxed: true, workspaceRoot: this.workspaceRoot },
       );
 
       if (recallResult.memories.length === 0) {
@@ -1123,6 +1135,9 @@ ${candidateList}`;
       this.lastExtractionMessageIndex = Math.max(
         this.lastExtractionMessageIndex,
         conversationEndIndex,
+      );
+      await this.logExtractSkip('agent_wrote').catch((e) =>
+        console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e),
       );
     } else {
       // 冻结门控与游标：后台提取完成前下一 Turn 不得覆盖 triggerUserMessage / 游标
@@ -1275,7 +1290,8 @@ ${candidateList}`;
    * 清理资源。
    */
   dispose(): void {
-    registerAgentMemoryWriteGuard(null);
+    registerAgentMemoryWriteGuard(null, this.sessionId);
+    registerLongTermMemoryWriteCap(null);
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
@@ -1508,10 +1524,10 @@ ${candidateList}`;
     );
   }
 
-  private shouldExtract(ctx: ExtractionQueueContext): boolean {
+  private evaluateExtractDecision(ctx: ExtractionQueueContext): MemoryExtractionGateResult {
     const gateUserMessage = ctx.gateUserMessage.trim();
-    if (!this.llmAdapter || !gateUserMessage) return false;
-    if (!this.memoryDirExists) return false;
+    if (!gateUserMessage) return { allow: false, reason: 'empty_message' };
+    if (!this.memoryDirExists) return { allow: false, reason: 'memory_dir_missing' };
 
     const cfg = getExtractionConfig();
     const casualCfg = getCasualExtractionConfig();
@@ -1526,6 +1542,7 @@ ${candidateList}`;
       extractionTurnCounter: this.extractionTurnCounter,
       sessionSuccessfulExtractCount: this.sessionSuccessfulExtractCount,
       sessionExtractWrittenCount: this.sessionExtractWrittenCount,
+      sessionLongTermWriteCount: this.sessionMemoryWriteCap.writtenBasenames.size,
       taskIntent: ctx.taskIntent,
       commandsRun: ctx.commandsRun,
       extractionConfig: cfg,
@@ -1536,7 +1553,7 @@ ${candidateList}`;
       if (gate.resetTurnCounter) {
         this.extractionTurnCounter = 0;
       }
-      return true;
+      return gate;
     }
 
     if (
@@ -1553,7 +1570,23 @@ ${candidateList}`;
     if (gate.reason) {
       console.debug(`[harness-memory] 跳过提取 — ${gate.reason}`);
     }
-    return false;
+    return gate;
+  }
+
+  private async logExtractSkip(reason: string, extras?: {
+    messageCount?: number;
+    contextPrefixLength?: number;
+    durationMs?: number;
+  }): Promise<void> {
+    await this.telemetry.logExtract({
+      messageCount: extras?.messageCount ?? 0,
+      extractedCount: 0,
+      usedPromptCache: false,
+      contextPrefixLength: extras?.contextPrefixLength ?? 0,
+      durationMs: extras?.durationMs ?? 0,
+      writtenFiles: [],
+      skipReason: reason,
+    });
   }
 
   /**
@@ -1561,8 +1594,19 @@ ${candidateList}`;
    * 带 inProgress 互斥 + trailing run 机制。
    */
   private async _extractMemoriesImpl(ctx: ExtractionQueueContext): Promise<void> {
-    if (!this.llmAdapter) return;
-    if (!this.shouldExtract(ctx)) return;
+    const decision = this.evaluateExtractDecision(ctx);
+    if (!decision.allow) {
+      await this.logExtractSkip(decision.reason ?? 'gate_denied').catch((e) =>
+        console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e),
+      );
+      return;
+    }
+    if (!this.llmAdapter) {
+      await this.logExtractSkip('no_llm').catch((e) =>
+        console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e),
+      );
+      return;
+    }
 
     // inProgress 互斥
     if (this.extractionGuard.inProgress) {
@@ -1651,7 +1695,10 @@ ${candidateList}`;
       const allConversation = messages
         .filter(m => m.role === 'user' || m.role === 'assistant');
 
-      if (allConversation.length === 0) return;
+      if (allConversation.length === 0) {
+        await this.logExtractSkip('empty_conversation');
+        return;
+      }
 
       // 只提取入队时冻结游标之后的新消息（勿读 this.lastExtractionMessageIndex 实时值）
       const newMessagesRaw = allConversation.slice(conversationStartIndex);
@@ -1659,6 +1706,7 @@ ${candidateList}`;
         console.debug(
           `[harness-memory] 提取跳过 — 无新对话片段 (start=${conversationStartIndex}, total=${allConversation.length})`,
         );
+        await this.logExtractSkip('no_new_messages');
         return;
       }
 
@@ -1674,7 +1722,10 @@ ${candidateList}`;
       const CHUNK_SIZE = EXTRACTION_CHUNK_SIZE;
       const MAX_CHUNKS = EXTRACTION_MAX_CHUNKS_PER_RUN;
       const writeBudget = Math.max(0, SESSION_MAX_EXTRACT_WRITES - this.sessionExtractWrittenCount);
-      if (writeBudget <= 0) return;
+      if (writeBudget <= 0) {
+        await this.logExtractSkip('session_extract_cap');
+        return;
+      }
 
       const chunks: UnifiedMessage[][] = [];
       for (let i = 0; i < newMessages.length && chunks.length < MAX_CHUNKS; i += CHUNK_SIZE) {
@@ -1720,16 +1771,20 @@ ${candidateList}`;
         allConversation.length,
       );
 
-      this.telemetry.logExtract({
+      await this.telemetry.logExtract({
         messageCount: newMessages.length,
         extractedCount: totalWritten,
         usedPromptCache,
         contextPrefixLength: conversationPrefix.length,
         durationMs: totalDuration,
         writtenFiles: allWrittenPaths,
+        skipReason: totalWritten === 0 ? 'extractor_empty' : undefined,
       }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
 
       if (totalWritten > 0) {
+        for (const writtenPath of allWrittenPaths) {
+          recordLongTermMemoryWriteSuccess(writtenPath, this.sessionId);
+        }
         this.sessionSuccessfulExtractCount++;
         this.sessionExtractWrittenCount += totalWritten;
         this.toolCallsAtLastExtract = countToolCallsSince(messages, 0);

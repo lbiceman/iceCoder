@@ -147,17 +147,16 @@ window.SkillsPage = (function () {
 
   function confirmDeleteSkill(sk) {
     var name = sk.name || sk.filename;
-    var doConfirm = function () { doDelete(sk.filename); };
-    if (window.Modal && typeof window.Modal.confirm === 'function') {
-      window.Modal.confirm({
-        title: '删除技能',
-        message: '确定删除「' + name + '」？此操作不可撤销。',
-        confirmText: '删除',
-        dangerConfirm: true,
-      }).then(function (ok) { if (ok) doConfirm(); });
-    } else if (confirm('确定删除技能「' + name + '」？')) {
-      doConfirm();
-    }
+    window.Modal.confirm({
+      title: '删除技能',
+      message: '确定删除「' + name + '」？此操作不可撤销。',
+      type: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+      dangerConfirm: true,
+    }).then(function (ok) {
+      if (ok) doDelete(sk.filename);
+    });
   }
 
   function navigateToChatComposer() {
@@ -232,17 +231,7 @@ window.SkillsPage = (function () {
         var delBtn = detailEl.querySelector('#skills-delete-btn');
         if (delBtn) {
           delBtn.addEventListener('click', function () {
-            var doConfirm = function () { doDelete(filename); };
-            if (window.Modal && typeof window.Modal.confirm === 'function') {
-              window.Modal.confirm({
-                title: '删除技能',
-                message: '确定删除「' + (meta.name || filename) + '」？此操作不可撤销。',
-                confirmText: '删除',
-                dangerConfirm: true,
-              }).then(function (ok) { if (ok) doConfirm(); });
-            } else if (confirm('确定删除技能「' + (meta.name || filename) + '」？')) {
-              doConfirm();
-            }
+            confirmDeleteSkill({ name: meta.name || filename, filename: filename });
           });
         }
       })

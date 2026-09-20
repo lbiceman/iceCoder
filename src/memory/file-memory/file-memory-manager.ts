@@ -18,8 +18,11 @@ import { MultiLevelMemoryLoader, type MultiLevelMemoryConfig, MemoryLevel } from
 import { AsyncMemoryPrefetcher, type PrefetchConfig } from './async-prefetch.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { loadMemoryPrompt } from './memory-prompt.js';
-import { upsertIndexRow } from './memory-index-maintainer.js';
+import { upsertIndexRow, ensureMemoryIndexBootstrapped, repairMemoryIndexIfUnhealthy } from './memory-index-maintainer.js';
 import { sanitizeMemoryContentBeforeWrite } from './memory-write-pipeline.js';
+import { repairCoarseTopicSupersessions } from './memory-false-merge-repair.js';
+import { dedupeUserMemoryDuplicates } from './memory-user-dedup.js';
+import { downgradeSessionProgressOverviews } from './memory-progress-overview.js';
 import {
   DEFAULT_FILE_MEMORY_CONFIG,
   DEFAULT_MULTI_LEVEL_CONFIG,
@@ -90,6 +93,15 @@ export class FileMemoryManager {
       // 确保记忆目录存在
       const memoryDir = this.config.memory.memoryDir || DEFAULT_CONFIG.memory.memoryDir!;
       await fs.mkdir(memoryDir, { recursive: true });
+      await ensureMemoryIndexBootstrapped(memoryDir);
+      await repairCoarseTopicSupersessions(memoryDir).catch(() => {});
+      await downgradeSessionProgressOverviews(memoryDir).catch(() => {});
+      const userDir = process.env.ICE_USER_MEMORY_DIR?.trim();
+      if (userDir) {
+        await fs.mkdir(userDir, { recursive: true }).catch(() => {});
+        await repairMemoryIndexIfUnhealthy(userDir).catch(() => {});
+        await dedupeUserMemoryDuplicates(userDir).catch(() => {});
+      }
 
       // 初始化多级加载器
       await this.memoryLoader.loadAllLevels();

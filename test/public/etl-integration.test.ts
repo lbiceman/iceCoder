@@ -171,6 +171,11 @@ async function loadObserver(options: {
   await page.addScriptTag({ content: BRIDGE_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatExecutionPlan.setPageActive(true);
+    (window as any).__chapterElapsed = () => {
+      const el = document.querySelector('.etl-chapter-node.is-current .etl-chapter-clock')
+        || document.querySelector('.etl-chapter-clock');
+      return el ? el.textContent : null;
+    };
   });
   return page;
 }
@@ -398,7 +403,7 @@ describe('ETL 真实 Observer 链路', () => {
         updatedAt: projected?.updatedAt,
         planStartedAt: projected?.startedAt,
         planEndedAt: projected?.endedAt,
-        footerTime: document.querySelector('.etl-foot-time b')?.textContent,
+        footerTime: (window as any).__chapterElapsed(),
         hasLegacyTimeline: !!document.querySelector('.etl-tl-total, #etl-timeline'),
       };
     }, {
@@ -423,7 +428,7 @@ describe('ETL 真实 Observer 链路', () => {
       updatedAt: 15_000,
       planStartedAt: 10_000,
       planEndedAt: 15_000,
-      footerTime: '00:05',
+      footerTime: '5秒',
       hasLegacyTimeline: false,
     });
   });
@@ -874,7 +879,7 @@ describe('ETL 真实 Observer 链路', () => {
         before,
         afterSend,
         currentRoundText: document.querySelector('#etl-round-timeline .etl-round-node')?.textContent,
-        elapsed: document.querySelector('.etl-foot-time b')?.textContent,
+        elapsed: (window as any).__chapterElapsed(),
         titles,
         chaptersAfter: nodes.length,
         previousCollapsed: nodes[0] ? !nodes[0].classList.contains('is-selected') : false,
@@ -892,7 +897,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.afterSend.chapterEmpty).toBe(true);
     expect(result.currentRoundText).toMatch(/glob|查找匹配/i);
     expect(result.currentRoundText).not.toContain('previous.ts');
-    expect(result.elapsed).toBe('00:05');
+    expect(result.elapsed).toBe('5秒');
     expect(result.chaptersAfter).toBeGreaterThanOrEqual(2);
     expect(result.previousCollapsed).toBe(true);
     expect(result.currentExpanded).toBe(true);
@@ -902,7 +907,7 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('还原 runningTurn 时跳过 execution_plan_clear 并从 startedAt 走底栏时间', async () => {
+  it('还原 runningTurn 时跳过 execution_plan_clear 并从 startedAt 走检查点计时', async () => {
     const page = await loadChatPageObserver();
     const result = await page.evaluate(() => {
       const emit = (window as any).__emitWs;
@@ -945,9 +950,9 @@ describe('ETL 真实 Observer 链路', () => {
           ],
         },
       });
-      return document.querySelector('.etl-foot-time b')?.textContent;
+      return (window as any).__chapterElapsed();
     });
-    expect(result).toBe('01:30');
+    expect(result).toBe('1分30秒');
     await page.close();
   });
 

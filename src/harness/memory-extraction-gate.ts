@@ -138,6 +138,8 @@ export interface MemoryExtractionGateInput {
   extractionTurnCounter: number;
   sessionSuccessfulExtractCount: number;
   sessionExtractWrittenCount: number;
+  /** 本会话主代理已成功写入的长期记忆主题数（与 Extract 共用 cap） */
+  sessionLongTermWriteCount?: number;
   taskIntent?: TaskIntent;
   commandsRun?: string[];
   extractionConfig: ExtractionRemoteConfig;
@@ -159,7 +161,7 @@ export function evaluateMemoryExtractionGate(input: MemoryExtractionGateInput): 
     return { allow: false, reason: 'empty_message' };
   }
 
-  if (input.sessionSuccessfulExtractCount >= 1) {
+  if (input.sessionSuccessfulExtractCount >= 1 || (input.sessionLongTermWriteCount ?? 0) >= 1) {
     return { allow: false, reason: 'session_extract_cap' };
   }
 

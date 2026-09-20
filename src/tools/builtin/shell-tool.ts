@@ -26,7 +26,11 @@ import {
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
-import { assertAgentMemoryShellCommandAllowed } from '../../memory/file-memory/memory-write-pipeline.js';
+import {
+  assertAgentMemoryShellCommandAllowed,
+  recordShellMemoryWriteSuccess,
+  shellCommandTargetsMemoryWrite,
+} from '../../memory/file-memory/memory-write-pipeline.js';
 import { HeadTailCharBuffer } from '../head-tail-truncate.js';
 
 /** 命令执行超时（毫秒）— 前台一次性命令默认 10 分钟 */
@@ -152,7 +156,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       if (shouldBackground) {
         const command = trimmedCommand;
         if (!command) return { success: false, output: '', error: 'Command cannot be empty' };
-        const memoryShellErr = assertAgentMemoryShellCommandAllowed(command);
+        const memoryShellErr = assertAgentMemoryShellCommandAllowed(command, sessionId);
         if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
         const inlineAdvisory = analyzeInlineScriptCommand(command);
         if (inlineAdvisory?.block) {
@@ -190,7 +194,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       // ── Foreground execution ──
       const command = trimmedCommand;
       if (!command) return { success: false, output: '', error: 'Command is required for foreground execution' };
-      const memoryShellErr = assertAgentMemoryShellCommandAllowed(command);
+      const memoryShellErr = assertAgentMemoryShellCommandAllowed(command, sessionId);
       if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
       // classifier 收紧 short 命令前台 timeout 上限到 10s
       const timeout = pickForegroundTimeout(
@@ -333,7 +337,12 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
           }
 
           if (killed) { safeResolve({ success: false, output, error: `Command timed out (${timeout}ms)` }); return; }
-          if (code === 0) { safeResolve({ success: true, output: output || 'Command succeeded (no output)' }); }
+          if (code === 0) {
+            if (shellCommandTargetsMemoryWrite(command)) {
+              recordShellMemoryWriteSuccess(sessionId, command);
+            }
+            safeResolve({ success: true, output: output || 'Command succeeded (no output)' });
+          }
           else { safeResolve({ success: false, output, error: `Command failed (exit code: ${code})` }); }
         });
 

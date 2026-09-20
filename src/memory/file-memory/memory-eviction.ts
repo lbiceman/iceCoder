@@ -300,6 +300,46 @@ function formatEvictionReason(mem: MemoryHeader, score: EvictionScoreBreakdown):
 }
 
 /**
+ * 将单个记忆文件移入归档目录（可恢复），不按条数上限筛选。
+ * 跨设备 rename 失败时回退为复制+删除。
+ */
+export async function archiveMemoryFile(
+  filePath: string,
+  evictedDir: string,
+  reason = 'manual-archive',
+): Promise<boolean> {
+  const filename = path.basename(filePath);
+  try {
+    await fs.mkdir(evictedDir, { recursive: true });
+    let destPath = path.join(evictedDir, filename);
+    await fs.mkdir(path.dirname(destPath), { recursive: true });
+    try {
+      await fs.access(destPath);
+      const ext = path.extname(filename);
+      const stem = filename.slice(0, -ext.length || filename.length);
+      destPath = path.join(evictedDir, `${stem}-${Date.now()}${ext || '.md'}`);
+    } catch {
+      // dest is free
+    }
+    try {
+      await fs.rename(filePath, destPath);
+    } catch {
+      const content = await fs.readFile(filePath, 'utf-8');
+      await writeFileAtomic(destPath, content, 'utf-8');
+      await fs.unlink(filePath);
+    }
+    await appendEvictionLog(evictedDir, [{ filename, score: 0, reason }]);
+    return true;
+  } catch (err) {
+    console.debug(
+      `[memory-eviction] Failed to archive ${filename}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/**
  * 从淘汰归档中恢复记忆文件。
  */
 export async function restoreEvicted(

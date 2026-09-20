@@ -152,4 +152,8 @@ export interface MCPServerInfo {
   status: MCPServerStatus;
   tools: MCPToolDefinition[];
   error?: string;
+  /** 进程 status 之外的后端会话；仅 browsermcp 等扩展浏览器有值。 */
+  backendKind?: 'none' | 'browser_extension';
+  backendSession?: 'unknown' | 'attached' | 'detached';
+  backendDetail?: string;
 }

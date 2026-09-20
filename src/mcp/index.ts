@@ -2,6 +2,14 @@
  * MCP 模块入口。
  */
 
+export {
+  isBrowserExtensionMcp,
+  isBrowserExtensionDetachedError,
+  createMcpBackendState,
+  applyMcpToolOutcome,
+  annotateBrowserExtensionDetachedOutput,
+} from './mcp-backend-session.js';
+export type { McpBackendKind, McpBackendSession, McpBackendState } from './mcp-backend-session.js';
 export { MCPClient } from './mcp-client.js';
 export { MCPManager } from './mcp-manager.js';
 export type { MCPManagerOptions } from './mcp-manager.js';

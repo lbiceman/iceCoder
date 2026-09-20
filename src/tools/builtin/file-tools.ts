@@ -23,27 +23,44 @@ import {
 import { checkReadBeforeEdit, markFileRead } from '../read-before-edit.js';
 import {
   sanitizeMemoryContentBeforeWrite,
-  afterMemoryMarkdownWritten,
+  afterSuccessfulMemoryMarkdownWrite,
   resolveMemoryRootForPath,
   assertAgentMemoryWriteAllowed,
   canonicalizeMemoryToolPath,
   resolveMemoryWritePath,
+  formatMemoryWritePathNote,
+  removeStaleMemoryFileIfMoved,
+  resolveExistingMemoryToolPath,
+  isMemoryToolPath,
 } from '../../memory/file-memory/memory-write-pipeline.js';
+import { gateMemoryToolRead, isHiddenMemoryToolPath, SESSION_PROGRESS_TOOL_SKIP_MESSAGE } from '../../memory/file-memory/memory-tool-access.js';
 
-async function applyMemoryWriteGuard(filePath: string): Promise<string | null> {
-  return assertAgentMemoryWriteAllowed(filePath);
+async function applyMemoryWriteGuard(
+  filePath: string,
+  content?: string,
+  sessionId?: string,
+): Promise<string | null> {
+  return assertAgentMemoryWriteAllowed(filePath, { content, sessionId });
 }
 
 /** 记忆路径先过 E6，避免 read-before-edit 掩盖 remember 拒绝原因（Turn 5b 探针） */
-async function applyMemoryWriteGuardEarly(rawPath: string, workDir: string): Promise<string | null> {
+async function applyMemoryWriteGuardEarly(
+  rawPath: string,
+  workDir: string,
+  sessionId?: string,
+): Promise<string | null> {
   const resolved = resolveToolFilePath(rawPath, workDir);
   if (!resolveMemoryRootForPath(resolved)) return null;
-  return applyMemoryWriteGuard(resolved);
+  return applyMemoryWriteGuard(resolved, undefined, sessionId);
 }
 
-async function postProcessMemoryFileWrite(filePath: string, content: string): Promise<void> {
+async function postProcessMemoryFileWrite(
+  filePath: string,
+  content: string,
+  sessionId?: string,
+): Promise<void> {
   if (!resolveMemoryRootForPath(filePath)) return;
-  await afterMemoryMarkdownWritten(filePath, content);
+  await afterSuccessfulMemoryMarkdownWrite(filePath, content, sessionId);
 }
 
 /**
@@ -56,18 +73,6 @@ function safePath(filePath: string, baseDir: string): string {
 /** 文件工具路径：记忆别名归一化后 resolve */
 function resolveToolFilePath(filePath: string, workDir: string): string {
   return canonicalizeMemoryToolPath(filePath, workDir);
-}
-
-/** type:user 从 memory-files 迁到 user-memory 后删除旧文件 */
-async function removeStaleMemoryFileIfMoved(fromPath: string, toPath: string): Promise<void> {
-  if (path.resolve(fromPath) === path.resolve(toPath)) return;
-  if (!resolveMemoryRootForPath(fromPath)) return;
-  try {
-    await fs.unlink(fromPath);
-    console.warn(`[memory-write] Removed misplaced memory file: ${path.basename(fromPath)}`);
-  } catch {
-    /* already gone */
-  }
 }
 
 /**
@@ -99,7 +104,26 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         if (!rawPath) {
           return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
         }
-        const resolvedPath = safePath(rawPath, workDir);
+        const memoryRead = await gateMemoryToolRead(rawPath, workDir);
+        if (memoryRead.blocked) {
+          return { success: true, output: memoryRead.message ?? '' };
+        }
+        let resolvedPath = memoryRead.resolvedPath;
+        try {
+          await fs.access(resolvedPath);
+        } catch {
+          resolvedPath = await resolveExistingMemoryToolPath(rawPath, workDir);
+          if (await isHiddenMemoryToolPath(resolvedPath)) {
+            return { success: true, output: memoryRead.message ?? SESSION_PROGRESS_TOOL_SKIP_MESSAGE };
+          }
+          try {
+            await fs.access(resolvedPath);
+          } catch {
+            if (!isMemoryToolPath(rawPath, workDir) && !resolveMemoryRootForPath(memoryRead.resolvedPath)) {
+              resolvedPath = safePath(rawPath, workDir);
+            }
+          }
+        }
         const encoding = (args.encoding || 'utf-8') as BufferEncoding;
         const content = await fs.readFile(resolvedPath, encoding);
 
@@ -184,7 +208,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         }
         const sourcePath = resolveToolFilePath(rawPath, workDir);
         const filePath = resolveMemoryWritePath(rawPath, workDir, content);
-        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir, sessionId);
         if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
         const oldContent = await (async () => {
           try {
@@ -197,7 +221,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
           if (readErr) return { success: false, output: '', error: readErr };
         }
-        const guardErr = await applyMemoryWriteGuard(filePath);
+        const guardErr = await applyMemoryWriteGuard(filePath, content, sessionId);
         if (guardErr) return { success: false, output: '', error: guardErr };
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -208,7 +232,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         await fs.writeFile(filePath, writeContent, (args.encoding || 'utf-8') as BufferEncoding);
         await removeStaleMemoryFileIfMoved(sourcePath, filePath);
         if (resolveMemoryRootForPath(filePath)) {
-          await afterMemoryMarkdownWritten(filePath, writeContent);
+          await afterSuccessfulMemoryMarkdownWrite(filePath, writeContent, sessionId);
         }
 
         const lineCount = writeContent.split('\n').length;
@@ -222,7 +246,10 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         const diff = buildFileChangeDiff(oldContent, writeContent, rawPath);
         return {
           success: true,
-          output: formatToolOutputWithDiff(`File written: ${rawPath}${warnNote}`, diff),
+          output: formatToolOutputWithDiff(
+            `File written: ${rawPath}${warnNote}${formatMemoryWritePathNote(filePath)}`,
+            diff,
+          ),
         };
       },
     },
@@ -244,9 +271,9 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       },
       handler: async (args) => {
         const rawPath = args.path;
-        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir, sessionId);
         if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
-        const sourcePath = resolveToolFilePath(rawPath, workDir);
+        const sourcePath = await resolveExistingMemoryToolPath(rawPath, workDir);
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) {
           try {
@@ -256,11 +283,15 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
             /* new file via append — no prior read required */
           }
         }
-        const oldContent = await readFileTextOrEmpty(() => fs.readFile(sourcePath, 'utf-8'));
-        const filePath = resolveMemoryWritePath(rawPath, workDir, oldContent || undefined);
-        const guardErr = await applyMemoryWriteGuard(filePath);
-        if (guardErr) return { success: false, output: '', error: guardErr };
+        const sourceContent = await readFileTextOrEmpty(() => fs.readFile(sourcePath, 'utf-8'));
         const appendContent = String(args.content ?? '');
+        const destGuess = resolveMemoryWritePath(rawPath, workDir, sourceContent + appendContent || undefined);
+        const destExisting = await readFileTextOrEmpty(() => fs.readFile(destGuess, 'utf-8'));
+        const oldContent = destExisting || (path.resolve(destGuess) === path.resolve(sourcePath) ? sourceContent : '');
+        const combined = oldContent + appendContent;
+        const filePath = resolveMemoryWritePath(rawPath, workDir, combined || appendContent || undefined);
+        const guardErr = await applyMemoryWriteGuard(filePath, combined, sessionId);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         let safeAppend = appendContent;
         if (resolveMemoryRootForPath(filePath)) {
           safeAppend = sanitizeMemoryContentBeforeWrite(appendContent).content;
@@ -269,11 +300,14 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         await fs.appendFile(filePath, safeAppend, 'utf-8');
         const newContent = oldContent + safeAppend;
         await removeStaleMemoryFileIfMoved(sourcePath, filePath);
-        await postProcessMemoryFileWrite(filePath, newContent);
+        await postProcessMemoryFileWrite(filePath, newContent, sessionId);
         const diff = buildFileChangeDiff(oldContent, newContent, args.path);
         return {
           success: true,
-          output: formatToolOutputWithDiff(`Content appended to: ${args.path}`, diff),
+          output: formatToolOutputWithDiff(
+            `Content appended to: ${args.path}${formatMemoryWritePathNote(filePath)}`,
+            diff,
+          ),
         };
       },
     },
@@ -299,9 +333,9 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       handler: async (args) => {
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
-        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir, sessionId);
         if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
-        const sourcePath = resolveToolFilePath(rawPath, workDir);
+        const sourcePath = await resolveExistingMemoryToolPath(rawPath, workDir);
         if (
           resolveMemoryRootForPath(sourcePath)
           && path.basename(sourcePath).toLowerCase() === 'memory.md'
@@ -345,7 +379,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         }
 
         const filePath = resolveMemoryWritePath(rawPath, workDir, newContent);
-        const guardErr = await applyMemoryWriteGuard(filePath);
+        const guardErr = await applyMemoryWriteGuard(filePath, newContent, sessionId);
         if (guardErr) return { success: false, output: '', error: guardErr };
 
         const changed = content !== newContent;
@@ -359,14 +393,14 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, writeContent, 'utf-8');
         await removeStaleMemoryFileIfMoved(sourcePath, filePath);
-        if (changed) {
-          await postProcessMemoryFileWrite(filePath, writeContent);
+        if (changed || path.resolve(sourcePath) !== path.resolve(filePath)) {
+          await postProcessMemoryFileWrite(filePath, writeContent, sessionId);
         }
 
         const fuzzyNote = fuzzyMatch ? ' (fuzzy whitespace/line match)' : '';
 
         const summary = changed
-          ? `File modified: ${rawPath}${fuzzyNote}`
+          ? `File modified: ${rawPath}${fuzzyNote}${formatMemoryWritePathNote(filePath)}`
           : `No match found, file unchanged: ${rawPath}`;
         const diff = changed ? buildFileChangeDiff(content, newContent, rawPath) : null;
 
@@ -404,14 +438,30 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         const op = args.operation as string;
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
-        const filePath = safePath(rawPath, workDir);
+        const canonicalPath = canonicalizeMemoryToolPath(rawPath, workDir);
+        if (
+          (op === 'delete' || op === 'move' || op === 'copy' || op === 'create_dir')
+          && resolveMemoryRootForPath(canonicalPath)
+        ) {
+          const memErr = await applyMemoryWriteGuard(canonicalPath, undefined, sessionId);
+          if (memErr) return { success: false, output: '', error: memErr };
+        }
+        const filePath = resolveMemoryRootForPath(canonicalPath) ? canonicalPath : safePath(rawPath, workDir);
 
         switch (op) {
           case 'list': {
             const recursive = args.recursive || false;
             const maxDepth = args.maxDepth || 3;
-            const entries = await listDir(filePath, workDir, recursive, maxDepth, 0);
-            return { success: true, output: entries.join('\n') };
+            const listPath = resolveToolFilePath(rawPath, workDir);
+            const entries = await listDir(listPath, workDir, recursive, maxDepth, 0);
+            const visible: string[] = [];
+            for (const entry of entries) {
+              const name = entry.replace(/^[📁📄]\s*/, '');
+              const abs = canonicalizeMemoryToolPath(name, workDir);
+              if (await isHiddenMemoryToolPath(abs)) continue;
+              visible.push(entry);
+            }
+            return { success: true, output: visible.join('\n') };
           }
           case 'create_dir': {
             await fs.mkdir(filePath, { recursive: true });
@@ -424,7 +474,11 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           case 'move': {
             const target = args.target as string;
             if (!target) return { success: false, output: '', error: 'target is required for move operation' };
-            const destPath = safePath(target, workDir);
+            let srcContent: string | undefined;
+            try { srcContent = await fs.readFile(filePath, 'utf-8'); } catch { /* dir or missing */ }
+            const destPath = resolveMemoryWritePath(target, workDir, srcContent);
+            const destGuard = await applyMemoryWriteGuard(destPath, srcContent, sessionId);
+            if (destGuard) return { success: false, output: '', error: destGuard };
             const overwrite = args.overwrite || false;
             try { await fs.access(filePath); } catch { return { success: false, output: '', error: `Source not found: ${args.path}` }; }
             if (!overwrite) {
@@ -432,15 +486,25 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
             }
             await fs.mkdir(path.dirname(destPath), { recursive: true });
             await fs.rename(filePath, destPath);
-            return { success: true, output: `Moved: ${args.path} → ${target}` };
+            if (resolveMemoryRootForPath(destPath) && srcContent !== undefined) {
+              await postProcessMemoryFileWrite(destPath, srcContent, sessionId);
+            }
+            await removeStaleMemoryFileIfMoved(filePath, destPath);
+            return { success: true, output: `Moved: ${args.path} → ${target}${formatMemoryWritePathNote(destPath)}` };
           }
           case 'copy': {
             const target = args.target as string;
             if (!target) return { success: false, output: '', error: 'target is required for copy operation' };
-            const destPath = safePath(target, workDir);
-            const overwrite = args.overwrite || false;
             let srcStat;
             try { srcStat = await fs.stat(filePath); } catch { return { success: false, output: '', error: `Source not found: ${args.path}` }; }
+            let srcContent: string | undefined;
+            if (srcStat.isFile()) {
+              srcContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
+            }
+            const destPath = resolveMemoryWritePath(target, workDir, srcContent);
+            const destGuard = await applyMemoryWriteGuard(destPath, srcContent, sessionId);
+            if (destGuard) return { success: false, output: '', error: destGuard };
+            const overwrite = args.overwrite || false;
             if (!overwrite) {
               try { await fs.access(destPath); return { success: false, output: '', error: `Target exists: ${target}. Set overwrite: true to replace.` }; } catch { /* ok */ }
             }
@@ -450,7 +514,10 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
               return { success: true, output: `Copied directory: ${args.path} → ${target}` };
             }
             await fs.copyFile(filePath, destPath);
-            return { success: true, output: `Copied file: ${args.path} → ${target}` };
+            if (resolveMemoryRootForPath(destPath) && srcContent !== undefined) {
+              await postProcessMemoryFileWrite(destPath, srcContent, sessionId);
+            }
+            return { success: true, output: `Copied file: ${args.path} → ${target}${formatMemoryWritePathNote(destPath)}` };
           }
           default:
             return { success: false, output: '', error: `Unknown operation: ${op}. Valid: list, create_dir, delete, move, copy` };
@@ -473,7 +540,27 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawInfoPath = args.path as string;
+        const memoryRead = await gateMemoryToolRead(rawInfoPath, workDir);
+        if (memoryRead.blocked) {
+          return { success: true, output: memoryRead.message ?? '' };
+        }
+        let filePath = memoryRead.resolvedPath;
+        try {
+          await fs.access(filePath);
+        } catch {
+          filePath = await resolveExistingMemoryToolPath(rawInfoPath, workDir);
+          if (await isHiddenMemoryToolPath(filePath)) {
+            return { success: true, output: SESSION_PROGRESS_TOOL_SKIP_MESSAGE };
+          }
+          try {
+            await fs.access(filePath);
+          } catch {
+            if (!isMemoryToolPath(rawInfoPath, workDir) && !resolveMemoryRootForPath(memoryRead.resolvedPath)) {
+              filePath = safePath(rawInfoPath, workDir);
+            }
+          }
+        }
         const stat = await fs.stat(filePath);
         const info = {
           path: args.path,

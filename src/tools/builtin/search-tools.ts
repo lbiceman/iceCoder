@@ -18,6 +18,7 @@ import {
   runGlobFiles,
   runRipgrep,
 } from './ripgrep-runner.js';
+import { filterHiddenMemoryListing } from '../../memory/file-memory/memory-tool-access.js';
 
 function capMaxResults(n: unknown, fallback: number, ceiling: number): number {
   const v = Number(n);
@@ -83,6 +84,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
           .filter(Boolean);
         const truncatedList = paths.length > maxResults;
         if (truncatedList) paths = paths.slice(0, maxResults);
+        paths = await filterHiddenMemoryListing(paths, [workDir, scope.cwd]);
 
         if (paths.length === 0) {
           return { success: true, output: `No files matched pattern: ${pattern}` };
@@ -181,7 +183,13 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
             return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
           }
           const lines = result.stdout.split('\n').filter(Boolean).slice(0, maxResults);
-          body = lines.length ? lines.join('\n') : 'No matches found.';
+          const kept: string[] = [];
+          for (const line of lines) {
+            const filePath = line.replace(/:\d+\s*$/, '');
+            const visible = await filterHiddenMemoryListing([filePath], [workDir, scope.cwd]);
+            if (visible.length > 0) kept.push(line);
+          }
+          body = kept.length ? kept.join('\n') : 'No matches found.';
         } else if (outputMode === 'content') {
           const ctx = capMaxResults(args.context_lines, 2, 10);
           rgArgs.push('--json', '-C', String(ctx), '-m', String(maxResults), '--', pattern, rgTarget);
@@ -193,7 +201,11 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
             return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
           }
           const blocks = parseRipgrepJsonMatches(result.stdout, maxResults);
-          body = formatGrepContentBlocks(blocks, maxResults);
+          const visiblePaths = new Set(
+            await filterHiddenMemoryListing([...new Set(blocks.map(b => b.path))], [workDir, scope.cwd]),
+          );
+          const visibleBlocks = blocks.filter(b => visiblePaths.has(b.path));
+          body = formatGrepContentBlocks(visibleBlocks, maxResults);
           if (!body.trim()) body = 'No matches found.';
         } else {
           rgArgs.push('-l', '--', pattern, rgTarget);
@@ -207,6 +219,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
           let paths = result.stdout.split('\n').map((p) => p.trim().replace(/\\/g, '/')).filter(Boolean);
           const truncatedList = paths.length > maxResults;
           if (truncatedList) paths = paths.slice(0, maxResults);
+          paths = await filterHiddenMemoryListing(paths, [workDir, scope.cwd]);
           if (paths.length === 0) {
             body = 'No matches found.';
           } else {

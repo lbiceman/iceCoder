@@ -39,8 +39,9 @@ const FILE_EXT =
 
 const EXPLICIT_MARKER = /(?:工作目录|Workspace|仓库路径)\s*[:：]\s*/i;
 
+/** 仅认明确换工作区的说法。不要把「换到下一关 / 转到这个文件」当成切仓库。 */
 const WORKSPACE_CHANGE =
-  /(?:工作目录改为|换到|切换到|现在工作在|改到|改在|转到|移到)/;
+  /(?:工作目录改为|工作区改为|切换工作目录|切换工作区|现在工作在|换工作目录|仓库(?:改|换)为)/;
 
 const WORKSPACE_KEYWORDS =
   /(?:中实现|里实现|内实现|项目中|项目里|仓库里|开始写|写代码|落地|开发|实现|增加|添加|新增|扩展|模块|编写|创建)/;
@@ -72,9 +73,92 @@ export function normalizeDetectedPath(raw: string): string {
   return path.win32.normalize(withBackslashes);
 }
 
+const UNIX_WORKSPACE_PREFIXES = [
+  '/home/',
+  '/Users/',
+  '/mnt/',
+  '/opt/',
+  '/var/',
+  '/tmp/',
+  '/root/',
+  '/data/',
+  '/workspace/',
+  '/projects/',
+  '/work/',
+  '/srv/',
+  '/Volumes/',
+];
+
+function toPosixPath(normalized: string): string {
+  return normalized.replace(/\\/g, '/');
+}
+
+function hasWindowsDrive(normalized: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(normalized);
+}
+
+function isUncPath(normalized: string): boolean {
+  return normalized.startsWith('\\\\');
+}
+
+function isPlausibleUnixWorkspace(asPosix: string): boolean {
+  if (!asPosix.startsWith('/')) return false;
+  const withSlash = asPosix.endsWith('/') ? asPosix : `${asPosix}/`;
+  if (!UNIX_WORKSPACE_PREFIXES.some((prefix) => withSlash.startsWith(prefix))) return false;
+  return asPosix.split('/').filter(Boolean).length >= 2;
+}
+
+/**
+ * 像不像「用户指定的工程根」。
+ * `/src/core`、`\src\core` 这种仓库内相对路径不能当工作区根。
+ */
+export function isPlausibleWorkspaceRoot(normalized: string): boolean {
+  if (!normalized) return false;
+  if (isUncPath(normalized)) {
+    return normalized.split('\\').filter(Boolean).length >= 2;
+  }
+  if (hasWindowsDrive(normalized)) {
+    return normalized.replace(/^[A-Za-z]:[\\/]+/, '').length > 0;
+  }
+  return isPlausibleUnixWorkspace(toPosixPath(normalized));
+}
+
+/** Windows 上 `/src/core`、`\src\core`：相对当前盘根，不是新工程。 */
+function isDriveRelativeOrProjectPath(normalized: string): boolean {
+  if (hasWindowsDrive(normalized) || isUncPath(normalized)) return false;
+  const asPosix = toPosixPath(normalized);
+  if (isPlausibleUnixWorkspace(asPosix)) return false;
+  return asPosix.startsWith('/') || normalized.startsWith('\\');
+}
+
+function resolveLockCandidate(normalized: string, prevRoot?: string): string | undefined {
+  if (prevRoot && isDriveRelativeOrProjectPath(normalized)) {
+    const rel = normalized.replace(/^[\\/]+/, '');
+    return rel ? path.win32.join(prevRoot, rel) : prevRoot;
+  }
+  return isPlausibleWorkspaceRoot(normalized) ? normalized : undefined;
+}
+
+function unixPathOverlapsWindows(unixRaw: string, windows: PathCandidate[]): boolean {
+  const tail = toPosixPath(normalizeDetectedPath(unixRaw)).replace(/^\/+/, '').toLowerCase();
+  if (!tail) return true;
+  return windows.some((candidate) => {
+    const win = toPosixPath(candidate.normalized).toLowerCase();
+    return win.endsWith(`/${tail}`) || win.endsWith(tail) || win.includes(`/${tail}/`);
+  });
+}
+
+/** 技能注入只保留 `[User Request]` 之后的用户原文，避免技能正文里的路径改写锁定。 */
+function textForWorkspaceDetection(text: string): string {
+  const marker = '[User Request]';
+  const idx = text.lastIndexOf(marker);
+  if (idx < 0) return text;
+  return text.slice(idx + marker.length);
+}
+
 /** 路径检测前对用户文本做容错（分号盘符、统一换行）。 */
 export function preprocessWorkspaceMessage(text: string): string {
-  return fixDriveLetterSemicolonTypo(text);
+  return fixDriveLetterSemicolonTypo(textForWorkspaceDetection(text));
 }
 
 function isFileLikePath(normalized: string): boolean {
@@ -101,9 +185,12 @@ function extractPathCandidates(text: string): PathCandidate[] {
     if (match.index != null) add(match[0], match.index);
   }
 
+  const windowsCandidates = out.slice();
   for (const match of text.matchAll(UNIX_PATH)) {
     const candidate = match[1];
-    if (candidate && match.index != null) add(candidate, match.index + match[0].indexOf(candidate));
+    if (!candidate || match.index == null) continue;
+    if (unixPathOverlapsWindows(candidate, windowsCandidates)) continue;
+    add(candidate, match.index + match[0].indexOf(candidate));
   }
 
   for (const line of text.split(/\r?\n/)) {
@@ -244,15 +331,19 @@ export function detectWorkspaceFromUserMessage(
   let workspaceChangeTarget: string | undefined;
 
   if (WORKSPACE_CHANGE.test(trimmed)) {
+    let changeBest: { path: string; score: number } | undefined;
     for (const candidate of candidates) {
       const ctx = clauseContextForPath(trimmed, candidate.index);
-      const wsScore = scoreWorkspace(ctx, candidate);
-      if (!bestWorkspace || wsScore > bestWorkspace.score) {
-        bestWorkspace = { path: candidate.normalized, score: wsScore };
+      if (!WORKSPACE_CHANGE.test(ctx)) continue;
+      const resolved = resolveLockCandidate(candidate.normalized, previous?.lockedRoot);
+      if (!resolved) continue;
+      const wsScore = scoreWorkspace(ctx, candidate) + 5;
+      if (!changeBest || wsScore > changeBest.score) {
+        changeBest = { path: resolved, score: wsScore };
       }
     }
-    if (bestWorkspace && bestWorkspace.score >= 1) {
-      workspaceChangeTarget = bestWorkspace.path;
+    if (changeBest && changeBest.score >= 3) {
+      workspaceChangeTarget = changeBest.path;
     }
   }
 
@@ -269,19 +360,25 @@ export function detectWorkspaceFromUserMessage(
       }
     }
 
-    if (wsScore >= workspaceScoreThreshold(previous, candidate.normalized)
+    // 已锁定后不再凭「实现/开发」等普通关键词换根；只用于首次锁定。
+    if (previous?.lockedRoot) continue;
+    const resolved = resolveLockCandidate(candidate.normalized, previous?.lockedRoot);
+    if (!resolved) continue;
+    if (wsScore >= workspaceScoreThreshold(previous, resolved)
       && (!bestWorkspace || wsScore > bestWorkspace.score)) {
-      bestWorkspace = { path: candidate.normalized, score: wsScore };
+      bestWorkspace = { path: resolved, score: wsScore };
     }
   }
 
   const inlinePath = extractPathLineWithInlineAction(trimmed);
   if (inlinePath && WORKSPACE_INLINE_ACTION.test(trimmed)) {
-    bestWorkspace = { path: inlinePath, score: 10 };
+    const resolved = resolveLockCandidate(inlinePath, previous?.lockedRoot);
+    if (resolved) bestWorkspace = { path: resolved, score: 10 };
   }
 
   if (explicitPath) {
-    bestWorkspace = { path: explicitPath, score: 10 };
+    const resolved = resolveLockCandidate(explicitPath, previous?.lockedRoot);
+    if (resolved) bestWorkspace = { path: resolved, score: 10 };
   }
 
   const standaloneLinePath = candidates.find((c) => {
@@ -289,14 +386,18 @@ export function detectWorkspaceFromUserMessage(
     return !!line && !c.isFile;
   });
   if (standaloneLinePath && !previous?.lockedRoot) {
-    bestWorkspace = { path: standaloneLinePath.normalized, score: 10 };
+    const resolved = resolveLockCandidate(standaloneLinePath.normalized, previous?.lockedRoot);
+    if (resolved) bestWorkspace = { path: resolved, score: 10 };
   }
 
   let nextLockedRoot = workspaceChangeTarget ?? bestWorkspace?.path;
   const prevRoot = previous?.lockedRoot;
+  if (nextLockedRoot) {
+    nextLockedRoot = resolveLockCandidate(nextLockedRoot, prevRoot);
+  }
 
-  // 已锁定工作区内部的路径（例如通过 @ 引用 `<lockedRoot>\Assets\x.unity`）
-  // 只是引用了工作区里的文件，绝不应改写已锁定的工作区根。
+  // 已锁定工作区内部的路径（例如通过 @ 引用 `<lockedRoot>\Assets\x.unity`，
+  // 或把 `/src/core` 当成仓库内目录）绝不应改写已锁定的工作区根。
   if (
     prevRoot
     && nextLockedRoot
@@ -304,7 +405,8 @@ export function detectWorkspaceFromUserMessage(
     && isPathInsideRoot(prevRoot, nextLockedRoot)
   ) {
     const insideCandidate = candidates.find(
-      (c) => rootsEqual(c.normalized, nextLockedRoot as string),
+      (c) => rootsEqual(c.normalized, nextLockedRoot as string)
+        || rootsEqual(resolveLockCandidate(c.normalized, prevRoot) ?? '', nextLockedRoot as string),
     );
     if (insideCandidate?.isFile) referenceReads.add(insideCandidate.normalized);
     nextLockedRoot = undefined;

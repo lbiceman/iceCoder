@@ -5,6 +5,7 @@ import { getDefaultWorkDir } from '../cli/paths.js';
 import {
   detectWorkspaceFromUserMessage,
   emptySessionWorkspaceState,
+  isPlausibleWorkspaceRoot,
   mergeWorkspaceDetection,
   normalizeDetectedPath,
   type SessionWorkspaceState,
@@ -32,6 +33,12 @@ async function looksLikeCorruptFileLockedRoot(lockedRoot?: string): Promise<bool
   }
 }
 
+async function looksLikeCorruptLockedRoot(lockedRoot?: string): Promise<boolean> {
+  if (!lockedRoot) return false;
+  if (!isPlausibleWorkspaceRoot(lockedRoot)) return true;
+  return looksLikeCorruptFileLockedRoot(lockedRoot);
+}
+
 async function rebuildSessionWorkspaceFromMessages(
   sessionDir: string,
   sessionId: string,
@@ -56,11 +63,22 @@ async function repairCorruptFileLockedRoot(
   sessionId: string,
   state: SessionWorkspaceState,
 ): Promise<SessionWorkspaceState> {
-  if (!await looksLikeCorruptFileLockedRoot(state.lockedRoot)) return state;
+  if (!await looksLikeCorruptLockedRoot(state.lockedRoot)) return state;
   const rebuilt = await rebuildSessionWorkspaceFromMessages(sessionDir, sessionId);
-  if (!rebuilt?.lockedRoot || rebuilt.lockedRoot === state.lockedRoot) return state;
-  await saveSessionWorkspace(sessionDir, sessionId, rebuilt);
-  return rebuilt;
+  if (
+    rebuilt?.lockedRoot
+    && rebuilt.lockedRoot !== state.lockedRoot
+    && isPlausibleWorkspaceRoot(rebuilt.lockedRoot)
+  ) {
+    await saveSessionWorkspace(sessionDir, sessionId, rebuilt);
+    return rebuilt;
+  }
+  if (state.lockedRoot && !isPlausibleWorkspaceRoot(state.lockedRoot)) {
+    const cleared: SessionWorkspaceState = { ...state, lockedRoot: undefined };
+    await saveSessionWorkspace(sessionDir, sessionId, cleared);
+    return cleared;
+  }
+  return state;
 }
 
 export async function loadSessionWorkspace(

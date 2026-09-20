@@ -439,9 +439,10 @@ window.ChatSessionSidebar = (function () {
     Modal.confirm({
       title: '删除会话',
       message: '确定要删除该会话吗？此操作不可撤销。',
-      type: 'warning',
+      type: 'danger',
       confirmText: '删除',
       cancelText: '取消',
+      dangerConfirm: true,
     }).then(function (ok) {
       if (!ok) return;
       var wasActive = Store.getActiveSessionId() === sessionId;

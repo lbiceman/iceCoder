@@ -769,6 +769,42 @@ describe('Dream 执行', () => {
     expect(old).toContain('superseded-by: pref_new.md');
     expect(old).toContain('confidence: 0.45');
   });
+
+  it('Dream 不会按 lang:/tool: 把无关 feedback 标成 superseded', async () => {
+    await writeMemoryFile(tempDir, 'unity-preprocessor.md', '预处理指令编译失败', {
+      type: 'feedback',
+      level: 'preference',
+      confidence: 0.9,
+      recallCount: 8,
+      tags: ['lang:csharp', 'platform:unity'],
+      content: 'Do not wrap the whole class with #if UNITY_ANDROID.',
+    });
+    await writeMemoryFile(tempDir, 'unity-2d-visibility.md', '2D 最小可见尺寸', {
+      type: 'feedback',
+      level: 'preference',
+      confidence: 0.8,
+      recallCount: 1,
+      tags: ['lang:csharp', 'platform:unity'],
+      content: 'Sprites smaller than 32x32 are unreadable.',
+    });
+
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'noop',
+    }));
+
+    const dream = createMemoryDream({ enableBackup: false });
+    await dream.forceDream(tempDir, mockLLM);
+
+    const left = await fs.readFile(path.join(tempDir, 'unity-2d-visibility.md'), 'utf-8');
+    const keeper = await fs.readFile(path.join(tempDir, 'unity-preprocessor.md'), 'utf-8');
+    expect(left).not.toContain('superseded-by');
+    expect(left).toContain('confidence: 0.8');
+    expect(keeper).not.toContain('merged-from');
+  });
 });
 
 // ─── 备份与恢复 ───

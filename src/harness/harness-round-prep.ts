@@ -14,6 +14,7 @@ import {
 import { appendQueuedAlsoNotesToMessages } from '../session/pending-note.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
+import type { InjectMemoryMode } from './harness-memory.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
 import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
@@ -73,6 +74,16 @@ export interface PrepareHarnessRoundArgs {
 export type PrepareHarnessRoundResult =
   | { action: 'continue'; normalizedMsgs: UnifiedMessage[]; round: number }
   | { action: 'stop'; result: HarnessResult };
+
+/** 闲聊走轻量召回；工具轮之后走标准召回；首轮执行任务仍用关键词粗召回避免堵首 token。 */
+export function resolveRecallInjectMode(args: {
+  casual: boolean;
+  hadToolRoundThisRun: boolean;
+}): InjectMemoryMode {
+  if (args.casual) return 'casual_light';
+  if (args.hadToolRoundThisRun) return 'default';
+  return 'coarse_pre_llm';
+}
 
 /**
  * 轮次预处理：压缩、推进轮次、运行时注入、任务图、记忆、工具规划、规范化与预算、任务切换检测。
@@ -238,7 +249,10 @@ export async function prepareHarnessRound(
     const intent = state.taskState.snapshot().intent;
     const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
     if (!skipMemoryRecall) {
-      const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
+      const memoryMode = resolveRecallInjectMode({
+        casual: shouldApplyCasualHarness(intent),
+        hadToolRoundThisRun: state.hadToolRoundThisRun === true,
+      });
       await timeAsync('prep_memory', () =>
         deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep }),
       );

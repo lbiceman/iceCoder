@@ -1,7 +1,7 @@
 /**
  * 聊天页面主模块（重构后）
  * 职责：DOM 渲染、事件绑定、模块协调
- * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet（冰豆）
+ * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet（冰豆）, Modal
  */
 
 /* exported ChatPage */
@@ -470,6 +470,12 @@ window.ChatPage = (function () {
         '/open\n\n' +
         '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。',
       );
+      return true;
+    }
+
+    if (text === '~tokens') {
+      Cmd.hide();
+      Cmd.handleTokenStats();
       return true;
     }
 
@@ -1466,57 +1472,28 @@ window.ChatPage = (function () {
     }
   }
 
-  function closeRestoreConfirmDialog() {
-    var overlay = document.querySelector('.restore-confirm-overlay');
-    if (overlay) overlay.remove();
-  }
-
   function showRestoreConfirmDialog(messageId) {
-    closeRestoreConfirmDialog();
-    var overlay = document.createElement('div');
-    overlay.className = 'restore-confirm-overlay';
-    overlay.innerHTML =
-      '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-confirm-title">' +
-        '<h3 id="restore-confirm-title">确认回滚？</h3>' +
-        '<p>将工作区恢复到该消息发送前的状态。<br><br>' +
-        '该条用户消息及之后的对话会从聊天和模型上下文中移除，仅保留回滚记录。</p>' +
-        '<div class="restore-confirm-actions">' +
-          '<button type="button" class="restore-confirm-cancel">取消</button>' +
-          '<button type="button" class="restore-confirm-ok">回滚</button>' +
-        '</div>' +
-      '</div>';
-    document.body.appendChild(overlay);
-    overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeRestoreConfirmDialog);
-    overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
-      closeRestoreConfirmDialog();
-      dispatchRestoreRuntime(messageId);
+    Modal.confirm({
+      title: '确认回滚？',
+      message: '将工作区恢复到该消息发送前的状态。\n\n该条用户消息及之后的对话会从聊天和模型上下文中移除，仅保留回滚记录。',
+      type: 'warning',
+      confirmText: '回滚',
+      cancelText: '取消',
+    }).then(function (ok) {
+      if (ok) dispatchRestoreRuntime(messageId);
     });
   }
 
-  function closeDeleteConfirmDialog() {
-    var overlay = document.querySelector('.delete-confirm-overlay');
-    if (overlay) overlay.remove();
-  }
-
   function showDeleteConfirmDialog(messageId) {
-    closeDeleteConfirmDialog();
-    var overlay = document.createElement('div');
-    overlay.className = 'restore-confirm-overlay delete-confirm-overlay';
-    overlay.innerHTML =
-      '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">' +
-        '<h3 id="delete-confirm-title">确认删除？</h3>' +
-        '<p>删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
-        '此操作不会回滚工作区文件修改。</p>' +
-        '<div class="restore-confirm-actions">' +
-          '<button type="button" class="restore-confirm-cancel">取消</button>' +
-          '<button type="button" class="restore-confirm-ok">删除</button>' +
-        '</div>' +
-      '</div>';
-    document.body.appendChild(overlay);
-    overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeDeleteConfirmDialog);
-    overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
-      closeDeleteConfirmDialog();
-      dispatchDeleteMessage(messageId);
+    Modal.confirm({
+      title: '确认删除？',
+      message: '删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。\n\n此操作不会回滚工作区文件修改。',
+      type: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+      dangerConfirm: true,
+    }).then(function (ok) {
+      if (ok) dispatchDeleteMessage(messageId);
     });
   }
 

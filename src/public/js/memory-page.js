@@ -492,13 +492,7 @@ window.MemoryPage = (function () {
         var fn = file.filename;
         if (!fn || !containerEl) return;
         var label = file.name || fn;
-        Modal.confirm({
-          title: '删除记忆',
-          message: '确定删除记忆「' + label + '」？删除后不可恢复。',
-          type: 'danger',
-          confirmText: '删除',
-          cancelText: '取消',
-        }).then(function (ok) {
+        confirmDeleteMemory(label).then(function (ok) {
           if (!ok) return;
           deleteBtn.disabled = true;
           fetch('/api/memory/files/' + encodeURIComponent(fn), { method: 'DELETE' })
@@ -1127,6 +1121,17 @@ window.MemoryPage = (function () {
       });
   }
 
+  function confirmDeleteMemory(name) {
+    return window.Modal.confirm({
+      title: '删除记忆',
+      message: '确定删除记忆「' + name + '」？删除后不可恢复。',
+      type: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+      dangerConfirm: true,
+    });
+  }
+
   function deleteMemoryItem(file, card) {
     var name = file.name || file.filename;
     var doDelete = function () {
@@ -1138,12 +1143,7 @@ window.MemoryPage = (function () {
         })
         .catch(function () { Notification.error('删除请求失败'); });
     };
-    if (window.Modal && typeof window.Modal.confirm === 'function') {
-      Modal.confirm({ title: '删除记忆', message: '确定删除记忆「' + name + '」？删除后不可恢复。', type: 'danger', confirmText: '删除', cancelText: '取消' })
-        .then(function (ok) { if (ok) doDelete(); });
-    } else if (confirm('确定删除记忆「' + name + '」？')) {
-      doDelete();
-    }
+    confirmDeleteMemory(name).then(function (ok) { if (ok) doDelete(); });
   }
 
   function render(innerContainer) {

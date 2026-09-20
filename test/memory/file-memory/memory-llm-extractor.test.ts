@@ -763,5 +763,19 @@ type: user
         }),
       ).toBeNull();
     });
+
+    it('拒绝把无关用户习惯写进同一文件', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'stable_preference',
+          filename: 'user_hygiene_cleanup.md',
+          type: 'user',
+          name: 'n',
+          description: '零残留：删除 debug-*.mjs',
+          content: '绝对不要修改 ProjectSettings/ProjectVersion.txt',
+          confidence: 0.95,
+        }),
+      ).toBe('mixed_user_topics');
+    });
   });
 });

@@ -47,4 +47,32 @@ describe('session-workspace-store', () => {
     const state = await loadSessionWorkspace(sessionDir, sessionId);
     expect(path.resolve(state.lockedRoot || '').toLowerCase()).toBe(path.resolve(root).toLowerCase());
   });
+
+  it('repairs a lockedRoot polluted by /src/core style relative path', async () => {
+    const root = path.join(sessionDir, 'happyHide2');
+    await fs.mkdir(root, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionDir, `${sessionId}.json`),
+      JSON.stringify([
+        {
+          role: 'user',
+          content: [root, '请实现一个三消小游戏'].join('\n'),
+        },
+        {
+          role: 'user',
+          content: '请继续在 /src/core 里实现关卡数据',
+        },
+      ]),
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(sessionDir, `${sessionId}.workspace.json`),
+      JSON.stringify({ lockedRoot: '\\src\\core', referenceReads: [], changeCount: 1 }, null, 2),
+      'utf-8',
+    );
+
+    const state = await loadSessionWorkspace(sessionDir, sessionId);
+    expect(path.resolve(state.lockedRoot || '').toLowerCase()).toBe(path.resolve(root).toLowerCase());
+  });
 });

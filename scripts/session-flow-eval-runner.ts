@@ -39,10 +39,19 @@ import type {
   IntentCheckpointArchive,
   UiChatMessage,
 } from '../src/types/intent-checkpoint.js';
+import {
+  annotateBrowserExtensionDetachedOutput,
+  applyMcpToolOutcome,
+  createMcpBackendState,
+  isBrowserExtensionMcp,
+} from '../src/mcp/mcp-backend-session.js';
+import { buildMcpRuntimeContext } from '../src/mcp/mcp-runtime-context.js';
+import type { MCPManager } from '../src/mcp/mcp-manager.js';
+import type { MCPServerInfo } from '../src/mcp/types.js';
 
 export interface SessionFlowEvalCaseResult {
   id: string;
-  category: 'delete' | 'restore' | 'also' | 'next' | 'isolation';
+  category: 'delete' | 'restore' | 'also' | 'next' | 'isolation' | 'mcp';
   passed: boolean;
   durationMs: number;
   failures: string[];
@@ -427,6 +436,61 @@ const cases: EvalCase[] = [
         ['session two'],
         's2 queue was contaminated',
       );
+    },
+  },
+  {
+    id: 'mcp-browser-ext-detach-keeps-process-ready',
+    category: 'mcp',
+    async run() {
+      assert(isBrowserExtensionMcp('browsermcp', ['browser_navigate']), 'browsermcp should be extension-browser');
+      assert(!isBrowserExtensionMcp('puppeteer', ['puppeteer_navigate']), 'puppeteer must stay a separate MCP');
+      assert(!isBrowserExtensionMcp('github', ['create_issue']), 'HTTP MCP must not be classified as browser extension');
+      const start = createMcpBackendState('browsermcp', ['browser_snapshot']);
+      const detached = applyMcpToolOutcome(start, {
+        success: false,
+        output: 'No connection to browser extension',
+      });
+      assert(detached.kind === 'browser_extension', 'kind must remain browser_extension');
+      assert(detached.session === 'detached', 'extension disconnect should be detached');
+      const annotated = annotateBrowserExtensionDetachedOutput(detached.lastError ?? '');
+      assert(annotated.includes('MCP process is still ready'), 'model-facing hint missing');
+      const puppeteer = applyMcpToolOutcome(
+        createMcpBackendState('puppeteer', ['puppeteer_navigate']),
+        { success: false, output: 'No connection to browser extension' },
+      );
+      assert(puppeteer.kind === 'none' && puppeteer.session === 'unknown', 'puppeteer backend must be untouched');
+    },
+  },
+  {
+    id: 'mcp-runtime-detached-does-not-change-puppeteer-line',
+    category: 'mcp',
+    async run() {
+      const infos: MCPServerInfo[] = [
+        {
+          name: 'browsermcp',
+          config: { command: 'npx' },
+          status: 'ready',
+          tools: [{ name: 'browser_navigate', inputSchema: { type: 'object' } }],
+          backendKind: 'browser_extension',
+          backendSession: 'detached',
+        },
+        {
+          name: 'puppeteer',
+          config: { command: 'npx' },
+          status: 'ready',
+          tools: [{ name: 'puppeteer_navigate', inputSchema: { type: 'object' } }],
+          backendKind: 'none',
+          backendSession: 'unknown',
+        },
+      ];
+      const ctx = buildMcpRuntimeContext(
+        { getServerInfos: () => infos } as MCPManager,
+        ['mcp_browsermcp_browser_navigate', 'mcp_puppeteer_puppeteer_navigate'],
+      );
+      assert(ctx.mcpServers.includes('browser session: detached'), 'detached session missing from runtime');
+      assert(/puppeteer: ready \(1 tools\)/.test(ctx.mcpServers ?? ''), 'puppeteer ready line must keep original format');
+      assert(!(ctx.mcpServers ?? '').includes('puppeteer: ready (process'), 'puppeteer must not get process/session suffix');
+      assert((ctx.mcpRetryHint ?? '').includes('browser session is detached'), 'detached retry hint missing');
     },
   },
 ];

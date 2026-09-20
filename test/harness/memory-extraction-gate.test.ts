@@ -45,6 +45,16 @@ describe('memory-extraction-gate', () => {
     ).toBe(false);
   });
 
+  it('主代理已写长期记忆后 Extract 也受 cap 限制', () => {
+    expect(
+      evaluateMemoryExtractionGate({
+        ...base,
+        currentUserMessage: '记住，commit 用中文',
+        sessionLongTermWriteCount: 1,
+      }).reason,
+    ).toBe('session_extract_cap');
+  });
+
   it('mysql 关键词 alone 不触发（非 ops 安装语境）', () => {
     expect(
       evaluateMemoryExtractionGate({

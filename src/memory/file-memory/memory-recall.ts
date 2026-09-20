@@ -40,6 +40,7 @@ import {
   STALE_THRESHOLD_DAYS,
   EXPIRED_THRESHOLD_DAYS,
 } from './memory-config.js';
+import { filterMemoriesByWorkspace } from './memory-workspace-filter.js';
 
 /** 时间范围加权倍数 */
 const TIME_RANGE_BOOST = 1.5;
@@ -89,6 +90,8 @@ const TAGS_JACCARD_THRESHOLD = 0.2;
 export interface RecallOptions {
   /** 粗召回：降低过滤阈值，零命中时按活跃度兜底 */
   relaxed?: boolean;
+  /** 当前工作区；用于丢掉明确属于其它项目的 project/feedback */
+  workspaceRoot?: string;
 }
 
 export interface RecallResult {
@@ -260,9 +263,12 @@ export async function recallRelevantMemories(
 
   // 过滤极低置信度和不适合当前任务类型的记忆（减少噪声，降低幻觉）
   const filteredMemories = dedupeConflictingMemories(
-    filterByMemoryLevelForIntent(
-      memories.filter(m => m.confidence >= confidenceThreshold),
-      inferRecallIntent(query),
+    filterMemoriesByWorkspace(
+      filterByMemoryLevelForIntent(
+        memories.filter(m => m.confidence >= confidenceThreshold),
+        inferRecallIntent(query),
+      ),
+      options?.workspaceRoot,
     ),
   );
 

@@ -53,7 +53,9 @@ describe('failure-evidence-recovery', () => {
 
   it('builds light and strong hint messages', () => {
     expect(buildLightFailureHintMessage(2)).toMatch(/2 consecutive/);
+    expect(buildLightFailureHintMessage(2)).toMatch(/retry the same listed mcp_/);
     expect(buildStrongFailureWarningMessage(7)).toMatch(/Warning: 7 consecutive/);
+    expect(buildStrongFailureWarningMessage(7)).toMatch(/still-listed ready mcp_/);
   });
 
   it('purges ephemeral messages in place', () => {

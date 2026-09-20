@@ -98,6 +98,14 @@ window.McpConfigPanel = (function () {
     }
   }
 
+  function mcpStatusPresentation(srv) {
+    var status = srv && srv.status;
+    if (status === 'ready' && srv.backendSession === 'detached') {
+      return { label: '运行中 · 未挂上标签', dot: 'dot-warn' };
+    }
+    return { label: statusLabel(status), dot: dotClass(status) };
+  }
+
   function dotClass(status) {
     switch (status) {
       case 'ready': return 'dot-green';
@@ -184,15 +192,27 @@ window.McpConfigPanel = (function () {
     return items;
   }
 
-  function selectServer(name) {
-    if (configDirty && name !== selectedName) {
-      if (!window.confirm('当前配置尚未保存，切换将丢弃修改，是否继续？')) {
-        return;
-      }
-      configDirty = false;
-    }
+  function applySelectedServer(name) {
     selectedName = name;
     renderAll();
+  }
+
+  function selectServer(name) {
+    if (configDirty && name !== selectedName) {
+      window.Modal.confirm({
+        title: '未保存的修改',
+        message: '当前配置尚未保存，切换将丢弃修改，是否继续？',
+        type: 'warning',
+        confirmText: '继续',
+        cancelText: '取消',
+      }).then(function (ok) {
+        if (!ok) return;
+        configDirty = false;
+        applySelectedServer(name);
+      });
+      return;
+    }
+    applySelectedServer(name);
   }
 
   function renderList() {
@@ -211,13 +231,16 @@ window.McpConfigPanel = (function () {
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'config-list-item' + (isListItemActive(srv.name) ? ' is-active' : '');
+        var present = mcpStatusPresentation(srv);
         var toolText = srv.status === 'draft'
           ? '未保存'
-          : (srv.toolCount != null ? srv.toolCount + ' 个工具' : '—');
+          : (srv.backendSession === 'detached'
+            ? '未挂上标签' + (srv.toolCount != null ? ' · ' + srv.toolCount + ' 个工具' : '')
+            : (srv.toolCount != null ? srv.toolCount + ' 个工具' : '—'));
         btn.innerHTML =
           '<div class="config-list-item-head">' +
             '<span class="config-list-item-name">' + escapeHtml(srv.name) + '</span>' +
-            '<span class="config-status-dot ' + dotClass(srv.status) + '" aria-hidden="true"></span>' +
+            '<span class="config-status-dot ' + present.dot + '" aria-hidden="true"></span>' +
           '</div>' +
           '<div class="config-list-item-sub">' + escapeHtml(toolText) + '</div>';
         btn.addEventListener('click', function (e) {
@@ -461,20 +484,16 @@ window.McpConfigPanel = (function () {
           });
       };
 
-      if (window.Modal && typeof window.Modal.confirm === 'function') {
-        Modal.confirm({
-          title: '删除 MCP 服务器',
-          message: '确定要删除「' + displayName + '」吗？此操作不可恢复。',
-          type: 'danger',
-          confirmText: '删除',
-          cancelText: '取消',
-          dangerConfirm: true,
-        }).then(function (ok) {
-          if (ok) doDelete();
-        });
-      } else if (window.confirm('确定要删除「' + displayName + '」吗？此操作不可恢复。')) {
-        doDelete();
-      }
+      window.Modal.confirm({
+        title: '删除 MCP 服务器',
+        message: '确定要删除「' + displayName + '」吗？此操作不可恢复。',
+        type: 'danger',
+        confirmText: '删除',
+        cancelText: '取消',
+        dangerConfirm: true,
+      }).then(function (ok) {
+        if (ok) doDelete();
+      });
     });
   }
 
@@ -564,6 +583,7 @@ window.McpConfigPanel = (function () {
     var launchValue = urlLine || cmdLine;
     var isDraft = isDraftName(srv.name);
 
+    var present = mcpStatusPresentation(srv);
     return (
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
@@ -578,7 +598,7 @@ window.McpConfigPanel = (function () {
         '<dl class="mcp-info-grid">' +
           '<dt>' + launchLabel + '</dt><dd><code>' + escapeHtml(launchValue || '—') + '</code></dd>' +
           '<dt>配置文件</dt><dd><code>' + escapeHtml(configPath || '.iceCoder/mcp.json') + '</code></dd>' +
-          '<dt>连接状态</dt><dd><span class="config-status-dot ' + dotClass(srv.status) + '"></span> ' + escapeHtml(statusLabel(srv.status)) + '</dd>' +
+          '<dt>连接状态</dt><dd><span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label) + '</dd>' +
           (srv.error ? '<dt>错误信息</dt><dd class="mcp-error-text">' + escapeHtml(srv.error) + '</dd>' : '') +
         '</dl>' +
       '</div>' +
@@ -662,13 +682,7 @@ window.McpConfigPanel = (function () {
     renderDetail();
   }
 
-  function handleAddServer() {
-    if (configDirty) {
-      if (!window.confirm('当前配置尚未保存，新增将丢弃修改，是否继续？')) {
-        return;
-      }
-      configDirty = false;
-    }
+  function addDraftServer() {
     var name = 'new-mcp-' + (nextDraftId++);
     while (draftServers[name] || servers.some(function (s) { return s.name === name; })) {
       name = 'new-mcp-' + (nextDraftId++);
@@ -677,6 +691,24 @@ window.McpConfigPanel = (function () {
     selectedName = name;
     if (isMobile()) mobileExpanded = true;
     renderAll();
+  }
+
+  function handleAddServer() {
+    if (configDirty) {
+      window.Modal.confirm({
+        title: '未保存的修改',
+        message: '当前配置尚未保存，新增将丢弃修改，是否继续？',
+        type: 'warning',
+        confirmText: '继续',
+        cancelText: '取消',
+      }).then(function (ok) {
+        if (!ok) return;
+        configDirty = false;
+        addDraftServer();
+      });
+      return;
+    }
+    addDraftServer();
   }
 
   function reloadData() {
@@ -718,11 +750,12 @@ window.McpConfigPanel = (function () {
     if (!srv) return;
     var detailEl = getActiveDetailEl();
     if (!detailEl) return;
+    var present = mcpStatusPresentation(srv);
     var dot = detailEl.querySelector('.mcp-info-grid .config-status-dot');
-    if (dot) dot.className = 'config-status-dot ' + dotClass(srv.status);
+    if (dot) dot.className = 'config-status-dot ' + present.dot;
     var statusText = detailEl.querySelector('.mcp-info-grid dd:nth-of-type(3)');
     if (statusText) {
-      statusText.innerHTML = '<span class="config-status-dot ' + dotClass(srv.status) + '"></span> ' + escapeHtml(statusLabel(srv.status));
+      statusText.innerHTML = '<span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label);
     }
   }
 

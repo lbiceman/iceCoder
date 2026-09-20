@@ -1,6 +1,5 @@
 /**
- * 二维码远程控制模块
- * 负责：生成远程控制二维码、弹窗展示
+ * 二维码远程控制：复用 Modal.panel。
  */
 
 /* exported ChatQR */
@@ -14,27 +13,13 @@ window.ChatQR = (function () {
     return div.innerHTML;
   }
 
-  function showQrCode() {
-    var overlay = createQrOverlayShell();
-    setQrModalLoading(overlay);
-    document.body.appendChild(overlay);
-
-    fetch('/api/remote/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (!data.success) {
-          setQrModalError(overlay, '生成二维码失败: ' + (data.error || '未知错误'));
-          return;
-        }
-        populateQrModal(overlay, data);
-      })
-      .catch(function () {
-        setQrModalError(overlay, '生成二维码失败，请检查网络连接');
-      });
+  function openPanel(bodyHtml) {
+    if (!window.Modal || typeof window.Modal.panel !== 'function') return null;
+    return window.Modal.panel({
+      title: '手机扫码远程控制',
+      description: '请确保手机和电脑在同一局域网内；扫码后将打开手机端 H5 界面',
+      bodyHtml: bodyHtml,
+    });
   }
 
   function buildMobileRemoteUrl(data) {
@@ -59,121 +44,145 @@ window.ChatQR = (function () {
     return base + '/m/chat?' + params;
   }
 
-  function createQrOverlayShell() {
-    var overlay = document.createElement('div');
-    overlay.className = 'qr-overlay';
-    overlay.setAttribute('id', 'qr-overlay');
+  function copyIconHtml() {
+    if (window.AppIcon && typeof window.AppIcon.html === 'function') {
+      return window.AppIcon.html('copy', { width: 14 });
+    }
+    return '';
+  }
 
-    var modal = document.createElement('div');
-    modal.className = 'qr-modal';
+  function notify(message, type) {
+    if (window.Notification && typeof window.Notification.show === 'function') {
+      window.Notification.show(message, type || 'info');
+    }
+  }
 
-    var title = document.createElement('h3');
-    title.textContent = '手机扫码远程控制';
-    modal.appendChild(title);
-
-    var desc = document.createElement('p');
-    desc.className = 'qr-desc';
-    desc.textContent = '请确保手机和电脑在同一局域网内；扫码后将打开手机端 H5 界面';
-    modal.appendChild(desc);
-
-    var qrContainer = document.createElement('div');
-    qrContainer.className = 'qr-canvas-container';
-    modal.appendChild(qrContainer);
-
-    var urlText = document.createElement('p');
-    urlText.className = 'qr-url';
-    urlText.hidden = true;
-    modal.appendChild(urlText);
-
-    var info = document.createElement('p');
-    info.className = 'qr-info';
-    info.hidden = true;
-    modal.appendChild(info);
-
-    var hint = document.createElement('p');
-    hint.className = 'qr-timer';
-    hint.textContent = '链接长期有效，直到下次重新生成';
-    hint.hidden = true;
-    modal.appendChild(hint);
-
-    var closeBtn = document.createElement('button');
-    closeBtn.className = 'qr-close-btn';
-    closeBtn.textContent = '关闭';
-    closeBtn.addEventListener('click', function () {
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-    });
-    modal.appendChild(closeBtn);
-
-    overlay.appendChild(modal);
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay && overlay.parentNode) {
-        overlay.parentNode.removeChild(overlay);
+  function copyTextFallback(text) {
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (!document.execCommand('copy')) {
+          reject(new Error('copy failed'));
+          return;
+        }
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        if (ta.parentNode) ta.parentNode.removeChild(ta);
       }
     });
-
-    return overlay;
   }
 
-  function setQrModalLoading(overlay) {
-    var qrContainer = overlay.querySelector('.qr-canvas-container');
-    if (!qrContainer) return;
-    qrContainer.innerHTML = '<p class="qr-loading">正在生成远程控制二维码…</p>';
+  function copyText(text) {
+    if (!text) return Promise.reject(new Error('empty'));
+    return copyTextFallback(text).catch(function () {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        return navigator.clipboard.writeText(text);
+      }
+      return Promise.reject(new Error('copy failed'));
+    });
   }
 
-  function setQrModalError(overlay, message) {
-    var qrContainer = overlay.querySelector('.qr-canvas-container');
-    if (qrContainer) {
-      qrContainer.innerHTML = '<p class="qr-error">' + escapeHtml(message) + '</p>';
+  function bindCopyButton(panel, url) {
+    if (!panel || !panel.body) return;
+    if (window.AppIcon && typeof window.AppIcon.hydrate === 'function') {
+      window.AppIcon.hydrate(panel.body);
     }
-    var hint = overlay.querySelector('.qr-timer');
-    if (hint) hint.hidden = true;
+    var btn = panel.body.querySelector('.modal-panel-copy');
+    if (btn && url) btn.setAttribute('data-copy-text', url);
+    if (panel.body.getAttribute('data-copy-bound') === '1') return;
+    panel.body.setAttribute('data-copy-bound', '1');
+    panel.body.addEventListener('click', function (e) {
+      var copyBtn = e.target.closest ? e.target.closest('.modal-panel-copy') : null;
+      if (!copyBtn) return;
+      var text = copyBtn.getAttribute('data-copy-text') || url || '';
+      copyText(text).then(function () {
+        notify('链接已复制', 'success');
+      }).catch(function () {
+        notify('复制失败', 'error');
+      });
+    });
   }
 
-  function populateQrModal(overlay, data) {
+  function renderQrBody(data) {
     var displayUrl = buildMobileRemoteUrl(data);
-    var qrContainer = overlay.querySelector('.qr-canvas-container');
-    if (qrContainer) {
-      qrContainer.innerHTML = '';
-      if (data.qrDataUrl) {
-        var img = document.createElement('img');
-        img.src = data.qrDataUrl;
-        img.alt = 'QR Code';
-        img.style.width = '220px';
-        img.style.height = '220px';
-        img.style.borderRadius = '8px';
-        qrContainer.appendChild(img);
-      } else {
-        qrContainer.innerHTML = '<p style="word-break:break-all;font-size:12px;color:#a0a0a0;">二维码生成失败，请手动访问:<br>' + escapeHtml(displayUrl) + '</p>';
-      }
-    }
+    var media = data.qrDataUrl
+      ? '<div class="modal-panel-media"><img src="' + escapeHtml(data.qrDataUrl) + '" alt="QR Code" width="220" height="220"></div>'
+      : '<p class="modal-panel-error">二维码生成失败，请手动访问下方地址</p>';
+    var info = data.tunnel
+      ? '通过公网隧道访问（任意网络可用）'
+      : ('局域网 IP: ' + (data.localIP || '') + ' | 端口: ' + (data.port || ''));
+    var urlRow = displayUrl
+      ? (
+        '<div class="modal-panel-code-row">' +
+          '<div class="modal-panel-code">' + escapeHtml(displayUrl) + '</div>' +
+          '<button type="button" class="btn-icon btn-icon-ghost modal-panel-copy" aria-label="复制链接" title="复制链接" data-copy-text="' + escapeHtml(displayUrl) + '">' +
+            copyIconHtml() +
+          '</button>' +
+        '</div>'
+      )
+      : '';
+    return (
+      '<div class="modal-panel-card">' +
+        media +
+        urlRow +
+        '<p class="modal-panel-note">' + escapeHtml(info) + '</p>' +
+        '<p class="modal-panel-note is-success">链接长期有效，直到下次重新生成</p>' +
+      '</div>'
+    );
+  }
 
-    var urlText = overlay.querySelector('.qr-url');
-    if (urlText) {
-      urlText.textContent = displayUrl;
-      urlText.hidden = false;
-    }
+  function fillQrPanel(panel, data) {
+    if (!panel) return;
+    panel.setBody(renderQrBody(data));
+    bindCopyButton(panel, buildMobileRemoteUrl(data));
+  }
 
-    var info = overlay.querySelector('.qr-info');
-    if (info) {
-      info.textContent = data.tunnel
-        ? '通过公网隧道访问（任意网络可用）'
-        : '局域网 IP: ' + data.localIP + ' | 端口: ' + data.port;
-      info.hidden = false;
-    }
+  function showQrCode() {
+    var panel = openPanel('<p class="modal-panel-muted">正在生成二维码…</p>');
+    if (!panel) return;
 
-    var hint = overlay.querySelector('.qr-timer');
-    if (hint) hint.hidden = false;
+    fetch('/api/remote/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!data.success) {
+          panel.setBody('<p class="modal-panel-error">生成二维码失败: ' + escapeHtml(data.error || '未知错误') + '</p>');
+          return;
+        }
+        fillQrPanel(panel, data);
+      })
+      .catch(function () {
+        panel.setBody('<p class="modal-panel-error">生成二维码失败，请检查网络连接</p>');
+      });
   }
 
   function showQrModal(url, qrDataUrl, localIP, port, tunnel, token) {
-    var overlay = createQrOverlayShell();
-    populateQrModal(overlay, { url: url, qrDataUrl: qrDataUrl, localIP: localIP, port: port, tunnel: tunnel, token: token });
-    document.body.appendChild(overlay);
+    var panel = openPanel('');
+    fillQrPanel(panel, {
+      url: url,
+      qrDataUrl: qrDataUrl,
+      localIP: localIP,
+      port: port,
+      tunnel: tunnel,
+      token: token,
+    });
   }
 
   function closeQrCode() {
-    var overlay = document.getElementById('qr-overlay');
-    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    if (window.Modal && typeof window.Modal.closePanel === 'function') {
+      window.Modal.closePanel();
+    }
   }
 
   return {
