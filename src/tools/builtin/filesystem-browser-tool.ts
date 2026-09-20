@@ -11,6 +11,10 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { RegisteredTool } from '../types.js';
+import {
+  gateMemoryToolRead,
+  SESSION_PROGRESS_TOOL_SKIP_MESSAGE,
+} from '../../memory/file-memory/memory-tool-access.js';
 
 const execAsync = promisify(exec);
 
@@ -82,8 +86,9 @@ async function listWindowsDrives(): Promise<string[]> {
 
 /**
  * 创建系统文件浏览器工具集。
+ * @param workDir 用于把相对路径规范到记忆目录；open_file 读进度快照时与 read_file 同一套隐藏。
  */
-export function createFilesystemBrowserTools(): RegisteredTool[] {
+export function createFilesystemBrowserTools(workDir = process.cwd()): RegisteredTool[] {
   return [
     // ---- 列出驱动器 / 根目录 ----
     {
@@ -260,7 +265,15 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
         },
       },
       handler: async (args) => {
-        const filePath = path.resolve(args.path);
+        const rawPath = String(args.path || '');
+        if (!rawPath.trim()) {
+          return { success: false, output: '', error: 'path is required' };
+        }
+        const memoryRead = await gateMemoryToolRead(rawPath, workDir);
+        if (memoryRead.blocked) {
+          return { success: true, output: memoryRead.message ?? SESSION_PROGRESS_TOOL_SKIP_MESSAGE };
+        }
+        const filePath = memoryRead.resolvedPath;
         const encoding = (args.encoding || 'utf-8') as BufferEncoding;
 
         // 检查文件是否存在

@@ -9,13 +9,23 @@ import {
   parseMemoryFrontmatterField,
   resolveMemoryRootForPath,
 } from './memory-write-pipeline.js';
+import { resolveMemoryEvictedRoot } from './memory-config.js';
+import { isWithinMemoryDir } from './memory-security.js';
 import {
   SESSION_PROGRESS_CATEGORY,
   SESSION_PROGRESS_TAG,
 } from './memory-progress-overview.js';
 
 export const SESSION_PROGRESS_TOOL_SKIP_MESSAGE =
-  'This file is archived session-progress memory, not active long-term memory. Do not treat it as current project status. See session-notes or memory-evicted/memory-files.';
+  'This file is archived session-progress memory, not active long-term memory. Do not treat it as current project status. Use session-notes or the current codebase.';
+
+function isWithinArchivedMemoryDir(absolutePath: string): boolean {
+  try {
+    return isWithinMemoryDir(path.resolve(absolutePath), resolveMemoryEvictedRoot());
+  } catch {
+    return false;
+  }
+}
 
 export function isHiddenSessionProgressMemoryContent(content: string): boolean {
   const category = parseMemoryFrontmatterField(content, 'memoryCategory').toLowerCase();
@@ -26,11 +36,14 @@ export function isHiddenSessionProgressMemoryContent(content: string): boolean {
 }
 
 export async function isHiddenMemoryToolPath(absolutePath: string): Promise<boolean> {
-  if (!resolveMemoryRootForPath(absolutePath)) return false;
-  const filename = path.basename(absolutePath);
+  const normalized = path.resolve(absolutePath);
+  if (!resolveMemoryRootForPath(normalized) && !isWithinArchivedMemoryDir(normalized)) {
+    return false;
+  }
+  const filename = path.basename(normalized);
   if (filename === 'MEMORY.md' || !filename.endsWith('.md')) return false;
   try {
-    const content = await fs.readFile(absolutePath, 'utf-8');
+    const content = await fs.readFile(normalized, 'utf-8');
     return isHiddenSessionProgressMemoryContent(content);
   } catch {
     return false;

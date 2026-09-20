@@ -110,7 +110,7 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   registry.register(createXlsxParseTool(workDir));
 
   // 注册系统文件浏览器工具（支持浏览电脑任意路径）
-  for (const tool of createFilesystemBrowserTools()) {
+  for (const tool of createFilesystemBrowserTools(workDir)) {
     registry.register(tool);
   }
 

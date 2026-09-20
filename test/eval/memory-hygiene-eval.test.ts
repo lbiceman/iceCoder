@@ -633,7 +633,7 @@ describe('eval: filename heuristic does not dump docs into user-memory', () => {
 });
 
 describe('eval: session_progress is hidden from read_file', () => {
-  it('已降级的 *-overview.md 不能再被 read_file 当活跃记忆读到', async () => {
+  it('已降级的 *-overview.md 不能再被 read_file / open_file / glob 当活跃记忆读到', async () => {
     await writeMem(projectDir, 'icecoder-chat-page-ws-split-overview.md', `
 name: chat-page WS 拆分已全部完成（块1-4）
 description: 已完成并提交；测试全绿
@@ -649,11 +649,28 @@ tags: project:icecoder
 
     const tools = createFileTools(root);
     const readTool = tools.find(t => t.definition.name === 'read_file')!;
-    const archivedRead = await readTool.handler({
-      path: path.join(root, 'memory-evicted', 'memory-files', 'icecoder-chat-page-ws-split-overview.md'),
-    });
+    const archivedPath = path.join(root, 'memory-evicted', 'memory-files', 'icecoder-chat-page-ws-split-overview.md');
+    const archivedRead = await readTool.handler({ path: archivedPath });
     expect(archivedRead.success).toBe(true);
-    expect(archivedRead.output).toContain('level: session_state');
+    expect(archivedRead.output).toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
+    expect(archivedRead.output).not.toContain('测试全绿');
+
+    const { createFilesystemBrowserTools } = await import('../../src/tools/builtin/filesystem-browser-tool.js');
+    const openTool = createFilesystemBrowserTools(root).find(t => t.definition.name === 'open_file')!;
+    const opened = await openTool.handler({ path: archivedPath });
+    expect(opened.success).toBe(true);
+    expect(opened.output).toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
+    expect(opened.output).not.toContain('stale snapshot');
+    expect(opened.output).not.toContain('测试全绿');
+
+    const { createSearchTools } = await import('../../src/tools/builtin/search-tools.js');
+    const globTool = createSearchTools(root).find(t => t.definition.name === 'glob')!;
+    const listed = await globTool.handler({
+      pattern: '**/*chat-page-ws-split*',
+      path: root,
+    });
+    expect(listed.success).toBe(true);
+    expect(listed.output).not.toMatch(/icecoder-chat-page-ws-split-overview/);
 
     await fs.writeFile(
       path.join(projectDir, 'still-active-progress-overview.md'),
@@ -675,5 +692,34 @@ stale snapshot
     expect(hidden.success).toBe(true);
     expect(hidden.output).toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
     expect(hidden.output).not.toContain('stale snapshot');
+
+    const hiddenOpen = await openTool.handler({
+      path: path.join(projectDir, 'still-active-progress-overview.md'),
+    });
+    expect(hiddenOpen.success).toBe(true);
+    expect(hiddenOpen.output).toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
+  });
+
+  it('归档里的非进度记忆仍可被 open_file 读到', async () => {
+    const evictedUser = path.join(root, 'memory-evicted', 'user-memory');
+    await fs.mkdir(evictedUser, { recursive: true });
+    const kept = path.join(evictedUser, 'user-git-commit-push-style.md');
+    await fs.writeFile(
+      kept,
+      `---
+name: git commit 用中文
+type: user
+---
+
+commit message 必须用中文
+`,
+      'utf-8',
+    );
+    const { createFilesystemBrowserTools } = await import('../../src/tools/builtin/filesystem-browser-tool.js');
+    const openTool = createFilesystemBrowserTools(root).find(t => t.definition.name === 'open_file')!;
+    const opened = await openTool.handler({ path: kept });
+    expect(opened.success).toBe(true);
+    expect(opened.output).toContain('commit message 必须用中文');
+    expect(opened.output).not.toBe(SESSION_PROGRESS_TOOL_SKIP_MESSAGE);
   });
 });
