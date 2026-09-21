@@ -647,11 +647,15 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 ![Empty-session welcome (light)](./assets/desktop-welcome-light.png)
 
-![Work chat (light) — changed-files dock](./assets/desktop-work-chat-light.png)
+![Work chat (light)](./assets/desktop-work-chat-light.png)
 
 ![Memory graph](./assets/desktop-memory-graph.png)
 
 ![Skills library](./assets/desktop-skills.png)
+
+![Stats — token, memory, and supervisor trends (dark)](./assets/desktop-stats.png)
+
+![Stats (light theme)](./assets/desktop-stats-light.png)
 
 ![MCP settings](./assets/desktop-config-mcp.png)
 
