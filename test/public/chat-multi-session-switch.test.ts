@@ -37,6 +37,26 @@ describe('多会话并发切换 · 前端源码约定', () => {
     expect(renderList).toMatch(/if\s*\(\s*!sidebar\s*\)\s*return/);
   });
 
+  it('桌面侧栏保留工作入口，记忆/技能/统计/设置页会话可回到聊天', () => {
+    const sidebar = read(publicJs('chat-session-sidebar.js'));
+    expect(sidebar).toContain('data-page="chat"');
+    expect(sidebar).toMatch(/chat-sidebar-nav-btn-label">工作</);
+    expect(sidebar).toContain('data-page="memory"');
+    expect(sidebar).toContain('data-page="skills"');
+    expect(sidebar).toContain('data-page="stats"');
+    expect(sidebar).toContain('function isAuxiliaryNavPage');
+    expect(sidebar).toMatch(/route === 'settings'/);
+    expect(sidebar).toContain('highlightActive && s.id === activeId');
+
+    const selectFn = sidebar.slice(
+      sidebar.indexOf('function selectSession'),
+      sidebar.indexOf('function startRename'),
+    );
+    expect(selectFn).toContain('leaveAuxiliary');
+    expect(selectFn).toContain('navigateToChatPage');
+    expect(selectFn.indexOf('navigateToChatPage')).toBeLessThan(selectFn.indexOf('Store.switchSession'));
+  });
+
   it('移动端再点当前会话只关抽屉，不 switchSession', () => {
     const drawer = read(publicJs('shell', 'mobile-session-drawer.js'));
     const selectFn = drawer.slice(
