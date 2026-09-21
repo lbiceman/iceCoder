@@ -16,7 +16,7 @@ export const TOKEN_USAGE_WINDOW_DAYS = {
 } as const;
 
 export const TOKEN_USAGE_SERIES_HOURS = 24;
-export const TOKEN_USAGE_SERIES_DAYS = 30;
+export const TOKEN_USAGE_SERIES_DAYS = 31;
 
 export interface TokenUsageTotals {
   inputTokens: number;
@@ -34,6 +34,7 @@ export interface TokenUsageWindows {
 export interface TokenUsageBucket extends TokenUsageTotals {
   key: string;
   timestamp: number;
+  turns: number;
   byModel: Record<string, TokenUsageTotals>;
 }
 
@@ -100,6 +101,7 @@ function emptyTokenUsageBucket(key: string, timestamp: number): TokenUsageBucket
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
+    turns: 0,
     byModel: {},
   };
 }
@@ -182,6 +184,7 @@ export function aggregateTurnTokenWindows(
 }
 
 function addToBucket(bucket: TokenUsageBucket, record: TurnTokenRecord): void {
+  bucket.turns += 1;
   addUsage(bucket, record.inputTokens, record.outputTokens);
   const model = record.usedModel;
   if (!model) return;
@@ -190,7 +193,7 @@ function addToBucket(bucket: TokenUsageBucket, record: TurnTokenRecord): void {
 }
 
 /**
- * 本地时区下的 24 小时桶 + 30 天日桶，供统计页面积图使用。
+ * 本地时区下的 24 小时桶 + 31 天日桶，供统计页面积图使用。
  * 滚动窗口（1/7/30 天）仍由 aggregateTurnTokenWindows 提供，与 ~tokens 弹框一致。
  */
 export function aggregateTurnTokenSeries(

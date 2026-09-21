@@ -136,12 +136,15 @@ describe('aggregateTurnTokenSeries', () => {
       { timestamp: twoDaysAgoNoon.getTime(), inputTokens: 5, outputTokens: 1, usedModel: 'DeepSeek-V3.2' },
     ], t);
 
-    expect(series.hourly).toHaveLength(24);
-    expect(series.daily).toHaveLength(30);
-    expect(series.hourly[23].inputTokens).toBe(10);
-    expect(series.hourly[23].byModel['gpt-4o']?.totalTokens).toBe(12);
-    expect(series.daily[29].inputTokens).toBe(10);
-    expect(series.daily[27].inputTokens).toBe(5);
-    expect(series.daily[27].byModel['DeepSeek-V3.2']?.totalTokens).toBe(6);
+    expect(series.hourly).toHaveLength(TOKEN_USAGE_SERIES_HOURS);
+    expect(series.daily).toHaveLength(TOKEN_USAGE_SERIES_DAYS);
+    expect(series.hourly[TOKEN_USAGE_SERIES_HOURS - 1].inputTokens).toBe(10);
+    expect(series.hourly[TOKEN_USAGE_SERIES_HOURS - 1].turns).toBe(1);
+    expect(series.hourly[TOKEN_USAGE_SERIES_HOURS - 1].byModel['gpt-4o']?.totalTokens).toBe(12);
+    expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 1].inputTokens).toBe(10);
+    expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 1].turns).toBe(1);
+    expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].inputTokens).toBe(5);
+    expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].turns).toBe(1);
+    expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].byModel['DeepSeek-V3.2']?.totalTokens).toBe(6);
   });
 });

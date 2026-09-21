@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getRuntimeDataDir } from '../../cli/paths.js';
 import type { ExecutionModeTelemetryPayload } from '../../types/supervisor.js';
+import { makeTimeBuckets, timeBucketKey } from '../telemetry-series.js';
 
 const DEFAULT_RUNTIME_TELEMETRY_LOG = 'runtime/telemetry.jsonl';
 
@@ -61,6 +62,71 @@ export function extractExecutionModeEvents(entries: JsonlLine[]) {
   });
 }
 
+export function aggregateExecutionModeStats(
+  events: ReturnType<typeof extractExecutionModeEvents>,
+) {
+  const byMode: Record<string, number> = {};
+  const bySignal: Record<string, number> = {};
+  let enter = 0;
+  let exit = 0;
+  for (const event of events) {
+    if (event.type === 'execution_mode_enter') {
+      enter += 1;
+      const mode = event.payload.executionMode || 'forced';
+      byMode[mode] = (byMode[mode] || 0) + 1;
+      const signal = event.payload.enteredByPrimary
+        || event.payload.enteredBy[0]
+        || 'unknown';
+      bySignal[signal] = (bySignal[signal] || 0) + 1;
+      continue;
+    }
+    if (event.type === 'execution_mode_exit') exit += 1;
+  }
+  return {
+    enter,
+    exit,
+    byMode,
+    bySignal,
+    recent: events.slice(-20),
+  };
+}
+
+export interface ExecutionModeSeriesBucket {
+  key: string;
+  timestamp: number;
+  enter: number;
+  exit: number;
+}
+
+export function aggregateExecutionModeSeries(
+  events: ReturnType<typeof extractExecutionModeEvents>,
+  days: number,
+  now = Date.now(),
+): ExecutionModeSeriesBucket[] {
+  const hourly = days <= 1;
+  const buckets = makeTimeBuckets(days, now).map((slot) => ({
+    key: slot.key,
+    timestamp: slot.timestamp,
+    enter: 0,
+    exit: 0,
+  }));
+  const map = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  const windowStart = now - days * 86_400_000;
+  const first = buckets[0];
+  const last = buckets[buckets.length - 1];
+  for (const event of events) {
+    const ts = Date.parse(event.timestamp);
+    if (!Number.isFinite(ts) || ts < windowStart) continue;
+    const bucket = map.get(timeBucketKey(ts, hourly))
+      || (first && ts < first.timestamp ? first : null)
+      || (last && ts > last.timestamp ? last : null);
+    if (!bucket) continue;
+    if (event.type === 'execution_mode_enter') bucket.enter += 1;
+    else if (event.type === 'execution_mode_exit') bucket.exit += 1;
+  }
+  return buckets;
+}
+
 export function createSupervisorEventsRouter(): Router {
   const router = Router();
   router.get('/', async (req: Request, res: Response): Promise<void> => {
@@ -68,13 +134,13 @@ export function createSupervisorEventsRouter(): Router {
     const days = Number.isFinite(parsedDays) ? Math.min(Math.max(parsedDays, 1), 90) : 7;
     const runtimePath = path.join(getRuntimeDataDir(), DEFAULT_RUNTIME_TELEMETRY_LOG);
     const events = extractExecutionModeEvents(await readJsonlFile(runtimePath, days));
+    const stats = aggregateExecutionModeStats(events);
     res.json({
       success: true,
       days,
       executionMode: {
-        enter: events.filter(event => event.type === 'execution_mode_enter').length,
-        exit: events.filter(event => event.type === 'execution_mode_exit').length,
-        recent: events.slice(-20),
+        ...stats,
+        series: aggregateExecutionModeSeries(events, days),
       },
     });
   });
