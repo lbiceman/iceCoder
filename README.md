@@ -32,6 +32,12 @@
 
 ![Desktop — skills library: list, preview, and “Use skill”](./docs/assets/desktop-skills.png)
 
+**Stats** — token usage trend (summed from session bubbles), memory read/write, and supervisor enter/exit; day / week / month ranges:
+
+![Desktop — stats: token, memory, and supervisor trends (dark)](./docs/assets/desktop-stats.png)
+
+![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
+
 **Settings · General** — skip permission prompts, shell command blacklist, execution overlay toggle/default expand/panel width, and other security options:
 
 ![Desktop — general settings: security and execution overlay](./docs/assets/desktop-config-general.png)
@@ -44,7 +50,7 @@
 
 ![Desktop — MCP settings: server list and unity-mcp detail](./docs/assets/desktop-config-mcp.png)
 
-**Work / chat (light theme)** — same workbench layout with the changed-files dock open:
+**Work / chat (light theme)** — same workbench layout (checkpoints + flow) in light appearance:
 
 ![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 

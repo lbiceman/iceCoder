@@ -32,6 +32,12 @@
 
 ![桌面端 — 技能库：列表、正文预览与「使用技能」](./docs/assets/desktop-skills.png)
 
+**统计** — Token 消耗趋势（按会话气泡合计）、记忆读写与监管进出；支持日 / 当周 / 当月：
+
+![桌面端 — 统计：Token、记忆与监管趋势（深色）](./docs/assets/desktop-stats.png)
+
+![桌面端 — 统计（浅色主题）](./docs/assets/desktop-stats-light.png)
+
 **设置 · 通用** — 跳过权限确认、Shell 命令黑名单、执行透明层开关/默认展开/面板宽度等安全与执行选项：
 
 ![桌面端 — 通用设置：安全选项与执行透明层](./docs/assets/desktop-config-general.png)
@@ -44,7 +50,7 @@
 
 ![桌面端 — 设置页 MCP 配置：服务器列表与 unity-mcp 详情](./docs/assets/desktop-config-mcp.png)
 
-**工作 / 聊天（浅色主题）** — 相同工作台布局，底栏展开变更文件层：
+**工作 / 聊天（浅色主题）** — 相同工作台布局（检查点 + 执行流）的浅色外观：
 
 ![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
