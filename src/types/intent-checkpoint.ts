@@ -35,6 +35,8 @@ export interface UiChatMessage {
   diffSource?: string;
   /** 本轮 agent 回复累计 token（刷新后仍可见） */
   turnTokenUsage?: TurnTokenUsage;
+  /** 本轮实际使用的模型名（气泡级落盘，供展示与统计） */
+  usedModel?: string;
   /** 运行中 /also 注入的用户备注（仅 UI 层） */
   alsoNote?: boolean;
 }

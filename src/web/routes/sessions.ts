@@ -97,6 +97,8 @@ interface ChatMessage {
   images?: string[];
   sentAt?: number;
   completedAt?: number;
+  turnTokenUsage?: { inputTokens: number; outputTokens: number };
+  usedModel?: string;
 }
 
 /** 确保目录存在 */

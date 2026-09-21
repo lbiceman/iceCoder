@@ -1325,34 +1325,40 @@ window.ChatPage = (function () {
   // confirm / confirm_resolved / confirm_timeout 事件 handler 已拆分至
   // chat-ws-restore-handlers.js（含 activeConfirmId / activeConfirmResolved 私有状态）。
 
-  function applyTurnTokenUsageToLastAgent(usage, messageId) {
+  function applyTurnTokenUsageToLastAgent(usage, messageId, usedModel) {
     if (!usage || typeof usage !== 'object') return false;
     var payload = {
       inputTokens: usage.inputTokens || 0,
       outputTokens: usage.outputTokens || 0,
     };
+    var model = typeof usedModel === 'string' ? usedModel.trim() : '';
     var msgs = Session.getMessages();
+
+    function applyTo(msg) {
+      msg.turnTokenUsage = payload;
+      if (model) msg.usedModel = model;
+      if (messageId && !msg.id) msg.id = messageId;
+      if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msg);
+      Session.saveMessages();
+      return true;
+    }
+
     if (messageId) {
       for (var j = msgs.length - 1; j >= 0; j--) {
         if (msgs[j].role === 'agent' && msgs[j].id === messageId) {
-          msgs[j].turnTokenUsage = payload;
-          if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msgs[j]);
-          Session.saveMessages();
-          return true;
+          return applyTo(msgs[j]);
         }
       }
-      pendingTurnTokenUsage = { usage: payload, messageId: messageId };
-      return false;
     }
     for (var i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'agent') {
-        msgs[i].turnTokenUsage = payload;
-        if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msgs[i]);
-        Session.saveMessages();
-        return true;
+      if (msgs[i].role !== 'agent') continue;
+      if (messageId && msgs[i].id && msgs[i].id !== messageId) {
+        pendingTurnTokenUsage = { usage: payload, messageId: messageId, usedModel: model };
+        return false;
       }
+      return applyTo(msgs[i]);
     }
-    pendingTurnTokenUsage = { usage: payload, messageId: '' };
+    pendingTurnTokenUsage = { usage: payload, messageId: messageId || '', usedModel: model };
     return false;
   }
 
@@ -1364,9 +1370,10 @@ window.ChatPage = (function () {
     });
     var turnIn = typeof data.totalInputTokens === 'number' ? data.totalInputTokens : 0;
     var turnOut = typeof data.totalOutputTokens === 'number' ? data.totalOutputTokens : 0;
-    if (turnIn > 0 || turnOut > 0) {
+    var usedModel = typeof data.usedModel === 'string' ? data.usedModel.trim() : '';
+    if (turnIn > 0 || turnOut > 0 || usedModel) {
       var usage = { inputTokens: turnIn, outputTokens: turnOut };
-      if (applyTurnTokenUsageToLastAgent(usage, data.messageId || '')) {
+      if (applyTurnTokenUsageToLastAgent(usage, data.messageId || '', usedModel)) {
         pendingTurnTokenUsage = null;
       }
     }

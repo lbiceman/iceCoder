@@ -446,6 +446,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
+  const usedModel = typeof modelMeta?.modelName === 'string' ? modelMeta.modelName.trim() : '';
 
   const workspaceMessage = stripReferencePathLinesForWorkspaceLock(message, explicitReferencePaths);
   const sessionToolCtx = await resolveSessionHarnessToolContext({
@@ -750,16 +751,20 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         inputTokens: result.loopState.totalInputTokens,
         outputTokens: result.loopState.totalOutputTokens,
       };
+      const agentBubble = {
+        role: 'agent' as const,
+        id: agentMsgId,
+        turnTokenUsage,
+        ...(usedModel ? { usedModel } : {}),
+      };
 
       if (result.content) {
-        sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId, turnTokenUsage });
+        sessionEntries.push({ ...agentBubble, content: result.content });
         turnAgentMsgId = agentMsgId;
       } else if (toolTraceBatch.length > 0) {
         sessionEntries.push({
-          role: 'agent',
+          ...agentBubble,
           content: '（本轮仅有工具调用，无文字回复）',
-          id: agentMsgId,
-          turnTokenUsage,
         });
         turnAgentMsgId = agentMsgId;
       }
@@ -800,6 +805,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       totalInputTokens: result.loopState.totalInputTokens,
       totalOutputTokens: result.loopState.totalOutputTokens,
       ...(turnAgentMsgId ? { messageId: turnAgentMsgId } : {}),
+      ...(usedModel ? { usedModel } : {}),
     });
     stopReason = result.loopState.stopReason;
   } finally {

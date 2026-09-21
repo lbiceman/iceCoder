@@ -829,6 +829,17 @@
   white-space: nowrap;
 }
 
+.msg-token-usage__item--model {
+  min-width: 0;
+}
+
+.msg-token-usage__item--model .msg-token-usage__value {
+  font-variant-numeric: normal;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .message.user .msg-label-actions {
   display: inline-flex;
   align-items: center;

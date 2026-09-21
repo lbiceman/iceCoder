@@ -30,6 +30,13 @@ export interface TurnTokenRecord {
   timestamp: number;
   inputTokens: number;
   outputTokens: number;
+  usedModel?: string;
+}
+
+export type TokenUsageByModel = Record<string, TokenUsageWindows>;
+
+export interface TokenUsageSummary extends TokenUsageWindows {
+  byModel: TokenUsageByModel;
 }
 
 export function emptyTokenUsageTotals(): TokenUsageTotals {
@@ -54,9 +61,14 @@ function readFiniteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function readUsedModel(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
 /**
  * 从 UI 会话消息中抽出带时间戳的 turnTokenUsage。
  * 时间优先 completedAt（agent 气泡完成时刻），否则 sentAt。
+ * 使用模型以消息级 `usedModel` 为准；兼容旧数据写在 turnTokenUsage.model / usedModel。
  */
 export function extractTurnTokenRecords(messages: unknown): TurnTokenRecord[] {
   const records: TurnTokenRecord[] = [];
@@ -77,7 +89,15 @@ export function extractTurnTokenRecords(messages: unknown): TurnTokenRecord[] {
     const timestamp = completedAt > 0 ? completedAt : sentAt;
     if (timestamp <= 0) continue;
 
-    records.push({ timestamp, inputTokens, outputTokens });
+    const usedModel = readUsedModel(msg.usedModel)
+      || readUsedModel((usage as Record<string, unknown>).usedModel)
+      || readUsedModel((usage as Record<string, unknown>).model);
+    records.push({
+      timestamp,
+      inputTokens,
+      outputTokens,
+      ...(usedModel ? { usedModel } : {}),
+    });
   }
 
   return records;
@@ -107,6 +127,25 @@ export function aggregateTurnTokenWindows(
   return windows;
 }
 
+export function aggregateTurnTokenByModel(
+  records: TurnTokenRecord[],
+  now = Date.now(),
+): TokenUsageByModel {
+  const grouped = new Map<string, TurnTokenRecord[]>();
+  for (const record of records) {
+    const key = record.usedModel || '';
+    if (!key) continue;
+    const list = grouped.get(key) ?? [];
+    list.push(record);
+    grouped.set(key, list);
+  }
+  const out: TokenUsageByModel = {};
+  for (const [model, list] of grouped) {
+    out[model] = aggregateTurnTokenWindows(list, now);
+  }
+  return out;
+}
+
 export async function collectSessionTurnTokenRecords(sessionsDir: string): Promise<TurnTokenRecord[]> {
   const names = await fs.readdir(sessionsDir).catch((): string[] => []);
   const batches = await Promise.all(names.map(async (name) => {
@@ -125,7 +164,10 @@ export async function collectSessionTurnTokenRecords(sessionsDir: string): Promi
 export async function summarizeSessionTokenUsage(
   sessionsDir: string,
   now = Date.now(),
-): Promise<TokenUsageWindows> {
+): Promise<TokenUsageSummary> {
   const records = await collectSessionTurnTokenRecords(sessionsDir);
-  return aggregateTurnTokenWindows(records, now);
+  return {
+    ...aggregateTurnTokenWindows(records, now),
+    byModel: aggregateTurnTokenByModel(records, now),
+  };
 }

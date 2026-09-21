@@ -1,4 +1,6 @@
 // iceCoder vitest config — last updated 2026-06-01
+import os from 'node:os';
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -6,6 +8,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    env: {
+      ICE_DATA_DIR: path.join(os.tmpdir(), 'iceCoder-vitest-data'),
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

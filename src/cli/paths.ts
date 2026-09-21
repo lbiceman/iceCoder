@@ -3,9 +3,10 @@
  *
  * 运行时数据根目录规则：
  * - **全局 / tgz 安装**（`node_modules/ice-coder/dist/cli/` 入口）：`~/.iceCoder/`，与启动 cwd 无关
- * - **源码本地开发**（`tsx src/cli/index.ts`、`npm run dev` 等）：当前项目下的 `data/`
+ * - **源码本地开发**（`tsx src/cli/index.ts`、`npm run dev` 等）：`E:/my/iceCoderCache`（可用 `ICE_CACHE_ROOT` 覆盖）
  * - **`NODE_ENV=production`**（如 `npm start`）：`~/.iceCoder/`
  *
+ * 仓库 `data/` 只保留 `.example` 与打包模板，不作为运行时数据根。
  * 子目录示例（随 dataDir 切换）：`memory-files/`、`imagesCache/`、`mcpCache/` 等。
  *
  * MCP 配置：开发用项目 `.iceCoder/mcp.json`；生产 / 全局 / Electron 用 `{ICE_DATA_DIR}/mcp.json`（与桌面端一致）。
@@ -31,8 +32,19 @@ import {
 /** 用户主目录下的 iceCoder 数据目录（生产环境） */
 export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
 
-/** 当前工作目录下的 data 目录（开发环境） */
-export const LOCAL_DATA_DIR = path.resolve('data');
+/** 仓库内模板目录（`.example`、默认技能、system-prompt），不存放运行时数据 */
+export const REPO_DATA_DIR = path.resolve('data');
+
+/** 源码本地开发默认数据根（可用 `ICE_CACHE_ROOT` 覆盖） */
+export const DEFAULT_LOCAL_CACHE_DIR = 'E:/my/iceCoderCache';
+
+export function resolveLocalDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.ICE_CACHE_ROOT?.trim();
+  return path.resolve(fromEnv || DEFAULT_LOCAL_CACHE_DIR);
+}
+
+/** 源码本地开发运行时数据根 */
+export const LOCAL_DATA_DIR = resolveLocalDataDir();
 
 /** 开发环境：项目根 `.iceCoder/`（MCP、memory.md 等项目级配置） */
 export const LOCAL_ICECODER_DIR = path.resolve('.iceCoder');
@@ -63,13 +75,13 @@ export function isElectronRuntime(): boolean {
   return process.env.ICE_ELECTRON === '1';
 }
 
-/** 数据根使用 `~/.iceCoder`（全局安装或 production），否则用项目 `data/`。 */
+/** 数据根使用 `~/.iceCoder`（全局安装或 production），否则用本地开发缓存目录。 */
 export function usesUserDataRoot(): boolean {
   return isProductionRuntime() || isPackagedCliEntry() || isElectronRuntime();
 }
 
 function defaultDataDirForRuntime(): string {
-  if (!usesUserDataRoot()) return LOCAL_DATA_DIR;
+  if (!usesUserDataRoot()) return resolveLocalDataDir();
   return readPersistedDataDirectory() ?? USER_DATA_DIR;
 }
 
@@ -157,7 +169,7 @@ export function getImagesCacheSessionDir(sessionId: string): string {
 /**
  * MCP 工具返回的图片落盘目录（如 Puppeteer 截图）。
  * 与 memory-files / imagesCache 相同，随 `getRuntimeDataDir()` 分环境：
- * - 开发：项目 `data/mcpCache/`
+ * - 开发：`{ICE_CACHE_ROOT|E:/my/iceCoderCache}/mcpCache/`
  * - 生产 / 全局安装：用户目录 `~/.iceCoder/mcpCache/`
  */
 export function getMcpCacheDir(): string {
@@ -321,7 +333,7 @@ export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void
   await fs.mkdir(dir, { recursive: true });
   if (await exists(mcpPath)) return;
 
-  const legacyDevMcp = path.join(LOCAL_DATA_DIR, 'mcp.json');
+  const legacyDevMcp = path.join(REPO_DATA_DIR, 'mcp.json');
   if (await exists(legacyDevMcp)) {
     try {
       const raw = await fs.readFile(legacyDevMcp, 'utf-8');
@@ -400,8 +412,8 @@ export async function ensureSupervisorConfigFile(dataDir: string): Promise<void>
   if (await exists(bundled)) {
     content = await fs.readFile(bundled, 'utf-8');
   } else {
-    const localExample = path.join(LOCAL_DATA_DIR, SUPERVISOR_CONFIG_EXAMPLE);
-    const localConfig = path.join(LOCAL_DATA_DIR, 'supervisor-config.json');
+    const localExample = path.join(REPO_DATA_DIR, SUPERVISOR_CONFIG_EXAMPLE);
+    const localConfig = path.join(REPO_DATA_DIR, 'supervisor-config.json');
     if (await exists(localExample)) {
       content = await fs.readFile(localExample, 'utf-8');
     } else if (await exists(localConfig)) {
@@ -434,7 +446,7 @@ export async function ensureDefaultSkillFiles(skillsDir: string): Promise<void> 
   if (await exists(target)) return;
 
   const bundled = resolvePackagedDataDir(path.join(BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE));
-  const localBundled = path.join(LOCAL_DATA_DIR, BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE);
+  const localBundled = path.join(REPO_DATA_DIR, BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE);
   let content: string | null = null;
   if (await exists(bundled)) {
     content = await fs.readFile(bundled, 'utf-8');

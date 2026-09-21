@@ -11,8 +11,10 @@ import { resolveProviderProtocol } from '../src/llm/provider-protocol.js';
 import { resolveAnthropicMessagesUrl } from '../src/llm/anthropic-adapter.js';
 import type { ProviderConfig, IceCoderConfigFile } from '../src/web/types.js';
 import type { UnifiedMessage } from '../src/llm/types.js';
+import { resolveLocalDataDir } from '../src/cli/paths.js';
 
-const CONFIG_PATH = path.resolve('data/config.json');
+const CONFIG_PATH = process.env.ICE_CONFIG_PATH?.trim()
+  || path.join(resolveLocalDataDir(), 'config.json');
 
 async function loadProvider(): Promise<ProviderConfig> {
   const raw = JSON.parse(await fs.readFile(CONFIG_PATH, 'utf-8')) as IceCoderConfigFile;

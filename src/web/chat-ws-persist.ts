@@ -223,6 +223,7 @@ export type AppendableSessionMessage = {
   sentAt?: number;
   completedAt?: number;
   turnTokenUsage?: { inputTokens: number; outputTokens: number };
+  usedModel?: string;
   diffSource?: string | null;
 };
 
@@ -279,6 +280,12 @@ export async function appendMessages(
         }
         if (!incoming.openCommand && prev.openCommand) {
           merged.openCommand = prev.openCommand;
+        }
+        if (!incoming.usedModel && prev.usedModel) {
+          merged.usedModel = prev.usedModel;
+        }
+        if (!incoming.turnTokenUsage && prev.turnTokenUsage) {
+          merged.turnTokenUsage = prev.turnTokenUsage;
         }
         existing[existingIndex] = merged;
       } else {

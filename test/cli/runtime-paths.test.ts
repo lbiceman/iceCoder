@@ -15,6 +15,7 @@ describe('runtime data paths', () => {
     'ICE_MCP_CONFIG_PATH',
     'ICE_DEFAULT_WORK_DIR',
     'ICE_SHELL_IDENTITY_DIR',
+    'ICE_CACHE_ROOT',
   ];
 
   beforeEach(() => {
@@ -35,13 +36,13 @@ describe('runtime data paths', () => {
     return import('../../src/cli/paths.js');
   }
 
-  it('uses project data/ in development', async () => {
+  it('uses local iceCoderCache in development', async () => {
     process.env.NODE_ENV = 'development';
-    const { getRuntimeDataDir, resolveDataPaths } = await loadPathsModule();
-    expect(getRuntimeDataDir()).toBe(path.resolve('data'));
+    const { getRuntimeDataDir, resolveDataPaths, LOCAL_DATA_DIR } = await loadPathsModule();
+    expect(getRuntimeDataDir()).toBe(LOCAL_DATA_DIR);
     const paths = await resolveDataPaths();
-    expect(paths.configPath).toBe(path.resolve('data/config.json'));
-    expect(paths.sessionsDir).toBe(path.resolve('data/sessions'));
+    expect(paths.configPath).toBe(path.join(LOCAL_DATA_DIR, 'config.json'));
+    expect(paths.sessionsDir).toBe(path.join(LOCAL_DATA_DIR, 'sessions'));
     expect(paths.mcpConfigPath).toBe(path.resolve('.iceCoder/mcp.json'));
   });
 
@@ -98,7 +99,7 @@ describe('runtime data paths', () => {
     process.env.NODE_ENV = 'development';
     const devMod = await loadPathsModule();
     expect(devMod.getImagesCacheSessionDir('s1')).toBe(
-      path.resolve('data', 'imagesCache', 's1'),
+      path.join(devMod.LOCAL_DATA_DIR, 'imagesCache', 's1'),
     );
 
     process.env.NODE_ENV = 'production';

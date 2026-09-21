@@ -1,5 +1,5 @@
 /**
- * GET /api/token-usage — 汇总各会话气泡上的 turnTokenUsage。
+ * GET /api/token-usage — 汇总各会话气泡上的 turnTokenUsage / usedModel。
  */
 
 import { Router, type Request, type Response } from 'express';

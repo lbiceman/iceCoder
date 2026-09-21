@@ -24,6 +24,7 @@ interface ChatSessionApi {
   ): void;
   fetchStructuredMessages(callback: (messages: unknown[]) => void): void;
   setSessionId(id: string): void;
+  saveMessages(): void;
 }
 
 function loadChatSession(options?: {
@@ -191,5 +192,84 @@ describe('ChatSession 服务端快照同步', () => {
       content: '你好',
     })).toBe('existing');
     expect(session.getMessages()).toHaveLength(1);
+  });
+
+  it('气泡 usedModel 会随 localStorage 往返', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({
+      role: 'agent',
+      id: 'a1',
+      content: 'ok',
+      usedModel: 'DeepSeek-V3.2',
+      turnTokenUsage: { inputTokens: 10, outputTokens: 2 },
+    });
+    session.saveMessages();
+    session.setSessionId('default');
+    const msgs = session.getMessages() as Array<Record<string, unknown>>;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].usedModel).toBe('DeepSeek-V3.2');
+    expect(msgs[0].turnTokenUsage).toEqual({ inputTokens: 10, outputTokens: 2 });
+  });
+
+  it('服务端快照缺 usedModel 时保留本地气泡模型与 token', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({
+      role: 'agent',
+      id: 'a1',
+      content: 'ok',
+      usedModel: 'DeepSeek-V3.2',
+      turnTokenUsage: { inputTokens: 10, outputTokens: 2 },
+    });
+    const updated = session.applyServerChatSnapshot(
+      session.separateToolTraces([{
+        role: 'agent',
+        id: 'a1',
+        content: 'ok',
+        completedAt: 1,
+      }]),
+      { authoritative: true },
+      false,
+      false,
+    );
+    expect(updated).toBe(true);
+    const msgs = session.getMessages() as Array<Record<string, unknown>>;
+    expect(msgs[0].usedModel).toBe('DeepSeek-V3.2');
+    expect(msgs[0].turnTokenUsage).toEqual({ inputTokens: 10, outputTokens: 2 });
+  });
+
+  it('后续快照补上 usedModel 时会刷新本地气泡', () => {
+    const session = loadChatSession();
+    session.initSession();
+    expect(session.applyServerChatSnapshot(
+      session.separateToolTraces([{
+        role: 'agent',
+        id: 'a1',
+        content: 'ok',
+        completedAt: 1,
+      }]),
+      { authoritative: true },
+      false,
+      false,
+    )).toBe(true);
+
+    const updated = session.applyServerChatSnapshot(
+      session.separateToolTraces([{
+        role: 'agent',
+        id: 'a1',
+        content: 'ok',
+        completedAt: 1,
+        usedModel: 'gpt-4o',
+        turnTokenUsage: { inputTokens: 3, outputTokens: 1 },
+      }]),
+      { authoritative: true },
+      false,
+      false,
+    );
+    expect(updated).toBe(true);
+    const msgs = session.getMessages() as Array<Record<string, unknown>>;
+    expect(msgs[0].usedModel).toBe('gpt-4o');
+    expect(msgs[0].turnTokenUsage).toEqual({ inputTokens: 3, outputTokens: 1 });
   });
 });

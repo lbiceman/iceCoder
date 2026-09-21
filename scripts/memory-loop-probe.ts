@@ -125,7 +125,6 @@ async function loadRealLlm(): Promise<LLMAdapterInterface | null> {
   const candidates = [
     process.env.ICE_CONFIG_PATH,
     'E:/my/iceCoderCache/config.json',
-    path.resolve('data/config.json'),
   ].filter((p): p is string => !!p);
   for (const configPath of candidates) {
     try {

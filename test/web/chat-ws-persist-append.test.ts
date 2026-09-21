@@ -68,6 +68,26 @@ describe('chat-ws-persist appendMessages', () => {
     expect(raw[0].shellCommand).toBe('ls');
   });
 
+  it('agent 气泡写入 usedModel，同 id 合并时保留旧模型', async () => {
+    await appendMessages([{
+      role: 'agent',
+      id: 'a1',
+      content: 'first',
+      usedModel: 'DeepSeek-V3.2',
+      turnTokenUsage: { inputTokens: 10, outputTokens: 2 },
+    }], SID);
+    await appendMessages([{
+      role: 'agent',
+      id: 'a1',
+      content: 'second',
+    }], SID);
+    const raw = JSON.parse(await fs.readFile(getSessionFile(SID), 'utf-8')) as Array<Record<string, unknown>>;
+    expect(raw).toHaveLength(1);
+    expect(raw[0].content).toBe('second');
+    expect(raw[0].usedModel).toBe('DeepSeek-V3.2');
+    expect(raw[0].turnTokenUsage).toEqual({ inputTokens: 10, outputTokens: 2 });
+  });
+
   it('saveStructuredMessages 写入 structuredCache，不改非活跃 session 的 legacy 缓存', () => {
     vi.useFakeTimers();
     try {
