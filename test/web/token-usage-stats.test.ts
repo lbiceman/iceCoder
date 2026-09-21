@@ -4,10 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   aggregateTurnTokenByModel,
+  aggregateTurnTokenSeries,
   aggregateTurnTokenWindows,
   collectSessionTurnTokenRecords,
   extractTurnTokenRecords,
   summarizeSessionTokenUsage,
+  TOKEN_USAGE_SERIES_DAYS,
+  TOKEN_USAGE_SERIES_HOURS,
 } from '../../src/web/token-usage-stats.js';
 
 const DAY_MS = 86_400_000;
@@ -66,6 +69,7 @@ describe('aggregateTurnTokenWindows', () => {
     expect(windows.day).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11 });
     expect(windows.week).toEqual({ inputTokens: 110, outputTokens: 6, totalTokens: 116 });
     expect(windows.month).toEqual({ inputTokens: 1110, outputTokens: 56, totalTokens: 1166 });
+    expect(windows.all).toEqual({ inputTokens: 11109, outputTokens: 65, totalTokens: 11174 });
   });
 });
 
@@ -109,6 +113,35 @@ describe('collectSessionTurnTokenRecords', () => {
 
     const summary = await summarizeSessionTokenUsage(dir, now);
     expect(summary.day.totalTokens).toBe(23);
+    expect(summary.all.totalTokens).toBe(23);
     expect(summary.byModel['MiniMax-M2.7']?.day.totalTokens).toBe(23);
+    expect(summary.series.hourly).toHaveLength(TOKEN_USAGE_SERIES_HOURS);
+    expect(summary.series.daily).toHaveLength(TOKEN_USAGE_SERIES_DAYS);
+  });
+});
+
+describe('aggregateTurnTokenSeries', () => {
+  it('fills local hourly and daily buckets', () => {
+    const now = new Date();
+    now.setMinutes(30, 0, 0);
+    const t = now.getTime();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const twoDaysAgoNoon = new Date(todayStart);
+    twoDaysAgoNoon.setDate(twoDaysAgoNoon.getDate() - 2);
+    twoDaysAgoNoon.setHours(12, 0, 0, 0);
+
+    const series = aggregateTurnTokenSeries([
+      { timestamp: t, inputTokens: 10, outputTokens: 2, usedModel: 'gpt-4o' },
+      { timestamp: twoDaysAgoNoon.getTime(), inputTokens: 5, outputTokens: 1, usedModel: 'DeepSeek-V3.2' },
+    ], t);
+
+    expect(series.hourly).toHaveLength(24);
+    expect(series.daily).toHaveLength(30);
+    expect(series.hourly[23].inputTokens).toBe(10);
+    expect(series.hourly[23].byModel['gpt-4o']?.totalTokens).toBe(12);
+    expect(series.daily[29].inputTokens).toBe(10);
+    expect(series.daily[27].inputTokens).toBe(5);
+    expect(series.daily[27].byModel['DeepSeek-V3.2']?.totalTokens).toBe(6);
   });
 });

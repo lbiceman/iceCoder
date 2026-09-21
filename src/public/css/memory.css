@@ -12,7 +12,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 20px;
+  padding: 20px 24px 16px;
   flex-shrink: 0;
 }
 
@@ -26,7 +26,6 @@
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
-  padding-top: 2px;
 }
 
 .memory-count {
@@ -131,6 +130,7 @@
 }
 
 .memory-title {
+  margin: 0 0 6px;
   font-size: 20px;
   font-weight: 700;
   color: var(--text-primary);
@@ -176,7 +176,7 @@
 .memory-sidebar-hint {
   font-size: 11px;
   color: var(--text-muted);
-  margin-top: 12px;
+  margin: 0;
   line-height: 1.45;
 }
 

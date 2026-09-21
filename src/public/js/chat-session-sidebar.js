@@ -78,6 +78,10 @@ window.ChatSessionSidebar = (function () {
           '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('skills') + '</span>' +
           '<span class="chat-sidebar-nav-btn-label">技能</span>' +
         '</button>' +
+        '<button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false">' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('stats') + '</span>' +
+          '<span class="chat-sidebar-nav-btn-label">统计</span>' +
+        '</button>' +
       '</nav>' +
       '<div class="chat-sidebar-header">' +
         '<div class="chat-sidebar-header-top">' +
@@ -117,7 +121,9 @@ window.ChatSessionSidebar = (function () {
 
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'settings' || h === 'config') return h === 'config' ? 'settings' : h;
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'stats' || h === 'settings' || h === 'config') {
+      return h === 'config' ? 'settings' : h;
+    }
     return 'chat';
   }
 

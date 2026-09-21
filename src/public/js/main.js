@@ -58,4 +58,5 @@ import './chat-ws-bg-task-handlers.js';
 import './chat-page.js';
 import './memory-page.js';
 import './skills-page.js';
+import './stats-page.js';
 import './app.js';

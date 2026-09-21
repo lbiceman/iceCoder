@@ -4,7 +4,7 @@
  * 包含主题切换（桌面默认暗色，移动端默认浅色；桌面侧栏入口在设置页）
  */
 
-/* global ConfigPage, SettingsPage, ChatPage, MemoryPage, SkillsPage */
+/* global ConfigPage, SettingsPage, ChatPage, MemoryPage, SkillsPage, StatsPage */
 
 (function () {
   'use strict';
@@ -22,6 +22,7 @@
     settings: { shell: 'desktop', root: null, mounted: false },
     memory: { shell: 'desktop', root: null, mounted: false },
     skills: { shell: 'desktop', root: null, mounted: false },
+    stats: { shell: 'desktop', root: null, mounted: false },
     work: { shell: 'mobile', root: null, mounted: false },
     workChat: { shell: 'mobile', root: null, mounted: false },
     mMemory: { shell: 'mobile', root: null, mounted: false },
@@ -342,6 +343,7 @@
     if (h.startsWith('#/settings')) return { shell: 'desktop', page: 'settings' };
     if (h.startsWith('#/memory')) return { shell: 'desktop', page: 'memory' };
     if (h.startsWith('#/skills')) return { shell: 'desktop', page: 'skills' };
+    if (h.startsWith('#/stats')) return { shell: 'desktop', page: 'stats' };
     return { shell: 'desktop', page: 'chat' };
   }
 
@@ -401,6 +403,7 @@
     if (page === 'settings') newHash = '#/settings';
     else if (page === 'memory') newHash = '#/memory';
     else if (page === 'skills') newHash = '#/skills';
+    else if (page === 'stats') newHash = '#/stats';
 
     if (window.location.hash !== newHash) {
       history.replaceState(null, '', newHash);
@@ -427,6 +430,15 @@
     ) {
       window.SkillsPage.destroy();
       pages.skills.mounted = false;
+    }
+    if (
+      prev === 'stats' &&
+      page !== 'stats' &&
+      window.StatsPage &&
+      typeof window.StatsPage.destroy === 'function'
+    ) {
+      window.StatsPage.destroy();
+      pages.stats.mounted = false;
     }
 
     // 聊天页/设置页保持 keep-alive：不调用 destroy，子树仅切 display
@@ -550,6 +562,8 @@
         window.MemoryPage.render(root);
       } else if (page === 'skills' && window.SkillsPage) {
         window.SkillsPage.render(root);
+      } else if (page === 'stats' && window.StatsPage) {
+        window.StatsPage.render(root);
       } else if (page === 'work' && window.MobileWorkPage) {
         window.MobileWorkPage.render(root);
       } else if (page === 'workChat' && window.MobileChatPage) {
@@ -574,6 +588,8 @@
       window.MemoryPage.render(root);
     } else if (page === 'skills' && window.SkillsPage) {
       window.SkillsPage.render(root);
+    } else if (page === 'stats' && window.StatsPage) {
+      window.StatsPage.render(root);
     } else if (page === 'chat' && window.ChatPage && typeof window.ChatPage.onActivate === 'function') {
       window.ChatPage.onActivate();
     } else if (page === 'work' && window.MobileWorkPage && typeof window.MobileWorkPage.onActivate === 'function') {

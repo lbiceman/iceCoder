@@ -1,5 +1,6 @@
 /**
  * GET /api/token-usage — 汇总各会话气泡上的 turnTokenUsage / usedModel。
+ * 既有 day/week/month/byModel 供 ~tokens 弹框；series 供统计页图表。
  */
 
 import { Router, type Request, type Response } from 'express';
