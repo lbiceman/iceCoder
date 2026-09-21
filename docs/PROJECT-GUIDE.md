@@ -639,27 +639,11 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 ![Work chat — checkpoints and selected-chapter flow](./assets/desktop-work-chat.png)
 
-![Workbench — session tool names](./assets/desktop-workbench-tools.png)
-
-![Workbench — changed files](./assets/desktop-work-snapshot.png)
-
-![Empty-session welcome (dark)](./assets/desktop-welcome.png)
-
-![Empty-session welcome (light)](./assets/desktop-welcome-light.png)
-
 ![Work chat (light)](./assets/desktop-work-chat-light.png)
-
-![Memory graph](./assets/desktop-memory-graph.png)
-
-![Skills library](./assets/desktop-skills.png)
 
 ![Stats — token, memory, and supervisor trends (dark)](./assets/desktop-stats.png)
 
 ![Stats (light theme)](./assets/desktop-stats-light.png)
-
-![MCP settings](./assets/desktop-config-mcp.png)
-
-![Remote QR (~scan)](./assets/desktop-remote-scan.png)
 
 **Mobile H5**
 

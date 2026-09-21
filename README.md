@@ -12,47 +12,13 @@
 
 ![Desktop — work chat: checkpoint directory and selected-chapter flow](./docs/assets/desktop-work-chat.png)
 
-**iceCoder Workbench · footer docks** — **Tools** opens this session’s tool names and counts; **Files** opens this session’s changed files (created / modified / deleted / moved + filename):
-
-![Desktop — workbench: session tool names](./docs/assets/desktop-workbench-tools.png)
-
-![Desktop — workbench: changed files](./docs/assets/desktop-work-snapshot.png)
-
-**Empty-session welcome** — “IceCoder ready”: mode / Memory / Harness / Gate, quick start, current context, Ice Bean on the right. The workbench stays closed until there is a turn:
-
-![Desktop — empty-session welcome (dark)](./docs/assets/desktop-welcome.png)
-
-![Desktop — empty-session welcome (light)](./docs/assets/desktop-welcome-light.png)
-
-**Memory map** — tag filters + force-directed graph; click nodes for details:
-
-![Desktop — memory graph: tag filters and node relationships](./docs/assets/desktop-memory-graph.png)
-
-**Skills** — list + Markdown preview; type `#` in chat to attach:
-
-![Desktop — skills library: list, preview, and “Use skill”](./docs/assets/desktop-skills.png)
+![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 
 **Stats** — token usage trend (summed from session bubbles), memory read/write, and supervisor enter/exit; day / week / month ranges:
 
 ![Desktop — stats: token, memory, and supervisor trends (dark)](./docs/assets/desktop-stats.png)
 
 ![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
-
-**Settings · General** — skip permission prompts, shell command blacklist, execution overlay toggle/default expand/panel width, and other security options:
-
-![Desktop — general settings: security and execution overlay](./docs/assets/desktop-config-general.png)
-
-**Settings · Model** — providers, API keys, comma-separated multi-model list, temperature, context limit:
-
-![Desktop — model settings: provider list and configuration form](./docs/assets/desktop-config-model.png)
-
-**Settings · MCP** — manage MCP servers, start/stop, tool list, JSON config:
-
-![Desktop — MCP settings: server list and unity-mcp detail](./docs/assets/desktop-config-mcp.png)
-
-**Work / chat (light theme)** — same workbench layout (checkpoints + flow) in light appearance:
-
-![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 
 ### Mobile H5
 
