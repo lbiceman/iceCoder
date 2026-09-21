@@ -554,24 +554,26 @@ window.StatsPage = (function () {
     var colors = chartColors();
     var series = [
       {
-        key: 'input',
-        label: '输入',
-        color: colors[0],
-        values: buckets.map(function (b) { return Number(b.inputTokens) || 0; }),
-      },
-      {
         key: 'output',
         label: '输出',
-        color: colors[1],
+        color: colors[0],
+        mode: 'area',
         values: buckets.map(function (b) { return Number(b.outputTokens) || 0; }),
       },
+      {
+        key: 'input',
+        label: '输入',
+        color: colors[1],
+        mode: 'line',
+        values: buckets.map(function (b) { return Number(b.inputTokens) || 0; }),
+      },
     ];
-    if (legendEl) legendEl.innerHTML = renderLegend(series);
+    if (legendEl) legendEl.innerHTML = renderLegend([series[1], series[0]]);
     ioChart = bindAreaChart(mount, {
       id: 'io',
       labels: buckets.map(function (b) { return b.key; }),
       series: series,
-      stacked: true,
+      stacked: false,
       formatX: range.key === 'day' ? formatHourTick : formatDayTick,
       formatTipTitle: range.key === 'day' ? formatHourTip : formatDayTip,
     });
@@ -706,16 +708,21 @@ window.StatsPage = (function () {
     var areas = '';
     for (s = 0; s < series.length; s++) {
       var gid = uid + '-g' + s;
-      defs +=
-        '<linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
-          '<stop offset="5%" stop-color="' + series[s].color + '" stop-opacity="0.8"/>' +
-          '<stop offset="95%" stop-color="' + series[s].color + '" stop-opacity="0.08"/>' +
-        '</linearGradient>';
+      var mode = series[s].mode || 'area';
       var topYs = tops[s].map(yOf);
       var botYs = bottoms[s].map(yOf);
+      if (mode !== 'line') {
+        defs +=
+          '<linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="5%" stop-color="' + series[s].color + '" stop-opacity="0.8"/>' +
+            '<stop offset="95%" stop-color="' + series[s].color + '" stop-opacity="0.08"/>' +
+          '</linearGradient>';
+        areas +=
+          '<path class="stats-area-fill" d="' + areaPath(xs, topYs, botYs) + '" fill="url(#' + gid + ')"/>';
+      }
       areas +=
-        '<path class="stats-area-fill" d="' + areaPath(xs, topYs, botYs) + '" fill="url(#' + gid + ')"/>' +
-        '<path class="stats-area-stroke" d="' + linePath(xs, topYs) + '" stroke="' + series[s].color + '"/>';
+        '<path class="stats-area-stroke' + (mode === 'line' ? ' is-line' : '') +
+          '" d="' + linePath(xs, topYs) + '" stroke="' + series[s].color + '"/>';
     }
 
     var grid = '';

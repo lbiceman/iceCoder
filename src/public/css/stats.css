@@ -210,6 +210,10 @@
   stroke-linejoin: round;
 }
 
+.stats-area-stroke.is-line {
+  stroke-width: 2;
+}
+
 .stats-axis-label {
   fill: var(--text-muted);
   font-size: 11px;
