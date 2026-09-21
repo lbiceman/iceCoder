@@ -43,7 +43,9 @@
 .page-root > .config-center,
 .page-root > .settings-center,
 .page-root > .config-page,
-.page-root > .memory-root {
+.page-root > .memory-root,
+.page-root > .skills-root,
+.page-root > .stats-root {
   flex: 1;
   min-height: 0;
 }

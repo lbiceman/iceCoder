@@ -78,6 +78,10 @@ window.ChatSessionSidebar = (function () {
           '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('skills') + '</span>' +
           '<span class="chat-sidebar-nav-btn-label">技能</span>' +
         '</button>' +
+        '<button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false">' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('stats') + '</span>' +
+          '<span class="chat-sidebar-nav-btn-label">统计</span>' +
+        '</button>' +
       '</nav>' +
       '<div class="chat-sidebar-header">' +
         '<div class="chat-sidebar-header-top">' +
@@ -117,8 +121,22 @@ window.ChatSessionSidebar = (function () {
 
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'settings' || h === 'config') return h === 'config' ? 'settings' : h;
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'stats' || h === 'settings' || h === 'config') {
+      return h === 'config' ? 'settings' : h;
+    }
     return 'chat';
+  }
+
+  /** 记忆 / 技能 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
+  function isAuxiliaryNavPage() {
+    var route = getRouteFromHash();
+    return route === 'memory' || route === 'skills' || route === 'stats' || route === 'settings';
+  }
+
+  function navigateToChatPage() {
+    if (window.location.hash !== '#/chat') {
+      window.location.hash = '#/chat';
+    }
   }
 
   function syncSidebarSettingsActive() {
@@ -170,7 +188,10 @@ window.ChatSessionSidebar = (function () {
       })(navBtns[i]);
     }
     syncSidebarNavActive();
-    window.addEventListener('hashchange', syncSidebarNavActive);
+    window.addEventListener('hashchange', function () {
+      syncSidebarNavActive();
+      renderList();
+    });
 
     bindShellControls();
     bindShellCollabWs();
@@ -322,10 +343,11 @@ window.ChatSessionSidebar = (function () {
 
     var sessions = Store.getSessions();
     var activeId = Store.getActiveSessionId();
+    var highlightActive = !isAuxiliaryNavPage();
 
     for (var i = 0; i < sessions.length; i++) {
       var s = sessions[i];
-      var isActive = s.id === activeId;
+      var isActive = highlightActive && s.id === activeId;
       var item = document.createElement('div');
       item.className = 'chat-sidebar-item' + (isActive ? ' active' : '');
       item.setAttribute('data-id', s.id);
@@ -459,7 +481,11 @@ window.ChatSessionSidebar = (function () {
   }
 
   function selectSession(sessionId) {
-    if (sessionId === Store.getActiveSessionId()) return;
+    var leaveAuxiliary = isAuxiliaryNavPage();
+    if (sessionId === Store.getActiveSessionId()) {
+      if (leaveAuxiliary) navigateToChatPage();
+      return;
+    }
     Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload, _degraded, bgTasks, runtime) {
       if (!ok) return;
       applyWorkspaceForSession(sessionId, workspacePayload);
@@ -467,6 +493,7 @@ window.ChatSessionSidebar = (function () {
       if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
         window.ChatPage.onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
       }
+      if (leaveAuxiliary) navigateToChatPage();
     });
   }
 

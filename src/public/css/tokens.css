@@ -128,6 +128,12 @@
   --surface-raised: #1e1e21;
   --surface-overlay: rgba(10, 10, 11, 0.95);
   --chat-bg: var(--surface-page);
+
+  --chart-1: oklch(0.64 0.15 255);
+  --chart-2: oklch(0.72 0.12 163);
+  --chart-3: oklch(0.78 0.10 78);
+  --chart-4: var(--chart-1);
+  --chart-5: var(--chart-2);
 }
 
 /* ── Light Theme: shadcn/zinc 白底 + 边框分层，主色为近黑 ── */
@@ -225,6 +231,12 @@
   --surface-raised: #ffffff;
   --surface-overlay: rgba(255, 255, 255, 0.95);
   --chat-bg: var(--surface-page);
+
+  --chart-1: oklch(0.52 0.16 255);
+  --chart-2: oklch(0.50 0.12 163);
+  --chart-3: oklch(0.62 0.13 78);
+  --chart-4: var(--chart-1);
+  --chart-5: var(--chart-2);
 }
 
 /* ===== Global ===== */
@@ -244,7 +256,9 @@ html, body {
 .chat-page,
 .config-center,
 .config-page,
-.memory-root {
+.memory-root,
+.skills-root,
+.stats-root {
   background: var(--surface-page);
 }
 

@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  aggregateExecutionModeSeries,
+  aggregateExecutionModeStats,
   extractExecutionModeEvents,
   readJsonlFile,
 } from '../../../src/web/routes/supervisor-events.js';
@@ -32,5 +34,98 @@ describe('execution-mode telemetry API helpers', () => {
     ]);
     expect(events).toHaveLength(1);
     expect(events[0]?.payload.executionMode).toBe('forced');
+  });
+
+  it('aggregates enter/exit counts and primary signals', () => {
+    const stats = aggregateExecutionModeStats([
+      {
+        type: 'execution_mode_enter',
+        timestamp: 't1',
+        payload: {
+          executionMode: 'forced',
+          enteredBy: ['tool_failure', 'multi_write'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: '工具失败',
+          round: 2,
+        },
+      },
+      {
+        type: 'execution_mode_enter',
+        timestamp: 't2',
+        payload: {
+          executionMode: 'forced',
+          enteredBy: ['multi_write'],
+          enteredByPrimary: 'multi_write',
+          primaryReasonHuman: '多文件写入',
+          round: 4,
+        },
+      },
+      {
+        type: 'execution_mode_exit',
+        timestamp: 't3',
+        payload: {
+          executionMode: 'free',
+          enteredBy: ['tool_failure'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: 'free',
+          round: 6,
+        },
+      },
+    ]);
+    expect(stats.enter).toBe(2);
+    expect(stats.exit).toBe(1);
+    expect(stats.byMode).toEqual({ forced: 2 });
+    expect(stats.bySignal).toEqual({ tool_failure: 1, multi_write: 1 });
+    expect(stats.recent).toHaveLength(3);
+  });
+
+  it('buckets enter/exit into a rolling window', () => {
+    const now = Date.parse('2026-09-21T15:30:00+08:00');
+    const series = aggregateExecutionModeSeries([
+      {
+        type: 'execution_mode_enter',
+        timestamp: new Date(now - 2 * 86_400_000).toISOString(),
+        payload: {
+          executionMode: 'forced',
+          enteredBy: ['tool_failure'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: '工具失败',
+          round: 2,
+        },
+      },
+      {
+        type: 'execution_mode_exit',
+        timestamp: new Date(now).toISOString(),
+        payload: {
+          executionMode: 'free',
+          enteredBy: [],
+          primaryReasonHuman: 'free',
+          round: 6,
+        },
+      },
+    ], 7, now);
+    expect(series).toHaveLength(7);
+    expect(series.reduce((sum, row) => sum + row.enter, 0)).toBe(1);
+    expect(series.reduce((sum, row) => sum + row.exit, 0)).toBe(1);
+    expect(series[series.length - 1]?.exit).toBe(1);
+  });
+
+  it('keeps rolling 24h enters that sit before the first hour tick', () => {
+    const now = Date.parse('2026-09-21T15:30:00+08:00');
+    const series = aggregateExecutionModeSeries([
+      {
+        type: 'execution_mode_enter',
+        timestamp: new Date(now - 23.5 * 3_600_000).toISOString(),
+        payload: {
+          executionMode: 'forced',
+          enteredBy: ['tool_failure'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: '工具失败',
+          round: 2,
+        },
+      },
+    ], 1, now);
+    expect(series).toHaveLength(24);
+    expect(series[0]?.enter).toBe(1);
   });
 });

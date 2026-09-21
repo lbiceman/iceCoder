@@ -194,6 +194,10 @@
   overflow: hidden;
 }
 
+.modal-panel-card + .modal-panel-card {
+  margin-top: 12px;
+}
+
 .modal-panel-row {
   display: flex;
   align-items: center;

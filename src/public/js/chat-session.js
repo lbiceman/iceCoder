@@ -173,6 +173,8 @@ window.ChatSession = (function () {
         outputTokens: m.turnTokenUsage.outputTokens || 0,
       };
     }
+    var usedModel = typeof m.usedModel === 'string' ? m.usedModel.trim() : '';
+    if (usedModel) o.usedModel = usedModel;
     return o;
   }
 
@@ -203,6 +205,8 @@ window.ChatSession = (function () {
         outputTokens: raw.turnTokenUsage.outputTokens || 0,
       };
     }
+    var usedModel = typeof raw.usedModel === 'string' ? raw.usedModel.trim() : '';
+    if (usedModel) o.usedModel = usedModel;
     return o;
   }
 
@@ -581,7 +585,18 @@ window.ChatSession = (function () {
 
   function sessionPayloadSig(separated) {
     var ids = separated.msgs.map(function (m) { return m.id || ''; }).join(',');
-    return separated.msgs.length + '|' + ids + '|' + snapshotTraceTotals(separated.traces);
+    var usage = [];
+    var i;
+    for (i = 0; i < separated.msgs.length; i++) {
+      var m = separated.msgs[i];
+      if (!m || (m.role !== 'agent' && m.role !== 'assistant')) continue;
+      var tok = m.turnTokenUsage && typeof m.turnTokenUsage === 'object' ? m.turnTokenUsage : {};
+      var input = typeof tok.inputTokens === 'number' ? tok.inputTokens : 0;
+      var output = typeof tok.outputTokens === 'number' ? tok.outputTokens : 0;
+      var model = typeof m.usedModel === 'string' ? m.usedModel : '';
+      usage.push((m.id || '') + ':' + input + ':' + output + ':' + model);
+    }
+    return separated.msgs.length + '|' + ids + '|' + snapshotTraceTotals(separated.traces) + '|' + usage.join(';');
   }
 
   function hasUserMessageId(id) {
@@ -785,6 +800,48 @@ window.ChatSession = (function () {
     }
   }
 
+  function copyLocalAgentUsage(from, to) {
+    if (!from || !to) return false;
+    var patched = false;
+    if (!to.usedModel && typeof from.usedModel === 'string' && from.usedModel.trim()) {
+      to.usedModel = from.usedModel.trim();
+      patched = true;
+    }
+    if (!to.turnTokenUsage && from.turnTokenUsage && typeof from.turnTokenUsage === 'object') {
+      to.turnTokenUsage = {
+        inputTokens: from.turnTokenUsage.inputTokens || 0,
+        outputTokens: from.turnTokenUsage.outputTokens || 0,
+      };
+      patched = true;
+    }
+    return patched;
+  }
+
+  /** 服务端快照缺 usedModel / turnTokenUsage 时，保留本地已展示的气泡用量。 */
+  function mergeLocalAgentUsageFields(serverMsgs, localMsgs) {
+    if (!localMsgs || !localMsgs.length || !serverMsgs || !serverMsgs.length) return;
+    var localById = {};
+    var lastLocalAgent = null;
+    var lastServerAgentIdx = -1;
+    var i;
+    for (i = 0; i < localMsgs.length; i++) {
+      var lm = localMsgs[i];
+      if (!lm || (lm.role !== 'agent' && lm.role !== 'assistant')) continue;
+      if (lm.id) localById[lm.id] = lm;
+      lastLocalAgent = lm;
+    }
+    for (i = 0; i < serverMsgs.length; i++) {
+      var sm = serverMsgs[i];
+      if (!sm || (sm.role !== 'agent' && sm.role !== 'assistant')) continue;
+      lastServerAgentIdx = i;
+      if (sm.id && localById[sm.id]) copyLocalAgentUsage(localById[sm.id], sm);
+    }
+    if (lastServerAgentIdx < 0 || !lastLocalAgent) return;
+    var lastServer = serverMsgs[lastServerAgentIdx];
+    if (lastLocalAgent.id && lastServer.id && lastLocalAgent.id !== lastServer.id) return;
+    copyLocalAgentUsage(lastLocalAgent, lastServer);
+  }
+
   function applyServerChatSnapshot(separated, options, isStreaming, wsProcessing) {
     var opts = options || {};
     if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
@@ -797,6 +854,7 @@ window.ChatSession = (function () {
     }
 
     mergeLocalUserDisplayFields(separated.msgs, messages);
+    mergeLocalAgentUsageFields(separated.msgs, messages);
     messages = separated.msgs;
     toolTraces = separated.traces;
     reindexMessages();

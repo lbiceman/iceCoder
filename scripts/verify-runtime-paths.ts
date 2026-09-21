@@ -24,14 +24,16 @@ async function verify(label: string, nodeEnv: string | undefined): Promise<boole
   const dataDir = mod.getRuntimeDataDir();
   const paths = await mod.resolveDataPaths();
 
+  const { readPersistedDataDirectory } = await import('../src/runtime/shell-identity.js');
+  const productionRoot = readPersistedDataDirectory() ?? path.join(os.homedir(), '.iceCoder');
   const expectedRoot =
     nodeEnv === 'production'
-      ? path.join(os.homedir(), '.iceCoder')
-      : path.resolve('data');
+      ? productionRoot
+      : path.resolve(mod.DEFAULT_LOCAL_CACHE_DIR);
 
   const expectedMcp =
     nodeEnv === 'production'
-      ? path.join(os.homedir(), '.iceCoder', 'mcp.json')
+      ? path.join(productionRoot, 'mcp.json')
       : path.resolve('.iceCoder/mcp.json');
 
   const ok =
@@ -52,7 +54,8 @@ async function verify(label: string, nodeEnv: string | undefined): Promise<boole
 }
 
 async function verifyDevConfigReadable(): Promise<boolean> {
-  const configPath = path.resolve('data/config.json');
+  const { DEFAULT_LOCAL_CACHE_DIR } = await import('../src/cli/paths.js');
+  const configPath = path.join(path.resolve(DEFAULT_LOCAL_CACHE_DIR), 'config.json');
   try {
     await fs.access(configPath);
     const raw = await fs.readFile(configPath, 'utf-8');

@@ -450,7 +450,27 @@ window.ChatCommands = (function () {
           '<span class="modal-panel-row-value">' + formatTokenCount(total) + '</span>' +
         '</div>';
     }
-    return html + '</div>';
+    html += '</div>';
+    var byModel = windows && windows.byModel ? windows.byModel : null;
+    var modelNames = byModel ? Object.keys(byModel).sort() : [];
+    if (modelNames.length > 0) {
+      html += '<div class="modal-panel-card">';
+      for (var j = 0; j < modelNames.length; j++) {
+        var name = modelNames[j];
+        var modelUsage = byModel[name] && byModel[name].month ? byModel[name].month : {};
+        var modelTotal = typeof modelUsage.totalTokens === 'number' ? modelUsage.totalTokens : 0;
+        html +=
+          '<div class="modal-panel-row">' +
+            '<div class="modal-panel-row-meta">' +
+              '<span class="modal-panel-row-label">' + escapeTokenStatsText(name) + '</span>' +
+              '<span class="modal-panel-row-hint">最近一个月</span>' +
+            '</div>' +
+            '<span class="modal-panel-row-value">' + formatTokenCount(modelTotal) + '</span>' +
+          '</div>';
+      }
+      html += '</div>';
+    }
+    return html;
   }
 
   function tokenStatsLoadingHtml() {
@@ -476,7 +496,15 @@ window.ChatCommands = (function () {
         ? msg.completedAt
         : (typeof msg.sentAt === 'number' && isFinite(msg.sentAt) && msg.sentAt > 0 ? msg.sentAt : 0);
       if (ts <= 0) continue;
-      records.push({ timestamp: ts, inputTokens: input, outputTokens: output });
+      var usedModel = typeof msg.usedModel === 'string' && msg.usedModel.trim()
+        ? msg.usedModel.trim()
+        : '';
+      records.push({
+        timestamp: ts,
+        inputTokens: input,
+        outputTokens: output,
+        usedModel: usedModel,
+      });
     }
     return records;
   }
@@ -485,17 +513,29 @@ window.ChatCommands = (function () {
     var now = Date.now();
     var dayMs = 86400000;
     var empty = function () { return { inputTokens: 0, outputTokens: 0, totalTokens: 0 }; };
-    var windows = { day: empty(), week: empty(), month: empty() };
+    var windows = { day: empty(), week: empty(), month: empty(), byModel: {} };
     function add(target, rec) {
       target.inputTokens += rec.inputTokens;
       target.outputTokens += rec.outputTokens;
       target.totalTokens += rec.inputTokens + rec.outputTokens;
+    }
+    function ensureModel(name) {
+      if (!windows.byModel[name]) {
+        windows.byModel[name] = { day: empty(), week: empty(), month: empty() };
+      }
+      return windows.byModel[name];
     }
     for (var i = 0; i < records.length; i++) {
       var rec = records[i];
       if (rec.timestamp >= now - 30 * dayMs) add(windows.month, rec);
       if (rec.timestamp >= now - 7 * dayMs) add(windows.week, rec);
       if (rec.timestamp >= now - dayMs) add(windows.day, rec);
+      if (rec.usedModel) {
+        var modelWindows = ensureModel(rec.usedModel);
+        if (rec.timestamp >= now - 30 * dayMs) add(modelWindows.month, rec);
+        if (rec.timestamp >= now - 7 * dayMs) add(modelWindows.week, rec);
+        if (rec.timestamp >= now - dayMs) add(modelWindows.day, rec);
+      }
     }
     return windows;
   }
@@ -528,7 +568,7 @@ window.ChatCommands = (function () {
     if (!window.Modal || typeof window.Modal.panel !== 'function') return;
     var panel = window.Modal.panel({
       title: 'Token 消耗',
-      description: '按各会话气泡合计汇总',
+      description: '按各会话气泡合计与使用模型汇总',
       bodyHtml: tokenStatsLoadingHtml(),
     });
 

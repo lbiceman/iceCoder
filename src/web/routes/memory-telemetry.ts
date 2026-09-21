@@ -11,6 +11,7 @@ import { getMemoryTelemetry } from '../../memory/file-memory/memory-telemetry.js
 import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { memoryAgeDays } from '../../memory/file-memory/memory-age.js';
 import { getRuntimeMemoryAuxPath } from '../../cli/paths.js';
+import { makeTimeBuckets, timeBucketKey } from '../telemetry-series.js';
 
 const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
 const DEFAULT_TELEMETRY_LOG = getRuntimeMemoryAuxPath('telemetry.jsonl');
@@ -53,6 +54,45 @@ async function readTelemetryLog(logPath: string, days: number): Promise<Telemetr
 /**
  * 从 JSONL 日志条目中汇总统计。
  */
+export interface MemorySeriesBucket {
+  key: string;
+  timestamp: number;
+  recall: number;
+  extract: number;
+  dream: number;
+}
+
+export function aggregateMemorySeries(
+  entries: TelemetryLogEntry[],
+  days: number,
+  now = Date.now(),
+): MemorySeriesBucket[] {
+  const hourly = days <= 1;
+  const buckets = makeTimeBuckets(days, now).map((slot) => ({
+    key: slot.key,
+    timestamp: slot.timestamp,
+    recall: 0,
+    extract: 0,
+    dream: 0,
+  }));
+  const map = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  const windowStart = now - days * 86_400_000;
+  const first = buckets[0];
+  const last = buckets[buckets.length - 1];
+  for (const entry of entries) {
+    const ts = Date.parse(entry.timestamp);
+    if (!Number.isFinite(ts) || ts < windowStart) continue;
+    const bucket = map.get(timeBucketKey(ts, hourly))
+      || (first && ts < first.timestamp ? first : null)
+      || (last && ts > last.timestamp ? last : null);
+    if (!bucket) continue;
+    if (entry.type === 'memory_recall') bucket.recall += 1;
+    else if (entry.type === 'memory_extract' && !entry.skipReason) bucket.extract += 1;
+    else if (entry.type === 'memory_dream' && entry.executed) bucket.dream += 1;
+  }
+  return buckets;
+}
+
 function aggregateLogEntries(entries: TelemetryLogEntry[]) {
   let recallCount = 0;
   let recallLLMCount = 0;
@@ -282,6 +322,7 @@ export function createMemoryTelemetryRouter(): Router {
           log: logStats,
           store: storeStats,
           process: processSummary,
+          series: aggregateMemorySeries(logEntries, days),
         });
       } else {
         const report = formatReport(logStats, storeStats, processSummary, days);

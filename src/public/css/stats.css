@@ -1,0 +1,471 @@
+/* Token 用量统计页：上排 Token 卡，下排记忆 / 监管，不滚动 */
+.stats-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-page);
+  color: var(--text-primary);
+}
+
+.stats-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.stats-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.stats-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.stats-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.stats-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stats-card {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.stats-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  flex: 1.05 1 0;
+  min-height: 0;
+}
+
+.stats-split-aux {
+  flex: 1 1 0;
+}
+
+.stats-card-main {
+  flex: 1.05 1 0;
+}
+
+.stats-split > .stats-card {
+  height: 100%;
+}
+
+.stats-aux {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.stats-aux-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+.stats-split-aux .stats-aux-metrics,
+.stats-card-main .stats-aux-metrics {
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.stats-aux-metric {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.stats-split-aux .stats-aux-metric,
+.stats-card-main .stats-aux-metric {
+  padding: 5px 8px;
+}
+
+.stats-split-aux .stats-aux-metric-value,
+.stats-card-main .stats-aux-metric-value {
+  font-size: 15px;
+}
+
+.stats-split-aux .stats-chart,
+.stats-card-main .stats-chart {
+  flex: 1 1 auto;
+  min-height: 72px;
+}
+
+.stats-chart > .stats-muted {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+
+.stats-aux-metric-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.stats-aux-metric-value {
+  margin-top: 2px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stats-aux-metric-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-aux-list {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stats-aux-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stats-aux-row span:last-child {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stats-aux-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.stats-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.stats-card-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stats-card-value {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.stats-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.stats-range-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.stats-range-btn:hover {
+  color: var(--text-primary);
+}
+
+.stats-range-btn[aria-pressed="true"] {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.stats-chart {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.stats-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.stats-grid-line {
+  stroke: var(--border-color);
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+}
+
+.stats-area-fill {
+  stroke: none;
+}
+
+.stats-area-stroke {
+  fill: none;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stats-split-aux .stats-area-stroke,
+.stats-card-main .stats-area-stroke {
+  stroke-width: 2;
+}
+
+.stats-axis-label {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+
+.stats-hover[visibility="hidden"] {
+  display: none;
+}
+
+.stats-hover-line {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.stats-hover-dot {
+  stroke: var(--bg-card);
+  stroke-width: 2;
+}
+
+.stats-chart-empty {
+  position: absolute;
+  inset: 0 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.stats-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 6px 2px 0;
+  flex-shrink: 0;
+  max-height: 44px;
+  overflow: hidden;
+}
+
+.stats-legend:empty {
+  display: none;
+}
+
+.stats-split .stats-legend,
+.stats-card-main .stats-legend {
+  min-height: 22px;
+}
+
+.stats-split .stats-legend:empty,
+.stats-card-main .stats-legend:empty {
+  display: block;
+  visibility: hidden;
+}
+
+.stats-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stats-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.stats-muted,
+.stats-status {
+  margin: 0;
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.stats-aux .stats-muted {
+  padding: 8px 2px;
+  text-align: left;
+}
+
+.stats-status {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+
+.stats-retry {
+  margin-top: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.stats-retry:hover {
+  background: var(--bg-hover);
+}
+
+.stats-skel {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.stats-skel.is-label { width: 42%; }
+.stats-skel.is-value { width: 68%; height: 18px; margin-top: 2px; }
+.stats-skel.is-hint { width: 54%; }
+
+.stats-skel-chart {
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.stats-tooltip {
+  position: fixed;
+  z-index: 80;
+  min-width: 160px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+.stats-tooltip-title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.stats-tooltip-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.stats-tooltip-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-tooltip-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+@media (max-width: 640px) {
+  .stats-header,
+  .stats-main {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .stats-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+}

@@ -2171,43 +2171,56 @@ window.ChatUI = (function () {
     return { inputTokens: input, outputTokens: output };
   }
 
-  function createTokenUsageBar(usage) {
+  function normalizeUsedModel(usedModel) {
+    return typeof usedModel === 'string' ? usedModel.trim() : '';
+  }
+
+  function createTokenUsageBar(usage, usedModel) {
     var normalized = normalizeTurnTokenUsage(usage);
-    if (!normalized) return null;
-    var total = normalized.inputTokens + normalized.outputTokens;
+    var model = normalizeUsedModel(usedModel);
+    if (!normalized && !model) return null;
+    var total = normalized ? (normalized.inputTokens + normalized.outputTokens) : 0;
     var bar = document.createElement('div');
     bar.className = 'msg-token-usage';
-    bar.setAttribute('aria-label', 'Token 消耗');
+    bar.setAttribute('aria-label', model ? ('Token 消耗，模型 ' + model) : 'Token 消耗');
 
-    function addItem(label, value) {
+    function addItem(label, value, extraClass) {
       var item = document.createElement('span');
-      item.className = 'msg-token-usage__item';
+      item.className = extraClass ? 'msg-token-usage__item ' + extraClass : 'msg-token-usage__item';
       var lbl = document.createElement('span');
       lbl.className = 'msg-token-usage__label';
       lbl.textContent = label;
       var val = document.createElement('span');
       val.className = 'msg-token-usage__value';
-      val.textContent = formatTokenCount(value);
+      val.textContent = value;
       item.appendChild(lbl);
       item.appendChild(val);
       bar.appendChild(item);
+      return item;
     }
 
-    addItem('输入', normalized.inputTokens);
-    addItem('输出', normalized.outputTokens);
-    addItem('合计', total);
+    if (normalized) {
+      addItem('输入', formatTokenCount(normalized.inputTokens));
+      addItem('输出', formatTokenCount(normalized.outputTokens));
+      addItem('合计', formatTokenCount(total));
+    }
+    if (model) {
+      var modelItem = addItem('模型', model, 'msg-token-usage__item--model');
+      modelItem.title = model;
+    }
     return bar;
   }
 
-  function mountTokenUsageBar(messageEl, usage) {
+  function mountTokenUsageBar(messageEl, usage, usedModel) {
     if (!messageEl) return;
     var normalized = normalizeTurnTokenUsage(usage);
+    var model = normalizeUsedModel(usedModel);
     var existing = messageEl.querySelector('.msg-token-usage');
-    if (!normalized) {
+    if (!normalized && !model) {
       if (existing) existing.remove();
       return;
     }
-    var bar = createTokenUsageBar(normalized);
+    var bar = createTokenUsageBar(normalized, model);
     if (!bar) return;
     if (existing) {
       existing.replaceWith(bar);
@@ -2244,7 +2257,7 @@ window.ChatUI = (function () {
       var nodes = elTailRoot.querySelectorAll('.message.agent, .message.assistant');
       if (nodes.length) el = nodes[nodes.length - 1];
     }
-    if (el) mountTokenUsageBar(el, msg.turnTokenUsage);
+    if (el) mountTokenUsageBar(el, msg.turnTokenUsage, msg.usedModel);
   }
 
   function resolveSkillChipLabel(filename) {
@@ -2413,7 +2426,7 @@ window.ChatUI = (function () {
       el.appendChild(content);
     }
 
-    var tokenBar = createTokenUsageBar(displayMsg.turnTokenUsage);
+    var tokenBar = createTokenUsageBar(displayMsg.turnTokenUsage, displayMsg.usedModel);
     if (tokenBar) el.appendChild(tokenBar);
 
     return el;
@@ -2954,7 +2967,7 @@ window.ChatUI = (function () {
     } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
       appendMessageEl(lastMsg, stripStatusTagFn);
     }
-    if (lastMsg && lastMsg.role === 'agent' && lastMsg.turnTokenUsage) {
+    if (lastMsg && lastMsg.role === 'agent' && (lastMsg.turnTokenUsage || lastMsg.usedModel)) {
       updateMessageTokenUsage(lastMsg);
     }
     if (autoScrollEnabled) scheduleScrollIfSticky();

@@ -313,6 +313,7 @@ window.ChatWebSocket = (function () {
           totalInputTokens: data.totalInputTokens,
           totalOutputTokens: data.totalOutputTokens,
           messageId: data.messageId || '',
+          usedModel: typeof data.usedModel === 'string' ? data.usedModel : '',
           sessionId: sid,
         });
         break;

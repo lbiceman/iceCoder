@@ -108,11 +108,12 @@ window.ChatWsStreamHandlers = (function () {
           msg.id = pending.messageId;
         }
         msg.turnTokenUsage = pending.usage || pending;
+        if (pending.usedModel) msg.usedModel = pending.usedModel;
         ctx.setPendingTurnTokenUsage(null);
       }
       Session.flushToolBatchLocal();
       UI.appendMessageEl(msg, Session.stripStatusTag);
-      if (msg.turnTokenUsage && UI.updateMessageTokenUsage) {
+      if ((msg.turnTokenUsage || msg.usedModel) && UI.updateMessageTokenUsage) {
         UI.updateMessageTokenUsage(msg);
       }
       Session.saveMessages();

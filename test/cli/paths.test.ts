@@ -25,6 +25,7 @@ describe('usesUserDataRoot / data dir', () => {
     delete process.env.ICE_DATA_DIR;
     delete process.env.ICE_SESSIONS_DIR;
     delete process.env.ICE_CONFIG_PATH;
+    delete process.env.ICE_CACHE_ROOT;
   });
 
   it('全局安装入口 → ~/.iceCoder', () => {
@@ -38,14 +39,24 @@ describe('usesUserDataRoot / data dir', () => {
     expect(getRuntimeDataDir()).toBe(USER_DATA_DIR);
   });
 
-  it('源码 tsx 入口 → 项目 data/', () => {
+  it('源码 tsx 入口 → 本地 iceCoderCache', () => {
     delete process.env.NODE_ENV;
     delete process.env.ICE_DATA_DIR;
+    delete process.env.ICE_CACHE_ROOT;
     process.argv[1] = 'D:/work/self/iceCoder/src/cli/index.ts';
     expect(isPackagedCliEntry()).toBe(false);
     expect(usesUserDataRoot()).toBe(false);
     applyRuntimeDataEnvDefaults();
     expect(getRuntimeDataDir()).toBe(LOCAL_DATA_DIR);
+  });
+
+  it('ICE_CACHE_ROOT 覆盖源码开发数据根', () => {
+    delete process.env.NODE_ENV;
+    delete process.env.ICE_DATA_DIR;
+    process.env.ICE_CACHE_ROOT = 'D:/custom/ice-cache';
+    process.argv[1] = 'D:/work/self/iceCoder/src/cli/index.ts';
+    applyRuntimeDataEnvDefaults();
+    expect(getRuntimeDataDir()).toBe(path.resolve('D:/custom/ice-cache'));
   });
 
   it('NODE_ENV=production → ~/.iceCoder', () => {
@@ -65,10 +76,11 @@ describe('getMcpCacheDir', () => {
     process.argv[1] = argv1;
     delete process.env.ICE_DATA_DIR;
     delete process.env.ICE_MCP_CACHE_DIR;
+    delete process.env.ICE_CACHE_ROOT;
     delete process.env.NODE_ENV;
   });
 
-  it('开发环境 → data/mcpCache', () => {
+  it('开发环境 → iceCoderCache/mcpCache', () => {
     delete process.env.ICE_DATA_DIR;
     delete process.env.NODE_ENV;
     process.argv[1] = 'D:/work/self/iceCoder/src/cli/index.ts';
