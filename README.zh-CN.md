@@ -12,47 +12,13 @@
 
 ![桌面端 — 工作聊天页：检查点目录与选中章执行流](./docs/assets/desktop-work-chat.png)
 
-**iceCoder 工作台 · 底栏层** — 点「工具」弹出本会话用过的工具名与次数；点「文件」弹出本会话变更文件（新建 / 修改 / 删除 / 移动 + 文件名）：
-
-![桌面端 — 工作台：会话工具名单](./docs/assets/desktop-workbench-tools.png)
-
-![桌面端 — 工作台：变更文件名单](./docs/assets/desktop-work-snapshot.png)
-
-**空会话欢迎页** — 「IceCoder 已就绪」：模式 / Memory / Harness / 门控、快速上手、当前上下文；右侧冰豆。尚未发过话时工作台默认不占右侧：
-
-![桌面端 — 空会话欢迎页（深色）](./docs/assets/desktop-welcome.png)
-
-![桌面端 — 空会话欢迎页（浅色）](./docs/assets/desktop-welcome-light.png)
-
-**记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
-
-![桌面端 — 记忆图谱：标签筛选与节点关系可视化](./docs/assets/desktop-memory-graph.png)
-
-**技能库** — 列表 + Markdown 预览，输入 `#` 可快速挂载：
-
-![桌面端 — 技能库：列表、正文预览与「使用技能」](./docs/assets/desktop-skills.png)
+![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
 **统计** — Token 消耗趋势（按会话气泡合计）、记忆读写与监管进出；支持日 / 当周 / 当月：
 
 ![桌面端 — 统计：Token、记忆与监管趋势（深色）](./docs/assets/desktop-stats.png)
 
 ![桌面端 — 统计（浅色主题）](./docs/assets/desktop-stats-light.png)
-
-**设置 · 通用** — 跳过权限确认、Shell 命令黑名单、执行透明层开关/默认展开/面板宽度等安全与执行选项：
-
-![桌面端 — 通用设置：安全选项与执行透明层](./docs/assets/desktop-config-general.png)
-
-**设置 · 模型配置** — 模型提供者、API 密钥、多模型列表（逗号分隔）、温度与上下文上限：
-
-![桌面端 — 模型配置：提供者列表与配置表单](./docs/assets/desktop-config-model.png)
-
-**设置 · MCP** — 管理 MCP 服务器、启动/停止、查看工具列表与 JSON 配置：
-
-![桌面端 — 设置页 MCP 配置：服务器列表与 unity-mcp 详情](./docs/assets/desktop-config-mcp.png)
-
-**工作 / 聊天（浅色主题）** — 相同工作台布局（检查点 + 执行流）的浅色外观：
-
-![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
 ### 移动端 H5
 
