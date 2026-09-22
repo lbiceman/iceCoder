@@ -529,81 +529,6 @@ export const ChatCommands = (() => {
     );
   }
 
-  function extractTurnTokenRecords(messages) {
-    const records = [];
-    if (!Array.isArray(messages)) return records;
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-      if (!msg || typeof msg !== 'object' || !msg.turnTokenUsage) continue;
-      const input = typeof msg.turnTokenUsage.inputTokens === 'number' ? msg.turnTokenUsage.inputTokens : 0;
-      const output = typeof msg.turnTokenUsage.outputTokens === 'number' ? msg.turnTokenUsage.outputTokens : 0;
-      if (input <= 0 && output <= 0) continue;
-      const ts = typeof msg.completedAt === 'number' && isFinite(msg.completedAt) && msg.completedAt > 0
-        ? msg.completedAt
-        : (typeof msg.sentAt === 'number' && isFinite(msg.sentAt) && msg.sentAt > 0 ? msg.sentAt : 0);
-      if (ts <= 0) continue;
-      const usedModel = typeof msg.usedModel === 'string' && msg.usedModel.trim()
-        ? msg.usedModel.trim()
-        : '';
-      records.push({
-        timestamp: ts,
-        inputTokens: input,
-        outputTokens: output,
-        usedModel,
-      });
-    }
-    return records;
-  }
-
-  function aggregateTurnTokenWindows(records) {
-    const now = Date.now();
-    const dayMs = 86400000;
-    const empty = function () { return { inputTokens: 0, outputTokens: 0, totalTokens: 0 }; };
-    const windows = { day: empty(), week: empty(), month: empty(), byModel: {} };
-    function add(target, rec) {
-      target.inputTokens += rec.inputTokens;
-      target.outputTokens += rec.outputTokens;
-      target.totalTokens += rec.inputTokens + rec.outputTokens;
-    }
-    function ensureModel(name) {
-      if (!windows.byModel[name]) {
-        windows.byModel[name] = { day: empty(), week: empty(), month: empty() };
-      }
-      return windows.byModel[name];
-    }
-    for (let i = 0; i < records.length; i++) {
-      const rec = records[i];
-      if (rec.timestamp >= now - 30 * dayMs) add(windows.month, rec);
-      if (rec.timestamp >= now - 7 * dayMs) add(windows.week, rec);
-      if (rec.timestamp >= now - dayMs) add(windows.day, rec);
-      if (rec.usedModel) {
-        const modelWindows = ensureModel(rec.usedModel);
-        if (rec.timestamp >= now - 30 * dayMs) add(modelWindows.month, rec);
-        if (rec.timestamp >= now - 7 * dayMs) add(modelWindows.week, rec);
-        if (rec.timestamp >= now - dayMs) add(modelWindows.day, rec);
-      }
-    }
-    return windows;
-  }
-
-  function loadTokenStatsFromSessionMessages() {
-    return fetchJsonWithTimeout('/api/sessions', 30000).then((body) => {
-      const sessions = (body && body.sessions) || [];
-      return Promise.all(sessions.map((session) => {
-        if (!session || !session.id) return [];
-        return fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(session.id)}`, 30000)
-          .then((msgBody) =>  extractTurnTokenRecords((msgBody && msgBody.messages) || []))
-          .catch(() =>  []);
-      })).then((batches) => {
-        const records = [];
-        for (let i = 0; i < batches.length; i++) {
-          for (let j = 0; j < batches[i].length; j++) records.push(batches[i][j]);
-        }
-        return aggregateTurnTokenWindows(records);
-      });
-    });
-  }
-
   function showTokenStatsError(panel, message) {
     panel.setBody(`<p class="modal-panel-error">统计失败：${escapeTokenStatsText(message)}</p>`);
   }
@@ -612,7 +537,7 @@ export const ChatCommands = (() => {
     if (!window.Modal || typeof window.Modal.panel !== 'function') return;
     const panel = window.Modal.panel({
       title: 'Token 消耗',
-      description: '按各会话气泡合计与使用模型汇总',
+      description: '按每次模型调用记账，与会话无关',
       bodyHtml: tokenStatsLoadingHtml(),
     });
 
@@ -622,13 +547,8 @@ export const ChatCommands = (() => {
           panel.setBody(renderTokenStatsWindows(body));
           return;
         }
-        return loadTokenStatsFromSessionMessages().then((windows) => {
-          panel.setBody(renderTokenStatsWindows(windows));
-        });
+        showTokenStatsError(panel, (body && body.error) || '统计失败');
       })
-      .catch(() =>  loadTokenStatsFromSessionMessages().then((windows) => {
-          panel.setBody(renderTokenStatsWindows(windows));
-        }))
       .catch((err) => {
         showTokenStatsError(panel, err && err.message ? err.message : '网络错误');
       });

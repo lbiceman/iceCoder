@@ -227,7 +227,7 @@ export class SubAgentRunner {
           return this.partialResult('timeout', lastAssistantContent, filesRead, toolCallCount, roundsUsed, tokensUsed);
         }
 
-        const raw = await this.chatFn(normalizeMessages(messages), { tools });
+        const raw = await this.chatFn(normalizeMessages(messages), { tools, usageSource: 'sub_agent' });
         const response = resolveSalvagedLlmResponse(raw);
         tokensUsed += response.usage?.totalTokens ?? 0;
 

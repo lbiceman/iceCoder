@@ -614,6 +614,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     const result = await harness.run(
       harnessUserMessage,
       (msgs, opts) => llmAdapter.chat(msgs, {
+        usageSource: 'chat',
         ...opts,
         signal: abortController.signal,
         sessionId: runSessionId,
@@ -704,6 +705,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       },
       existingMessages,
       (msgs, callback, opts) => llmAdapter.stream(msgs, callback, {
+        usageSource: 'chat',
         ...opts,
         signal: abortController.signal,
         sessionId: runSessionId,

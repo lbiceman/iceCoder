@@ -1336,6 +1336,7 @@ export class MemoryDream {
       temperature: 0,
       requestTimeoutMs: DEFAULT_DREAM_LLM_TIMEOUT_MS,
       skipRetry: true,
+      usageSource: 'memory_dream',
       ...overrides,
     };
   }

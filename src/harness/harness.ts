@@ -562,7 +562,7 @@ export class Harness {
       this.memoryIntegration.onLoopStart(
         sessionGoalAnchor,
         {
-          chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
+          chat: async (msgs, opts) => chatFn(msgs, { usageSource: 'memory_recall', tools: [], ...opts }),
           stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
           countTokens: async (text) => estimateStringTokens(text),
         },

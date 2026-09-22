@@ -185,6 +185,15 @@ export function getRuntimeMemoryAuxPath(...segments: string[]): string {
   return path.join(getRuntimeDataDir(), 'memory', ...segments);
 }
 
+/** Token 用量账本：`{dataDir}/runtime/token-usage.jsonl`，可用 `ICE_TOKEN_USAGE_LOG` 覆盖 */
+export function getTokenUsageLogPath(): string {
+  applyRuntimeDataEnvDefaults();
+  if (process.env.ICE_TOKEN_USAGE_LOG?.trim()) {
+    return path.resolve(process.env.ICE_TOKEN_USAGE_LOG.trim());
+  }
+  return path.join(getRuntimeDataDir(), 'runtime', 'token-usage.jsonl');
+}
+
 /**
  * 所有数据路径。
  */

@@ -34,6 +34,19 @@ export interface ResolvedStaticDir {
  * - `dist/web` 且存在 `dist/public/index.html`：打包前端（含全局 `iceCoder`，不依赖 NODE_ENV）
  * - `NODE_ENV=production`：优先 `dist/public`
  */
+/**
+ * 本地 `npm run dev` 时 API 口会端出未编译的 `.ts`，浏览器按 video/mp2t 拒掉后整页黑屏。
+ * 有 Vite 端口（VITE_PORT）或 ICE_TUNNEL_DEV=1 时，把本机 HTML 导航转到 Vite。
+ */
+export function resolveViteDevRedirectOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.NODE_ENV === 'production') return null;
+  const explicit = env.VITE_PORT?.trim();
+  if (!explicit && env.ICE_TUNNEL_DEV !== '1') return null;
+  const port = explicit ? Number.parseInt(explicit, 10) : 1025;
+  if (!Number.isFinite(port) || port <= 0) return null;
+  return `http://localhost:${port}`;
+}
+
 export function resolveDefaultStaticDir(options?: {
   moduleDir?: string;
   nodeEnv?: string;
@@ -136,6 +149,23 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
       res.sendFile(path.join(staticDir, 'index.html'));
     });
   } else {
+    const viteOrigin = resolveViteDevRedirectOrigin();
+    if (viteOrigin) {
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.path.startsWith('/api/')) {
+          next();
+          return;
+        }
+        const accept = String(req.headers.accept || '');
+        const wantsHtml = req.method === 'GET'
+          && (accept.includes('text/html') || req.path.endsWith('.html'));
+        if (!wantsHtml) {
+          next();
+          return;
+        }
+        res.redirect(302, `${viteOrigin}${req.originalUrl || '/'}`);
+      });
+    }
     // 开发模式：JS/CSS 也不缓存，方便调试
     app.use(express.static(staticDir, {
       etag: false,

@@ -1292,7 +1292,7 @@ Continue the conversation from where it left off without asking the user any fur
         },
       ];
 
-      const response = await chatFn(summarizeMessages, { tools: [] });
+      const response = await chatFn(summarizeMessages, { tools: [], usageSource: 'compaction' });
       if (response.content && response.content.length > 0) {
         return response.content;
       }

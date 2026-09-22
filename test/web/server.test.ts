@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, startServer, resolveDefaultStaticDir } from '../../src/web/server.js';
+import { createServer, startServer, resolveDefaultStaticDir, resolveViteDevRedirectOrigin } from '../../src/web/server.js';
 import type { Server } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -85,6 +85,36 @@ describe('Web Server', () => {
       expect(text).toContain('<!DOCTYPE html>');
     });
 
+    it('ICE_TUNNEL_DEV 时本机 HTML 跳到 Vite，避免 API 口黑屏', async () => {
+      const prevTunnel = process.env.ICE_TUNNEL_DEV;
+      const prevVite = process.env.VITE_PORT;
+      process.env.ICE_TUNNEL_DEV = '1';
+      delete process.env.VITE_PORT;
+      try {
+        const app = await createServer({
+          staticDir: path.join(__dirname, '../../src/public'),
+        });
+        server = await startServer(app, 0);
+        const address = server.address();
+        const port = typeof address === 'object' && address ? address.port : 0;
+
+        const response = await fetch(`http://127.0.0.1:${port}/`, {
+          redirect: 'manual',
+          headers: { Accept: 'text/html' },
+        });
+        expect(response.status).toBe(302);
+        expect(response.headers.get('location')).toBe('http://localhost:1025/');
+        const probe = await fetch(`http://127.0.0.1:${port}/`);
+        expect(probe.status).toBe(200);
+        expect(await probe.text()).toContain('id="page-container"');
+      } finally {
+        if (prevTunnel === undefined) delete process.env.ICE_TUNNEL_DEV;
+        else process.env.ICE_TUNNEL_DEV = prevTunnel;
+        if (prevVite === undefined) delete process.env.VITE_PORT;
+        else process.env.VITE_PORT = prevVite;
+      }
+    });
+
     it('should return index.html for unmatched client-side routes (SPA fallback)', async () => {
       const app = await createServer({
         staticDir: path.join(__dirname, '../../src/public'),
@@ -141,6 +171,15 @@ describe('Web Server', () => {
         process.exit = originalExit;
         await new Promise<void>((resolve) => blocker.close(() => resolve()));
       }
+    });
+  });
+
+  describe('resolveViteDevRedirectOrigin', () => {
+    it('仅开发隧道或显式 VITE_PORT 时返回 Vite 源', () => {
+      expect(resolveViteDevRedirectOrigin({ NODE_ENV: 'production', ICE_TUNNEL_DEV: '1' })).toBeNull();
+      expect(resolveViteDevRedirectOrigin({})).toBeNull();
+      expect(resolveViteDevRedirectOrigin({ ICE_TUNNEL_DEV: '1' })).toBe('http://localhost:1025');
+      expect(resolveViteDevRedirectOrigin({ VITE_PORT: '5173' })).toBe('http://localhost:5173');
     });
   });
 

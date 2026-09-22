@@ -1,10 +1,11 @@
 /**
- * 按会话 UI 消息上的 turnTokenUsage（气泡「合计」）汇总 Token 消耗。
+ * 从 token-usage.jsonl 汇总 Token 消耗（与会话文件无关）。
  */
 
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { sessionIdFromMessageFileName } from './session-index-store.js';
+import {
+  readTokenUsageLogEvents,
+  type TokenUsageLogEvent,
+} from '../llm/token-usage-log.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -31,11 +32,21 @@ export interface TokenUsageWindows {
   all: TokenUsageTotals;
 }
 
+export interface TokenUsageKindTotals extends TokenUsageTotals {
+  turns: number;
+}
+
+export interface TokenUsageByKind {
+  chat: TokenUsageKindTotals;
+  memory: TokenUsageKindTotals;
+}
+
 export interface TokenUsageBucket extends TokenUsageTotals {
   key: string;
   timestamp: number;
   turns: number;
   byModel: Record<string, TokenUsageTotals>;
+  byKind: TokenUsageByKind;
 }
 
 export interface TokenUsageSeries {
@@ -43,11 +54,12 @@ export interface TokenUsageSeries {
   daily: TokenUsageBucket[];
 }
 
-export interface TurnTokenRecord {
+export interface TokenUsageRecord {
   timestamp: number;
   inputTokens: number;
   outputTokens: number;
   usedModel?: string;
+  source?: string;
 }
 
 export type TokenUsageByModel = Record<string, TokenUsageWindows>;
@@ -59,6 +71,23 @@ export interface TokenUsageSummary extends TokenUsageWindows {
 
 export function emptyTokenUsageTotals(): TokenUsageTotals {
   return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+}
+
+export function emptyTokenUsageKindTotals(): TokenUsageKindTotals {
+  return { inputTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0 };
+}
+
+export function emptyTokenUsageByKind(): TokenUsageByKind {
+  return {
+    chat: emptyTokenUsageKindTotals(),
+    memory: emptyTokenUsageKindTotals(),
+  };
+}
+
+export function isMemoryTokenSource(source?: string): boolean {
+  return source === 'memory_extract'
+    || source === 'memory_recall'
+    || source === 'memory_dream';
 }
 
 export function emptyTokenUsageWindows(): TokenUsageWindows {
@@ -103,6 +132,7 @@ function emptyTokenUsageBucket(key: string, timestamp: number): TokenUsageBucket
     totalTokens: 0,
     turns: 0,
     byModel: {},
+    byKind: emptyTokenUsageByKind(),
   };
 }
 
@@ -116,50 +146,28 @@ function readFiniteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function readUsedModel(value: unknown): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
-
-/**
- * 从 UI 会话消息中抽出带时间戳的 turnTokenUsage。
- * 时间优先 completedAt（agent 气泡完成时刻），否则 sentAt。
- * 使用模型以消息级 `usedModel` 为准；兼容旧数据写在 turnTokenUsage.model / usedModel。
- */
-export function extractTurnTokenRecords(messages: unknown): TurnTokenRecord[] {
-  const records: TurnTokenRecord[] = [];
-  if (!Array.isArray(messages)) return records;
-
-  for (const raw of messages) {
-    if (!raw || typeof raw !== 'object') continue;
-    const msg = raw as Record<string, unknown>;
-    const usage = msg.turnTokenUsage;
-    if (!usage || typeof usage !== 'object') continue;
-
-    const inputTokens = Math.max(0, readFiniteNumber((usage as Record<string, unknown>).inputTokens));
-    const outputTokens = Math.max(0, readFiniteNumber((usage as Record<string, unknown>).outputTokens));
+export function tokenUsageEventsToRecords(events: TokenUsageLogEvent[]): TokenUsageRecord[] {
+  const records: TokenUsageRecord[] = [];
+  for (const event of events) {
+    const timestamp = Date.parse(event.timestamp);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
+    const inputTokens = Math.max(0, readFiniteNumber(event.inputTokens));
+    const outputTokens = Math.max(0, readFiniteNumber(event.outputTokens));
     if (inputTokens <= 0 && outputTokens <= 0) continue;
-
-    const completedAt = readFiniteNumber(msg.completedAt);
-    const sentAt = readFiniteNumber(msg.sentAt);
-    const timestamp = completedAt > 0 ? completedAt : sentAt;
-    if (timestamp <= 0) continue;
-
-    const usedModel = readUsedModel(msg.usedModel)
-      || readUsedModel((usage as Record<string, unknown>).usedModel)
-      || readUsedModel((usage as Record<string, unknown>).model);
+    const usedModel = typeof event.model === 'string' && event.model.trim() ? event.model.trim() : '';
     records.push({
       timestamp,
       inputTokens,
       outputTokens,
       ...(usedModel ? { usedModel } : {}),
+      ...(event.source ? { source: event.source } : {}),
     });
   }
-
   return records;
 }
 
-export function aggregateTurnTokenWindows(
-  records: TurnTokenRecord[],
+export function aggregateTokenUsageWindows(
+  records: TokenUsageRecord[],
   now = Date.now(),
 ): TokenUsageWindows {
   const windows = emptyTokenUsageWindows();
@@ -183,21 +191,21 @@ export function aggregateTurnTokenWindows(
   return windows;
 }
 
-function addToBucket(bucket: TokenUsageBucket, record: TurnTokenRecord): void {
+function addToBucket(bucket: TokenUsageBucket, record: TokenUsageRecord): void {
   bucket.turns += 1;
   addUsage(bucket, record.inputTokens, record.outputTokens);
+  const kind = isMemoryTokenSource(record.source) ? 'memory' : 'chat';
+  bucket.byKind[kind].turns += 1;
+  addUsage(bucket.byKind[kind], record.inputTokens, record.outputTokens);
   const model = record.usedModel;
   if (!model) return;
   if (!bucket.byModel[model]) bucket.byModel[model] = emptyTokenUsageTotals();
   addUsage(bucket.byModel[model], record.inputTokens, record.outputTokens);
 }
 
-/**
- * 本地时区下的 24 小时桶 + 31 天日桶，供统计页面积图使用。
- * 滚动窗口（1/7/30 天）仍由 aggregateTurnTokenWindows 提供，与 ~tokens 弹框一致。
- */
-export function aggregateTurnTokenSeries(
-  records: TurnTokenRecord[],
+/** 本地时区下的 24 小时桶 + 31 天日桶，供统计页面积图使用。 */
+export function aggregateTokenUsageSeries(
+  records: TokenUsageRecord[],
   now = Date.now(),
 ): TokenUsageSeries {
   const hourStart = startOfLocalHour(now);
@@ -240,11 +248,11 @@ export function aggregateTurnTokenSeries(
   return { hourly, daily };
 }
 
-export function aggregateTurnTokenByModel(
-  records: TurnTokenRecord[],
+export function aggregateTokenUsageByModel(
+  records: TokenUsageRecord[],
   now = Date.now(),
 ): TokenUsageByModel {
-  const grouped = new Map<string, TurnTokenRecord[]>();
+  const grouped = new Map<string, TokenUsageRecord[]>();
   for (const record of records) {
     const key = record.usedModel || '';
     if (!key) continue;
@@ -254,34 +262,23 @@ export function aggregateTurnTokenByModel(
   }
   const out: TokenUsageByModel = {};
   for (const [model, list] of grouped) {
-    out[model] = aggregateTurnTokenWindows(list, now);
+    out[model] = aggregateTokenUsageWindows(list, now);
   }
   return out;
 }
 
-export async function collectSessionTurnTokenRecords(sessionsDir: string): Promise<TurnTokenRecord[]> {
-  const names = await fs.readdir(sessionsDir).catch((): string[] => []);
-  const batches = await Promise.all(names.map(async (name) => {
-    if (!sessionIdFromMessageFileName(name)) return [] as TurnTokenRecord[];
-    try {
-      const raw = await fs.readFile(path.join(sessionsDir, name), 'utf-8');
-      const parsed = JSON.parse(raw) as unknown;
-      return extractTurnTokenRecords(parsed);
-    } catch {
-      return [] as TurnTokenRecord[];
-    }
-  }));
-  return batches.flat();
+export async function collectTokenUsageRecords(logPath?: string): Promise<TokenUsageRecord[]> {
+  return tokenUsageEventsToRecords(await readTokenUsageLogEvents(logPath));
 }
 
-export async function summarizeSessionTokenUsage(
-  sessionsDir: string,
+export async function summarizeTokenUsage(
+  logPath?: string,
   now = Date.now(),
 ): Promise<TokenUsageSummary> {
-  const records = await collectSessionTurnTokenRecords(sessionsDir);
+  const records = await collectTokenUsageRecords(logPath);
   return {
-    ...aggregateTurnTokenWindows(records, now),
-    byModel: aggregateTurnTokenByModel(records, now),
-    series: aggregateTurnTokenSeries(records, now),
+    ...aggregateTokenUsageWindows(records, now),
+    byModel: aggregateTokenUsageByModel(records, now),
+    series: aggregateTokenUsageSeries(records, now),
   };
 }

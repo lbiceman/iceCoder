@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Token 用量统计页：合计趋势 + 按模型趋势。
+ * Token 用量统计页：合计趋势 + 会话/记忆消耗（读独立 JSONL 账本）。
  * 日 / 当周 / 当月为滚动窗口：24 小时 / 7 天 / 30 天。
  */
 
@@ -29,7 +29,6 @@ export const StatsPage = (() => {
   };
 
   const CHART_COLOR_VARS = ['--chart-1', '--chart-2', '--chart-3'];
-  const UNKNOWN_MODEL = '未标注';
 
   let containerEl = null;
   let mainEl = null;
@@ -86,7 +85,7 @@ export const StatsPage = (() => {
     destroy();
     containerEl = parentEl;
     parentEl.innerHTML =
-      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">统计</h1><p class="stats-hint">按会话气泡合计 Token；当周为最近 7 天，当月为最近 30 天</p></div><div class="stats-range" role="group" aria-label="时间范围">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
+      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">统计</h1><p class="stats-hint">查看 Token 消耗、记忆活动与监管进出的近期趋势</p></div><div class="stats-range" role="group" aria-label="时间范围">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
     mainEl = parentEl.querySelector('.stats-main');
     tooltipEl = parentEl.querySelector('.stats-tooltip');
     bindRangeButtons(containerEl);
@@ -110,14 +109,12 @@ export const StatsPage = (() => {
         clearTimeout(timer);
         if (ctrl !== abortCtrl) return;
         const body = out.body;
-        const next = (body && body.success)
-          ? ensureChartData(body, ctrl.signal)
-          : loadTokenStatsFromSessions(ctrl.signal);
-        return next.then((ready) => {
-          if (ctrl !== abortCtrl) return;
-          summary = ready;
-          paint();
-        });
+        if (!out.ok || !body || !body.success) {
+          paintError((body && body.error) || '统计失败');
+          return;
+        }
+        summary = body;
+        paint();
       })
       .catch((err) => {
         clearTimeout(timer);
@@ -136,226 +133,6 @@ export const StatsPage = (() => {
         throw new Error(`HTTP ${res.status}`);
       });
     });
-  }
-
-  function hasSeries(body) {
-    return !!(body
-      && body.series
-      && Array.isArray(body.series.hourly)
-      && Array.isArray(body.series.daily)
-      && body.series.hourly.length
-      && body.series.daily.length);
-  }
-
-  function seriesHasTurns(body) {
-    const lists = body && body.series ? [body.series.hourly, body.series.daily] : [];
-    for (let i = 0; i < lists.length; i++) {
-      const list = lists[i];
-      if (!Array.isArray(list)) continue;
-      for (let j = 0; j < list.length; j++) {
-        if ((Number(list[j] && list[j].turns) || 0) > 0) return true;
-      }
-    }
-    return false;
-  }
-
-  function ensureChartData(body, signal) {
-    const seriesReady = hasSeries(body) && seriesHasTurns(body);
-    if (seriesReady && body.all) return Promise.resolve(body);
-    return loadRecordsFromSessions(signal).then((records) => {
-      if (!seriesReady) body.series = aggregateClientSeries(records);
-      const windows = aggregateClientWindows(records);
-      if (!body.day) body.day = windows.day;
-      if (!body.week) body.week = windows.week;
-      if (!body.month) body.month = windows.month;
-      if (!body.all) body.all = windows.all;
-      if (!body.byModel) {
-        body.byModel = aggregateClientByModel(records);
-      } else {
-        const extra = aggregateClientByModel(records);
-        const names = Object.keys(extra);
-        for (let i = 0; i < names.length; i++) {
-          if (!body.byModel[names[i]]) body.byModel[names[i]] = extra[names[i]];
-          else if (!body.byModel[names[i]].all) body.byModel[names[i]].all = extra[names[i]].all;
-        }
-      }
-      return body;
-    });
-  }
-
-  function loadTokenStatsFromSessions(signal) {
-    return loadRecordsFromSessions(signal).then((records) => {
-      const windows = aggregateClientWindows(records);
-      return {
-        success: true,
-        day: windows.day,
-        week: windows.week,
-        month: windows.month,
-        all: windows.all,
-        byModel: aggregateClientByModel(records),
-        series: aggregateClientSeries(records),
-      };
-    });
-  }
-
-  function loadRecordsFromSessions(signal) {
-    return fetchJson('/api/sessions', signal).then((body) => {
-      const sessions = (body && body.sessions) || [];
-      return Promise.all(sessions.map((session) => {
-        if (!session || !session.id) return [];
-        return fetchJson(`/api/sessions/${encodeURIComponent(session.id)}`, signal)
-          .then((msgBody) =>  extractTurnTokenRecords((msgBody && msgBody.messages) || []))
-          .catch(() =>  []);
-      })).then((batches) => {
-        const records = [];
-        for (let i = 0; i < batches.length; i++) {
-          for (let j = 0; j < batches[i].length; j++) records.push(batches[i][j]);
-        }
-        return records;
-      });
-    });
-  }
-
-  function extractTurnTokenRecords(messages) {
-    const records = [];
-    if (!Array.isArray(messages)) return records;
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-      if (!msg || typeof msg !== 'object' || !msg.turnTokenUsage) continue;
-      const usage = msg.turnTokenUsage;
-      const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
-      const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
-      if (input <= 0 && output <= 0) continue;
-      const ts = typeof msg.completedAt === 'number' && isFinite(msg.completedAt) && msg.completedAt > 0
-        ? msg.completedAt
-        : (typeof msg.sentAt === 'number' && isFinite(msg.sentAt) && msg.sentAt > 0 ? msg.sentAt : 0);
-      if (ts <= 0) continue;
-      const usedModel = typeof msg.usedModel === 'string' && msg.usedModel.trim()
-        ? msg.usedModel.trim()
-        : (typeof usage.usedModel === 'string' && usage.usedModel.trim()
-          ? usage.usedModel.trim()
-          : (typeof usage.model === 'string' && usage.model.trim() ? usage.model.trim() : ''));
-      records.push({
-        timestamp: ts,
-        inputTokens: input,
-        outputTokens: output,
-        usedModel,
-      });
-    }
-    return records;
-  }
-
-  function emptyTotals() {
-    return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-  }
-
-  function addTotals(target, rec) {
-    target.inputTokens += rec.inputTokens;
-    target.outputTokens += rec.outputTokens;
-    target.totalTokens += rec.inputTokens + rec.outputTokens;
-  }
-
-  function aggregateClientWindows(records, now) {
-    now = now || Date.now();
-    const dayMs = 86400000;
-    const windows = { day: emptyTotals(), week: emptyTotals(), month: emptyTotals(), all: emptyTotals() };
-    for (let i = 0; i < records.length; i++) {
-      const rec = records[i];
-      addTotals(windows.all, rec);
-      if (rec.timestamp >= now - 30 * dayMs) addTotals(windows.month, rec);
-      if (rec.timestamp >= now - 7 * dayMs) addTotals(windows.week, rec);
-      if (rec.timestamp >= now - dayMs) addTotals(windows.day, rec);
-    }
-    return windows;
-  }
-
-  function aggregateClientByModel(records, now) {
-    const grouped = {};
-    for (let i = 0; i < records.length; i++) {
-      const rec = records[i];
-      if (!rec.usedModel) continue;
-      if (!grouped[rec.usedModel]) grouped[rec.usedModel] = [];
-      grouped[rec.usedModel].push(rec);
-    }
-    const out = {};
-    const names = Object.keys(grouped);
-    for (let j = 0; j < names.length; j++) out[names[j]] = aggregateClientWindows(grouped[names[j]], now);
-    return out;
-  }
-
-  function emptyBucket(key, timestamp) {
-    return {
-      key,
-      timestamp,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      turns: 0,
-      byModel: {},
-    };
-  }
-
-  function addToClientBucket(bucket, rec) {
-    bucket.turns = (Number(bucket.turns) || 0) + 1;
-    addTotals(bucket, rec);
-    if (!rec.usedModel) return;
-    if (!bucket.byModel[rec.usedModel]) bucket.byModel[rec.usedModel] = emptyTotals();
-    addTotals(bucket.byModel[rec.usedModel], rec);
-  }
-
-  function localDateKeyFromDate(d) {
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  }
-
-  function localHourKeyFromDate(d) {
-    return `${localDateKeyFromDate(d)}T${pad2(d.getHours())}:00`;
-  }
-
-  function aggregateClientSeries(records, now) {
-    now = now || Date.now();
-    const hourMs = 3600000;
-    const hourStart = new Date(now);
-    hourStart.setMinutes(0, 0, 0);
-    const hourly = [];
-    const hourlyMap = {};
-    for (let i = 23; i >= 0; i--) {
-      const ts = hourStart.getTime() - i * hourMs;
-      const hd = new Date(ts);
-      const hKey = localHourKeyFromDate(hd);
-      const hBucket = emptyBucket(hKey, ts);
-      hourly.push(hBucket);
-      hourlyMap[hKey] = hBucket;
-    }
-    const dayStart = new Date(now);
-    dayStart.setHours(0, 0, 0, 0);
-    const daily = [];
-    const dailyMap = {};
-    for (let d = 30; d >= 0; d--) {
-      const day = new Date(dayStart);
-      day.setDate(day.getDate() - d);
-      const dKey = localDateKeyFromDate(day);
-      const dBucket = emptyBucket(dKey, day.getTime());
-      daily.push(dBucket);
-      dailyMap[dKey] = dBucket;
-    }
-    const hourCutoff = hourly[0].timestamp;
-    const dayCutoff = daily[0].timestamp;
-    for (let r = 0; r < records.length; r++) {
-      const rec = records[r];
-      if (rec.timestamp >= hourCutoff) {
-        const recHour = new Date(rec.timestamp);
-        recHour.setMinutes(0, 0, 0);
-        const hb = hourlyMap[localHourKeyFromDate(recHour)];
-        if (hb) addToClientBucket(hb, rec);
-      }
-      if (rec.timestamp >= dayCutoff) {
-        const recDay = new Date(rec.timestamp);
-        recDay.setHours(0, 0, 0, 0);
-        const db = dailyMap[localDateKeyFromDate(recDay)];
-        if (db) addToClientBucket(db, rec);
-      }
-    }
-    return { hourly, daily };
   }
 
   function paintLoading() {
@@ -736,64 +513,34 @@ export const StatsPage = (() => {
   function paintTrendMetrics(buckets) {
     const panel = mainEl && mainEl.querySelector('[data-role="trend-metrics"]');
     if (!panel) return;
-    const usage = sumBucketTotals(buckets);
-    let turns = 0;
-    for (let i = 0; i < buckets.length; i++) turns += Number(buckets[i].turns) || 0;
-    const total = usage.totalTokens;
-    const inShare = total > 0 ? Math.round((usage.inputTokens / total) * 100) : 0;
-    const outShare = total > 0 ? Math.max(0, 100 - inShare) : 0;
+    const kinds = sumKindTotals(buckets);
+    const chat = kinds.chat.totalTokens;
+    const memory = kinds.memory.totalTokens;
+    const total = chat + memory;
+    const chatShare = total > 0 ? Math.round((chat / total) * 100) : 0;
+    const memoryShare = total > 0 ? Math.max(0, 100 - chatShare) : 0;
+    const turns = kinds.chat.turns + kinds.memory.turns;
     panel.innerHTML =
-      auxMetric('输入', formatTokenCount(usage.inputTokens), `${inShare}%`) +
-      auxMetric('输出', formatTokenCount(usage.outputTokens), `${outShare}%`) +
+      auxMetric('会话', formatTokenCount(chat), `${chatShare}%`) +
+      auxMetric('记忆', formatTokenCount(memory), `${memoryShare}%`) +
       auxMetric('请求次数', formatTokenCount(turns), '次');
   }
 
   function buildTokenSeries(buckets, colors) {
-    const models = modelKeysFromBuckets(buckets);
-    const unnamed = unnamedValues(buckets);
-    const hasUnnamed = unnamed.some((v) =>  v > 0);
-    const series = [];
-    let colorIdx = 0;
-    if (hasUnnamed) {
-      series.push({
-        key: 'unnamed',
-        label: UNKNOWN_MODEL,
+    return [
+      {
+        key: 'chat',
+        label: '会话',
         color: colors[0],
-        values: unnamed,
-      });
-      colorIdx = 1;
-    }
-    let i;
-    for (i = 0; i < models.length; i++) {
-      series.push({
-        key: models[i],
-        label: models[i],
-        color: colors[colorIdx % colors.length],
-        values: valuesForModel(buckets, models[i]),
-      });
-      colorIdx += 1;
-    }
-    if (!series.length) {
-      series.push({
-        key: 'total',
-        label: '合计',
-        color: colors[0],
-        values: buckets.map((b) =>  Number(b.totalTokens) || 0),
-      });
-    }
-    return series;
-  }
-
-  function unnamedValues(buckets) {
-    return buckets.map((b) => {
-      let named = 0;
-      const byModel = b && b.byModel ? b.byModel : {};
-      const names = Object.keys(byModel);
-      for (let i = 0; i < names.length; i++) {
-        named += Number(byModel[names[i]] && byModel[names[i]].totalTokens) || 0;
-      }
-      return Math.max(0, (Number(b.totalTokens) || 0) - named);
-    });
+        values: buckets.map((b) => Number(kindFromBucket(b, 'chat').totalTokens) || 0),
+      },
+      {
+        key: 'memory',
+        label: '记忆',
+        color: colors[1] || colors[0],
+        values: buckets.map((b) => Number(kindFromBucket(b, 'memory').totalTokens) || 0),
+      },
+    ];
   }
 
   function renderLegend(series) {
@@ -1093,34 +840,46 @@ export const StatsPage = (() => {
     return daily.slice(Math.max(0, daily.length - 30));
   }
 
-  function sumBucketTotals(buckets) {
-    const totals = emptyTotals();
-    for (let i = 0; i < buckets.length; i++) {
-      totals.inputTokens += Number(buckets[i].inputTokens) || 0;
-      totals.outputTokens += Number(buckets[i].outputTokens) || 0;
-      totals.totalTokens += Number(buckets[i].totalTokens) || 0;
-    }
-    return totals;
+  function emptyKindTotals() {
+    return { inputTokens: 0, outputTokens: 0, totalTokens: 0, turns: 0 };
   }
 
-  function modelKeysFromBuckets(buckets) {
-    const totals = {};
-    for (let i = 0; i < buckets.length; i++) {
-      const byModel = buckets[i] && buckets[i].byModel ? buckets[i].byModel : {};
-      const names = Object.keys(byModel);
-      for (let j = 0; j < names.length; j++) {
-        const name = names[j];
-        totals[name] = (totals[name] || 0) + (Number(byModel[name].totalTokens) || 0);
-      }
+  function kindFromBucket(bucket, kind) {
+    const row = bucket && bucket.byKind ? bucket.byKind[kind] : null;
+    if (row && typeof row === 'object') {
+      return {
+        inputTokens: Number(row.inputTokens) || 0,
+        outputTokens: Number(row.outputTokens) || 0,
+        totalTokens: Number(row.totalTokens) || 0,
+        turns: Number(row.turns) || 0,
+      };
     }
-    return Object.keys(totals).sort((a, b) =>  totals[b] - totals[a]);
+    if (kind === 'chat') {
+      return {
+        inputTokens: Number(bucket && bucket.inputTokens) || 0,
+        outputTokens: Number(bucket && bucket.outputTokens) || 0,
+        totalTokens: Number(bucket && bucket.totalTokens) || 0,
+        turns: Number(bucket && bucket.turns) || 0,
+      };
+    }
+    return emptyKindTotals();
   }
 
-  function valuesForModel(buckets, model) {
-    return buckets.map((b) => {
-      const row = b && b.byModel && b.byModel[model];
-      return row ? (Number(row.totalTokens) || 0) : 0;
-    });
+  function sumKindTotals(buckets) {
+    const out = { chat: emptyKindTotals(), memory: emptyKindTotals() };
+    for (let i = 0; i < buckets.length; i++) {
+      const chat = kindFromBucket(buckets[i], 'chat');
+      const memory = kindFromBucket(buckets[i], 'memory');
+      out.chat.inputTokens += chat.inputTokens;
+      out.chat.outputTokens += chat.outputTokens;
+      out.chat.totalTokens += chat.totalTokens;
+      out.chat.turns += chat.turns;
+      out.memory.inputTokens += memory.inputTokens;
+      out.memory.outputTokens += memory.outputTokens;
+      out.memory.totalTokens += memory.totalTokens;
+      out.memory.turns += memory.turns;
+    }
+    return out;
   }
 
   function sumValues(values) {

@@ -160,7 +160,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
 
     const result = await harness.run(
       task,
-      (msgs, opts) => ctx.llmAdapter.chat(msgs, { ...opts, sessionId: 'default' }),
+      (msgs, opts) => ctx.llmAdapter.chat(msgs, { usageSource: 'chat', ...opts, sessionId: 'default' }),
       (event) => {
         if (jsonOutput) return;
         if (event.type === 'tool_call' && event.toolName) {

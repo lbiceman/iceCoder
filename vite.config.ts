@@ -58,6 +58,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    host: true,
     port: vitePort,
     // 将 API 请求代理到 Express 后端（PORT / VITE_PORT 可覆盖，开发不锁死端口）
     proxy: {

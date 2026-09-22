@@ -151,7 +151,7 @@ export function createMemoryExportRouter(llmAdapter?: LLMAdapter): Router {
       const adapter = llmAdapter
         ? {
             chat: async (msgs: Parameters<LLMAdapter['chat']>[0], opts?: Parameters<LLMAdapter['chat']>[1]) =>
-              llmAdapter.chat(msgs, { tools: [], ...opts }),
+              llmAdapter.chat(msgs, { usageSource: 'memory_recall', tools: [], ...opts }),
             stream: async () => {
               throw new Error('Not supported');
             },

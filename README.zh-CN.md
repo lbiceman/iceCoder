@@ -14,7 +14,7 @@
 
 ![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
-**统计** — Token 消耗趋势（按会话气泡合计）、记忆读写与监管进出；支持日 / 当周 / 当月：
+**统计** — Token 消耗趋势（按每次 LLM 调用独立记账，与会话无关）、记忆读写与监管进出；支持日 / 当周 / 当月：
 
 ![桌面端 — 统计：Token、记忆与监管趋势（深色）](./docs/assets/desktop-stats.png)
 

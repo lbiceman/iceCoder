@@ -1072,7 +1072,7 @@ ${candidateList}`;
           { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
           { role: 'user', content: rerankPrompt },
         ],
-        { tools: [] },
+        { tools: [], usageSource: 'memory_recall' },
       );
 
       const content = response.content.trim();
@@ -1977,6 +1977,7 @@ ${candidateList}`;
       let response = await this.llmAdapter.chat(baseChatMessages, {
         maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS,
         temperature: 0,
+        usageSource: 'memory_extract',
       });
 
       let sessionRetried = false;
@@ -1999,7 +2000,7 @@ ${candidateList}`;
             { role: 'assistant', content: preview },
             { role: 'user', content: retryUser },
           ],
-          { maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS, temperature: 0 },
+          { maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS, temperature: 0, usageSource: 'memory_extract' },
         );
         sessionRetried = true;
         validation = response.content

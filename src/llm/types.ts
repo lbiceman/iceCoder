@@ -96,6 +96,20 @@ export type StreamCallbackChunk = string | { channel: 'reasoning'; delta: string
 export type StreamCallback = (chunk: StreamCallbackChunk, done: boolean) => void;
 
 /**
+ * Token 账本分类。未设时记为 unknown。
+ */
+export type TokenUsageSource =
+  | 'chat'
+  | 'compaction'
+  | 'memory_extract'
+  | 'memory_recall'
+  | 'memory_dream'
+  | 'step_review'
+  | 'image_read'
+  | 'sub_agent'
+  | 'unknown';
+
+/**
  * LLM 调用选项，支持通用参数和提供者特定参数。
  */
 export interface LLMOptions {
@@ -104,6 +118,8 @@ export interface LLMOptions {
   maxTokens?: number;
   topP?: number;
   tools?: ToolDefinition[];
+  /** Token 账本来源；统计页按调用记账，与会话文件无关 */
+  usageSource?: TokenUsageSource;
   /**
    * 用户中断信号 — 触发时 provider 应尽快断开正在进行的 HTTP/流。
    * 由调用方通过 options.signal 传入（每轮 LLM 调用各带自己的 AbortSignal）；

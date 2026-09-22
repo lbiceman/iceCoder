@@ -4,7 +4,7 @@
  * 负责上下文组装、工具权限、循环控制和可靠性。
  */
 
-import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
+import type { UnifiedMessage, ToolDefinition, LLMResponse, LLMOptions } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { TaskGraphView, TaskGraphPatch } from '../types/task-graph-view.js';
@@ -342,7 +342,7 @@ export interface HarnessResult {
  */
 export type ChatFunction = (
   messages: UnifiedMessage[],
-  options: { tools: ToolDefinition[] },
+  options: LLMOptions & { tools: ToolDefinition[] },
 ) => Promise<LLMResponse>;
 
 /**
@@ -353,5 +353,5 @@ export type ChatFunction = (
 export type StreamFunction = (
   messages: UnifiedMessage[],
   callback: import('../llm/types.js').StreamCallback,
-  options: { tools: ToolDefinition[] },
+  options: LLMOptions & { tools: ToolDefinition[] },
 ) => Promise<LLMResponse>;

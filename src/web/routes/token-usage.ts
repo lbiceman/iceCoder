@@ -1,20 +1,17 @@
 /**
- * GET /api/token-usage — 汇总各会话气泡上的 turnTokenUsage / usedModel。
- * 既有 day/week/month/byModel 供 ~tokens 弹框；series 供统计页图表。
+ * GET /api/token-usage — 汇总 token-usage.jsonl（与会话无关）。
+ * day/week/month/byModel 供 ~tokens 弹框；series 供统计页图表。
  */
 
 import { Router, type Request, type Response } from 'express';
-import path from 'node:path';
 import '../../cli/paths.js';
-import { summarizeSessionTokenUsage } from '../token-usage-stats.js';
-
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
+import { summarizeTokenUsage } from '../token-usage-stats.js';
 
 export function createTokenUsageRouter(): Router {
   const router = Router();
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
     try {
-      const windows = await summarizeSessionTokenUsage(SESSIONS_DIR);
+      const windows = await summarizeTokenUsage();
       res.json({ success: true, ...windows });
     } catch (err) {
       res.status(500).json({
