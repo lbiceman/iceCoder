@@ -379,11 +379,7 @@ window.StatsPage = (function () {
     mainEl.innerHTML =
       '<section class="stats-card stats-card-main" aria-busy="true">' +
         '<div class="stats-card-head"><span class="stats-skel is-label"></span></div>' +
-        '<div class="stats-aux-metrics">' +
-          '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>' +
-          '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>' +
-          '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>' +
-        '</div>' +
+        '<div class="stats-aux-metrics">' + skelMetrics() + '</div>' +
         '<div class="stats-skel-chart"></div>' +
       '</section>' +
       '<div class="stats-split stats-split-aux">' +
@@ -543,12 +539,24 @@ window.StatsPage = (function () {
   function paintAuxLoading() {
     var memoryEl = mainEl && mainEl.querySelector('[data-role="memory-metrics"]');
     var supervisorEl = mainEl && mainEl.querySelector('[data-role="supervisor-metrics"]');
-    var html =
-        '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>' +
-        '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>' +
-        '<div class="stats-aux-metric"><span class="stats-skel is-label"></span><span class="stats-skel is-value"></span></div>';
+    var html = skelMetrics();
     if (memoryEl) memoryEl.innerHTML = html;
     if (supervisorEl) supervisorEl.innerHTML = html;
+    paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="memory"]'), 'memory');
+    paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="supervisor"]'), 'supervisor');
+    hideTooltip();
+  }
+
+  function paintChartSkeleton(mount, which) {
+    if (which === 'memory') {
+      unbindChart(memoryChart);
+      memoryChart = null;
+    } else {
+      unbindChart(supervisorChart);
+      supervisorChart = null;
+    }
+    if (!mount) return;
+    mount.innerHTML = '<div class="stats-skel-chart"></div>';
   }
 
   function paintAux() {
@@ -680,6 +688,20 @@ window.StatsPage = (function () {
         '<div class="stats-aux-metric-sub">' + escapeHtml(sub) + '</div>' +
       '</div>'
     );
+  }
+
+  function skelMetric() {
+    return (
+      '<div class="stats-aux-metric">' +
+        '<div class="stats-aux-metric-label"><span class="stats-skel is-label"></span></div>' +
+        '<div class="stats-aux-metric-value"><span class="stats-skel is-value"></span></div>' +
+        '<div class="stats-aux-metric-sub"><span class="stats-skel is-hint"></span></div>' +
+      '</div>'
+    );
+  }
+
+  function skelMetrics() {
+    return skelMetric() + skelMetric() + skelMetric();
   }
 
   function supervisorBySignal(mode) {

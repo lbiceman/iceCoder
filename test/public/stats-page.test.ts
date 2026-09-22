@@ -249,4 +249,79 @@ describe('统计页 Token 图表', () => {
     const dayChart = await page.evaluate(() => document.querySelectorAll('[data-chart="trend"] svg').length);
     expect(dayChart).toBe(1);
   });
+
+  it('切换时间范围时，指标骨架与加载后等高，图表不跳动', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadStats(page, samplePayload());
+
+    const before = await page.evaluate(() => ({
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+    }));
+
+    await page.evaluate(() => {
+      const orig = window.fetch.bind(window);
+      const pending: Array<() => void> = [];
+      (window as unknown as { __releaseAux?: () => void }).__releaseAux = () => {
+        pending.splice(0).forEach((run) => run());
+      };
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/api/memory/telemetry') || url.includes('/api/supervisor/events')) {
+          return new Promise((resolve, reject) => {
+            pending.push(() => {
+              orig(input, init).then(resolve, reject);
+            });
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          });
+        }
+        return orig(input, init);
+      };
+    });
+
+    await page.click('.stats-range-btn[data-range="month"]');
+    const during = await page.evaluate(() => ({
+      skel: document.querySelectorAll('[data-role="memory-metrics"] .stats-aux-metric-sub .stats-skel').length,
+      memoryChartSkel: document.querySelectorAll('[data-chart="memory"] .stats-skel-chart').length,
+      supervisorChartSkel: document.querySelectorAll('[data-chart="supervisor"] .stats-skel-chart').length,
+      memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
+      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+    }));
+    expect(during.skel).toBe(3);
+    expect(during.memoryChartSkel).toBe(1);
+    expect(during.supervisorChartSkel).toBe(1);
+    expect(during.memorySvg).toBe(0);
+    expect(during.supervisorSvg).toBe(0);
+    expect(Math.abs(during.metric - before.metric)).toBeLessThan(1);
+    expect(Math.abs(during.supervisor - before.supervisor)).toBeLessThan(1);
+    expect(Math.abs(during.chart - before.chart)).toBeLessThan(1);
+    expect(Math.abs(during.supervisorChart - before.supervisorChart)).toBeLessThan(1);
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseAux?: () => void }).__releaseAux?.();
+    });
+    await page.waitForSelector('[data-chart="memory"] svg');
+    await page.waitForSelector('[data-chart="supervisor"] svg');
+    const after = await page.evaluate(() => ({
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+      memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
+      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
+    }));
+    expect(after.memorySvg).toBe(1);
+    expect(after.supervisorSvg).toBe(1);
+    expect(Math.abs(after.metric - before.metric)).toBeLessThan(1);
+    expect(Math.abs(after.chart - before.chart)).toBeLessThan(1);
+    expect(Math.abs(after.supervisorChart - before.supervisorChart)).toBeLessThan(1);
+  });
 });
