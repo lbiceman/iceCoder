@@ -1,0 +1,2490 @@
+// @ts-nocheck
+/**
+ * 聊天页面主模块（重构后）
+ * 职责：DOM 渲染、事件绑定、模块协调
+ * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet（冰豆）, Modal
+ */
+
+/* exported ChatPage */
+
+export const ChatPage = (() => {
+
+  // ---- 子模块引用 ----
+  let Session = window.ChatSession;
+  let WS = window.ChatWebSocket;
+  let UI = window.ChatUI;
+  let Cmd = window.ChatCommands;
+  let Skills = window.ChatSkills;
+  let FileRef = window.ChatFileRef;
+  let File = window.ChatFile;
+  let QR = window.ChatQR;
+  let Pet = window.ChatPetBridge;
+
+  // ---- 状态 ----
+  let container = null;
+  /**
+   * 方案 A keep-alive：ChatPage.render 只执行一次；
+   * 切到配置 / 记忆页再切回来不会重建 DOM、不重连 WS、不丢失流式状态。
+   */
+  let mounted = false;
+  let isStreaming = false;
+  let userStopped = false;
+  let runtimeRestoreInFlight = false;
+  let streamFinalized = false;
+  /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
+  let streamChunksReceived = false;
+  /** 本轮是否已有可见正文流写入 Assistant 气泡；仅 Thinking 流不算。 */
+  let visibleStreamChunksReceived = false;
+  /** tokenUsage 早于 agent 消息到达时的暂存 */
+  let pendingTurnTokenUsage = null;
+  let pendingAlsoMessageIds = {};
+  let remoteMode = false;
+  let remoteToken = null;
+  /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
+  let mcpReadyAnnounced = false;
+  /** 本页仅提示一次公网隧道就绪 */
+  let tunnelReadyAnnounced = false;
+  let lastWsConnectedFetchMs = 0;
+  let lastActivateFetchMs = 0;
+  let lastSyncMessagesMs = 0;
+  let initialHistoryPainted = false;
+  let pendingInitialPaint = false;
+
+  function isMobileShell() {
+    try {
+      return document.documentElement.getAttribute('data-shell') === 'mobile';
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function getWsConnectedFetchGapMs() {
+    return isMobileShell() ? 8000 : 4000;
+  }
+
+  function getActivateFetchGapMs() {
+    return isMobileShell() ? 20000 : 10000;
+  }
+
+  function shouldSkipWsConnectedHeavyFetch() {
+    if (!initialHistoryPainted) return false;
+    const now = Date.now();
+    if (now - lastWsConnectedFetchMs < getWsConnectedFetchGapMs()) return true;
+    lastWsConnectedFetchMs = now;
+    return false;
+  }
+
+  function needsInitialHistoryPaint() {
+    if (!initialHistoryPainted) return true;
+    if (Session && typeof Session.getMessages === 'function') {
+      return Session.getMessages().length === 0;
+    }
+    return false;
+  }
+
+  /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
+  let streamingDiffBuffer = { toolCallId: '', text: '' };
+
+  function buildDisplayMap(structured) {
+    if (!window.ToolDisplayHistory) return {};
+    return window.ToolDisplayHistory.buildAgentDisplayMap(
+      structured || Session.getStructuredMessages(),
+      Session.getMessages(),
+      Session.getToolTraces(),
+    );
+  }
+
+  /** 方案 B：拉 structured messages 并重绘聊天历史（含 diff） */
+  function renderChatHistory(shouldScroll, structured) {
+    const displayMap = buildDisplayMap(structured);
+    UI.renderMessagesOnly(
+      Session.getMessages(),
+      Session.getToolTraces(),
+      Session.stripStatusTag,
+      shouldScroll,
+      displayMap,
+    );
+    if (UI.repairMissingDiffMountsFromStructured) {
+      UI.repairMissingDiffMountsFromStructured(structured);
+    }
+    if (UI.followBottomAfterContentPatch) {
+      UI.followBottomAfterContentPatch(shouldScroll);
+    }
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.refresh === 'function') {
+      window.ChatStaircaseNav.refresh();
+    }
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.hydrateFromStructured === 'function') {
+      window.ChatExecutionPlan.hydrateFromStructured(
+        structured,
+        Session.getMessages ? Session.getMessages() : [],
+      );
+    }
+  }
+
+  function renderChatHistoryWithFetch(shouldScroll, done) {
+    Session.fetchStructuredMessages((structured) => {
+      renderChatHistory(shouldScroll, structured);
+      if (done) done();
+    });
+  }
+
+  // Token 用量
+  let maxContextTokens = 0;
+  let usedInputTokens = 0;
+  let usedOutputTokens = 0;
+  let modelName = '';
+
+  // DOM 引用
+  let elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
+  let elFileStatus;
+  let elStatusBar, elStatusTurn;
+  let elCmdPlusBtn, mainInputWrapper;
+  const cmdPaletteResizeObserver = null;
+  let sessionPet = null;
+  let composerEventsBound = false;
+
+  function updateNavStatus(connected) {
+    const dot = document.getElementById('status-dot');
+    if (dot) {
+      dot.classList.toggle('connected', connected);
+      dot.classList.toggle('disconnected', !connected);
+      dot.title = connected ? '已连接' : '未连接';
+    }
+  }
+
+  function applyModelContextFromWs(data) {
+    if (!data || !data.modelContext) return false;
+    const mc = data.modelContext;
+    if (typeof mc.maxContextTokens === 'number' && mc.maxContextTokens > 0) {
+      maxContextTokens = mc.maxContextTokens;
+    }
+    if (typeof mc.modelName === 'string') {
+      modelName = mc.modelName;
+    }
+    updatePetTokenUsage();
+    return true;
+  }
+
+  function resolveActiveModelName(provider) {
+    if (window.ModelNames && typeof window.ModelNames.resolveActiveModelName === 'function') {
+      return window.ModelNames.resolveActiveModelName(provider);
+    }
+    return provider && provider.modelName ? provider.modelName : '';
+  }
+
+  // 拉取一次即可覆盖两件事：
+  //   1) Token 用量（maxContextTokens / modelName → 冰豆）
+  //   2) 底部 #chip-model-label 显示当前默认 provider 的 modelName
+  // 失败时也要回填 chip，避免一直停在"加载中…"
+  function loadModelConfig() {
+    fetch('/api/config')
+      .then((res) =>  res.json())
+      .then((data) => {
+        const providers = data.providers || [];
+        const defaultProvider = providers.find((p) =>  p.isDefault) || providers[0];
+        if (defaultProvider) {
+          maxContextTokens = defaultProvider.maxContextTokens || 0;
+          modelName = resolveActiveModelName(defaultProvider);
+          updatePetTokenUsage();
+        }
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders(providers);
+        }
+        updateChipModelLabel(providers);
+        syncWelcomeState();
+      })
+      .catch(() => {
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders([]);
+        }
+        updateChipModelLabel(null);
+      });
+  }
+
+  // 没有 provider 或请求失败时回退到"未配置"
+  // DOM 还没渲染好时（chat 页面异步插入 chip-model-label）轮询重试，避免卡在"加载中…"
+  function updateChipModelLabel(providers) {
+    function apply() {
+      const el = document.getElementById('chip-model-label');
+      if (!el) return false;
+      if (!providers || !providers.length) {
+        el.textContent = '未配置';
+        return true;
+      }
+      const def = providers.find((p) =>  p.isDefault) || providers[0];
+      const label = def ? resolveActiveModelName(def) : '';
+      el.textContent = label || '未配置';
+      return true;
+    }
+    if (apply()) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (apply() || tries >= 10) clearInterval(timer);
+    }, 50);
+  }
+
+  // 从 WS 初始连接 payload 同步 chip（避免再走一次 fetch）
+  // 兼容两种结构：data.providers (数组) 或 data.modelName (单值)
+  function syncChipModelLabelFromWs(data) {
+    let providers = null;
+    if (data && data.providers && data.providers.length) {
+      providers = data.providers;
+    } else if (data && data.modelName) {
+      providers = [{ isDefault: true, modelName: data.modelName }];
+    }
+    updateChipModelLabel(providers);
+  }
+
+  function fetchSupportedFormats() {
+    fetch('/api/chat/supported-formats')
+      .then((res) =>  res.json())
+      .then(() => { /* ignore */ })
+      .catch(() => { /* ignore */ });
+  }
+
+  function updateTokenUsage(inputTokens, outputTokens, contextOpts) {
+    contextOpts = contextOpts || {};
+    if (typeof contextOpts.effectiveUsed === 'number' && contextOpts.effectiveUsed > 0) {
+      usedInputTokens = contextOpts.effectiveUsed;
+    } else {
+      usedInputTokens = inputTokens;
+    }
+    usedOutputTokens = outputTokens;
+    if (typeof contextOpts.contextWindow === 'number' && contextOpts.contextWindow > 0) {
+      maxContextTokens = contextOpts.contextWindow;
+    }
+    updatePetTokenUsage();
+  }
+
+  function applyTotalTokenUsageFromStep(totalTokenUsage) {
+    if (!totalTokenUsage) return;
+    updateTokenUsage(
+      totalTokenUsage.inputTokens || 0,
+      totalTokenUsage.outputTokens || 0,
+      {
+        effectiveUsed: totalTokenUsage.effectiveUsed,
+        contextWindow: totalTokenUsage.contextWindow,
+      },
+    );
+  }
+
+  function resetTokenUsage() {
+    usedInputTokens = 0;
+    usedOutputTokens = 0;
+    updatePetTokenUsage();
+  }
+
+  function updatePetTokenUsage() {
+    if (sessionPet && sessionPet.setTokenUsage) {
+      sessionPet.setTokenUsage(usedInputTokens, maxContextTokens, usedOutputTokens);
+    }
+    syncWelcomeState();
+  }
+
+  function syncWelcomeState() {
+    if (!window.ChatWelcome || typeof window.ChatWelcome.sync !== 'function') return;
+    const tail = elMessages && elMessages.querySelector ? elMessages.querySelector('.chat-tail-root') : null;
+    // tail 内始终保留 .chat-tail-anchor 占位，仅统计其前的真实消息/流式块
+    const hasTailContent = !!(tail && tail.firstChild !== tail.lastChild);
+    window.ChatWelcome.sync({
+      messageCount: Session.getMessages().length,
+      hasTailContent,
+      isWorkloadActive: isWorkloadActive(),
+      contextMaxTokens: maxContextTokens,
+      contextUsedTokens: usedInputTokens,
+      supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
+        ? window.AppRouter.getSupervisorMode()
+        : 'adaptive',
+      connectionState: window.AppShell && typeof window.AppShell.getConnectionState === 'function'
+        ? window.AppShell.getConnectionState()
+        : 'disconnected',
+      setupRequired: window.AppRouter && typeof window.AppRouter.isSetupRequired === 'function'
+        ? window.AppRouter.isSetupRequired()
+        : false,
+      remoteMode,
+    });
+    if (window.MobileWorkPage && typeof window.MobileWorkPage.syncChatActivity === 'function') {
+      window.MobileWorkPage.syncChatActivity();
+    }
+  }
+
+  /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
+  function isWorkloadActive() {
+    return !!(WS && typeof WS.isProcessing === 'function' && WS.isProcessing())
+      || isStreaming
+      || (Session && typeof Session.hasStreamingModelBubble === 'function' && Session.hasStreamingModelBubble());
+  }
+
+  /** 输入框是否有可发送内容（含附件 / file ref / skill ref） */
+  function getComposerHasSendableContent() {
+    if (getComposerText().trim()) return true;
+    if (File && typeof File.getUploadedFiles === 'function' && File.getUploadedFiles().length > 0) return true;
+    if (File && typeof File.getPendingImages === 'function' && File.getPendingImages().length > 0) return true;
+    if (File && typeof File.hasPendingImageLoads === 'function' && File.hasPendingImageLoads()) return true;
+    return false;
+  }
+
+  function syncComposerActionState() {
+    const busy = isWorkloadActive();
+    if (!busy || getComposerHasSendableContent()) {
+      UI.setComposerAction('send');
+    } else {
+      UI.setComposerAction('stop');
+    }
+    if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
+      if (busy) {
+        if (Pet.isToolUseActive && Pet.isToolUseActive()) {
+          sessionPet.setState('tool_calling');
+        } else if (isStreaming && !(WS && WS.isProcessing && WS.isProcessing())) {
+          sessionPet.setState('streaming');
+        } else {
+          sessionPet.setState('running');
+        }
+      } else if (
+        !userStopped
+        && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
+      ) {
+        sessionPet.setState('idle');
+      }
+    }
+    syncWelcomeState();
+  }
+
+  /** 切回聊天页或 WS 状态变化后，把发送钮与真实 workload 对齐（DOM 重建不会保留 btn-stop） */
+  function syncSendButtonWithWorkload() {
+    syncComposerActionState();
+  }
+
+  function getComposerBody() {
+    return (elInput && elInput.value != null ? elInput.value : '').replace(/\u00A0/g, ' ').trim();
+  }
+
+  function buildComposerTextWithBody(taskBody) {
+    const lines = [];
+    if (Skills && typeof Skills.getSelectedRefs === 'function') {
+      const skillRefs = Skills.getSelectedRefs();
+      if (skillRefs.length) lines.push(skillRefs.join(' '));
+    }
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      const fileRefs = FileRef.getSelectedRefs();
+      for (let fi = 0; fi < fileRefs.length; fi++) {
+        lines.push(fileRefs[fi]);
+      }
+    }
+    const trimmed = (taskBody || '').trim();
+    if (trimmed) lines.push(trimmed);
+    return lines.join('\n');
+  }
+
+  function stripNextPrefix(body) {
+    body = (body || '').trim();
+    if (body.startsWith('/next')) {
+      return { usedPrefix: true, text: body.slice('/next'.length).trim() };
+    }
+    return { usedPrefix: false, text: body };
+  }
+
+  function createAlsoNoteId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `also-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function appendAlsoNoteBubble(noteText, messageId) {
+    const noteMsg = {
+      role: 'user',
+      content: noteText,
+      id: messageId,
+      alsoNote: true,
+    };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(noteMsg);
+    }
+    Session.appendMessage(noteMsg);
+    UI.appendMessageEl(noteMsg, Session.stripStatusTag);
+    Session.saveMessages();
+    pendingAlsoMessageIds[messageId] = true;
+    UI.enableAutoScroll();
+    syncWelcomeState();
+    return noteMsg;
+  }
+
+  function handleAlsoCommand(body) {
+    body = (body || '').trim();
+    if (!body.startsWith('/also')) return false;
+    const noteText = body.slice('/also'.length).trim();
+    if (!noteText) {
+      const usageMsg = { role: 'agent', content: '用法: /also <补充说明>', statusTag: 'system' };
+      Session.appendMessage(usageMsg);
+      UI.appendMessageEl(usageMsg, Session.stripStatusTag);
+      Session.saveMessages();
+      return true;
+    }
+    const noteId = createAlsoNoteId();
+    appendAlsoNoteBubble(noteText, noteId);
+    WS.sendMessage(`/also ${noteText}`, { messageId: noteId });
+    return true;
+  }
+
+  // ---- 命令面板（+ 按钮）：浮层已统一为 ChatDropdown ----
+  function openCmdPalette() {
+    if (!elCmdPlusBtn) return;
+    Cmd.hide();
+    Cmd.setApplyTarget((value) => {
+      executeLocalCommand(value);
+      Cmd.hide();
+    });
+    Cmd.show('~', '');
+  }
+
+  function toggleCmdPalette() {
+    if (Cmd.isTildeOpen && Cmd.isTildeOpen()) Cmd.hide();
+    else openCmdPalette();
+  }
+
+  function isOpenComposerCommand(text) {
+    return text === '~open' || text.startsWith('~open\n') || text.startsWith('~open ')
+      || text === '/open' || text.startsWith('/open\n') || text.startsWith('/open ');
+  }
+
+  /** 本地 ~ 命令：选中即执行；/open 在发送时拦截。返回 true 表示已处理 */
+  function executeLocalCommand(text) {
+    text = (text || '').trim();
+    if (!text) return false;
+
+    if (text === '~scan' && !remoteMode) {
+      Cmd.hide();
+      QR.showQrCode();
+      return true;
+    }
+
+    if (isOpenComposerCommand(text)) {
+      Cmd.hide();
+      Pet.showThinking(false);
+      UI.clearLiveToolRoundDom();
+      UI.setLiveToolRoundActive(true);
+      WS.sendMessage(
+        '/open\n\n' +
+        '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。',
+      );
+      return true;
+    }
+
+    if (text === '~tokens') {
+      Cmd.hide();
+      Cmd.handleTokenStats();
+      return true;
+    }
+
+    if (text === '~telemetry') {
+      Cmd.hide();
+      Cmd.handleTelemetry(Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~supervisor' || text.startsWith('~supervisor ')) {
+      Cmd.hide();
+      Cmd.handleSupervisor(text, Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    return false;
+  }
+
+  // ---- 发送/停止 ----
+  function getComposerText() {
+    const lines = [];
+    if (Skills && typeof Skills.getSelectedRefs === 'function') {
+      const skillRefs = Skills.getSelectedRefs();
+      if (skillRefs.length) lines.push(skillRefs.join(' '));
+    }
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      const fileRefs = FileRef.getSelectedRefs();
+      for (let fi = 0; fi < fileRefs.length; fi++) {
+        lines.push(fileRefs[fi]);
+      }
+    }
+    const body = (elInput && elInput.value != null ? elInput.value : '').replace(/\u00A0/g, ' ').trim();
+    if (body) lines.push(body);
+    return lines.join('\n');
+  }
+
+  function clearComposerInput() {
+    if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
+    else if (elInput) elInput.value = '';
+    if (FileRef && typeof FileRef.clearInput === 'function') FileRef.clearInput(elInput);
+    if (Cmd && typeof Cmd.handleInput === 'function') Cmd.handleInput('', elInput);
+    UI.autoResizeInput();
+  }
+
+  function endTransparencyTurnTimer() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.endTurnTimer === 'function') {
+      window.ChatExecutionPlan.endTurnTimer();
+    }
+  }
+
+  function newClientMessageId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (let bi = 0; bi < 16; bi++) bytes[bi] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [];
+    for (let hi = 0; hi < 16; hi++) hex.push((`0${bytes[hi].toString(16)}`).slice(-2));
+    return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+  }
+
+  function handleSend() {
+    refreshComposerModules();
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
+    if (Skills) Skills.hide();
+    if (FileRef) FileRef.hide();
+
+    const composerBody = getComposerBody();
+    const fullText = getComposerText().trim();
+    let referencePaths = [];
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      referencePaths = FileRef.getSelectedRefs();
+    }
+    const uploadedFiles = File && typeof File.getUploadedFiles === 'function' ? File.getUploadedFiles() : [];
+    const pendingImages = File && typeof File.getPendingImages === 'function' ? File.getPendingImages() : [];
+    const nextStrip = stripNextPrefix(composerBody);
+    const taskBody = nextStrip.text;
+    const busyAtSend = isWorkloadActive();
+    // 直接发送与 /next 同一套：空闲出气泡并 kickoff；忙碌只入队，气泡等执行时再出。
+    const appendUserMessageNow = !busyAtSend;
+    const startNewTurnUi = appendUserMessageNow;
+
+    if (handleAlsoCommand(composerBody)) {
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
+    if (executeLocalCommand(composerBody)) {
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
+    if (
+      elSendBtn
+      && elSendBtn.dataset.action === 'stop'
+      && !composerBody
+      && !fullText
+      && uploadedFiles.length === 0
+      && pendingImages.length === 0
+    ) {
+      handleStop();
+      return;
+    }
+
+    if (File && File.hasPendingUploads && File.hasPendingUploads()) return;
+    if (File && File.hasPendingImageLoads && File.hasPendingImageLoads()) {
+      if (handleSend._waitingImages) return;
+      handleSend._waitingImages = true;
+      const waitImages = File.waitForPendingImageLoads || function (cb) { cb(); };
+      waitImages(() => {
+        handleSend._waitingImages = false;
+        handleSend();
+      });
+      return;
+    }
+    if (!composerBody && !fullText && uploadedFiles.length === 0 && pendingImages.length === 0) return;
+
+    if (
+      window.AppRouter &&
+      typeof window.AppRouter.getShell === 'function' &&
+      window.AppRouter.getShell() === 'mobile' &&
+      document.body.dataset.page === 'work' &&
+      !remoteMode &&
+      !document.querySelector('.page-root-work.mobile-work-has-chat') &&
+      window.MobileComposerHost &&
+      typeof window.MobileComposerHost.handleWorkPageSend === 'function'
+    ) {
+      if (window.MobileComposerHost.handleWorkPageSend()) return;
+    }
+
+    const outboundText = buildComposerTextWithBody(taskBody);
+    if (nextStrip.usedPrefix && !taskBody && uploadedFiles.length === 0 && pendingImages.length === 0) {
+      const usageMsg = { role: 'agent', content: '用法: /next <任务描述>', statusTag: 'system' };
+      if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+        window.ChatSession.stampMessageTimestamps(usageMsg);
+      }
+      Session.appendMessage(usageMsg);
+      UI.appendMessageEl(usageMsg, Session.stripStatusTag);
+      Session.saveMessages();
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
+    const displayParts = [];
+    const selectedSkillFilenames = (Skills && typeof Skills.getSelectedSkills === 'function')
+      ? Skills.getSelectedSkills()
+      : [];
+    if (appendUserMessageNow && taskBody) displayParts.push(taskBody);
+    for (let fi = 0; fi < uploadedFiles.length; fi++) {
+      if (appendUserMessageNow) displayParts.push(`[file] ${uploadedFiles[fi].filename}`);
+    }
+    const msgImages = pendingImages.map((p) =>  p.dataUrl);
+
+    let didAppendUserMessage = false;
+    let newTurnMeta = null;
+    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0 || selectedSkillFilenames.length > 0 || referencePaths.length > 0)) {
+      if (startNewTurnUi) {
+        UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
+      }
+      const userMessageId = newClientMessageId();
+      const userMsg = {
+        role: 'user',
+        id: userMessageId,
+        content: displayParts.join('\n') || (msgImages.length > 0 ? '(图片)' : ''),
+        images: msgImages.length > 0 ? msgImages : undefined,
+      };
+      if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
+      if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
+      userMsg._pendingServerAck = true;
+      Session.appendMessage(userMsg);
+      newTurnMeta = { messageId: userMessageId };
+      try {
+        if (window.EtlChronicle && typeof window.EtlChronicle.previewFromUser === 'function') {
+          newTurnMeta.preview = window.EtlChronicle.previewFromUser(userMsg);
+        }
+      } catch (_e) { /* ignore */ }
+      if (!newTurnMeta.preview && userMsg.content) {
+        newTurnMeta.preview = String(userMsg.content).replace(/\s+/g, ' ').trim().slice(0, 72);
+      }
+      UI.appendMessageEl(userMsg, Session.stripStatusTag);
+      if (startNewTurnUi && UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          'force',
+          buildDisplayMap(),
+        );
+      }
+      didAppendUserMessage = true;
+      Session.saveMessages();
+      syncWelcomeState();
+      const titlePrompt = displayParts.join('\n') || composerBody || fullText || '';
+      if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
+        let userMsgCount = 0;
+        const allMsgs = Session.getMessages();
+        for (let ti = 0; ti < allMsgs.length; ti++) {
+          if (allMsgs[ti].role === 'user') userMsgCount++;
+        }
+        if (userMsgCount === 1) {
+          window.ChatSessionStore.maybeAutoTitleFromPrompt(Session.getActiveId(), titlePrompt);
+        }
+      }
+    }
+
+    clearComposerInput();
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
+
+    let msgText = outboundText || '';
+    for (let fj = 0; fj < uploadedFiles.length; fj++) {
+      const uf = uploadedFiles[fj];
+      msgText = (msgText ? `${msgText}
+` : '') + '[file:' + uf.fileId + '] ' + uf.filename;
+    }
+    if (File && typeof File.clearUploadedFiles === 'function') File.clearUploadedFiles();
+
+    try {
+      if (startNewTurnUi) {
+        userStopped = false;
+        streamFinalized = false;
+        streamChunksReceived = false;
+        visibleStreamChunksReceived = false;
+        pendingTurnTokenUsage = null;
+        if (window.ChatExecutionPlanBridge
+          && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
+          window.ChatExecutionPlanBridge.notifyNewTurnStarted(newTurnMeta || {});
+        } else if (window.ChatExecutionPlan
+          && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
+          window.ChatExecutionPlan.resetToolActivity();
+        }
+        if (window.ChatExecutionPlan
+          && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+          window.ChatExecutionPlan.beginTurnTimer(undefined, newTurnMeta || {});
+        }
+        if (Pet && typeof Pet.showThinking === 'function') {
+          Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
+        }
+        if (UI && typeof UI.clearLiveToolRoundDom === 'function') UI.clearLiveToolRoundDom();
+        if (UI && typeof UI.setLiveToolRoundActive === 'function') UI.setLiveToolRoundActive(true);
+      }
+      if (Pet && typeof Pet.setLastUserPrompt === 'function') {
+        Pet.setLastUserPrompt(outboundText || composerBody || '');
+      }
+    } catch (uiErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] send UI update failed', uiErr);
+      }
+    }
+
+    const outboundMessageId = didAppendUserMessage && Session.getLastMessage()
+      ? Session.getLastMessage().id
+      : undefined;
+    const sendOpts = { referencePaths };
+    if (selectedSkillFilenames.length > 0) sendOpts.skills = selectedSkillFilenames.slice();
+    if (outboundMessageId) sendOpts.messageId = outboundMessageId;
+    if (msgImages.length > 0) sendOpts.images = msgImages;
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function') {
+      const insertIndex = window.ChatTaskQueue.getEditingInsertIndex();
+      if (typeof insertIndex === 'number') {
+        sendOpts.queueInsertIndex = insertIndex;
+        window.ChatTaskQueue.clearEditingInsertIndex();
+      }
+    }
+    let sent = false;
+    let optimisticId = null;
+    const queueLabel = msgText || (msgImages.length > 0 ? '(图片)' : taskBody) || '排队任务';
+    if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.addOptimistic === 'function') {
+      optimisticId = window.ChatTaskQueue.addOptimistic({ text: queueLabel, images: msgImages });
+    }
+    try {
+      if (!WS || typeof WS.sendMessage !== 'function') {
+        sent = false;
+      } else if (msgImages.length > 0) {
+        sent = WS.sendMessage(msgText || '请分析这些图片', sendOpts);
+      } else {
+        sent = WS.sendMessage(msgText, sendOpts);
+      }
+    } catch (sendErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] sendMessage failed', sendErr);
+      }
+    }
+    if (File && typeof File.clearPendingImages === 'function') File.clearPendingImages();
+
+    if (!sent) {
+      if (optimisticId && window.ChatTaskQueue && typeof window.ChatTaskQueue.removeById === 'function') {
+        window.ChatTaskQueue.removeById(optimisticId);
+      }
+      if (WS && typeof WS.connect === 'function') WS.connect(remoteToken);
+      notifyUser('未连接到服务，正在重连…请再发送一次', 'warning', { duration: 4000 });
+    } else if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
+      setTimeout(() => {
+        window.ChatTaskQueue.refresh();
+      }, 400);
+    }
+
+    if (didAppendUserMessage && UI && typeof UI.enableAutoScroll === 'function') {
+      UI.enableAutoScroll();
+    }
+    syncComposerActionState();
+  }
+
+  function handleStop() {
+    userStopped = true;
+    WS.sendStop();
+
+    Pet.removeThinking(isStreaming, WS.isProcessing());
+    UI.clearReasoningStream();
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+
+    const messages = Session.getMessages();
+    const lastMsg = Session.getLastMessage();
+
+    if (lastMsg && lastMsg._streaming) {
+      const stoppedContent = Session.stripStatusTag(lastMsg.content || '');
+      lastMsg.content = stoppedContent ? `${stoppedContent}
+
+[已停止]` : '[已停止]';
+      Session.markLastMessageStreaming(false);
+      if (lastMsg.completedAt == null) lastMsg.completedAt = Date.now();
+
+      const streamEl = document.getElementById('streaming-msg');
+      if (streamEl) {
+        const contentEl = streamEl._streamContentEl || streamEl.lastChild;
+        if (contentEl) contentEl.textContent = lastMsg.content;
+        if (UI.updateMsgLabelTime) UI.updateMsgLabelTime(streamEl, lastMsg.completedAt);
+        streamEl.removeAttribute('id');
+        delete streamEl._streamContentEl;
+      }
+      Session.flushToolBatchLocal();
+    } else {
+      const infoMsg = { role: 'agent', content: '[已停止]' };
+      Session.appendMessage(infoMsg);
+      Session.flushToolBatchLocal();
+      UI.appendMessageEl(infoMsg, Session.stripStatusTag);
+    }
+
+    isStreaming = false;
+    streamFinalized = false;
+    streamChunksReceived = false;
+    visibleStreamChunksReceived = false;
+    UI.setStreamingState(false);
+    WS.setProcessing(false);
+    endTransparencyTurnTimer();
+    Session.saveMessages();
+    syncComposerActionState();
+  }
+
+  // task_queue_updated / bg_task_update / bg_task_stop_result / also_note_appended /
+  // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
+
+  let elShellCollabIndicator = null;
+  let elShellModeChipBar = null;
+  let elPlanModeChipBar = null;
+  const DEFAULT_COMPOSER_PLACEHOLDER = '输入消息… (输入 # 选用技能，@ 引用文件)';
+  const PLAN_MODE_COMPOSER_PLACEHOLDER = '规划模式：描述任务，完善文档（不能改代码）…';
+
+  function getShellCollabStore() {
+    return window.ChatSessionStore || null;
+  }
+
+  function isActiveSessionShellCollab() {
+    const Store = getShellCollabStore();
+    const sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    return !!(Store && Store.getShellCollabActive && Store.getShellCollabActive(sid));
+  }
+
+  function isActiveSessionPlanMode() {
+    const Store = getShellCollabStore();
+    const sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    return !!(Store && Store.getPlanModeActive && Store.getPlanModeActive(sid));
+  }
+
+  function syncShellCollabIndicator() {
+    const active = isActiveSessionShellCollab();
+    if (elShellModeChipBar) {
+      elShellModeChipBar.classList.toggle('hidden', !active);
+      elShellModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elShellCollabIndicator) {
+      elShellCollabIndicator.classList.toggle('hidden', !active);
+      elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+  }
+
+  function syncPlanModeChip() {
+    const active = isActiveSessionPlanMode();
+    if (elPlanModeChipBar) {
+      elPlanModeChipBar.classList.toggle('hidden', !active);
+      elPlanModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elInput) {
+      elInput.placeholder = active ? PLAN_MODE_COMPOSER_PLACEHOLDER : DEFAULT_COMPOSER_PLACEHOLDER;
+    }
+  }
+
+  function notifyShellCollabState(data) {
+    const Store = getShellCollabStore();
+    if (!Store) return;
+    if (data && data.shellCollabActiveBySession && Store.applyShellCollabActiveMap) {
+      Store.applyShellCollabActiveMap(data.shellCollabActiveBySession);
+    } else if (data && data.sessionId && typeof data.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
+      Store.setShellCollabActive(data.sessionId, data.shellCollabActive);
+    }
+    syncShellCollabIndicator();
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+      window.ChatSessionSidebar.renderList();
+    }
+  }
+
+  function notifyPlanModeState(data) {
+    const Store = getShellCollabStore();
+    if (!Store) return;
+    if (data && data.planModeActiveBySession && Store.applyPlanModeActiveMap) {
+      Store.applyPlanModeActiveMap(data.planModeActiveBySession);
+    } else if (data && typeof data.planModeActive === 'boolean' && Store.setPlanModeActive) {
+      const planSid = data.sessionId || data.activeSessionId;
+      if (planSid) Store.setPlanModeActive(planSid, data.planModeActive);
+    }
+    syncPlanModeChip();
+  }
+
+  // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
+  // onWsAlsoNoteAppended / onWsAlsoRejected 已拆分至 chat-ws-bg-task-handlers.js。
+
+  function announceTunnelReadyFromPayload(payload) {
+    if (!payload || !payload.url || tunnelReadyAnnounced) return;
+    tunnelReadyAnnounced = true;
+    Pet.applyTunnelReadyToPet(payload, {
+      isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  function announceMcpReadyFromPayload(payload) {
+    if (!payload || mcpReadyAnnounced) return;
+    mcpReadyAnnounced = true;
+    Pet.applyMcpReadyToPet(payload, {
+      isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  function syncSidebarWorkspace(data) {
+    if (!data || !window.ChatSessionSidebar) return;
+    const sid = data.sessionId || data.activeSessionId;
+    if (sid && typeof window.ChatSessionSidebar.notifyWorkspaceUpdated === 'function') {
+      window.ChatSessionSidebar.notifyWorkspaceUpdated({ sessionId: sid, ...data });
+    }
+  }
+
+  function closeComposerOverlays() {
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
+    if (Skills && typeof Skills.hide === 'function') Skills.hide();
+    if (FileRef && typeof FileRef.hide === 'function') FileRef.hide();
+    if (QR && typeof QR.closeQrCode === 'function') QR.closeQrCode();
+    if (window.ChatDropdown && typeof window.ChatDropdown.close === 'function') {
+      window.ChatDropdown.close();
+    }
+  }
+
+  function captureComposerDraft(sessionId) {
+    if (!sessionId || !window.ChatSessionStore || typeof window.ChatSessionStore.setComposerDraft !== 'function') {
+      return;
+    }
+    const fileSnap = (File && typeof File.getComposerSnapshot === 'function')
+      ? File.getComposerSnapshot()
+      : { uploadedFiles: [], pendingImages: [] };
+    window.ChatSessionStore.setComposerDraft(sessionId, {
+      text: elInput && elInput.value != null ? elInput.value : '',
+      skills: Skills && typeof Skills.getSelectedSkills === 'function' ? Skills.getSelectedSkills() : [],
+      fileRefs: FileRef && typeof FileRef.getSelectedRefs === 'function' ? FileRef.getSelectedRefs() : [],
+      uploadedFiles: fileSnap.uploadedFiles || [],
+      pendingImages: fileSnap.pendingImages || [],
+      queueInsertIndex: window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function'
+        ? window.ChatTaskQueue.getEditingInsertIndex()
+        : null,
+    });
+  }
+
+  function restoreComposerDraft(sessionId) {
+    const draft = window.ChatSessionStore && typeof window.ChatSessionStore.getComposerDraft === 'function'
+      ? window.ChatSessionStore.getComposerDraft(sessionId)
+      : null;
+    if (elInput) elInput.value = draft && draft.text ? draft.text : '';
+    if (Skills && typeof Skills.setSelectedSkills === 'function') {
+      Skills.setSelectedSkills(draft && draft.skills ? draft.skills : []);
+    }
+    if (FileRef && typeof FileRef.setSelectedRefs === 'function') {
+      FileRef.setSelectedRefs(draft && draft.fileRefs ? draft.fileRefs : []);
+    }
+    if (File && typeof File.setComposerSnapshot === 'function') {
+      File.setComposerSnapshot({
+        uploadedFiles: draft && draft.uploadedFiles ? draft.uploadedFiles : [],
+        pendingImages: draft && draft.pendingImages ? draft.pendingImages : [],
+      });
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.setEditingInsertIndex === 'function') {
+      window.ChatTaskQueue.setEditingInsertIndex(
+        draft && typeof draft.queueInsertIndex === 'number' ? draft.queueInsertIndex : null,
+      );
+    }
+    closeComposerOverlays();
+    if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+  }
+
+  function dismissConfirmWithoutReply() {
+    if (window.ChatWsRestoreHandlers
+      && typeof window.ChatWsRestoreHandlers.dismissConfirmWithoutReply === 'function') {
+      window.ChatWsRestoreHandlers.dismissConfirmWithoutReply();
+    }
+  }
+
+  function bindTaskDoneNotifyClick() {
+    if (!window.iceDesktop || typeof window.iceDesktop.onTaskDoneNotifyClick !== 'function') return;
+    if (window.iceDesktop._iceTaskDoneNotifyClickBound) return;
+    window.iceDesktop._iceTaskDoneNotifyClickBound = true;
+    window.iceDesktop.onTaskDoneNotifyClick((sessionId) => {
+      if (!sessionId || !window.ChatSessionStore) return;
+      if (window.ChatSessionStore.getActiveSessionId() === sessionId) return;
+      const wsSend = window.ChatWebSocket && typeof window.ChatWebSocket.send === 'function'
+        ? window.ChatWebSocket.send
+        : null;
+      window.ChatSessionStore.switchSession(sessionId, wsSend, (ok, runningTurn, workspacePayload, _degraded, bgTasks, runtime) => {
+        if (!ok) return;
+        if (workspacePayload && typeof window.ChatSessionStore.setSessionWorkspace === 'function') {
+          window.ChatSessionStore.setSessionWorkspace(sessionId, workspacePayload);
+        }
+        if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+          window.ChatSessionSidebar.renderList();
+        }
+        if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.renderList === 'function') {
+          window.MobileSessionDrawer.renderList();
+        }
+        onSessionSwitched(sessionId, runningTurn, { bgTasks, ...(runtime || {}) });
+      });
+    });
+  }
+
+  function resetViewportTransientState() {
+    pendingTurnTokenUsage = null;
+    pendingAlsoMessageIds = {};
+    streamingDiffBuffer = { toolCallId: '', text: '' };
+    if (window.BgTaskChip && typeof window.BgTaskChip.clearAll === 'function') {
+      window.BgTaskChip.clearAll();
+    }
+  }
+
+  /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。 */
+  function onSessionSwitched(sessionId, runningTurn, options) {
+    options = options || {};
+    closeComposerOverlays();
+    dismissConfirmWithoutReply();
+    const outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId && outgoingSessionId !== sessionId) {
+      captureComposerDraft(outgoingSessionId);
+      if (Pet && typeof Pet.captureSnapshot === 'function') Pet.captureSnapshot(outgoingSessionId);
+      if (window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
+        window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
+      }
+    }
+    UI.clearReasoningStream();
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (Session && typeof Session.setSessionId === 'function') {
+      Session.setSessionId(sessionId);
+    }
+    resetViewportTransientState();
+    if (UI && typeof UI.setCheckpointMessageIds === 'function') {
+      UI.setCheckpointMessageIds([]);
+    }
+    if (UI && typeof UI.setCursorMessageId === 'function') {
+      UI.setCursorMessageId('');
+    }
+    if (typeof options.canRestore === 'boolean') {
+      applyHarnessRestoreUi(options.canRestore, options.checkpointMessageIds);
+    } else {
+      applyHarnessRestoreUi(false);
+    }
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.acknowledgeRunPhase === 'function') {
+      window.ChatSessionStore.acknowledgeRunPhase(sessionId);
+    }
+    restoreComposerDraft(sessionId);
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.notifySessionSwitched === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionSwitched();
+    }
+    resetTokenUsage();
+    if (runningTurn && runningTurn.isProcessing) {
+      restoreFromRunningTurn(runningTurn);
+    } else {
+      restoreFromRunningTurn(null);
+      if (Pet && typeof Pet.resetToIdle === 'function') Pet.resetToIdle();
+    }
+    syncComposerActionState();
+    Session.fetchServerMessages((serverMsgs, result) => {
+      const fetchOk = !result || result.ok !== false;
+      const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      if (fetchOk) {
+        const separated = Session.separateToolTraces(raw);
+        Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
+      }
+      if (shouldSkipServerSnapshotSync()) {
+        if (fetchOk) mergeAndPaintRemoteUserMessages(raw);
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+        initialHistoryPainted = true;
+        pendingInitialPaint = false;
+        return;
+      }
+      renderChatHistoryWithFetch(false, () => {
+        Session.saveMessages();
+        UI.enableAutoScroll();
+        initialHistoryPainted = true;
+        pendingInitialPaint = false;
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+      });
+    });
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
+      window.ChatTaskQueue.refresh(sessionId);
+    }
+    refreshSnapshotTimelinePanel();
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+      window.ChatSessionSidebar.renderList();
+    }
+    if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
+    syncShellCollabIndicator();
+    syncPlanModeChip();
+  }
+
+  function paintInitialChatView() {
+    function afterHistoryPainted() {
+      initialHistoryPainted = true;
+      pendingInitialPaint = false;
+      const cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+      if (cachedLiveTools.length > 0) {
+        applyLiveToolTimelineToUI(cachedLiveTools);
+      }
+      UI.enableAutoScroll();
+      syncSendButtonWithWorkload();
+    }
+    Session.fetchServerMessages((serverMsgs, result) => {
+      if (result && result.ok === false) {
+        renderChatHistoryWithFetch(false, afterHistoryPainted);
+        return;
+      }
+      const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      if (shouldSkipServerSnapshotSync()) {
+        mergeAndPaintRemoteUserMessages(raw);
+        afterHistoryPainted();
+        return;
+      }
+      const separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      renderChatHistoryWithFetch(false, afterHistoryPainted);
+    });
+  }
+
+  /**
+   * 把工具时间线渲染到 live 工具区（F5 / runningTurn / localStorage 共用）
+   */
+  function applyLiveToolTimelineToUI(timeline) {
+    if (!timeline || !timeline.length || !elMessages) return;
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+    UI.setLiveToolRoundActive(true);
+    for (let i = 0; i < timeline.length; i++) {
+      const row = timeline[i];
+      UI.appendToolAction(
+        row.toolName,
+        row.detail || '',
+        row.status || 'pending',
+        row.toolCallId || '',
+        row.diffSource || null,
+      );
+    }
+    if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
+  }
+
+  function pickToolTimelineForRestore(runningTurn) {
+    const serverTimeline = runningTurn && Array.isArray(runningTurn.toolTimeline)
+      ? runningTurn.toolTimeline
+      : [];
+    if (serverTimeline.length > 0) {
+      if (Session.replaceLiveToolBatch) Session.replaceLiveToolBatch(serverTimeline);
+      return serverTimeline;
+    }
+    const localTimeline = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+    if (localTimeline.length > 0) return localTimeline;
+    return [];
+  }
+
+  /**
+   * 方案 B3 还原：F5 / 移动端扫码 / 网络重连 / 切 session 等场景下
+   * 服务端在 `connected` 或 `session_switched` 包里附带 runningTurn 快照，
+   * 这里把流式文本、工具时间线、冰豆、按钮、token、计划重放一遍，使 UI 看起来「跟没断过」。
+   * 多次调用安全。runningTurn 为空时退化为 no-op（并把 isStreaming 复位）。
+   */
+  function restoreFromRunningTurn(runningTurn) {
+    if (!runningTurn || !runningTurn.isProcessing) {
+      // 无服务端 runningTurn 时清掉上一会话残留的流式思考 UI
+      UI.clearReasoningStream();
+      // 无服务端 runningTurn 时保留 localStorage 占位（初始 render 已绘制），由 status:idle 清理
+      isStreaming = false;
+      userStopped = false;
+      streamFinalized = false;
+      streamChunksReceived = false;
+      visibleStreamChunksReceived = false;
+      WS.setProcessing(false);
+      UI.setStreamingState(false);
+      if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
+      if (sessionPet) {
+        sessionPet.setState('idle');
+        sessionPet.setBubbleText('');
+        sessionPet.setTurnLabel('');
+      }
+      return;
+    }
+
+    // 1. 流式文本：先收尾上一段残留，再用累积文本重建 streaming bubble
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (runningTurn.streamingReasoningText) {
+      UI.appendReasoningStreamChunk(runningTurn.streamingReasoningText);
+    }
+    if (runningTurn.streamingText) {
+      UI.appendReasoningStreamChunk(runningTurn.streamingText);
+      streamChunksReceived = true;
+    }
+
+    // 2. 标记 streaming 中
+    isStreaming = !!runningTurn.streamingText;
+    userStopped = false;
+    streamFinalized = false;
+    visibleStreamChunksReceived = false;
+    WS.setProcessing(true);
+    UI.setStreamingState(true);
+
+    // 3. 工具时间线：服务端 runningTurn 优先，否则 localStorage 缓存
+    const toolTimeline = pickToolTimelineForRestore(runningTurn);
+    applyLiveToolTimelineToUI(toolTimeline);
+
+    // 4. token 用量 & 轮次
+    if (typeof runningTurn.lastEffectiveUsed === 'number' && runningTurn.lastEffectiveUsed > 0) {
+      updateTokenUsage(
+        runningTurn.lastInputTokens || 0,
+        runningTurn.lastOutputTokens || 0,
+        {
+          effectiveUsed: runningTurn.lastEffectiveUsed,
+          contextWindow: runningTurn.contextWindow,
+        },
+      );
+    } else if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
+      updateTokenUsage(runningTurn.lastInputTokens || 0, runningTurn.lastOutputTokens || 0);
+    }
+    if (runningTurn.iteration > 0) {
+      Pet.updateTurnCounter(runningTurn.iteration, isStreaming, true);
+    }
+
+    // 5. 冰豆状态 & 气泡
+    if (sessionPet) {
+      sessionPet.setVisible(true);
+      if (runningTurn.petState) sessionPet.setState(runningTurn.petState);
+      if (runningTurn.petBubble) sessionPet.setBubbleText(runningTurn.petBubble);
+      else if (runningTurn.petStatusText) sessionPet.setBubbleText(runningTurn.petStatusText);
+    }
+
+    // 6. 执行计划 / 任务图：重放保存的 step 事件
+    if (Array.isArray(runningTurn.planEvents) && window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.handleStep === 'function') {
+      for (let j = 0; j < runningTurn.planEvents.length; j++) {
+        const planEvt = runningTurn.planEvents[j];
+        // 开跑时的 clear 会把刚恢复的活章封掉并清掉计时；当前回合快照里不应再封一次。
+        if (planEvt && planEvt.type === 'execution_plan_clear') continue;
+        try { window.ChatExecutionPlanBridge.handleStep(planEvt); }
+        catch (_e) { /* ignore */ }
+      }
+    }
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+      window.ChatExecutionPlan.beginTurnTimer(
+        typeof runningTurn.startedAt === 'number' ? runningTurn.startedAt : undefined,
+      );
+    }
+
+    UI.scheduleScrollIfSticky();
+  }
+
+  // ---- WebSocket 事件处理 ----
+  function onWsOpen() {
+    updateNavStatus(true);
+    WS.startSyncPolling();
+  }
+
+  function onWsClose() {
+    updateNavStatus(false);
+    isStreaming = false;
+    UI.setStreamingState(false);
+    endTransparencyTurnTimer();
+  }
+
+  // 流式事件 handler（stream / reasoning_stream / stream_end / response）已拆分至
+  // chat-ws-stream-handlers.js，经 ctx 读写共享状态。
+
+  // step / status / error / tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js，
+  // 经 ctx 读写共享状态；onWsMcpReady 等会话/恢复域 handler 保留在本文件。
+
+  function onWsMcpReady(data) {
+    announceMcpReadyFromPayload(data || {});
+  }
+
+  function onWsTunnelReady(data) {
+    announceTunnelReadyFromPayload(data || {});
+  }
+
+  function isForeignSessionEvent(data) {
+    if (!data || !data.sessionId) return false;
+    const active = Session.getActiveId ? Session.getActiveId() : '';
+    return data.sessionId !== active;
+  }
+
+  function onWsMemoryNotice(data) {
+    if (isForeignSessionEvent(data)) return;
+    const notices = data.notices || [];
+    const messages = Session.getMessages();
+    for (let i = 0; i < notices.length; i++) {
+      const noticeMsg = { role: 'agent', content: notices[i] };
+      if (Session.stampMessageTimestamps) Session.stampMessageTimestamps(noticeMsg);
+      messages.push(noticeMsg);
+      UI.appendMessageEl(noticeMsg, Session.stripStatusTag);
+    }
+    Session.saveMessages();
+    Pet.applyMemoryNoticesToPet(notices, {
+      isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  // confirm / confirm_resolved / confirm_timeout 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js（含 activeConfirmId / activeConfirmResolved 私有状态）。
+
+  function applyTurnTokenUsageToLastAgent(usage, messageId, usedModel) {
+    if (!usage || typeof usage !== 'object') return false;
+    const payload = {
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+    };
+    const model = typeof usedModel === 'string' ? usedModel.trim() : '';
+    const msgs = Session.getMessages();
+
+    function applyTo(msg) {
+      msg.turnTokenUsage = payload;
+      if (model) msg.usedModel = model;
+      if (messageId && !msg.id) msg.id = messageId;
+      if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msg);
+      Session.saveMessages();
+      return true;
+    }
+
+    if (messageId) {
+      for (let j = msgs.length - 1; j >= 0; j--) {
+        if (msgs[j].role === 'agent' && msgs[j].id === messageId) {
+          return applyTo(msgs[j]);
+        }
+      }
+    }
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role !== 'agent') continue;
+      if (messageId && msgs[i].id && msgs[i].id !== messageId) {
+        pendingTurnTokenUsage = { usage: payload, messageId, usedModel: model };
+        return false;
+      }
+      return applyTo(msgs[i]);
+    }
+    pendingTurnTokenUsage = { usage: payload, messageId: messageId || '', usedModel: model };
+    return false;
+  }
+
+  function onWsTokenUsage(data) {
+    if (isForeignSessionEvent(data)) return;
+    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
+      effectiveUsed: data.effectiveUsed,
+      contextWindow: data.contextWindow,
+    });
+    const turnIn = typeof data.totalInputTokens === 'number' ? data.totalInputTokens : 0;
+    const turnOut = typeof data.totalOutputTokens === 'number' ? data.totalOutputTokens : 0;
+    const usedModel = typeof data.usedModel === 'string' ? data.usedModel.trim() : '';
+    if (turnIn > 0 || turnOut > 0 || usedModel) {
+      const usage = { inputTokens: turnIn, outputTokens: turnOut };
+      if (applyTurnTokenUsageToLastAgent(usage, data.messageId || '', usedModel)) {
+        pendingTurnTokenUsage = null;
+      }
+    }
+  }
+
+  function onWsPulse(data) {
+    if (isForeignSessionEvent(data)) return;
+    if (!sessionPet) return;
+    const hint = data && data.hint ? data.hint : '处理中';
+    Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
+  }
+
+  function applyHarnessRestoreUi(canRestore, checkpointIds) {
+    if (UI && typeof UI.setRestoreAvailability === 'function') {
+      UI.setRestoreAvailability(canRestore);
+    }
+    // 空数组不能当「权威清空」：connected/harness_state 偶发缺字段会被收成 []，
+    // 会把气泡回滚全部打成禁用，而快照时间轴仍有节点。切会话在上面显式清空。
+    if (UI && Array.isArray(checkpointIds) && checkpointIds.length
+      && typeof UI.setCheckpointMessageIds === 'function') {
+      UI.setCheckpointMessageIds(checkpointIds);
+    }
+    notifySnapshotRestoreAvailability();
+  }
+
+  function refreshSnapshotTimelinePanel() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.refreshSnapshotTimeline === 'function') {
+      window.ChatExecutionPlan.refreshSnapshotTimeline();
+    }
+  }
+
+  function notifySnapshotRestoreAvailability() {
+    if (UI && typeof UI.refreshRestoreButtonsVisibility === 'function') {
+      UI.refreshRestoreButtonsVisibility();
+    }
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.notifySnapshotRestoreAvailability === 'function') {
+      window.ChatExecutionPlan.notifySnapshotRestoreAvailability();
+    }
+  }
+
+  function wireSnapshotTimelineHandlers() {
+    if (!window.ChatExecutionPlan
+      || typeof window.ChatExecutionPlan.registerSnapshotHandlers !== 'function') {
+      return;
+    }
+    window.ChatExecutionPlan.registerSnapshotHandlers({
+      onRestore: handleMessageRestoreAction,
+      canRestore() {
+        if (runtimeRestoreInFlight) return false;
+        if (UI && typeof UI.isChatRestoreAllowed === 'function') {
+          return !!UI.isChatRestoreAllowed();
+        }
+        return !!(WS.canRestoreRuntime && WS.canRestoreRuntime());
+      },
+    });
+  }
+
+  // harness_state / checkpoint_message_ids / checkpoint_captured / runtime_restored /
+  // restore_failed / message_deleted / delete_message_failed 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js。
+
+  function dispatchDeleteMessage(messageId) {
+    if (!messageId) return;
+    if (!WS.isConnected || !WS.isConnected()) {
+      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      WS.connect(remoteToken);
+      return;
+    }
+    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    const sent = WS.sendDeleteUserMessage(messageId);
+    if (sent === false) {
+      notifyUser('删除请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+    }
+  }
+
+  function dispatchRestoreRuntime(messageId) {
+    if (!messageId) return;
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!WS.isConnected || !WS.isConnected()) {
+      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      WS.connect(remoteToken);
+      return;
+    }
+    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
+      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      return;
+    }
+    runtimeRestoreInFlight = true;
+    notifySnapshotRestoreAvailability();
+    const sent = WS.sendRestoreRuntime(messageId);
+    if (sent === false) {
+      runtimeRestoreInFlight = false;
+      notifySnapshotRestoreAvailability();
+      notifyUser('回滚请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+    }
+  }
+
+  function showRestoreConfirmDialog(messageId) {
+    Modal.confirm({
+      title: '确认回滚？',
+      message: '将工作区恢复到该消息发送前的状态。\n\n该条用户消息及之后的对话会从聊天和模型上下文中移除，仅保留回滚记录。',
+      type: 'warning',
+      confirmText: '回滚',
+      cancelText: '取消',
+    }).then((ok) => {
+      if (ok) dispatchRestoreRuntime(messageId);
+    });
+  }
+
+  function showDeleteConfirmDialog(messageId) {
+    Modal.confirm({
+      title: '确认删除？',
+      message: '删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。\n\n此操作不会回滚工作区文件修改。',
+      type: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+      dangerConfirm: true,
+    }).then((ok) => {
+      if (ok) dispatchDeleteMessage(messageId);
+    });
+  }
+
+  function handleMessageDeleteAction(messageId, btn) {
+    if (btn && btn.disabled) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!messageId) return;
+    const sentAt = btn && btn.dataset && btn.dataset.sentAt
+      ? Number(btn.dataset.sentAt)
+      : undefined;
+    let deleteId = messageId;
+    if (UI && typeof UI.resolveCheckpointMessageId === 'function') {
+      deleteId = UI.resolveCheckpointMessageId(messageId, isFinite(sentAt) ? sentAt : undefined) || messageId;
+    }
+    if (deleteId === messageId && Session && typeof Session.getMessages === 'function') {
+      const msgs = Session.getMessages();
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (!m || m.role !== 'user') continue;
+        if (m._prevId === messageId && m.id) {
+          deleteId = m.id;
+          break;
+        }
+      }
+    }
+    showDeleteConfirmDialog(deleteId);
+  }
+
+  function handleMessageRestoreAction(messageId, btn) {
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
+    if (btn && btn.disabled) {
+      const processing = !WS.canRestoreRuntime || !WS.canRestoreRuntime();
+      notifyUser(
+        processing
+          ? '运行中，请等待当前任务完成后再回滚。'
+          : '未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。',
+        'warning',
+        { duration: 4000 },
+      );
+      return;
+    }
+    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
+      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!messageId) return;
+    const sentAt = btn && btn.dataset && btn.dataset.sentAt
+      ? Number(btn.dataset.sentAt)
+      : undefined;
+    const restoreId = UI && typeof UI.resolveCheckpointMessageId === 'function'
+      ? UI.resolveCheckpointMessageId(messageId, sentAt)
+      : messageId;
+    const knownByChat = UI && typeof UI.hasCheckpointForMessage === 'function'
+      && UI.hasCheckpointForMessage(restoreId, sentAt);
+    const knownBySnapshot = window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.hasSnapshotCheckpoint === 'function'
+      && window.ChatExecutionPlan.hasSnapshotCheckpoint(restoreId);
+    if (!knownByChat && !knownBySnapshot) {
+      notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
+      return;
+    }
+    let hideRestore = UI && typeof UI.shouldHideRestoreAtCursor === 'function'
+      && UI.shouldHideRestoreAtCursor(restoreId, sentAt);
+    if (!hideRestore && window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.isSnapshotRestoreHidden === 'function') {
+      hideRestore = !!window.ChatExecutionPlan.isSnapshotRestoreHidden(restoreId);
+    }
+    if (hideRestore) {
+      notifyUser('已在该检查点，无需回滚。', 'info', { duration: 3000 });
+      return;
+    }
+    showRestoreConfirmDialog(restoreId);
+  }
+
+  function onRestoreButtonClick(e) {
+    const target = e.target && e.target.nodeType === 1 ? e.target : (e.target && e.target.parentElement);
+    if (!target || !target.closest) return;
+    const btn = target.closest('.msg-restore-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleMessageRestoreAction(btn.dataset.messageId, btn);
+  }
+
+  function onDeleteButtonClick(e) {
+    const target = e.target && e.target.nodeType === 1 ? e.target : (e.target && e.target.parentElement);
+    if (!target || !target.closest) return;
+    const btn = target.closest('.msg-delete-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleMessageDeleteAction(btn.dataset.messageId, btn);
+  }
+                                                             
+  function clearSessionExecutionFlow() {
+    const sessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.clearSessionFlow === 'function') {
+      window.ChatExecutionPlanBridge.clearSessionFlow(sessionId);
+    } else if (window.ChatExecutionFlowStore
+      && typeof window.ChatExecutionFlowStore.clear === 'function') {
+      window.ChatExecutionFlowStore.clear(sessionId);
+    }
+  }
+
+  function notifyUser(message, type, opts) {
+    if (window.Notification && typeof window.Notification.show === 'function') {
+      return window.Notification.show(message, type || 'info', opts);
+    }
+    if (window.UI && typeof window.UI.notify === 'function') {
+      return window.UI.notify(message, type || 'info', opts);
+    }
+    alert(message);
+  }
+
+  // runtime_restored / restore_failed / message_deleted / delete_message_failed
+  // 事件 handler 已拆分至 chat-ws-restore-handlers.js。
+
+  function shouldSkipServerSnapshotSync() {
+    return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
+  }
+
+  function refreshChatHistoryAfterTurn(shouldScroll, done, opts) {
+    opts = opts || {};
+    if (!opts.force && shouldSkipServerSnapshotSync()) {
+      if (done) done();
+      return;
+    }
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
+    Session.fetchServerMessages((serverMsgs, result) => {
+      if (result && result.ok === false) {
+        if (done) done();
+        return;
+      }
+      if (!opts.force && shouldSkipServerSnapshotSync()) {
+        if (done) done();
+        return;
+      }
+      const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      const separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      renderChatHistoryWithFetch(shouldScroll, () => {
+        Session.saveMessages();
+        if (done) done();
+      });
+    });
+  }
+
+  function getSyncMessagesGapMs() {
+    return isMobileShell() ? 12000 : 5000;
+  }
+
+  function syncMessages(force) {
+    if (shouldSkipServerSnapshotSync()) return;
+    const allowThrottleBypass = !!force || needsInitialHistoryPaint();
+    if (!allowThrottleBypass) {
+      const now = Date.now();
+      if (now - lastSyncMessagesMs < getSyncMessagesGapMs()) return;
+    }
+    lastSyncMessagesMs = Date.now();
+    Session.fetchServerMessages((serverMsgs) => {
+      // F5 重连：onWsOpen 发起的 fetch 可能在 connected+restore 之后才返回；
+      // 此时若仍 renderMessagesOnly 会清掉 runningTurn 刚还原的工具时间线/流式气泡。
+      if (shouldSkipServerSnapshotSync()) return;
+      if (!serverMsgs || serverMsgs.length === 0) return;
+      const separated = Session.separateToolTraces(serverMsgs);
+      const updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
+      if (updated) {
+        renderChatHistoryWithFetch(false, () => {
+          Session.saveMessages();
+          initialHistoryPainted = true;
+          pendingInitialPaint = false;
+        });
+      } else if (needsInitialHistoryPaint() && serverMsgs && serverMsgs.length > 0) {
+        renderChatHistoryWithFetch(false, () => {
+          Session.saveMessages();
+          initialHistoryPainted = true;
+          pendingInitialPaint = false;
+        });
+      }
+    });
+  }
+
+  function pullServerChatSnapshotAuthoritative(done) {
+    if (shouldSkipServerSnapshotSync()) {
+      if (done) done(false);
+      return;
+    }
+    Session.fetchServerMessages((serverMsgs, result) => {
+      if ((result && result.ok === false) || shouldSkipServerSnapshotSync()) {
+        if (done) done(false);
+        return;
+      }
+      const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      const separated = Session.separateToolTraces(raw);
+      const updated = Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      if (updated) {
+        renderChatHistoryWithFetch(false);
+        Session.saveMessages();
+      }
+      if (done) done(true);
+    });
+  }
+
+  function paintRemoteUserMessagesWithoutDom(msgs) {
+    let painted = false;
+    const root = document.getElementById('chat-messages');
+    for (let i = 0; i < msgs.length; i++) {
+      const um = msgs[i];
+      if (um.role !== 'user') continue;
+      if (um._el && um._el.isConnected) continue;
+      if (um.id && root && root.querySelector(`.message.user[data-message-id="${um.id}"]`)) continue;
+      if (um._prevId && root && root.querySelector(`.message.user[data-message-id="${um._prevId}"]`)) continue;
+      if (UI.insertRemoteUserMessageEl) {
+        UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
+      } else {
+        UI.appendMessageEl(um, Session.stripStatusTag);
+      }
+      painted = true;
+    }
+    if (painted) {
+      if (UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          'force',
+          buildDisplayMap(),
+        );
+      }
+      syncWelcomeState();
+      UI.scheduleScrollIfSticky();
+    }
+    return painted;
+  }
+
+  /** processing 期间无法全量拉快照时，仅补齐服务端已有 user 消息并插入 DOM */
+  function mergeAndPaintRemoteUserMessages(serverMsgs) {
+    const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+    if (!raw.length || !Session.mergeUserMessagesFromServer) return false;
+    const separated = Session.separateToolTraces(raw);
+    const added = Session.mergeUserMessagesFromServer(separated.msgs);
+    const painted = paintRemoteUserMessagesWithoutDom(Session.getMessages());
+    if (added || painted) Session.saveMessages();
+    return added || painted;
+  }
+
+  function applyRemoteUserMessage(msg) {
+    if (!msg || msg.role !== 'user') return false;
+    if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
+    if (!Session.insertRemoteUserMessage) return false;
+    const result = Session.insertRemoteUserMessage(msg);
+    if (!result) return false;
+    const localMsg = Session.getMessageById
+      ? (Session.getMessageById(msg.id) || (result === 'adopted' ? Session.getLastMessage() : null))
+      : null;
+    if (result === 'existing' || result === 'adopted') {
+      if (localMsg && UI.replaceUserMessageEl) {
+        UI.replaceUserMessageEl(localMsg, Session.stripStatusTag);
+      } else if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
+        UI.updateMessageImagesEl(msg.id, msg.images);
+      }
+      Session.saveMessages();
+      syncWelcomeState();
+      UI.scheduleScrollIfSticky();
+      return true;
+    }
+    if (UI.insertRemoteUserMessageEl) {
+      UI.insertRemoteUserMessageEl(msg, Session.stripStatusTag);
+    } else {
+      UI.appendMessageEl(msg, Session.stripStatusTag);
+    }
+    if (UI.maybeRepartitionTailIfNeeded) {
+      UI.maybeRepartitionTailIfNeeded(
+        Session.getMessages(),
+        Session.getToolTraces(),
+        Session.stripStatusTag,
+        'force',
+        buildDisplayMap(),
+      );
+    }
+    Session.saveMessages();
+    syncWelcomeState();
+    UI.scheduleScrollIfSticky();
+    return true;
+  }
+
+  // bg_task_update / bg_task_stop_result 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
+
+  // tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js。
+
+  /**
+   * 方案 A keep-alive：app.js navigate 回聊天页时调用。
+   * 此时 DOM、WS、流式状态都还在，仅做一次轻量级同步（拉服务端快照、对齐按钮态）。
+   */
+  function onActivate() {
+    if (!mounted) return;
+    if (WS && typeof WS.isConnected === 'function' && !WS.isConnected()) {
+      WS.connect(remoteToken);
+    }
+    syncSendButtonWithWorkload();
+    // 模型配置与底部 chip 每次回到聊天页都要刷新，不受消息同步节流影响
+    loadModelConfig();
+    if (needsInitialHistoryPaint()) return;
+    const now = Date.now();
+    if (now - lastActivateFetchMs < getActivateFetchGapMs()) return;
+    lastActivateFetchMs = now;
+    if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
+      syncMessages(false);
+    }
+  }
+
+  // ---- 流式 handler ctx ----
+  // 流式事件 handler 已拆分至 chat-ws-stream-handlers.js；ctx 向各 handler 暴露
+  // 共享状态读写（状态仍保留在本闭包）与跨域辅助函数引用。
+  function buildStreamHandlerCtx() {
+    return {
+      get(name) {
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        if (name === 'streamFinalized') return streamFinalized;
+        if (name === 'streamChunksReceived') return streamChunksReceived;
+        if (name === 'visibleStreamChunksReceived') return visibleStreamChunksReceived;
+        return undefined;
+      },
+      set(name, value) {
+        if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+        else if (name === 'streamFinalized') streamFinalized = value;
+        else if (name === 'streamChunksReceived') streamChunksReceived = value;
+        else if (name === 'visibleStreamChunksReceived') visibleStreamChunksReceived = value;
+      },
+      getPendingTurnTokenUsage() { return pendingTurnTokenUsage; },
+      setPendingTurnTokenUsage(v) { pendingTurnTokenUsage = v; },
+      getStreamingDiffBuffer() { return streamingDiffBuffer; },
+      setStreamingDiffBuffer(buf) { streamingDiffBuffer = buf; },
+      getSessionPet() { return sessionPet; },
+      getElMessages() { return elMessages; },
+      syncWelcomeState,
+      endTransparencyTurnTimer,
+      refreshChatHistoryAfterTurn,
+      shouldSkipServerSnapshotSync,
+      applyTotalTokenUsageFromStep,
+      notifySnapshotRestoreAvailability,
+      syncSendButtonWithWorkload,
+    };
+  }
+
+  // ---- 会话 handler ctx ----
+  // 会话事件 handler 已拆分至 chat-ws-session-handlers.js；共享函数留在本闭包，
+  // 经 ctx 注入避免双实现分叉（模块内不再复制 syncMessages / syncSidebarWorkspace 等）。
+  function buildSessionHandlerCtx() {
+    return {
+      get(name) {
+        if (name === 'remoteMode') return remoteMode;
+        if (name === 'initialHistoryPainted') return initialHistoryPainted;
+        if (name === 'pendingInitialPaint') return pendingInitialPaint;
+        return undefined;
+      },
+      set(name, value) {
+        if (name === 'initialHistoryPainted') initialHistoryPainted = value;
+        else if (name === 'pendingInitialPaint') pendingInitialPaint = value;
+      },
+      onSessionSwitched,
+      paintInitialChatView,
+      shouldSkipWsConnectedHeavyFetch,
+      applyModelContextFromWs,
+      loadModelConfig,
+      syncChipModelLabelFromWs,
+      syncSidebarWorkspace,
+      restoreFromRunningTurn,
+      announceMcpReadyFromPayload,
+      announceTunnelReadyFromPayload,
+      applyHarnessRestoreUi,
+      notifyShellCollabState,
+      notifyPlanModeState,
+      needsInitialHistoryPaint,
+      syncMessages,
+      applyRemoteUserMessage,
+      shouldSkipServerSnapshotSync,
+      refreshChatHistoryAfterTurn,
+      refreshSnapshotTimelinePanel,
+      paintRemoteUserMessagesWithoutDom,
+      pullServerChatSnapshotAuthoritative,
+    };
+  }
+
+  // ---- 恢复/确认 handler ctx ----
+  // confirm / harness / checkpoint / runtime_restored / message_deleted 等事件 handler
+  // 已拆分至 chat-ws-restore-handlers.js；跨域状态（runtimeRestoreInFlight / isStreaming /
+  // userStopped）留在本闭包，经 ctx.get/set 读写；共享函数经 ctx 注入，模块内不复制实现。
+  function buildRestoreHandlerCtx() {
+    return {
+      get(name) {
+        if (name === 'runtimeRestoreInFlight') return runtimeRestoreInFlight;
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        return undefined;
+      },
+      set(name, value) {
+        if (name === 'runtimeRestoreInFlight') runtimeRestoreInFlight = value;
+        else if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+      },
+      getSessionPet() { return sessionPet; },
+      applyHarnessRestoreUi,
+      refreshSnapshotTimelinePanel,
+      notifySnapshotRestoreAvailability,
+      clearSessionExecutionFlow,
+      refreshChatHistoryAfterTurn,
+      syncSidebarWorkspace,
+      notifyUser,
+      pullServerChatSnapshotAuthoritative,
+    };
+  }
+
+  // ---- 后台任务/协作 handler ctx ----
+  // bg_task / task_queue / also / shell_collab 事件 handler 已拆分至
+  // chat-ws-bg-task-handlers.js；共享状态（pendingAlsoMessageIds）留在本闭包，
+  // 经 ctx.get/set 共享对象引用；共享函数经 ctx 注入，模块内不复制实现。
+  function buildBgTaskHandlerCtx() {
+    return {
+      get(name) {
+        if (name === 'pendingAlsoMessageIds') return pendingAlsoMessageIds;
+        return undefined;
+      },
+      set(name, value) {
+        if (name === 'pendingAlsoMessageIds') pendingAlsoMessageIds = value;
+      },
+      getElMessages() { return elMessages; },
+      appendAlsoNoteBubble,
+      notifyShellCollabState,
+      notifyPlanModeState,
+      syncWelcomeState,
+    };
+  }
+
+  function refreshComposerModules() {
+    if (window.ChatSession) Session = window.ChatSession;
+    if (window.ChatWebSocket) WS = window.ChatWebSocket;
+    if (window.ChatUI) UI = window.ChatUI;
+    if (window.ChatCommands) Cmd = window.ChatCommands;
+    if (window.ChatSkills) Skills = window.ChatSkills;
+    if (window.ChatFileRef) FileRef = window.ChatFileRef;
+    if (window.ChatFile) File = window.ChatFile;
+    if (window.ChatQR) QR = window.ChatQR;
+    if (window.ChatPetBridge) Pet = window.ChatPetBridge;
+  }
+
+  function onComposerPaste(e) {
+    if (e && e.__iceComposerPaste) return;
+    if (e) e.__iceComposerPaste = true;
+    refreshComposerModules();
+    if (File && typeof File.handlePasteEvent === 'function' && File.handlePasteEvent(e)) return;
+    if (File && typeof File.tryPasteFromDesktopClipboard === 'function'
+      && File.tryPasteFromDesktopClipboard(e && e.clipboardData)) {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    }
+  }
+
+  /**
+   * 输入区交互必须在后续 init（冰豆 / WS / 欢迎页）之前绑定。
+   * 那些步骤一旦抛错，旧逻辑会跳过 @ # + 指令 粘贴 与自动增高。
+   */
+  function bindComposerInteractions() {
+    if (composerEventsBound) return;
+    composerEventsBound = true;
+    refreshComposerModules();
+
+    if (elMessages) {
+      elMessages.addEventListener('click', onRestoreButtonClick, true);
+      elMessages.addEventListener('click', onDeleteButtonClick, true);
+    }
+    if (elSendBtn) elSendBtn.addEventListener('click', handleSend);
+    if (elInput) {
+      elInput.addEventListener('keydown', (e) => {
+        refreshComposerModules();
+        if (FileRef && FileRef.handleKeydown(e, elInput)) return;
+        if (Skills && Skills.handleKeydown(e, elInput)) return;
+        if (Cmd && Cmd.handleKeydown(e, elInput)) return;
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (elSendBtn && elSendBtn.dataset.action === 'stop') return;
+          handleSend();
+        }
+      });
+      elInput.addEventListener('input', () => {
+        refreshComposerModules();
+        if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+        if (Skills) Skills.handleInput(elInput.value, elInput);
+        if (FileRef) FileRef.handleInput(elInput.value, elInput);
+        if (Cmd) Cmd.handleInput(elInput.value, elInput);
+        syncComposerActionState();
+      });
+      elInput.addEventListener('wheel', (e) => {
+        if (elInput.scrollHeight > elInput.clientHeight + 1) e.stopPropagation();
+      }, { passive: true });
+    }
+    document.addEventListener('paste', (e) => {
+      if (!elInput || !container) return;
+      const composer = container.querySelector('.chat-composer');
+      const ae = document.activeElement;
+      const focusedInComposer = !!(ae && composer && composer.contains(ae));
+      const targetInComposer = !!(e.target && composer && composer.contains(e.target));
+      if (ae !== elInput && !focusedInComposer && !targetInComposer) return;
+      onComposerPaste(e);
+    }, true);
+    if (elCmdPlusBtn) {
+      elCmdPlusBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        refreshComposerModules();
+        toggleCmdPalette();
+      });
+    }
+    const chatPage = container && container.querySelector('.chat-page');
+    if (chatPage) {
+      chatPage.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.add('drag-over');
+      });
+      chatPage.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+      });
+      chatPage.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+        refreshComposerModules();
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || !File) return;
+        for (let i = 0; i < files.length; i++) {
+          if (files[i].type.startsWith('image/')) {
+            File.addPendingImage(files[i]);
+          } else {
+            File.handleFileSelect(files[i], Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+          }
+        }
+      });
+    }
+    if (elFileInput) {
+      elFileInput.addEventListener('change', () => {
+        refreshComposerModules();
+        if (!elFileInput.files || !File) return;
+        for (let fi = 0; fi < elFileInput.files.length; fi++) {
+          const picked = elFileInput.files[fi];
+          if (picked && File.isImageFile && File.isImageFile(picked)) {
+            File.addPendingImage(picked);
+          } else {
+            File.handleFileSelect(picked, Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+          }
+        }
+        elFileInput.value = '';
+      });
+    }
+  }
+
+  // ---- 渲染 ----
+  function render(parentEl) {
+    if (mounted) {
+      // 方案 A：已经挂载，切页面回来不再重建
+      onActivate();
+      return;
+    }
+    container = parentEl;
+    refreshComposerModules();
+
+    const params = new URLSearchParams(window.location.search);
+    remoteToken = params.get('token');
+    remoteMode = !!remoteToken;
+    if (remoteMode) {
+      const remoteSid = params.get('sid');
+      if (remoteSid && window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+        window.ChatSessionStore.setActiveSessionId(remoteSid);
+      }
+    }
+
+    container.innerHTML =
+      '<div class="chat-page">' +
+        '<div class="chat-main">' +
+        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="规划模式">' +
+          '<span class="plan-mode-chip">' +
+            '<span class="plan-mode-chip-label">Plan</span>' +
+            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>' +
+          '</span>' +
+        '</div>' +
+        '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="Shell 协作模式">' +
+          '<span class="shell-mode-chip" title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话">' +
+            '<span class="shell-mode-chip-label">Shell</span>' +
+          '</span>' +
+        '</div>' +
+        '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
+        '<div class="session-pet-indicator" id="agent-status-bar">' +
+          '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
+          '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '，拖动移动；双击展开执行透明层" title="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '：拖动移动；双击展开执行透明层"></canvas>' +
+          '<span class="status-turn" id="status-turn"></span>' +
+        '</div>' +
+        '<div class="chat-input-area">' +
+          '<div class="chat-fade-overlay" aria-hidden="true"></div>' +
+          '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
+          '<div class="file-upload-status hidden" id="file-status"></div>' +
+          '<div class="chat-composer-stack">' +
+          '<div class="chat-composer">' +
+            '<div class="composer-input">' +
+              '<div class="input-wrapper">' +
+                '<div id="skill-chips-bar" class="skill-chips-bar hidden" role="listbox" aria-label="已选技能"></div>' +
+                '<div id="file-ref-chips-bar" class="file-ref-chips-bar hidden" role="listbox" aria-label="已引用文件"></div>' +
+                '<textarea id="chat-input" rows="2" placeholder="输入消息… (输入 # 选用技能，@ 引用文件)"></textarea>' +
+              '</div>' +
+            '</div>' +
+            '<div class="composer-toolbar">' +
+              '<div class="composer-file-btn" id="btn-file">' +
+                '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="上传文件" aria-label="上传文件">' +
+                '<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">' +
+                  (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+') +
+                '</span>' +
+              '</div>' +
+              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
+                '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
+              '</button>' +
+              '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
+                ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
+                ' aria-valuenow="0" tabindex="0">' +
+                '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
+                '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
+              '</div>' +
+              '<button class="btn-send" id="btn-send" type="button" title="Send" aria-label="Send">' +
+                (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
+              '</button>' +
+              '<div class="cmd-palette-anchor">' +
+                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                  (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
+                '</button>' +
+              '</div>' +
+              '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
+              + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
+              + 'aria-label="Shell 协作模式">'
+              + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
+              + '<span class="shell-collab-label">Shell协作</span>'
+              + '</span>' +
+            '</div>' +
+          '</div>' +
+          '</div>' +
+        '</div>' +
+        '</div>' + /* /chat-main */
+      '</div>';
+
+    if (window.AppIcon) window.AppIcon.hydrate(container);
+
+    // 缓存 DOM
+    elMessages = container.querySelector('#chat-messages');
+    elAnchor = container.querySelector('#chat-anchor');
+    elInput = container.querySelector('#chat-input');
+    elSendBtn = container.querySelector('#btn-send');
+    elFileBtn = container.querySelector('#btn-file');
+    elFileInput = container.querySelector('#file-input');
+    elFileStatus = container.querySelector('#file-status');
+    elStatusBar = container.querySelector('#agent-status-bar');
+    elStatusTurn = container.querySelector('#status-turn');
+    elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
+    elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
+    elShellModeChipBar = container.querySelector('#shell-mode-chip-bar');
+    elPlanModeChipBar = container.querySelector('#plan-mode-chip-bar');
+    const elPlanModeExitBtn = container.querySelector('#btn-plan-mode-exit');
+    if (elPlanModeExitBtn) {
+      elPlanModeExitBtn.addEventListener('click', () => {
+        if (WS && typeof WS.send === 'function') WS.send({ type: 'plan_mode_exit' });
+      });
+    }
+    mainInputWrapper = container.querySelector('.input-wrapper');
+    bindComposerInteractions();
+    mounted = true;
+
+    try {
+    if (elCmdPlusBtn && Cmd && typeof Cmd.setAnchor === 'function') Cmd.setAnchor(elCmdPlusBtn);
+    const composerInputEl = container.querySelector('.composer-input');
+    if (composerInputEl) {
+      if (Cmd && typeof Cmd.setInputAnchor === 'function') Cmd.setInputAnchor(composerInputEl);
+      if (Skills) Skills.setAnchor(composerInputEl);
+      if (FileRef) FileRef.setAnchor(composerInputEl);
+    }
+
+    // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
+    // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatReasoningStepper && typeof window.ChatReasoningStepper.init === 'function') {
+      window.ChatReasoningStepper.init(container.querySelector('#reasoning-stepper'));
+    }
+
+    if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
+      window.ChatModelPicker.init({
+        chipEl: container.querySelector('#chip-model'),
+        labelEl: container.querySelector('#chip-model-label'),
+      });
+      window.ChatModelPicker.refreshFromServer();
+    }
+
+    // 会话侧栏由 app.js 挂在 app-shell 上，切记忆/配置页时保持可见。
+
+    // 初始化子模块
+    UI.init({ elMessages, elAnchor, elInput, elSendBtn });
+    UI.autoResizeInput();
+    if (typeof UI.setMessageActionHandlers === 'function') {
+      UI.setMessageActionHandlers({
+        onDelete: handleMessageDeleteAction,
+        onRestore: handleMessageRestoreAction,
+      });
+    }
+    wireSnapshotTimelineHandlers();
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.init === 'function') {
+      window.ChatStaircaseNav.init({
+        elMessages,
+        elMain: container.querySelector('.chat-main'),
+        getMessages: Session.getMessages,
+      });
+    }
+    if (window.ChatWelcome && typeof window.ChatWelcome.init === 'function') {
+      window.ChatWelcome.init({
+        elMessages,
+        remoteMode,
+      });
+    }
+    if (window.AppShell) {
+      if (typeof window.AppShell.addSupervisorModeListener === 'function') {
+        window.AppShell.addSupervisorModeListener(() => {
+          syncWelcomeState();
+        });
+      }
+      if (typeof window.AppShell.addConnectionChangeListener === 'function') {
+        window.AppShell.addConnectionChangeListener(() => {
+          syncWelcomeState();
+        });
+      }
+    }
+    if (File && typeof File.init === 'function') {
+      File.init({
+        elFileStatus,
+        elFileInput,
+        onComposerChange: syncComposerActionState,
+      });
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
+      window.ChatTaskQueue.init({
+        container: container.querySelector('.chat-input-area'),
+        getSessionId() { return Session.getActiveId(); },
+        onFillInput(text, images) {
+          if (elInput) {
+            elInput.value = text || '';
+            UI.autoResizeInput();
+            elInput.focus();
+          }
+          if (File && typeof File.setComposerSnapshot === 'function') {
+            const snap = typeof File.getComposerSnapshot === 'function'
+              ? File.getComposerSnapshot()
+              : { uploadedFiles: [] };
+            const pending = [];
+            if (Array.isArray(images)) {
+              for (let pi = 0; pi < images.length; pi++) {
+                pending.push({ dataUrl: images[pi], file: null });
+              }
+            }
+            File.setComposerSnapshot({
+              uploadedFiles: snap.uploadedFiles || [],
+              pendingImages: pending,
+            });
+          }
+          syncComposerActionState();
+        },
+      });
+      window.ChatTaskQueue.refresh(Session.getActiveId());
+    }
+    if (Cmd && typeof Cmd.setRemoteMode === 'function') Cmd.setRemoteMode(remoteMode);
+    const cmdDropdown = Cmd && typeof Cmd.init === 'function' ? Cmd.init() : null;
+    if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
+    if (Skills) {
+      Skills.init();
+      Skills.initSkillComposer(elInput, container.querySelector('#skill-chips-bar'));
+    }
+    if (FileRef) {
+      FileRef.init();
+      FileRef.initFileComposer(elInput, container.querySelector('#file-ref-chips-bar'));
+    }
+
+    // 初始化冰豆（会话指示器）
+    if (window.SessionPet) {
+      sessionPet = window.SessionPet.create(elStatusBar);
+      if (Pet && typeof Pet.init === 'function') Pet.init(sessionPet);
+      const petCanvas = container.querySelector('#pet-canvas');
+      if (petCanvas) {
+        petCanvas.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          if (window.ChatExecutionPlan
+            && typeof window.ChatExecutionPlan.requestExpandFromPet === 'function') {
+            window.ChatExecutionPlan.requestExpandFromPet();
+          }
+        });
+      }
+      if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
+        window.DesktopPetBridge.attach(sessionPet);
+      }
+      if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
+        Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
+      }
+    }
+
+    // 初始化会话：先从 localStorage 载入（本地页与远程页都需要内存里有消息再绘制）
+    Session.initSession();
+
+    fetchSupportedFormats();
+
+    if (window.BgTaskChip && window.BgTaskChip.setStopHandler) {
+      window.BgTaskChip.setStopHandler((taskId) => {
+        if (!WS.isConnected || !WS.isConnected()) return;
+        WS.send({ type: 'bg_task_stop', taskId });
+      });
+    }
+    if (window.EtlShellDock && window.EtlShellDock.setStopHandler) {
+      window.EtlShellDock.setStopHandler((taskId) => {
+        if (!WS.isConnected || !WS.isConnected()) return;
+        WS.send({ type: 'bg_task_stop', taskId });
+      });
+    }
+    if (window.ChatShellDock) window.ChatShellDock.initTaskRemovedHandler();
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] ui init failed after composer bind', err);
+      }
+    }
+
+    try {
+    if (!WS || typeof WS.on !== 'function') {
+      throw new Error('ChatWebSocket 未加载');
+    }
+    // 绑定 WebSocket 事件
+    WS.on('open', onWsOpen);
+    WS.on('close', onWsClose);
+    // 流式事件（stream / reasoning_stream / stream_end / response / step / status / error / tool_output）
+    // 已拆分至 chat-ws-stream-handlers.js，经 ctx 读写共享状态
+    try {
+      if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
+        window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+      }
+    } catch (streamErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] stream handlers bind failed', streamErr);
+      }
+    }
+    try {
+      if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
+        window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
+      }
+    } catch (sessionErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] session handlers bind failed', sessionErr);
+      }
+    }
+    try {
+      if (window.ChatWsRestoreHandlers && typeof window.ChatWsRestoreHandlers.bind === 'function') {
+        window.ChatWsRestoreHandlers.bind(WS, buildRestoreHandlerCtx());
+      } else if (typeof console !== 'undefined') {
+        console.warn('[ChatPage] ChatWsRestoreHandlers not loaded');
+      }
+    } catch (restoreErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] restore handlers bind failed', restoreErr);
+      }
+    }
+    WS.on('mcp_ready', onWsMcpReady);
+    WS.on('tunnel_ready', onWsTunnelReady);
+    WS.on('memory_notice', onWsMemoryNotice);
+    WS.on('tokenUsage', onWsTokenUsage);
+    WS.on('pulse', onWsPulse);
+    try {
+      if (window.ChatWsBgTaskHandlers && typeof window.ChatWsBgTaskHandlers.bind === 'function') {
+        window.ChatWsBgTaskHandlers.bind(WS, buildBgTaskHandlerCtx());
+      } else if (typeof console !== 'undefined') {
+        console.warn('[ChatPage] ChatWsBgTaskHandlers not loaded');
+      }
+    } catch (bgErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] bg-task handlers bind failed', bgErr);
+      }
+    }
+
+    syncShellCollabIndicator();
+    syncPlanModeChip();
+    bindTaskDoneNotifyClick();
+
+    // 连接 WebSocket
+    WS.connect(remoteToken);
+    } catch (wsErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] websocket init failed', wsErr);
+      }
+      if (WS && typeof WS.connect === 'function') {
+        try { WS.connect(remoteToken); } catch (_e) { /* ignore */ }
+      }
+    }
+
+    try {
+    if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
+      window.ChatSessionStore.bootstrapInitialSession(() => {
+        paintInitialChatView();
+      });
+    } else if (remoteMode) {
+      pendingInitialPaint = true;
+      setTimeout(() => {
+        if (!initialHistoryPainted && pendingInitialPaint) {
+          pendingInitialPaint = false;
+          paintInitialChatView();
+        }
+      }, 4000);
+    } else {
+      paintInitialChatView();
+    }
+
+    // 切回前台重连
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        if (!WS.isConnected()) {
+          WS.connect(remoteToken);
+        } else if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
+          const now = Date.now();
+          if (now - lastActivateFetchMs >= getActivateFetchGapMs()) {
+            lastActivateFetchMs = now;
+            syncMessages(false);
+          }
+        }
+        WS.startSyncPolling();
+      } else {
+        WS.stopSyncPolling();
+      }
+    });
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] session paint init failed', err);
+      }
+    }
+  }
+
+  return {
+    render,
+    onActivate,
+    onSessionSwitched,
+    syncShellDockOnMount() { if (window.ChatShellDock) window.ChatShellDock.sync(); },
+    clearShellDockCache(sessionId) { if (window.ChatShellDock) window.ChatShellDock.clearCache(sessionId); },
+    hydrateShellDockForSession(sessionId, wsTasks) { if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, wsTasks); },
+    isWorkloadActive,
+    syncWelcomeState,
+    reloadModelConfig: loadModelConfig,
+    triggerSend: handleSend,
+    isMounted() { return mounted; },
+    getContainer() { return container; },
+  };
+})();
+
+if (typeof window !== 'undefined') {
+  window.ChatPage = ChatPage;
+}

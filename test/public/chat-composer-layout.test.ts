@@ -3,17 +3,19 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
 const CHAT_CSS = readFileSync(path.join(publicRoot, 'css/chat.css'), 'utf-8');
 const TOKENS_CSS = readFileSync(path.join(publicRoot, 'css/tokens.css'), 'utf-8');
-const CHAT_UI_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-ui.js'), 'utf-8');
+const CHAT_UI_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-ui.ts'), 'utf-8'));
 const ETL_CSS = readFileSync(path.join(publicRoot, 'css/chat-execution-plan.css'), 'utf-8');
-const ETL_PANEL_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan.js'), 'utf-8');
-const ETL_CHRONICLE_SOURCE = readFileSync(path.join(publicRoot, 'js/etl-chronicle.js'), 'utf-8');
-const ETL_BRIDGE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan-bridge.js'), 'utf-8');
-const ETL_FLOW_STORE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-flow-store.js'), 'utf-8');
+const ETL_PANEL_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-execution-plan.ts'), 'utf-8'));
+const ETL_CHRONICLE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/etl-chronicle.ts'), 'utf-8'));
+const ETL_BRIDGE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-execution-plan-bridge.ts'), 'utf-8'));
+const ETL_FLOW_STORE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-execution-flow-store.ts'), 'utf-8'));
 
 let browser: Browser;
 const openPages = new Set<Page>();

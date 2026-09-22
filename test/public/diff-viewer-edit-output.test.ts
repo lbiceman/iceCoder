@@ -3,11 +3,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { classicWindowSource } from './classic-window-source.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function loadDiffViewer() {
-  const src = readFileSync(path.join(__dirname, '../../src/public/js/diff-viewer.js'), 'utf-8');
+  const src = classicWindowSource(readFileSync(path.join(__dirname, '../../src/public/js/diff-viewer.ts'), 'utf-8'));
   const ctx: {
     window: { DiffViewer?: unknown };
     DiffViewer?: { renderFromText: (t: string, o?: object) => unknown; parseChangesOnly: (t: string) => unknown[] };

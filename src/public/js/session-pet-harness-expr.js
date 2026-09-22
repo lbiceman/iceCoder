@@ -5,8 +5,8 @@
  * 聊天页经 chat-pet-bridge 映射 harness step → 这些 state。
  */
 
-var PET_SCALE = 96 / 120;
-var blinkNow = false;
+const PET_SCALE = 96 / 120;
+let blinkNow = false;
 
 function ts(timestamp) {
   return typeof timestamp === 'number' && isFinite(timestamp) ? timestamp : 0;
@@ -24,7 +24,7 @@ function wrapExpr(fn) {
 }
 
 function drawClosedEyes(ctx, leftX, rightX, y, ec) {
-  var w = 11 * PET_SCALE;
+  const w = 11 * PET_SCALE;
   strokeSetup(ctx, ec, 2.4);
   ctx.beginPath();
   ctx.moveTo(leftX - w / 2, y);
@@ -50,7 +50,7 @@ function drawNomiEyes(ctx, leftX, rightX, y, ec) {
     drawClosedEyes(ctx, leftX, rightX, y, ec);
     return;
   }
-  var r = 6.2 * PET_SCALE;
+  const r = 6.2 * PET_SCALE;
   strokeSetup(ctx, ec, 2.4);
   ctx.beginPath();
   ctx.arc(leftX, y + 3.2, r, Math.PI, 0, true);
@@ -79,8 +79,8 @@ function drawHCapsuleEyes(ctx, leftX, rightX, y, ec) {
     drawClosedEyes(ctx, leftX, rightX, y, ec);
     return;
   }
-  var hw = 6.5 * PET_SCALE;
-  var hh = 3.2 * PET_SCALE;
+  const hw = 6.5 * PET_SCALE;
+  const hh = 3.2 * PET_SCALE;
   strokeSetup(ctx, ec, 2.3);
   ctx.beginPath();
   ctx.ellipse(leftX, y, hw, hh, 0, 0, Math.PI * 2);
@@ -100,7 +100,7 @@ function drawHand(ctx, x, y, rot, scale, ec) {
   ctx.beginPath();
   ctx.ellipse(0, 2.2, 4.4, 3.3, 0, 0, Math.PI * 2);
   ctx.stroke();
-  for (var i = -1; i <= 1; i++) {
+  for (let i = -1; i <= 1; i++) {
     ctx.beginPath();
     ctx.moveTo(i * 2.1, -0.2);
     ctx.quadraticCurveTo(i * 2.5, -5.6, i * 1.5, -7.4);
@@ -142,7 +142,7 @@ function drawPeaceSign(ctx, x, y, rot, scale, ec) {
 }
 
 function drawSleepZ(ctx, x, y, t, ec) {
-  var rise = (t / 18) % 16;
+  const rise = (t / 18) % 16;
   ctx.save();
   ctx.globalAlpha = Math.max(0.2, 1 - rise / 16);
   strokeSetup(ctx, ec, 1.5);
@@ -161,7 +161,7 @@ function expressionIdleRest(ctx, leftX, rightX, y, ec) {
 }
 
 function expressionIdleGlance(ctx, leftX, rightX, y, ec, dir) {
-  var d = dir >= 0 ? 1 : -1;
+  const d = dir >= 0 ? 1 : -1;
   drawOvalEyes(ctx, leftX + d * 2.2, rightX + d * 2.2, y, ec, 4.1 * PET_SCALE, 6.1 * PET_SCALE);
 }
 
@@ -171,22 +171,22 @@ function expressionIdleDoze(ctx, leftX, rightX, y, ec, timestamp) {
 }
 
 function expressionIdleWave(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawNomiEyes(ctx, leftX, rightX, y, ec);
-  var wag = Math.sin(t / 160) * 0.55;
+  const wag = Math.sin(t / 160) * 0.55;
   drawHand(ctx, leftX - 11, y + 20, -0.55 + wag, 1, ec);
 }
 
 function expressionIdlePeace(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawNomiEyes(ctx, leftX, rightX, y, ec);
-  var bob = Math.sin(t / 280) * 0.12;
+  const bob = Math.sin(t / 280) * 0.12;
   drawPeaceSign(ctx, rightX + 10, y + 16, 0.35 + bob, 0.95, ec);
 }
 
 function expressionIdle(ctx, leftX, rightX, y, ec, timestamp, extra) {
-  var pose = extra && extra.pose ? extra.pose : 'rest';
-  var dir = extra && extra.dir < 0 ? -1 : 1;
+  const pose = extra && extra.pose ? extra.pose : 'rest';
+  const dir = extra && extra.dir < 0 ? -1 : 1;
   if (pose === 'glance') {
     expressionIdleGlance(ctx, leftX, rightX, y, ec, dir);
     return;
@@ -206,7 +206,7 @@ function expressionIdle(ctx, leftX, rightX, y, ec, timestamp, extra) {
   expressionIdleRest(ctx, leftX, rightX, y, ec);
 }
 
-export var IDLE_POSES = ['rest', 'glance', 'doze', 'wave', 'peace'];
+export const IDLE_POSES = ['rest', 'glance', 'doze', 'wave', 'peace'];
 
 export function idlePoseHoldMs(pose) {
   if (pose === 'wave') return 1600 + Math.random() * 1400;
@@ -223,13 +223,13 @@ function expressionWave(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** planning：托腮 + 小任务图，只用于真正在规划 */
 function expressionPlanning(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var bob = Math.sin(t / 520) * 1.2;
+  const t = ts(timestamp);
+  const bob = Math.sin(t / 520) * 1.2;
   drawNomiEyes(ctx, leftX, rightX, y + bob * 0.3, ec);
   drawHand(ctx, leftX - 2, y + 18 + bob, 0.55, 0.92, ec);
   drawHand(ctx, rightX + 2, y + 18 + bob, -0.55, 0.92, ec);
-  var gx = rightX + 13;
-  var gy = y - 8 + bob;
+  const gx = rightX + 13;
+  const gy = y - 8 + bob;
   strokeSetup(ctx, ec, 1.45);
   ctx.globalAlpha = 0.82;
   ctx.beginPath();
@@ -252,19 +252,19 @@ function expressionPlanning(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** running：处理中 — 横线速度感，一眼忙碌 */
 function expressionRunning(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var shift = (t / 70) % 8;
+  const t = ts(timestamp);
+  const shift = (t / 70) % 8;
   strokeSetup(ctx, ec, 1.7);
   ctx.globalAlpha = 0.85;
-  for (var i = 0; i < 5; i++) {
-    var yy = y - 10 + i * 5;
-    var len = 6 + (i % 2) * 3;
-    var x0 = leftX - 20 + (shift + i * 2) % 8;
+  for (let i = 0; i < 5; i++) {
+    const yy = y - 10 + i * 5;
+    const len = 6 + (i % 2) * 3;
+    const x0 = leftX - 20 + (shift + i * 2) % 8;
     ctx.beginPath();
     ctx.moveTo(x0, yy);
     ctx.lineTo(x0 + len, yy);
     ctx.stroke();
-    var x1 = rightX + 12 - (shift + i * 2) % 8;
+    const x1 = rightX + 12 - (shift + i * 2) % 8;
     ctx.beginPath();
     ctx.moveTo(x1, yy);
     ctx.lineTo(x1 + len, yy);
@@ -276,8 +276,8 @@ function expressionRunning(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** executing / tool_calling：左下手握住扳手柄拧 */
 function expressionToolCalling(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var swing = Math.sin(t / 130) * 0.28;
+  const t = ts(timestamp);
+  const swing = Math.sin(t / 130) * 0.28;
 
   drawOvalEyes(ctx, leftX, rightX, y, ec, 4.6 * PET_SCALE, 6.4 * PET_SCALE);
   if (!blinkNow) {
@@ -326,9 +326,9 @@ function expressionToolCalling(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** streaming：麦克风 + 音符上浮 */
 function expressionStreaming(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawNomiEyes(ctx, leftX, rightX, y - 1, ec);
-  var bob = Math.sin(t / 180) * 1.4;
+  const bob = Math.sin(t / 180) * 1.4;
   ctx.save();
   ctx.translate(leftX - 8, y + 16 + bob);
   ctx.rotate(-0.55);
@@ -344,11 +344,11 @@ function expressionStreaming(ctx, leftX, rightX, y, ec, timestamp) {
   ctx.stroke();
   ctx.restore();
 
-  for (var n = 0; n < 3; n++) {
-    var phase = (t / 18 + n * 18) % 42;
-    var nx = rightX + 4 + n * 5;
-    var ny = y + 10 - phase;
-    var alpha = Math.max(0, 1 - phase / 42);
+  for (let n = 0; n < 3; n++) {
+    const phase = (t / 18 + n * 18) % 42;
+    const nx = rightX + 4 + n * 5;
+    const ny = y + 10 - phase;
+    const alpha = Math.max(0, 1 - phase / 42);
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.fillStyle = ec;
@@ -367,16 +367,16 @@ function expressionStreaming(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** recovering：指尖陀螺旋转 */
 function expressionRecovering(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawNomiEyes(ctx, leftX, rightX, y - 3, ec);
-  var cx = (leftX + rightX) / 2;
-  var cy = y + 18;
+  const cx = (leftX + rightX) / 2;
+  const cy = y + 18;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(t / 160);
   strokeSetup(ctx, ec, 1.85);
-  for (var i = 0; i < 3; i++) {
-    var a = (i * Math.PI * 2) / 3;
+  for (let i = 0; i < 3; i++) {
+    const a = (i * Math.PI * 2) / 3;
     ctx.beginPath();
     ctx.arc(Math.cos(a) * 7.2, Math.sin(a) * 7.2, 3.4, 0, Math.PI * 2);
     ctx.stroke();
@@ -389,11 +389,11 @@ function expressionRecovering(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** restoring：折叠地图展开 */
 function expressionRestoring(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawNomiEyes(ctx, leftX, rightX, y - 4, ec);
-  var cx = (leftX + rightX) / 2;
-  var cy = y + 18;
-  var open = 10 + Math.sin(t / 340) * 3.2;
+  const cx = (leftX + rightX) / 2;
+  const cy = y + 18;
+  const open = 10 + Math.sin(t / 340) * 3.2;
   strokeSetup(ctx, ec, 1.9);
   ctx.beginPath();
   ctx.moveTo(cx - open, cy - 6);
@@ -412,9 +412,9 @@ function expressionRestoring(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** cancelling：耷拉眼 + 平嘴 */
 function expressionCancelling(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var droop = 1.2 + Math.sin(t / 700) * 1.1;
-  var yy = y + droop;
+  const t = ts(timestamp);
+  const droop = 1.2 + Math.sin(t / 700) * 1.1;
+  const yy = y + droop;
   if (blinkNow) {
     drawClosedEyes(ctx, leftX, rightX, yy, ec);
   } else {
@@ -437,11 +437,11 @@ function expressionCancelling(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** 完成：睁眼鼓掌，避免和托腮/打盹撞脸 */
 function expressionClap(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawOvalEyes(ctx, leftX, rightX, y - 2, ec, 4.2 * PET_SCALE, 6.0 * PET_SCALE);
-  var g = Math.abs(Math.sin(t / 130));
-  var gap = 10 - g * 7;
-  var cx = (leftX + rightX) / 2;
+  const g = Math.abs(Math.sin(t / 130));
+  const gap = 10 - g * 7;
+  const cx = (leftX + rightX) / 2;
   drawHand(ctx, cx - gap, y + 18, 0.7, 0.88, ec);
   drawHand(ctx, cx + gap, y + 18, -0.7, 0.88, ec);
   if (g > 0.78) {
@@ -471,10 +471,10 @@ function drawSpark(ctx, x, y, s) {
 
 /** memory：记忆注入 — 睁眼接收，星点从外侧吸入头顶 */
 function expressionMemory(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawOvalEyes(ctx, leftX, rightX, y, ec, 4.4 * PET_SCALE, 6.2 * PET_SCALE);
-  var cx = (leftX + rightX) / 2;
-  var pulse = 0.5 + 0.5 * Math.sin(t / 180);
+  const cx = (leftX + rightX) / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(t / 180);
   strokeSetup(ctx, ec, 1.75);
   ctx.globalAlpha = 0.4 + 0.5 * pulse;
   ctx.beginPath();
@@ -488,10 +488,10 @@ function expressionMemory(ctx, leftX, rightX, y, ec, timestamp) {
   ctx.lineTo(cx + 5.5, y - 13);
   ctx.stroke();
   ctx.globalAlpha = 1;
-  for (var i = 0; i < 6; i++) {
-    var phase = (t / 420 + i / 6) % 1;
-    var x = cx + 20 - phase * 34;
-    var yy = y - 2 + Math.sin((phase * 2 + i) * Math.PI) * 9;
+  for (let i = 0; i < 6; i++) {
+    const phase = (t / 420 + i / 6) % 1;
+    const x = cx + 20 - phase * 34;
+    const yy = y - 2 + Math.sin((phase * 2 + i) * Math.PI) * 9;
     ctx.save();
     ctx.globalAlpha = 0.22 + 0.78 * (1 - phase);
     strokeSetup(ctx, ec, 1.5);
@@ -502,8 +502,8 @@ function expressionMemory(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** 出错：挑眉 */
 function expressionErrorBrow(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var shake = Math.sin(t / 70) * 0.8;
+  const t = ts(timestamp);
+  const shake = Math.sin(t / 70) * 0.8;
   drawOvalEyes(ctx, leftX + shake, rightX + shake, y, ec, 4.4 * PET_SCALE, 6.2 * PET_SCALE);
   strokeSetup(ctx, ec, 2.3);
   ctx.beginPath();
@@ -514,8 +514,8 @@ function expressionErrorBrow(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** 待确认：捂嘴害羞 */
 function expressionToolConfirm(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
-  var bob = Math.sin(t / 260) * 0.8;
+  const t = ts(timestamp);
+  const bob = Math.sin(t / 260) * 0.8;
   drawNomiEyes(ctx, leftX, rightX, y + bob, ec);
   ctx.fillStyle = 'rgba(255, 130, 160, 0.42)';
   ctx.beginPath();
@@ -527,9 +527,9 @@ function expressionToolConfirm(ctx, leftX, rightX, y, ec, timestamp) {
 
 /** 请接管：格旗摇动 */
 function expressionUserCheckpoint(ctx, leftX, rightX, y, ec, timestamp) {
-  var t = ts(timestamp);
+  const t = ts(timestamp);
   drawOvalEyes(ctx, leftX, rightX, y - 2, ec, 4.2 * PET_SCALE, 6.4 * PET_SCALE);
-  var wag = Math.sin(t / 180) * 0.28;
+  const wag = Math.sin(t / 180) * 0.28;
   ctx.save();
   ctx.translate(leftX - 10, y + 14);
   ctx.rotate(-0.35 + wag);
@@ -538,9 +538,9 @@ function expressionUserCheckpoint(ctx, leftX, rightX, y, ec, timestamp) {
   ctx.moveTo(0, 8);
   ctx.lineTo(0, -11);
   ctx.stroke();
-  var s = 4;
-  for (var r = 0; r < 2; r++) {
-    for (var c = 0; c < 2; c++) {
+  const s = 4;
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 2; c++) {
       if ((r + c) % 2 === 0) {
         ctx.fillRect(1.2 + c * s, -11 + r * s, s, s);
       } else {
@@ -551,9 +551,9 @@ function expressionUserCheckpoint(ctx, leftX, rightX, y, ec, timestamp) {
   ctx.restore();
 }
 
-var toolUseExpr = wrapExpr(expressionToolCalling);
+const toolUseExpr = wrapExpr(expressionToolCalling);
 
-export var HARNESS_PET_EXPRESSIONS = {
+export const HARNESS_PET_EXPRESSIONS = {
   idle: wrapExpr(expressionIdle),
   planning: wrapExpr(expressionPlanning),
   running: wrapExpr(expressionRunning),
@@ -571,7 +571,7 @@ export var HARNESS_PET_EXPRESSIONS = {
 };
 
 /** 这些态自己有持续动画，眨眼会打断道具 */
-export var HARNESS_PET_SKIP_BLINK = {
+export const HARNESS_PET_SKIP_BLINK = {
   running: 1,
   executing: 1,
   streaming: 1,
@@ -583,14 +583,14 @@ export var HARNESS_PET_SKIP_BLINK = {
   user_checkpoint: 1,
 };
 
-export var HARNESS_PET_SKIP_BREATH = {
+export const HARNESS_PET_SKIP_BREATH = {
   running: 1,
   executing: 1,
   tool_calling: 1,
   recovering: 1,
 };
 
-export var HARNESS_PET_DEMO = [
+export const HARNESS_PET_DEMO = [
   { state: 'idle', title: '空闲', why: '随机休息 / 张望 / 打盹 / 招手 / 比耶' },
   { state: 'planning', title: '规划', why: '托腮 + 任务图' },
   { state: 'running', title: '处理中', why: '两侧速度线，忙碌运转' },
@@ -602,7 +602,7 @@ export var HARNESS_PET_DEMO = [
   { state: 'cancelling', title: '取消中', why: '耷拉眼收束' },
 ];
 
-export var HARNESS_PET_DEMO_EXTRAS = [
+export const HARNESS_PET_DEMO_EXTRAS = [
   { state: 'memory', title: '记忆注入', why: '星点吸入，并入提示' },
   { state: 'clap', title: '完成', why: '鼓掌（model_done）' },
   { state: 'error', title: '出错', why: '挑眉（工具失败）' },

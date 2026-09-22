@@ -98,6 +98,105 @@ export interface ExecutionModeSeriesBucket {
   exit: number;
 }
 
+const SIGNAL_LABELS: Record<string, string> = {
+  task_graph_active: '任务图进行中',
+  pending_steps: '未完成步骤',
+  multi_write: '多文件写入',
+  branch_switched: '分支切换',
+  checkpoint_resumed: '检查点恢复',
+  tool_failure: '工具失败',
+  recovery_pending: '等待恢复',
+  large_diff: '大范围改动',
+  explicit_impl: '明确实现',
+  engine_fail_safe: '引擎兜底',
+  unknown: '其他',
+};
+
+const DEGRADED_LABELS: Record<string, string> = {
+  graph: '图构建降级',
+  step_queue: '步骤队列降级',
+  write_intent: '写入意图降级',
+};
+
+function signalLabel(key: string): string {
+  return SIGNAL_LABELS[key] || key || '其他';
+}
+
+export function filterExecutionModeEvents(
+  events: ReturnType<typeof extractExecutionModeEvents>,
+  eventFilter?: string,
+): ReturnType<typeof extractExecutionModeEvents> {
+  const filter = String(eventFilter || '').trim().toLowerCase();
+  if (!filter) return events;
+  return events.filter((event) => {
+    if (filter === 'enter' || filter === 'execution_mode_enter') {
+      return event.type === 'execution_mode_enter';
+    }
+    if (filter === 'exit' || filter === 'execution_mode_exit') {
+      return event.type === 'execution_mode_exit';
+    }
+    if (event.type.toLowerCase() === filter) return true;
+    const payload = event.payload;
+    if (payload.executionMode?.toLowerCase() === filter) return true;
+    if (payload.enteredByPrimary?.toLowerCase() === filter) return true;
+    return payload.enteredBy.some((signal) => signal.toLowerCase() === filter);
+  });
+}
+
+export function formatExecutionModeReport(
+  stats: ReturnType<typeof aggregateExecutionModeStats>,
+  days: number,
+  eventFilter?: string,
+): string {
+  const lines: string[] = [];
+  const filterNote = eventFilter ? `，event=${eventFilter}` : '';
+  lines.push(`📊 **执行模式报告**（最近 ${days} 天${filterNote}）`);
+  lines.push('');
+
+  if (stats.enter === 0 && stats.exit === 0) {
+    lines.push('暂无监管触发记录。');
+    return lines.join('\n');
+  }
+
+  lines.push(`**进入** ${stats.enter} 次 | 退出 ${stats.exit} 次`);
+
+  const modeParts = Object.entries(stats.byMode)
+    .sort((a, b) => b[1] - a[1])
+    .map(([mode, count]) => `${mode}:${count}`);
+  if (modeParts.length) {
+    lines.push(`**按模式** ${modeParts.join(' ')}`);
+  }
+
+  const signalParts = Object.entries(stats.bySignal)
+    .sort((a, b) => b[1] - a[1])
+    .map(([signal, count]) => `${signalLabel(signal)}:${count}`);
+  if (signalParts.length) {
+    lines.push(`**触发源** ${signalParts.join(' ')}`);
+  }
+
+  const recent = stats.recent.slice(-8);
+  if (recent.length) {
+    lines.push('');
+    lines.push('**最近**');
+    for (const event of recent) {
+      const verb = event.type === 'execution_mode_enter' ? '进入' : '退出';
+      const mode = event.payload.executionMode
+        || (event.type === 'execution_mode_enter' ? 'forced' : 'free');
+      const primary = event.payload.enteredByPrimary || event.payload.enteredBy[0];
+      const reason = event.type === 'execution_mode_enter' && primary
+        ? ` · ${signalLabel(primary)}`
+        : '';
+      const round = event.payload.round ? ` · 第 ${event.payload.round} 轮` : '';
+      const degraded = event.payload.degradedTier
+        ? `（${DEGRADED_LABELS[event.payload.degradedTier] || event.payload.degradedTier}）`
+        : '';
+      lines.push(`- ${verb} ${mode}${reason}${round}${degraded}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 export function aggregateExecutionModeSeries(
   events: ReturnType<typeof extractExecutionModeEvents>,
   days: number,
@@ -134,6 +233,19 @@ export function createSupervisorEventsRouter(): Router {
     const days = Number.isFinite(parsedDays) ? Math.min(Math.max(parsedDays, 1), 90) : 7;
     const runtimePath = path.join(getRuntimeDataDir(), DEFAULT_RUNTIME_TELEMETRY_LOG);
     const events = extractExecutionModeEvents(await readJsonlFile(runtimePath, days));
+
+    // ~supervisor 命令要文本报告；统计页不带 format，继续走下面的 JSON。
+    if (String(req.query.format || '') === 'text') {
+      const eventFilter = typeof req.query.event === 'string' ? req.query.event : '';
+      const filtered = filterExecutionModeEvents(events, eventFilter);
+      const stats = aggregateExecutionModeStats(filtered);
+      res.json({
+        success: true,
+        report: formatExecutionModeReport(stats, days, eventFilter || undefined),
+      });
+      return;
+    }
+
     const stats = aggregateExecutionModeStats(events);
     res.json({
       success: true,

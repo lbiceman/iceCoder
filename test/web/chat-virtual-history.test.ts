@@ -3,14 +3,16 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { classicWindowSource } from '../public/classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function loadChatVirtualHistory() {
-  const src = readFileSync(
-    path.join(__dirname, '../../src/public/js/chat-virtual-history.js'),
+  const src = classicWindowSource(readFileSync(
+    path.join(__dirname, '../../src/public/js/chat-virtual-history.ts'),
     'utf-8',
-  );
+  ));
   const ctx: { window: Record<string, unknown> } = { window: {} };
   runInNewContext(src, ctx);
   return ctx.window.ChatVirtualHistory as {

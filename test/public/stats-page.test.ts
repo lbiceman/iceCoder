@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const STATS_JS = readFileSync(path.join(publicRoot, 'js/stats-page.js'), 'utf-8');
+const STATS_JS = classicWindowSource(readFileSync(path.join(publicRoot, 'js/stats-page.ts'), 'utf-8'));
 const STATS_CSS = readFileSync(path.join(publicRoot, 'css/stats.css'), 'utf-8');
 
 let browser: Browser;

@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe('chat-pet-bridge user_checkpoint', () => {
   it('final 事件映射为 user_checkpoint 表情并保持接管提示', () => {
-    const bridgePath = path.join(__dirname, '../../src/public/js/chat-pet-bridge.js');
+    const bridgePath = path.join(__dirname, '../../src/public/js/chat-pet-bridge.ts');
     const src = readFileSync(bridgePath, 'utf-8');
     expect(src).toMatch(/sr === 'user_checkpoint'/);
     expect(src).toMatch(/setState\('user_checkpoint'\)/);
@@ -21,7 +21,7 @@ describe('chat-pet-bridge user_checkpoint', () => {
 
 describe('chat-page user_checkpoint pet guard', () => {
   it('syncSendButtonWithWorkload 不覆盖 checkpoint 表情', () => {
-    const pagePath = path.join(__dirname, '../../src/public/js/chat-page.js');
+    const pagePath = path.join(__dirname, '../../src/public/js/chat-page.ts');
     const src = readFileSync(pagePath, 'utf-8');
     expect(src).toMatch(/Pet\.isUserCheckpointActive/);
   });

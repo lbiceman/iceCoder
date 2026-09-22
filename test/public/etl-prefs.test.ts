@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ETL_PREFS_PATH = path.join(__dirname, '../../src/public/js/etl-prefs.js');
+const ETL_PREFS_PATH = path.join(__dirname, '../../src/public/js/etl-prefs.ts');
 
 type FetchHandler = (input: string, init?: { method?: string; body?: string }) => Promise<{
   ok: boolean;
@@ -38,7 +40,7 @@ function createFetchMock(initialPrefs: Record<string, unknown>, onPatch?: (body:
 }
 
 function loadEtlPrefs(fetchImpl: FetchHandler) {
-  const src = readFileSync(ETL_PREFS_PATH, 'utf-8');
+  const src = classicWindowSource(readFileSync(ETL_PREFS_PATH, 'utf-8'));
   const context: Record<string, unknown> = {
     window: {},
     fetch: fetchImpl,
@@ -115,39 +117,39 @@ describe('etl-prefs', () => {
 
 describe('phase 1-3 wiring', () => {
   it('main.js 在 config-model-panel 之前 import etl-prefs', () => {
-    const mainSrc = readFileSync(
-      path.join(__dirname, '../../src/public/js/main.js'),
+    const mainSrc = classicWindowSource(readFileSync(
+      path.join(__dirname, '../../src/public/js/main.ts'),
       'utf-8',
-    );
-    const etlIdx = mainSrc.indexOf("import './etl-prefs.js'");
-    const configIdx = mainSrc.indexOf("import './config-model-panel.js'");
+    ));
+    const etlIdx = mainSrc.indexOf("import './etl-prefs.ts'");
+    const configIdx = mainSrc.indexOf("import './config-model-panel.ts'");
     expect(etlIdx).toBeGreaterThan(-1);
     expect(configIdx).toBeGreaterThan(-1);
     expect(etlIdx).toBeLessThan(configIdx);
   });
 
   it('session-pet 不再绑定 dblclick 复位', () => {
-    const src = readFileSync(
+    const src = classicWindowSource(readFileSync(
       path.join(__dirname, '../../src/public/js/session-pet.js'),
       'utf-8',
-    );
+    ));
     expect(src).not.toMatch(/addEventListener\('dblclick'[\s\S]*clearCustomPosition/);
   });
 
   it('chat-page 绑定 requestExpandFromPet 并更新 canvas 文案', () => {
-    const src = readFileSync(
-      path.join(__dirname, '../../src/public/js/chat-page.js'),
+    const src = classicWindowSource(readFileSync(
+      path.join(__dirname, '../../src/public/js/chat-page.ts'),
       'utf-8',
-    );
+    ));
     expect(src).toMatch(/requestExpandFromPet/);
     expect(src).toMatch(/双击展开执行透明层/);
   });
 
   it('chat-page 将后端累计 Token 和工具次数同步到面板 Footer', () => {
-    const src = readFileSync(
-      path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.js'),
+    const src = classicWindowSource(readFileSync(
+      path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.ts'),
       'utf-8',
-    );
+    ));
     expect(src).toMatch(/ChatExecutionPlan\.applyRuntimeStats\(\{[\s\S]*totalTokenUsage:\s*step\.totalTokenUsage[\s\S]*totalToolCalls:\s*step\.totalToolCalls/);
   });
 });

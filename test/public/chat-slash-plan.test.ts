@@ -12,10 +12,10 @@ function readPublic(relativePath: string): string {
 
 describe('规划模式走 / 面板', () => {
   it('slash 列表含 /plan，工具栏不再放模式 chip', () => {
-    const commands = readPublic('js/chat-commands.js');
-    const page = readPublic('js/chat-page.js');
-    const main = readPublic('js/main.js');
-    const welcome = readPublic('js/chat-welcome.js');
+    const commands = readPublic('js/chat-commands.ts');
+    const page = readPublic('js/chat-page.ts');
+    const main = readPublic('js/main.ts');
+    const welcome = readPublic('js/chat-welcome.ts');
 
     expect(commands).toContain("name: 'plan'");
     expect(commands).toContain("cmd.name === 'shell' || cmd.name === 'plan'");

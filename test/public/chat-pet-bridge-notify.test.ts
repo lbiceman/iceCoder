@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BRIDGE_PATH = path.join(__dirname, '../../src/public/js/chat-pet-bridge.js');
+const BRIDGE_PATH = path.join(__dirname, '../../src/public/js/chat-pet-bridge.ts');
 
 interface NotifyPayload {
   success: boolean;
@@ -32,7 +34,7 @@ interface Harness {
 }
 
 function loadBridge(options: LoadOptions = {}): Harness {
-  const src = readFileSync(BRIDGE_PATH, 'utf-8');
+  const src = classicWindowSource(readFileSync(BRIDGE_PATH, 'utf-8'));
   const notifyCalls: NotifyPayload[] = [];
   const petStates: string[] = [];
   const bubbles: string[] = [];

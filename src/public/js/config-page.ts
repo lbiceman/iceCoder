@@ -1,0 +1,878 @@
+// @ts-nocheck
+/**
+ * 设置页面：Tab 切换「通用」「模型配置」「MCP 配置」与「监管模式配置」。
+ */
+
+/* exported ConfigPage, SettingsPage */
+
+export const SettingsPage = (() => {
+
+  let container = null;
+  let activeTab = 'general';
+
+  function isMobileViewport() {
+    return window.innerWidth <= 720;
+  }
+
+  function bindMobileBlankDismiss(rootEl) {
+    if (!rootEl || rootEl._configMobileBlankBound) return;
+    rootEl._configMobileBlankBound = true;
+    rootEl.addEventListener('click', (e) => {
+      if (!isMobileViewport()) return;
+      if (e.target.closest('.config-list-item')) return;
+      if (e.target.closest('.config-detail-panel')) return;
+      if (e.target.closest('.config-list-panel-head')) return;
+      if (e.target.closest('.chat-sidebar-new-btn')) return;
+      if (window.ModelConfigPanel && typeof window.ModelConfigPanel.collapseMobile === 'function') {
+        window.ModelConfigPanel.collapseMobile();
+      }
+      if (window.McpConfigPanel && typeof window.McpConfigPanel.collapseMobile === 'function') {
+        window.McpConfigPanel.collapseMobile();
+      }
+    });
+  }
+
+  function renderGeneralPanel(parentEl) {
+    const shell = window.AppShell;
+    const theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
+    const dataDirectorySection =
+      '<section class="settings-section settings-section-spaced" id="settings-data-directory-section">' +
+        '<h2 class="settings-section-title">数据目录</h2>' +
+        '<p class="settings-section-desc">iceCoder 的会话、缓存、技能和 MCP 配置默认保存在用户目录的 <code>.iceCoder</code> 文件夹中。可改到其他磁盘以释放系统盘空间。</p>' +
+        '<div class="settings-card" id="settings-data-directory-card">' +
+          '<div class="settings-card-info">' +
+            '<div class="settings-card-title-row"><span class="settings-card-title">iceCoder 数据文件夹</span><span class="config-badge is-off" id="settings-data-directory-env-badge">检测中</span></div>' +
+            '<p class="settings-card-desc" id="settings-data-directory-desc">选择完整的数据文件夹路径；更改将在重启应用后生效。</p>' +
+          '</div>' +
+          '<div class="settings-data-directory-controls">' +
+            '<input class="settings-data-directory-input" id="settings-data-directory-input" type="text" spellcheck="false" aria-label="iceCoder 数据文件夹路径" />' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-browse">选择文件夹</button>' +
+          '</div>' +
+          '<p class="settings-data-directory-note" id="settings-data-directory-note"></p>' +
+          '<div class="settings-card-footer">' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-reset">恢复默认</button>' +
+            '<button type="button" class="btn btn-primary" id="settings-data-directory-save">保存位置</button>' +
+          '</div>' +
+        '</div>' +
+      '</section>';
+
+    parentEl.innerHTML =
+      '<div class="settings-general">' +
+        '<section class="settings-section">' +
+          '<h2 class="settings-section-title">外观</h2>' +
+          '<p class="settings-section-desc">选择界面主题，可随时在此切换深色与浅色模式</p>' +
+          '<div class="settings-theme-options" role="radiogroup" aria-label="界面主题">' +
+            '<button type="button" class="settings-theme-option' + (theme === 'dark' ? ' is-active' : '') + '" data-theme="dark" role="radio" aria-checked="' + (theme === 'dark' ? 'true' : 'false') + '">' +
+              '<span class="settings-theme-preview settings-theme-preview-dark" aria-hidden="true">' +
+                '<span class="settings-theme-preview-bar"></span>' +
+                '<span class="settings-theme-preview-body"></span>' +
+              '</span>' +
+              '<span class="settings-theme-option-label">' +
+                (window.AppIcon ? window.AppIcon.html('moon', { width: 14, className: 'settings-theme-option-icon' }) : '') +
+                '深色' +
+              '</span>' +
+            '</button>' +
+            '<button type="button" class="settings-theme-option' + (theme === 'light' ? ' is-active' : '') + '" data-theme="light" role="radio" aria-checked="' + (theme === 'light' ? 'true' : 'false') + '">' +
+              '<span class="settings-theme-preview settings-theme-preview-light" aria-hidden="true">' +
+                '<span class="settings-theme-preview-bar"></span>' +
+                '<span class="settings-theme-preview-body"></span>' +
+              '</span>' +
+              '<span class="settings-theme-option-label">' +
+                (window.AppIcon ? window.AppIcon.html('sun', { width: 14, className: 'settings-theme-option-icon' }) : '') +
+                '浅色' +
+              '</span>' +
+            '</button>' +
+          '</div>' +
+        '</section>' +
+        dataDirectorySection +
+        '<section class="settings-section settings-section-spaced" id="settings-security-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">安全与执行</h2>' +
+            '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
+          '</div>' +
+          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令的强制确认策略</p>' +
+          '<div class="settings-security-grid">' +
+          '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<div class="settings-card-title-row">' +
+                  '<span class="settings-card-title">跳过权限确认</span>' +
+                  '<span class="config-badge is-error settings-risk-badge" id="settings-skip-risk-badge" hidden>高风险</span>' +
+                '</div>' +
+                '<p class="settings-card-desc">开启后 Agent 可直接执行工具，不再弹出确认（新会话生效）</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="跳过权限确认">' +
+                  '<input type="checkbox" id="settings-skip-permission-input" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="settings-card settings-blacklist-card" id="settings-blacklist-card" hidden>' +
+            '<div class="settings-card-header">' +
+              '<div class="settings-card-info">' +
+                '<div class="settings-card-title-row">' +
+                  '<span class="settings-card-title">Shell 强制确认规则</span>' +
+                  '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
+                '</div>' +
+                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。适用于普通聊天与 /shell 协作。</p>' +
+                '<div class="settings-shell-rules-panel">' +
+                  '<ul class="settings-shell-rules-list">' +
+                    '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
+                    '<li>「跳过权限确认」等设置<strong>不能</strong>绕过强制确认</li>' +
+                    '<li>未命中规则的命令不受此列表约束</li>' +
+                  '</ul>' +
+                '</div>' +
+                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后不再触发强制确认。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-blacklist-editor">' +
+              '<textarea class="settings-blacklist-textarea" id="settings-blacklist-textarea" spellcheck="false" placeholder="rm\\s+-rf&#10;git\\s+reset\\s+--hard"></textarea>' +
+            '</div>' +
+            '<div class="settings-card-footer">' +
+              '<button type="button" class="btn btn-secondary" id="settings-blacklist-reset">恢复默认</button>' +
+              '<button type="button" class="btn btn-primary" id="settings-blacklist-save">保存规则</button>' +
+            '</div>' +
+          '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">执行透明层</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
+          '<div class="settings-card" id="settings-etl-main-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<div class="settings-card-title-row">' +
+                  '<span class="settings-card-title">显示执行透明层</span>' +
+                  '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>功能未开启</span>' +
+                '</div>' +
+                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                  '<input type="checkbox" id="etl-show-panel" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
+                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
+                '</div>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                    '<input type="checkbox" id="etl-panel-default-expanded" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
+              '</div>' +
+              '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">面板默认宽度</span>' +
+                '</div>' +
+                '<div class="settings-card-control">' +
+                  '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
+                    '<option value="280">280 px</option>' +
+                    '<option value="320">320 px</option>' +
+                    '<option value="380">380 px</option>' +
+                  '</select>' +
+                '</div>' +
+              '</div>' +
+              '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
+                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
+                '</div>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                    '<input type="checkbox" id="etl-panel-auto-collapse" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">任务通知</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
+          '<div class="settings-card" id="settings-task-notification-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">任务完成消息通知</span>' +
+                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                  '<input type="checkbox" id="settings-task-done-notification" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+      '</div>';
+
+    if (window.AppIcon) window.AppIcon.hydrate(parentEl);
+    bindThemeOptions(parentEl, shell);
+    bindDataDirectorySettings(parentEl);
+    loadGeneralSecuritySettings(parentEl);
+    bindEtlSettings(parentEl);
+    bindTaskNotificationSettings(parentEl);
+  }
+
+  function isEtlCapabilityEnabled() {
+    const bridge = window.ChatExecutionPlanBridge;
+    if (!bridge || typeof bridge.isEnabled !== 'function') return true;
+    // WS 尚未宣告 features.executionPlan 时视为可用，避免设置页首屏把全部开关锁死。
+    if (typeof bridge.isCapabilityKnown === 'function' && !bridge.isCapabilityKnown()) {
+      return true;
+    }
+    return !!bridge.isEnabled();
+  }
+
+  function syncEtlSettingsUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+
+    const capabilityEnabled = isEtlCapabilityEnabled();
+    const showPanel = !!prefs.showTransparencyPanel;
+    const subgroupDisabled = !capabilityEnabled || !showPanel;
+
+    const capabilityBadge = parentEl.querySelector('#settings-etl-capability-badge');
+    const showPanelInput = parentEl.querySelector('#etl-show-panel');
+    const subgroup = parentEl.querySelector('#settings-etl-subgroup');
+
+    if (capabilityBadge) capabilityBadge.hidden = capabilityEnabled;
+    if (showPanelInput) {
+      showPanelInput.checked = showPanel;
+      showPanelInput.disabled = !capabilityEnabled;
+    }
+    if (subgroup) subgroup.classList.toggle('is-disabled', subgroupDisabled);
+
+    const panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    const panelWidth = parentEl.querySelector('#etl-panel-width');
+    const panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
+
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
+      panelDefaultExpanded.disabled = subgroupDisabled;
+    }
+    if (panelWidth) {
+      panelWidth.value = String(prefs.panelWidth || 320);
+      panelWidth.disabled = subgroupDisabled;
+    }
+    if (panelAutoCollapse) {
+      panelAutoCollapse.checked = prefs.panelAutoCollapse === true;
+      panelAutoCollapse.disabled = subgroupDisabled;
+    }
+  }
+
+  function syncTaskNotificationUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+    const taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.checked = prefs.taskDoneNotification === true;
+      taskDoneNotification.disabled = !(
+        window.iceDesktop
+        && typeof window.iceDesktop.notifyTaskDone === 'function'
+      );
+    }
+  }
+
+  function bindTaskNotificationSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._taskNotificationBound) return;
+    parentEl._taskNotificationBound = true;
+
+    syncTaskNotificationUi(parentEl);
+
+    const taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.addEventListener('change', () => {
+        const next = taskDoneNotification.checked;
+        taskDoneNotification.disabled = true;
+        window.EtlPrefs.set({ taskDoneNotification: next })
+          .then((ok) => {
+            if (!ok) throw new Error('更新失败');
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启任务完成通知' : '已关闭任务完成通知'
+              );
+            }
+          })
+          .catch((err) => {
+            taskDoneNotification.checked = !next;
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(() => { taskDoneNotification.disabled = false; });
+      });
+    }
+
+    window.EtlPrefs.whenReady().then(() => {
+      syncTaskNotificationUi(parentEl);
+    });
+
+    if (typeof parentEl._taskNotificationUnsubscribe !== 'function') {
+      parentEl._taskNotificationUnsubscribe = window.EtlPrefs.onChange(() => {
+        syncTaskNotificationUi(parentEl);
+      });
+    }
+  }
+
+  function bindEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._etlBound) return;
+    parentEl._etlBound = true;
+
+    syncEtlSettingsUi(parentEl);
+
+    const showPanelInput = parentEl.querySelector('#etl-show-panel');
+    if (showPanelInput) {
+      showPanelInput.addEventListener('change', () => {
+        const next = showPanelInput.checked;
+        showPanelInput.disabled = true;
+        window.EtlPrefs.set({ showTransparencyPanel: next })
+          .then((ok) => {
+            if (!ok) throw new Error('更新失败');
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启执行透明层' : '已关闭执行透明层'
+              );
+            }
+          })
+          .catch((err) => {
+            showPanelInput.checked = !next;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(() => { syncEtlSettingsUi(parentEl); });
+      });
+    }
+
+    const panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.addEventListener('change', () => {
+        const next = panelDefaultExpanded.checked;
+        panelDefaultExpanded.disabled = true;
+        window.EtlPrefs.set({ panelDefaultExpanded: next })
+          .catch(() => {
+            panelDefaultExpanded.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => { syncEtlSettingsUi(parentEl); });
+      });
+    }
+
+    const panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
+    if (panelAutoCollapse) {
+      panelAutoCollapse.addEventListener('change', () => {
+        const next = panelAutoCollapse.checked;
+        panelAutoCollapse.disabled = true;
+        window.EtlPrefs.set({ panelAutoCollapse: next })
+          .catch(() => {
+            panelAutoCollapse.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => { syncEtlSettingsUi(parentEl); });
+      });
+    }
+
+    const panelWidth = parentEl.querySelector('#etl-panel-width');
+    if (panelWidth) {
+      panelWidth.addEventListener('change', () => {
+        const width = parseInt(panelWidth.value, 10);
+        const previous = panelWidth.dataset.savedValue || panelWidth.value;
+        panelWidth.disabled = true;
+        window.EtlPrefs.set({ panelWidth: width })
+          .then(() => {
+            panelWidth.dataset.savedValue = String(width);
+            syncEtlSettingsUi(parentEl);
+          })
+          .catch(() => {
+            panelWidth.value = previous;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => { syncEtlSettingsUi(parentEl); });
+      });
+    }
+
+    window.EtlPrefs.whenReady().then(() => {
+      syncEtlSettingsUi(parentEl);
+    });
+
+    activateEtlSettings(parentEl);
+  }
+
+  function activateEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    syncEtlSettingsUi(parentEl);
+    if (typeof parentEl._etlUnsubscribe !== 'function') {
+      parentEl._etlUnsubscribe = window.EtlPrefs.onChange(() => {
+        syncEtlSettingsUi(parentEl);
+      });
+    }
+    if (parentEl._etlCapabilityListener) return;
+    parentEl._etlCapabilityListener = function () {
+      syncEtlSettingsUi(parentEl);
+    };
+    window.addEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+  }
+
+  function unbindEtlSettings(parentEl) {
+    if (!parentEl) return;
+    if (typeof parentEl._etlUnsubscribe === 'function') {
+      parentEl._etlUnsubscribe();
+      parentEl._etlUnsubscribe = null;
+    }
+    if (parentEl._etlCapabilityListener) {
+      window.removeEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+      parentEl._etlCapabilityListener = null;
+    }
+  }
+
+  function bindDataDirectorySettings(parentEl) {
+    const desktop = window.iceDesktop;
+    const migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。Electron 与 iceCoder start 共用此位置。';
+
+    const input = parentEl.querySelector('#settings-data-directory-input');
+    const browseBtn = parentEl.querySelector('#settings-data-directory-browse');
+    const saveBtn = parentEl.querySelector('#settings-data-directory-save');
+    const resetBtn = parentEl.querySelector('#settings-data-directory-reset');
+    const badge = parentEl.querySelector('#settings-data-directory-env-badge');
+    const note = parentEl.querySelector('#settings-data-directory-note');
+    if (!input || !browseBtn || !saveBtn || !resetBtn) return;
+
+    const canPickFolder = desktop && typeof desktop.pickDataDirectory === 'function';
+    if (!canPickFolder) {
+      browseBtn.disabled = true;
+      browseBtn.title = '在系统浏览器中请手动填写绝对路径';
+    }
+
+    function applyPayload(data) {
+      if (!data) return;
+      input.value = data.dataDir || '';
+      const persistable = !!data.canPersist;
+      input.disabled = !persistable;
+      saveBtn.disabled = !persistable;
+      resetBtn.disabled = !persistable;
+      browseBtn.disabled = !persistable || !canPickFolder;
+      if (badge) {
+        badge.textContent = persistable ? '可修改' : '开发模式';
+        badge.classList.remove('is-off');
+        badge.classList.toggle('is-ready', persistable);
+        badge.classList.toggle('is-starting', !persistable);
+      }
+    }
+
+    function showError(err) {
+      const message = (err && err.message) || '操作失败';
+      if (window.Notification) window.Notification.error(message);
+    }
+
+    if (note) note.textContent = migrationTip;
+
+    fetch('/api/config/data-directory', { cache: 'no-store' })
+      .then((res) =>  res.json())
+      .then(applyPayload)
+      .catch(() => { showError({ message: '无法读取数据目录' }); });
+
+    browseBtn.addEventListener('click', () => {
+      if (!canPickFolder) return;
+      desktop.pickDataDirectory()
+        .then((dataDir) => {
+          if (dataDir) input.value = dataDir;
+        })
+        .catch(() => { showError({ message: '无法选择文件夹' }); });
+    });
+
+    saveBtn.addEventListener('click', () => {
+      const dataDir = input.value.trim();
+      if (!dataDir) {
+        showError({ message: '请选择数据文件夹' });
+        return;
+      }
+      saveBtn.disabled = true;
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir }),
+      })
+        .then((res) =>  res.json().then((data) => {
+            if (!res.ok) throw new Error(data && data.error || '保存失败');
+            return data;
+          }))
+        .then((data) => {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
+        })
+        .catch(showError)
+        .finally(() => { saveBtn.disabled = false; });
+    });
+
+    resetBtn.addEventListener('click', () => {
+      resetBtn.disabled = true;
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir: null }),
+      })
+        .then((res) =>  res.json().then((data) => {
+            if (!res.ok) throw new Error(data && data.error || '恢复失败');
+            return data;
+          }))
+        .then((data) => {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
+        })
+        .catch(showError)
+        .finally(() => { resetBtn.disabled = false; });
+    });
+  }
+
+  function bindThemeOptions(parentEl, shell) {
+    const options = parentEl.querySelectorAll('.settings-theme-option');
+    for (let i = 0; i < options.length; i++) {
+      ((btn) => {
+        btn.addEventListener('click', () => {
+          const next = btn.getAttribute('data-theme');
+          if (!next || !shell || typeof shell.setTheme !== 'function') return;
+          if (shell.getTheme() === next) return;
+          shell.setTheme(next);
+          syncThemeOptions(parentEl);
+        });
+      })(options[i]);
+    }
+
+    if (shell && typeof shell.addThemeChangeListener === 'function') {
+      parentEl._themeListener = function () { syncThemeOptions(parentEl); };
+      shell.addThemeChangeListener(parentEl._themeListener);
+    }
+  }
+
+  function parseBlacklistText(text) {
+    return String(text || '')
+      .split('\n')
+      .map((line) =>  line.trim())
+      .filter((line) =>  line.length > 0);
+  }
+
+  function updateBlacklistCount(parentEl, patterns) {
+    const countEl = parentEl.querySelector('#settings-blacklist-count');
+    if (!countEl) return;
+    const n = patterns ? patterns.length : 0;
+    countEl.textContent = `${n} 条规则`;
+  }
+
+  function syncSkipPermissionUi(parentEl, enabled) {
+    const input = parentEl.querySelector('#settings-skip-permission-input');
+    const badge = parentEl.querySelector('#settings-skip-risk-badge');
+    if (input) input.checked = !!enabled;
+    if (badge) badge.hidden = !enabled;
+  }
+
+  function loadGeneralSecuritySettings(parentEl) {
+    fetch('/api/config')
+      .then((res) => {
+        if (!res.ok) throw new Error('fetch failed');
+        return res.json();
+      })
+      .then((data) => {
+        if (data && data.error) throw new Error(data.error);
+
+        const loading = parentEl.querySelector('#settings-security-loading');
+        const skipCard = parentEl.querySelector('#settings-skip-permission-card');
+        const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
+        if (loading) loading.hidden = true;
+        if (skipCard) skipCard.hidden = false;
+        if (blacklistCard) blacklistCard.hidden = false;
+
+        const skipEnabled = data && data.skipPermissionChecks === true;
+        syncSkipPermissionUi(parentEl, skipEnabled);
+
+        const patterns = (data && Array.isArray(data.shellBlacklist)) ? data.shellBlacklist : [];
+        const textarea = parentEl.querySelector('#settings-blacklist-textarea');
+        if (textarea) {
+          textarea.value = patterns.join('\n');
+          textarea.dataset.savedValue = textarea.value;
+        }
+        updateBlacklistCount(parentEl, patterns);
+
+        bindGeneralSecurityEvents(parentEl);
+      })
+      .catch(() => {
+        const loading = parentEl.querySelector('#settings-security-loading');
+        const skipCard = parentEl.querySelector('#settings-skip-permission-card');
+        const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
+        if (loading) {
+          loading.textContent = '加载失败';
+          loading.classList.add('is-error');
+        }
+        if (skipCard) skipCard.hidden = false;
+        if (blacklistCard) blacklistCard.hidden = false;
+        bindGeneralSecurityEvents(parentEl);
+        if (window.Notification) window.Notification.error('无法加载安全设置');
+      });
+  }
+
+  function bindGeneralSecurityEvents(parentEl) {
+    if (parentEl._securityBound) return;
+    parentEl._securityBound = true;
+
+    const skipInput = parentEl.querySelector('#settings-skip-permission-input');
+    if (skipInput) {
+      skipInput.addEventListener('change', () => {
+        const next = skipInput.checked;
+        skipInput.disabled = true;
+        fetch('/api/config/skip-permission-checks', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skipPermissionChecks: next }),
+        })
+          .then((res) => { return res.json().then((body) =>  ({ ok: res.ok, body })); })
+          .then((result) => {
+            if (result.ok && result.body.success) {
+              syncSkipPermissionUi(parentEl, result.body.skipPermissionChecks === true);
+              if (window.Notification) {
+                window.Notification.success(
+                  result.body.skipPermissionChecks
+                    ? '已开启跳过权限确认（新会话生效）'
+                    : '已关闭跳过权限确认（新会话生效）'
+                );
+              }
+            } else {
+              skipInput.checked = !next;
+              syncSkipPermissionUi(parentEl, skipInput.checked);
+              if (window.Notification) {
+                window.Notification.error((result.body && result.body.error) || '更新失败');
+              }
+            }
+          })
+          .catch(() => {
+            skipInput.checked = !next;
+            syncSkipPermissionUi(parentEl, skipInput.checked);
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => { skipInput.disabled = false; });
+      });
+    }
+
+    const textarea = parentEl.querySelector('#settings-blacklist-textarea');
+    if (textarea) {
+      textarea.addEventListener('input', () => {
+        updateBlacklistCount(parentEl, parseBlacklistText(textarea.value));
+      });
+    }
+
+    const saveBtn = parentEl.querySelector('#settings-blacklist-save');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', () => {
+        if (!textarea) return;
+        const patterns = parseBlacklistText(textarea.value);
+        saveBtn.disabled = true;
+        fetch('/api/config/shell-blacklist', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shellBlacklist: patterns }),
+        })
+          .then((res) => { return res.json().then((body) =>  ({ ok: res.ok, body })); })
+          .then((result) => {
+            if (result.ok && result.body.success) {
+              const saved = result.body.shellBlacklist || [];
+              textarea.value = saved.join('\n');
+              textarea.dataset.savedValue = textarea.value;
+              updateBlacklistCount(parentEl, saved);
+              if (window.Notification) window.Notification.success('Shell 强制确认规则已保存');
+            } else if (window.Notification) {
+              window.Notification.error((result.body && result.body.error) || '保存失败');
+            }
+          })
+          .catch(() => {
+            if (window.Notification) window.Notification.error('保存失败');
+          })
+          .finally(() => { saveBtn.disabled = false; });
+      });
+    }
+
+    const resetBtn = parentEl.querySelector('#settings-blacklist-reset');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        resetBtn.disabled = true;
+        fetch('/api/config/shell-blacklist-defaults')
+          .then((res) =>  res.json())
+          .then((data) => {
+            const defaults = (data && Array.isArray(data.shellBlacklist)) ? data.shellBlacklist : [];
+            if (textarea) {
+              textarea.value = defaults.join('\n');
+              updateBlacklistCount(parentEl, defaults);
+            }
+            if (window.Notification) window.Notification.info('已填入默认规则，点击「保存规则」生效');
+          })
+          .catch(() => {
+            if (window.Notification) window.Notification.error('无法加载默认规则');
+          })
+          .finally(() => { resetBtn.disabled = false; });
+      });
+    }
+  }
+
+  function syncThemeOptions(panelEl) {
+    if (!panelEl) return;
+    const shell = window.AppShell;
+    const theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
+    const options = panelEl.querySelectorAll('.settings-theme-option');
+    for (let i = 0; i < options.length; i++) {
+      const btn = options[i];
+      const on = btn.getAttribute('data-theme') === theme;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  }
+
+  function render(parentEl) {
+    container = parentEl;
+
+    const showSetupBanner = window.AppRouter
+      && window.AppRouter.isSetupRequired
+      && window.AppRouter.isSetupRequired();
+    activeTab = showSetupBanner ? 'model' : 'general';
+
+    parentEl.innerHTML =
+      '<div class="config-center settings-center">' +
+        '<header class="config-center-header">' +
+          '<div class="config-center-header-text">' +
+            '<h1 class="config-center-title">设置</h1>' +
+            '<p class="config-center-subtitle">管理外观主题、安全选项、模型、MCP 服务器与监管模式</p>' +
+            '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）；不支持 Anthropic Messages API（A/）。</p>' +
+          '</div>' +
+        '</header>' +
+        '<nav class="config-tabs" role="tablist" aria-label="设置类型">' +
+          '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">通用</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">模型配置</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">MCP 配置</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-tab="supervisor" role="tab" aria-selected="' + (activeTab === 'supervisor' ? 'true' : 'false') + '">监管模式配置</button>' +
+        '</nav>' +
+        '<div class="config-tab-panels">' +
+          '<div class="config-tab-panel' + (activeTab === 'general' ? ' is-active' : '') + '" data-panel="general" role="tabpanel" id="config-tab-general"' + (activeTab === 'general' ? '' : ' hidden') + '></div>' +
+          '<div class="config-tab-panel' + (activeTab === 'model' ? ' is-active' : '') + '" data-panel="model" role="tabpanel" id="config-tab-model"' + (activeTab === 'model' ? '' : ' hidden') + '></div>' +
+          '<div class="config-tab-panel' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-panel="mcp" role="tabpanel" id="config-tab-mcp"' + (activeTab === 'mcp' ? '' : ' hidden') + '></div>' +
+          '<div class="config-tab-panel' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-panel="supervisor" role="tabpanel" id="config-tab-supervisor"' + (activeTab === 'supervisor' ? '' : ' hidden') + '></div>' +
+        '</div>' +
+      '</div>';
+
+    container = parentEl.querySelector('.config-center') || parentEl;
+    bindMobileBlankDismiss(container);
+
+    const tabs = parentEl.querySelectorAll('.config-tab');
+    for (let i = 0; i < tabs.length; i++) {
+      ((tab) => {
+        tab.addEventListener('click', () => {
+          setActiveTab(tab.getAttribute('data-tab'));
+        });
+      })(tabs[i]);
+    }
+
+    renderGeneralPanel(parentEl.querySelector('#config-tab-general'));
+
+    if (window.ModelConfigPanel) {
+      window.ModelConfigPanel.render(parentEl.querySelector('#config-tab-model'), {
+        showSetupBanner
+      });
+    }
+
+    setActiveTab(activeTab);
+  }
+
+  function setActiveTab(tab) {
+    if (!tab) return;
+
+    const switching = tab !== activeTab;
+    activeTab = tab;
+
+    const tabs = container.querySelectorAll('.config-tab');
+    for (let i = 0; i < tabs.length; i++) {
+      const on = tabs[i].getAttribute('data-tab') === tab;
+      tabs[i].classList.toggle('is-active', on);
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+
+    const panels = container.querySelectorAll('.config-tab-panel');
+    for (let j = 0; j < panels.length; j++) {
+      const panelOn = panels[j].getAttribute('data-panel') === tab;
+      panels[j].classList.toggle('is-active', panelOn);
+      panels[j].hidden = !panelOn;
+    }
+
+    if (tab === 'mcp' && window.McpConfigPanel) {
+      const mcpEl = container.querySelector('#config-tab-mcp');
+      if (mcpEl && !mcpEl.dataset.mounted) {
+        mcpEl.dataset.mounted = '1';
+        window.McpConfigPanel.render(mcpEl);
+      } else if (switching && mcpEl && mcpEl.dataset.mounted) {
+        if (window.McpConfigPanel.resume) {
+          window.McpConfigPanel.resume();
+        } else if (window.McpConfigPanel.reload) {
+          window.McpConfigPanel.reload();
+        }
+      }
+    } else if (switching && window.McpConfigPanel && window.McpConfigPanel.pause) {
+      window.McpConfigPanel.pause();
+    }
+
+    if (tab === 'supervisor' && window.SupervisorConfigPanel) {
+      const supEl = container.querySelector('#config-tab-supervisor');
+      if (supEl && !supEl.dataset.mounted) {
+        supEl.dataset.mounted = '1';
+        window.SupervisorConfigPanel.render(supEl);
+      }
+    }
+  }
+
+  function onDeactivate() {
+    if (window.McpConfigPanel && window.McpConfigPanel.pause) {
+      window.McpConfigPanel.pause();
+    }
+    if (container) {
+      unbindEtlSettings(container.querySelector('#config-tab-general'));
+    }
+  }
+
+  function onActivate() {
+    if (container) {
+      activateEtlSettings(container.querySelector('#config-tab-general'));
+    }
+  }
+
+  return { render, onActivate, onDeactivate };
+})();
+
+export const ConfigPage = SettingsPage;
+if (typeof window !== 'undefined') {
+  window.ConfigPage = SettingsPage;
+}
+
+if (typeof window !== 'undefined') {
+  window.SettingsPage = SettingsPage;
+}

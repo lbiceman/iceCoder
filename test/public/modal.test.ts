@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MODAL_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/modal.js'),
+const MODAL_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/modal.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 

@@ -21,12 +21,22 @@ function walkImports(name, seen) {
   }
 }
 
-const jsFiles = fs.readdirSync(jsDir).filter((f) => f.endsWith('.js'));
+function listScripts(dir, prefix = '') {
+  const out = [];
+  for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${name.name}` : name.name;
+    if (name.isDirectory()) out.push(...listScripts(path.join(dir, name.name), rel));
+    else if (/\.(js|ts)$/.test(name.name) && !name.name.endsWith('.d.ts')) out.push(rel);
+  }
+  return out;
+}
+
+const jsFiles = listScripts(jsDir);
 const reachable = new Set();
-for (const m of fs.readFileSync(path.join(jsDir, 'main.js'), 'utf8').matchAll(/import\s+['"]\.\/([^'"]+)['"]/g)) {
+for (const m of fs.readFileSync(path.join(jsDir, 'main.ts'), 'utf8').matchAll(/import\s+['"]\.\/([^'"]+)['"]/g)) {
   walkImports(m[1], reachable);
 }
-const unreachableJs = jsFiles.filter((f) => f !== 'main.js' && !reachable.has(f));
+const unreachableJs = jsFiles.filter((f) => f !== 'main.ts' && !reachable.has(f));
 
 const jsBundle = fs.readdirSync(distAssets).find((f) => f.startsWith('index-') && f.endsWith('.js'));
 const cssBundle = fs.readdirSync(distAssets).find((f) => f.startsWith('index-') && f.endsWith('.css'));
@@ -58,7 +68,7 @@ const cssMarkers = [
 ];
 
 console.log('=== JS 模块 ===');
-console.log(`src/public/js 共 ${jsFiles.length} 个，main.js 可达 ${reachable.size} 个`);
+console.log(`src/public/js 共 ${jsFiles.length} 个，main.ts 可达 ${reachable.size} 个`);
 console.log('未纳入主入口:', unreachableJs.length ? unreachableJs.join(', ') : '(无)');
 
 console.log('\n=== JS bundle 全局对象 ===');

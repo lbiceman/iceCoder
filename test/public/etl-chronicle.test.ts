@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+const SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.ts'),
   'utf-8',
-);
+));
 
 function loadChronicle() {
   const context: Record<string, unknown> = { window: {}, console };
@@ -101,8 +103,8 @@ describe('EtlChronicle.assemble', () => {
         {
           role: 'assistant',
           toolCalls: [
-            { id: 'r1', name: 'read_file', arguments: { path: 'src/public/js/chat-ui.js' } },
-            { id: 'r2', name: 'edit_file', arguments: { path: 'src/public/js/chat-ui.js' } },
+            { id: 'r1', name: 'read_file', arguments: { path: 'src/public/js/chat-ui.ts' } },
+            { id: 'r2', name: 'edit_file', arguments: { path: 'src/public/js/chat-ui.ts' } },
           ],
         },
         { role: 'assistant', content: '改好了' },

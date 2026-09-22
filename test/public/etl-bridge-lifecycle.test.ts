@@ -3,32 +3,34 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PANEL_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
+const PANEL_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-plan.ts'),
   'utf-8',
-);
-const CHRONICLE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+));
+const CHRONICLE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.ts'),
   'utf-8',
-);
-const BRIDGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
+));
+const BRIDGE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.ts'),
   'utf-8',
-);
-const FLOW_STORE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.js'),
+));
+const FLOW_STORE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.ts'),
   'utf-8',
-);
-const PET_BRIDGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-pet-bridge.js'),
+));
+const PET_BRIDGE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-pet-bridge.ts'),
   'utf-8',
-);
-const APP_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/app.js'),
+));
+const APP_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/app.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();

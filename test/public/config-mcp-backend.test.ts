@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PANEL = readFileSync(path.join(__dirname, '../../src/public/js/config-mcp-panel.js'), 'utf-8');
+const PANEL = readFileSync(path.join(__dirname, '../../src/public/js/config-mcp-panel.ts'), 'utf-8');
 const CSS = readFileSync(path.join(__dirname, '../../src/public/css/config.css'), 'utf-8');
 
 describe('MCP 配置页后端会话展示', () => {

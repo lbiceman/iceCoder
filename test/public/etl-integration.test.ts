@@ -3,60 +3,62 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PANEL_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
+const PANEL_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-plan.ts'),
   'utf-8',
-);
-const CHRONICLE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+));
+const CHRONICLE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.ts'),
   'utf-8',
-);
-const BRIDGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
+));
+const BRIDGE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.ts'),
   'utf-8',
-);
-const FLOW_STORE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.js'),
+));
+const FLOW_STORE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.ts'),
   'utf-8',
-);
-const CONFIG_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/config-page.js'),
+));
+const CONFIG_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/config-page.ts'),
   'utf-8',
-);
+));
 const CONFIG_CSS_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/css/config.css'),
   'utf-8',
 );
-const CHAT_PAGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-page.js'),
+const CHAT_PAGE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-page.ts'),
   'utf-8',
-);
-const CHAT_SHELL_DOCK_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-shell-dock.js'),
+));
+const CHAT_SHELL_DOCK_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-shell-dock.ts'),
   'utf-8',
-);
-const CHAT_WS_STREAM_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.js'),
+));
+const CHAT_WS_STREAM_HANDLERS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.ts'),
   'utf-8',
-);
-const CHAT_WS_SESSION_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-session-handlers.js'),
+));
+const CHAT_WS_SESSION_HANDLERS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-session-handlers.ts'),
   'utf-8',
-);
-const CHAT_WS_RESTORE_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-restore-handlers.js'),
+));
+const CHAT_WS_RESTORE_HANDLERS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-restore-handlers.ts'),
   'utf-8',
-);
-const CHAT_WS_BG_TASK_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-bg-task-handlers.js'),
+));
+const CHAT_WS_BG_TASK_HANDLERS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-bg-task-handlers.ts'),
   'utf-8',
-);
-const APP_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/app.js'),
+));
+const APP_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/app.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -792,7 +794,7 @@ describe('ETL 真实 Observer 链路', () => {
           type: 'tool_call',
           toolCallId: 'ws-tool',
           toolName: 'read_file',
-          toolArgs: { path: 'src/public/js/chat-page.js' },
+          toolArgs: { path: 'src/public/js/chat-page.ts' },
           ts: plan.createdAt + 1500,
         },
       });
