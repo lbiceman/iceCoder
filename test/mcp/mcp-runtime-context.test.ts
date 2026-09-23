@@ -23,7 +23,7 @@ function readyServer(
 }
 
 describe('buildMcpRuntimeContext', () => {
-  it('ready 时也注入扩展断连与 browsermcp/puppeteer 分流，不只在 server error 时出现', () => {
+  it('ready 时注入通用重试与扩展断连说明，不点名具体服务器', () => {
     const ctx = buildMcpRuntimeContext(
       fakeManager([
         readyServer('browsermcp', ['browser_navigate', 'browser_snapshot']),
@@ -36,9 +36,9 @@ describe('buildMcpRuntimeContext', () => {
     );
 
     expect(ctx.mcpServers).toContain('ready = MCP process is up');
-    expect(ctx.mcpRetryHint).toContain('No connection to browser extension');
-    expect(ctx.mcpRetryHint).toContain('Prefer extension-browser MCP');
-    expect(ctx.mcpRetryHint).not.toMatch(/unconfigured when mcp_\* tools are listed above/i);
+    expect(ctx.mcpRetryHint).toContain('browser extension is not connected');
+    expect(ctx.mcpRetryHint).toContain('retry the same tool once');
+    expect(ctx.mcpRetryHint).not.toMatch(/puppeteer|browsermcp|PUPPETEER_EXECUTABLE_PATH/i);
     expect(ctx.mcpFailures).toBeUndefined();
   });
 
@@ -54,7 +54,8 @@ describe('buildMcpRuntimeContext', () => {
       [],
     );
     expect(ctx.mcpFailures).toContain('puppeteer');
-    expect(ctx.mcpRetryHint).toContain('PUPPETEER_EXECUTABLE_PATH');
+    expect(ctx.mcpRetryHint).toContain('Do not invent a replacement server');
+    expect(ctx.mcpRetryHint).not.toContain('PUPPETEER_EXECUTABLE_PATH');
   });
 
   it('browsermcp detached 时进程行带 attach 说明，puppeteer 行保持原 ready 格式', () => {
@@ -72,6 +73,7 @@ describe('buildMcpRuntimeContext', () => {
     expect(ctx.mcpServers).toContain('browser session: detached');
     expect(ctx.mcpServers).toMatch(/puppeteer: ready \(1 tools\)/);
     expect(ctx.mcpRetryHint).toContain('browser session is detached');
-    expect(ctx.mcpRetryHint).toContain('permanently switch to puppeteer');
+    expect(ctx.mcpRetryHint).toContain('switch to another server');
+    expect(ctx.mcpRetryHint).not.toMatch(/puppeteer|browsermcp/i);
   });
 });

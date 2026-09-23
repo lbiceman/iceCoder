@@ -51,7 +51,7 @@ describe('mcp-backend-session', () => {
   it('给扩展断连输出补进程仍 ready 的说明', () => {
     const annotated = annotateBrowserExtensionDetachedOutput('No connection to browser extension');
     expect(annotated).toContain('MCP process is still ready');
-    expect(annotated).toContain('Do not switch to puppeteer');
+    expect(annotated).toContain('Do not switch to another MCP server');
     expect(annotateBrowserExtensionDetachedOutput(annotated)).toBe(annotated);
     expect(formatMcpBackendRuntimeNote({ kind: 'browser_extension', session: 'detached' }))
       .toContain('attach the extension');

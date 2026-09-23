@@ -20,7 +20,7 @@ const BROWSER_EXT_DETACHED_RE =
 export const BROWSER_EXTENSION_DETACHED_HINT = [
   'MCP process is still ready. This is a browser-extension attach error, not a missing/unconfigured server.',
   'Retry this same mcp_* tool once. If it still fails, ask the user to attach the Browser MCP extension to the tab.',
-  'Do not switch to puppeteer as a permanent replacement while this server stays ready.',
+  'Do not switch to another MCP server while this one stays ready.',
 ].join(' ');
 
 export function isBrowserExtensionMcp(

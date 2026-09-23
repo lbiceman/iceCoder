@@ -82,7 +82,7 @@ describe('MCPManager browsermcp backend session', () => {
 
     expect(result.success).toBe(false);
     expect(result.output).toContain('MCP process is still ready');
-    expect(result.output).toContain('Do not switch to puppeteer');
+    expect(result.output).toContain('Do not switch to another MCP server');
     const info = manager.getServerInfos().find((s) => s.name === 'browsermcp');
     expect(info?.status).toBe('ready');
     expect(info?.backendKind).toBe('browser_extension');

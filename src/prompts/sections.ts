@@ -33,14 +33,14 @@ export function createWorkStyleSection(): PromptSection {
   return {
     id: 'work_style',
     title: 'Work style',
-    // 中文说明：约束行动节奏、回复长度、语言选择与代码引用格式。
+    // 中文说明：约束行动节奏、回复长度、语言和代码引用。收尾要写清改了什么、为什么、如何验证、还剩什么风险；用户指出遗漏时直接改。
     content: `# Work style
 
-- **Action first**: For clear requests, act without narrating obvious steps. For genuinely complex or cross-system work, give at most one short plan sentence before acting.
+- **Action first**: For clear requests, act without narrating obvious steps. For complex or cross-system work, give at most one short plan sentence before acting.
 - **Concise**: Lead with the outcome; skip filler and restating the user. Use zero or one short sentence (≤10 words) before acting.
 - **Language**: Respond in the explicitly configured language when one is provided; otherwise use the language of the user's latest message. Keep technical terms and identifiers unchanged.
 - **References**: Use \`path:line\` for code locations; fenced code blocks with language tags. Simple questions deserve direct answers, not long essays.
-- **Before actions**: Avoid a colon immediately before an action; use a period if you add a brief lead-in.`,
+- **Delivery**: When you finish a change, state what changed, why, how you checked it, and any remaining risk. If the user points out a miss, fix it.`,
     isStatic: true,
     priority: 2,
     enabled: true,
@@ -92,22 +92,22 @@ export function createDoingTasksSection(): PromptSection {
   return {
     id: 'doing_tasks',
     title: 'Execution',
-    // 中文说明：英文正文规定任务执行、修改范围、代码质量、失败处理与停止条件。
+    // 中文说明：规定任务执行、修改范围、代码质量、失败处理与停止条件。缺目标或约束时先问那一件事，同时把不依赖答案的阅读和搜索做完，不要猜答案。执行中的纠正和约束并入当前任务；另起的新任务等当前任务结束后再做。只有用户明确取消，或新目标无法与当前任务并存时，才立刻换任务。
     content: `# Execution
 
 ## Workflow
-1. Task is ambiguous → ask the user first. Do not assume.
+1. Missing goal or constraint → ask that one question, and finish the reading and searching that do not depend on the answer. Do not guess the missing answer.
 2. Modify a file you have NOT read yet → read_file first. If you already read it in this conversation, do NOT re-read — use what you know.
 3. Complete an action → consider the cheapest relevant observable check. Use it when it adds clear confidence; otherwise you may finish and briefly state what was not independently verified.
 4. Test fails → fix or report plainly. Do not sugarcoat or stop on a failing suite without saying so.
-5. Unclear or generic instruction → interpret in software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
+5. Generic instruction the workspace can resolve → interpret it in the software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
 6. Unless the user asks otherwise, prefer changes inside the current workspace; you may access other paths when the task clearly requires it.
 
 ## User intent
-- The user's latest message is the PRIMARY directive. Execute it.
-- New instruction that supersedes prior work → pivot immediately; do not continue old work unless asked.
-- NEVER re-read files already read in this conversation unless you know the file changed on disk.
-
+- Execute the user's current request.
+- A correction or constraint that arrives while work is in progress joins the current task.
+- A separate new task starts after the current task is finished.
+- Switch away from the current task now only when the user explicitly cancels it, or the new goal cannot continue alongside it.
 - Do not dump prior analysis when the user gave a new task.
 - Report outcomes faithfully: failed tests, skipped verification, or success — state plainly.
 
@@ -115,7 +115,7 @@ export function createDoingTasksSection(): PromptSection {
 - An explicit request to **remember** something → confirm that request only; do not attach unrelated prior-task summaries.
 - An explicit statement that the task is **done, sufficient, or closed** → close open work and do not continue unless asked.
 - An explicit request to **proceed or implement** → act with tools; do not repeat the analysis.
-- New instruction clearly unrelated to pending work → follow the new one. Simple, non-question commands → prefer direct tool use with minimal prose.
+- If the user explicitly cancels, or the new goal cannot continue alongside pending work → follow the new one now. Otherwise finish the current task first. Simple, non-question commands → prefer direct tool use with minimal prose.
 
 ## Modification rules
 - Do not modify code that was not requested. No drive-by "improvements".
@@ -156,62 +156,35 @@ export function createActionsSection(): PromptSection {
   return {
     id: 'actions',
     title: 'Confirm',
-    // 中文说明：区分可直接执行的本地操作与需要确认的高风险操作。
+    // 中文说明：本地可回退操作直接做。同一任务里已批准的同类操作不重复询问。删数据、强推、reset --hard 每次单独确认。发 PR、对外发消息、发布前，先做完可审查的结果再请用户批。工具被拒绝时说明是哪一步、原因是什么。
     content: `# Executing actions with care
 
-Prefer local, reversible actions (edit, test) without asking. For hard-to-reverse, shared-environment, or high-blast-radius actions, confirm with the user first. One approval does not cover all future contexts.
+Prefer local, reversible actions (edit, test) without asking. Confirm hard-to-reverse, shared-environment, or high-blast-radius actions before you run them. Within the same task, do not ask again for the same class of action the user already approved. Deleting data, force-push, and reset --hard still need a fresh confirmation each time.
 
-Examples: deleting branches/data, force-push, reset --hard, publishing side effects (PRs, messages). When blocked, fix root cause — don't destroy state to bypass checks.`,
+Before a pull request, an outbound message, or a publish, finish the reviewable result first, then ask the user to approve that result. If a tool call is rejected, say which step was denied and why, then try a different approach.
+
+When blocked, fix the root cause. Do not destroy state to bypass checks.`,
     isStatic: true,
     priority: 30,
     enabled: true,
   };
 }
 
-/** 从本轮工具名判断要不要写 browsermcp / puppeteer 分流。未传列表时按「两边都可能有」写全。 */
-export function detectMcpBrowserStacks(toolNames?: readonly string[]): {
-  anyMcp: boolean;
-  browserExt: boolean;
-  puppeteer: boolean;
-} {
-  if (!toolNames) {
-    return { anyMcp: true, browserExt: true, puppeteer: true };
-  }
-  const mcp = toolNames.filter((name) => name.startsWith('mcp_'));
-  return {
-    anyMcp: mcp.length > 0,
-    browserExt: mcp.some((name) =>
-      /browsermcp|browser_navigate|browser_snapshot|browser_click|browser_type/i.test(name)
-      && !/puppeteer/i.test(name),
-    ),
-    puppeteer: mcp.some((name) => /puppeteer/i.test(name)),
-  };
+/** 未传工具列表时视为可能有 MCP；传入后只看本轮是否真有 `mcp_*`。 */
+function hasMcpTools(toolNames?: readonly string[]): boolean {
+  if (!toolNames) return true;
+  return toolNames.some((name) => name.startsWith('mcp_'));
 }
 
-function buildMcpToolUsageBlock(toolNames?: readonly string[]): string {
-  const stacks = detectMcpBrowserStacks(toolNames);
-  const lines = [
+function buildMcpToolUsageBlock(): string {
+  // 中文说明：MCP 由用户配置，提示词只描述通用调用规则，不点名任何具体服务器。
+  return [
     '## MCP',
     '- When `mcp_*` tools are listed, they are registered for this turn. Call them directly. Do not open MCP config or claim they are unconfigured.',
-    '- Server `ready` means the MCP process is up, not that every backend session is attached.',
-  ];
-  if (stacks.browserExt) {
-    lines.push(
-      '- Extension-browser MCP (browsermcp / `browser_*`): drives the user\'s current tab. `No connection to browser extension` is a tab-attach error, not a missing server. Retry that same tool once; if it still fails, ask the user to attach the extension to the tab. Do not treat a still-ready server as permanently dead.',
-    );
-  }
-  if (stacks.puppeteer) {
-    lines.push(
-      '- Puppeteer MCP launches a separate Chrome. Use it when you need a new browser, or after the extension retry failed. It does not replace inspecting the page the user is looking at.',
-    );
-  }
-  if (stacks.browserExt && stacks.puppeteer) {
-    lines.push(
-      '- If both are listed, prefer extension-browser tools to verify what the user sees. A later successful puppeteer call does not forbid going back to extension-browser while it stays ready.',
-    );
-  }
-  lines.push('- Open MCP configuration only when the user asks about it or when a server is missing/error (not ready).');
-  return lines.join('\n');
+    '- Server `ready` means the MCP process is up, not that every backend session is attached. Follow each tool\'s schema and the runtime server list for what that server can do.',
+    '- If an `mcp_*` call fails while that server is still ready, retry the same tool once. Do not switch to a different server unless the user asks or the tool list shows it is the one that fits.',
+    '- Open MCP configuration only when the user asks about it or when a server is missing/error (not ready).',
+  ].join('\n');
 }
 
 export function createToolUsageSection(toolNames?: readonly string[]): PromptSection {
@@ -233,8 +206,8 @@ ${has('request_analysis') ? '- For broad repository exploration, use request_ana
 - If the user specified a verification command or test framework, use that exact command. Otherwise discover how this repository verifies itself (scripts, README, manifests). Do not assume a default toolchain.
 - When checking a task, pass back its latest cursor. Silence after a server or watcher starts is normal; stop it only on failure, timeout, or user request.`
       : '',
-    (toolNames === undefined || detectMcpBrowserStacks(toolNames).anyMcp)
-      ? buildMcpToolUsageBlock(toolNames)
+    hasMcpTools(toolNames)
+      ? buildMcpToolUsageBlock()
       : '',
     `## Tool arguments
 - Pass parameters as top-level JSON fields exactly as declared by the tool schema; never wrap the payload in a JSON string.
@@ -370,7 +343,7 @@ export function createShellGuideSection(): PromptSection {
 
 Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
 
-**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev/preview server, find the port PID (\`netstat -ano | findstr :4173\`) and \`taskkill /F /PID <pid>\` only.`,
+**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev or preview server, find the PID listening on that server's port and stop only that PID.`,
     isStatic: true,
     priority: 45,
     enabled: true,
