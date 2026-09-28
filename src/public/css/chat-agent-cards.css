@@ -94,10 +94,14 @@
 .agent-card__stop:disabled { opacity: 0.6; cursor: default; }
 .agent-card__chevron {
   flex-shrink: 0;
+  display: inline-block;
+  font-size: 1.85em;
+  line-height: 1;
   transition: transform var(--transition-fast);
   color: var(--text-muted);
+  transform: rotate(-90deg);
 }
-.agent-card.is-expanded .agent-card__chevron { transform: rotate(180deg); }
+.agent-card.is-expanded .agent-card__chevron { transform: none; }
 
 .agent-card__body {
   display: none;

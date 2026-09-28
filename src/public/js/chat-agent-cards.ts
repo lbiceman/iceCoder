@@ -176,7 +176,7 @@ export const ChatAgentCards = (() => {
     stop.type = 'button';
     stop.hidden = true;
     head.appendChild(stop);
-    head.appendChild(el('span', 'agent-card__chevron', '⌄'));
+    head.appendChild(el('span', 'agent-card__chevron', '▾'));
     card.appendChild(head);
 
     const body = el('div', 'agent-card__body');
