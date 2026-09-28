@@ -55,6 +55,8 @@ import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js'
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { GraphExecutor } from './task-graph-executor.js';
 import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
+import { ensureTaskTool, stripTaskTool } from './agents/task-tool.js';
+import { AgentAwareToolExecutor } from './agents/agent-tool-executors.js';
 import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
 import { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
@@ -167,6 +169,7 @@ export class Harness {
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
   private agentMaxOutputTokens: number;
+  private readonly config: HarnessConfig;
 
   /**
    * 根据 HarnessConfig 组装循环所需子模块：上下文、压缩、工具执行、检查点、双模决策引擎等。
@@ -176,12 +179,16 @@ export class Harness {
     config: HarnessConfig,
     toolExecutor: ToolExecutor,
   ) {
+    const baseTools = config.enableRequestAnalysis === false
+      ? config.context.tools
+      : ensureRequestAnalysisTool(config.context.tools);
     const context = {
       ...config.context,
-      tools: config.enableRequestAnalysis === false
-        ? config.context.tools
-        : ensureRequestAnalysisTool(config.context.tools),
+      tools: config.agentSpawner
+        ? ensureTaskTool(baseTools, config.agentSpawner.agentTypes)
+        : stripTaskTool(baseTools),
     };
+    this.config = config;
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
     this.agentMaxOutputTokens = config.loop.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
@@ -235,6 +242,7 @@ export class Harness {
       sessionDir: config.sessionDir,
       sessionId: config.sessionId,
       workspaceRoot: config.workspaceRoot,
+      disabled: config.memoryDisabled === true,
     });
 
     if (config.loop.tokenBudget) {
@@ -275,6 +283,8 @@ export class Harness {
       analysisSupervisor: this.analysisSupervisor,
       agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
+      checkpointOwner: this.config.checkpointOwner,
+      agentScope: this.config.agentScope,
     };
   }
 
@@ -488,7 +498,10 @@ export class Harness {
       : getLatestRealUserText(messages, '');
     let lockedWorkspaceRoot: string | undefined;
     let referenceReads: string[] = [];
-    if (this.sessionDir) {
+    if (this.config.workspaceLock) {
+      lockedWorkspaceRoot = this.config.workspaceLock.lockedRoot;
+      referenceReads = [...this.config.workspaceLock.referenceReads];
+    } else if (this.sessionDir) {
       const applied = await applyUserMessageWorkspaceLock({
         sessionDir: this.sessionDir,
         sessionId: this.sessionId,
@@ -520,6 +533,26 @@ export class Harness {
     deps.workspaceRoot = this.workspaceRoot;
     deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
     deps.referenceReads = referenceReads;
+    const spawner = this.config.agentSpawner;
+    if (spawner) {
+      spawner.beginParentRun();
+      const parentToolExecutor = this.toolExecutor;
+      const timeout = this.config.loop.timeout;
+      const deadline = timeout && timeout > 0 ? Date.now() + timeout : undefined;
+      deps.toolExecutor = new AgentAwareToolExecutor(parentToolExecutor, (toolCall) =>
+        spawner.runTask(toolCall, {
+          config: this.config,
+          toolExecutor: parentToolExecutor,
+          workspaceRoot: this.workspaceRoot,
+          lockedWorkspaceRoot,
+          referenceReads,
+          deadline,
+          signal: this.abortSignal,
+          onStep,
+        }),
+      );
+      deps.agentSpawner = spawner;
+    }
 
     const tools = this.contextAssembler.getTools();
     if (!this.analysisSupervisor && this.sessionDir && this.enableRequestAnalysis) {
@@ -558,7 +591,8 @@ export class Harness {
       },
     });
 
-    if (!this.shellCollabActive) {
+    const memoryActive = !this.shellCollabActive && this.config.memoryDisabled !== true;
+    if (memoryActive) {
       this.memoryIntegration.onLoopStart(
         sessionGoalAnchor,
         {
@@ -670,7 +704,7 @@ export class Harness {
     state.parallelBudgetBlockHintInjected = false;
     state.verificationOutputBuffer.clear();
 
-    if (!this.shellCollabActive && existingMessages && existingMessages.length > 0) {
+    if (memoryActive && existingMessages && existingMessages.length > 0) {
       try {
         const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
@@ -898,7 +932,7 @@ export class Harness {
     } finally {
       endTiming('run_total', runStartedAt);
       dumpHarnessTiming();
-      if (!this.shellCollabActive) {
+      if (memoryActive) {
         this.memoryIntegration.onLoopEnd(
           state.messages,
           state.turnCount,

@@ -50,6 +50,7 @@ import {
 import { ProjectCheckpointStore } from './project-checkpoint-store.js';
 import { bumpSessionContextWriteEpoch } from './session-context-write-gate.js';
 import type { CheckpointSnapshot } from './checkpoint-snapshot.js';
+import { deleteAgentRecordsForMessages } from './agents/agent-store.js';
 
 interface IntentRestoreMaterial {
   checkpoint: CheckpointSnapshot | null;
@@ -81,6 +82,19 @@ async function readStructuredMessagesFile(
   } catch {
     return [];
   }
+}
+
+/** messageId 这条用户消息及其之后全部用户消息的 id（回滚时这些回合的子 Agent 记录一并清理）。 */
+function userMessageIdsFrom(
+  uiMessages: ReadonlyArray<{ id?: string; role?: string }>,
+  messageId: string,
+): string[] {
+  const start = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
+  if (start < 0) return [messageId];
+  return uiMessages
+    .slice(start)
+    .filter((m) => m.role === 'user' && typeof m.id === 'string' && m.id)
+    .map((m) => m.id as string);
 }
 
 /** 以当前会话文件为准截断：该用户气泡及之后的记录都从聊天和模型上下文里删掉。 */
@@ -208,6 +222,10 @@ export class RuntimeRestoreCoordinator {
       backup = await this.capturePreRestoreBackup(params, archive, material);
       await this.applyRestore(params, archive, material, engine);
 
+      const discardedUserMessageIds = userMessageIdsFrom(
+        await readUiSessionMessages(sessionDir, sessionId),
+        messageId,
+      );
       const conversation = await conversationBeforeRestoredTurn(params, archive, messageId);
       await writeUiSessionMessages(sessionDir, sessionId, conversation.uiMessages);
       await writeStructuredMessages(sessionDir, sessionId, conversation.structuredMessages);
@@ -217,6 +235,8 @@ export class RuntimeRestoreCoordinator {
       await writeToolTraceDiffsRaw(sessionDir, sessionId, archive.toolTraceDiffsRaw);
 
       await truncateCheckpointsFrom(sessionDir, sessionId, messageId);
+      await deleteAgentRecordsForMessages(sessionDir, sessionId, discardedUserMessageIds)
+        .catch((err) => console.warn('[runtime-restore] 清理子 Agent 记录失败:', err));
 
       const timeLabel = archive.userMessageTime
         ? new Date(archive.userMessageTime).toLocaleString('zh-CN')

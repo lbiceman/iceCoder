@@ -120,6 +120,9 @@ export interface LLMOptions {
   tools?: ToolDefinition[];
   /** Token 账本来源；统计页按调用记账，与会话文件无关 */
   usageSource?: TokenUsageSource;
+  /** 子 Agent 调用时的 agentId 与类型；主 Agent 为空 */
+  agentId?: string;
+  agentType?: string;
   /**
    * 用户中断信号 — 触发时 provider 应尽快断开正在进行的 HTTP/流。
    * 由调用方通过 options.signal 传入（每轮 LLM 调用各带自己的 AbortSignal）；

@@ -28,6 +28,7 @@ import {
   sessionNotesPath,
 } from '../memory/file-memory/session-memory.js';
 import { bumpSessionContextWriteEpoch } from './session-context-write-gate.js';
+import { deleteAgentRecordsForMessages } from './agents/agent-store.js';
 
 function isAlsoNoteUiMessage(message: UiChatMessage): boolean {
   return message.role === 'user' && message.alsoNote === true;
@@ -546,6 +547,8 @@ export async function deleteUserMessageConversation(
     collectToolCallIdsFromUiMessages(removedUiMessages),
   );
   await removeMessageFromCheckpointHistory(sessionDir, sessionId, messageId, deletedUserContent);
+  await deleteAgentRecordsForMessages(sessionDir, sessionId, [messageId])
+    .catch((err) => console.warn('[conversation-delete] 清理子 Agent 记录失败:', err));
   await clearActiveTaskCheckpoint(sessionDir, sessionId);
   const remainingWritePaths = new Set(collectWritePathsFromUiMessages(nextUi));
   const deletedOnlyPaths = collectWritePathsFromUiMessages(removedUiMessages)

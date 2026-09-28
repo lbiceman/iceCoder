@@ -80,6 +80,10 @@ export function formatToolArgsDetailPreview(
     return formatRunCommandToolDetail(toolArgs);
   }
   if (!toolArgs || typeof toolArgs !== 'object') return '';
+  if (toolName === 'task' && typeof toolArgs.description === 'string') {
+    const type = typeof toolArgs.subagent_type === 'string' && toolArgs.subagent_type ? toolArgs.subagent_type : 'general';
+    return `[${type}] ${toolArgs.description}`;
+  }
   const direct = toolArgs.path ?? toolArgs.file ?? toolArgs.command ?? toolArgs.query;
   if (typeof direct === 'string' && direct) return direct;
   try {

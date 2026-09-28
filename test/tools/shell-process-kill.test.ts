@@ -11,6 +11,7 @@ vi.mock('../../src/tools/shell-spawn-env.js', () => ({
   resolveWindowsSystemExecutable: resolveWindowsSystemExecutableMock,
   resolveShellExecutable: () => 'resolved-shell',
   augmentPathForShellSpawn: (value: string | undefined) => value || '',
+  applyWindowsPathDefaults: () => {},
 }));
 
 import {

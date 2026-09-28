@@ -50,6 +50,16 @@ export type ToolTag =
  * 为每个内置工具定义行为特征。
  */
 export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
+  // ── 子 Agent：同一回复里的多个 task 并行跑；写冲突由写租约隔离 ──
+  task: {
+    name: 'task',
+    isConcurrencySafe: true,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 20_000,
+    tags: [],
+  },
+
   // ── 文件操作 ──
   read_file: {
     name: 'read_file',

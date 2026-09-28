@@ -1220,7 +1220,20 @@ export const ChatUI = (() => {
       }
     }
     bindDiffToggleRow(block, toolName, forHistory);
+    if (toolName === 'task' && toolCallId && window.ChatAgentCards) {
+      window.ChatAgentCards.decorateTaskBlock(block, toolCallId, detail);
+    }
     return block;
+  }
+
+  /** 子 Agent 卡片内的工具行：与主 Agent 工具行同一套渲染（含 diff 展开） */
+  function createAgentToolRowBlock(toolName, detail, status, toolCallId, diffSource) {
+    return createToolRowBlock(toolName, detail, status || 'pending', toolCallId || '', diffSource || null, false);
+  }
+
+  function notifyNodeLayoutChange(node) {
+    if (isNodeInHistoryRegion(node)) notifyHistoryLayoutChange(node);
+    else notifyTailLayoutChange();
   }
 
   function isToolRowBlock(node) {
@@ -2175,9 +2188,18 @@ export const ChatUI = (() => {
     return typeof usedModel === 'string' ? usedModel.trim() : '';
   }
 
-  function createTokenUsageBar(usage, usedModel) {
+  function normalizeAgentTokenUsage(agentUsage) {
+    if (!agentUsage || typeof agentUsage !== 'object') return null;
+    const tokens = Number(agentUsage.tokens);
+    const agents = Number(agentUsage.agents);
+    if (!isFinite(tokens) || !isFinite(agents) || agents <= 0) return null;
+    return { tokens: Math.max(0, tokens), agents: Math.floor(agents) };
+  }
+
+  function createTokenUsageBar(usage, usedModel, agentUsage) {
     const normalized = normalizeTurnTokenUsage(usage);
     const model = normalizeUsedModel(usedModel);
+    const subAgents = normalizeAgentTokenUsage(agentUsage);
     if (!normalized && !model) return null;
     const total = normalized ? (normalized.inputTokens + normalized.outputTokens) : 0;
     const bar = document.createElement('div');
@@ -2202,7 +2224,12 @@ export const ChatUI = (() => {
     if (normalized) {
       addItem('输入', formatTokenCount(normalized.inputTokens));
       addItem('输出', formatTokenCount(normalized.outputTokens));
-      addItem('合计', formatTokenCount(total));
+      if (subAgents) {
+        addItem('主 Agent', formatTokenCount(total));
+        addItem(`子 Agent ×${subAgents.agents}`, formatTokenCount(subAgents.tokens), 'msg-token-usage__item--sub-agent');
+      } else {
+        addItem('合计', formatTokenCount(total));
+      }
     }
     if (model) {
       const modelItem = addItem('模型', model, 'msg-token-usage__item--model');
@@ -2211,7 +2238,7 @@ export const ChatUI = (() => {
     return bar;
   }
 
-  function mountTokenUsageBar(messageEl, usage, usedModel) {
+  function mountTokenUsageBar(messageEl, usage, usedModel, agentUsage) {
     if (!messageEl) return;
     const normalized = normalizeTurnTokenUsage(usage);
     const model = normalizeUsedModel(usedModel);
@@ -2220,7 +2247,7 @@ export const ChatUI = (() => {
       if (existing) existing.remove();
       return;
     }
-    const bar = createTokenUsageBar(normalized, model);
+    const bar = createTokenUsageBar(normalized, model, agentUsage);
     if (!bar) return;
     if (existing) {
       existing.replaceWith(bar);
@@ -2257,7 +2284,7 @@ export const ChatUI = (() => {
       const nodes = elTailRoot.querySelectorAll('.message.agent, .message.assistant');
       if (nodes.length) el = nodes[nodes.length - 1];
     }
-    if (el) mountTokenUsageBar(el, msg.turnTokenUsage, msg.usedModel);
+    if (el) mountTokenUsageBar(el, msg.turnTokenUsage, msg.usedModel, msg.agentTokenUsage);
   }
 
   function resolveSkillChipLabel(filename) {
@@ -2425,7 +2452,7 @@ export const ChatUI = (() => {
       el.appendChild(content);
     }
 
-    const tokenBar = createTokenUsageBar(displayMsg.turnTokenUsage, displayMsg.usedModel);
+    const tokenBar = createTokenUsageBar(displayMsg.turnTokenUsage, displayMsg.usedModel, displayMsg.agentTokenUsage);
     if (tokenBar) el.appendChild(tokenBar);
 
     return el;
@@ -3162,6 +3189,8 @@ export const ChatUI = (() => {
     setInputValue,
     focusInput,
     updateToolActionByCallId,
+    createAgentToolRowBlock,
+    notifyNodeLayoutChange,
     scrollToToolCall,
     mountDiffForToolCallId,
     repairMissingDiffMountsFromStructured,

@@ -273,23 +273,26 @@ export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
   },
 };
 
-const DEFAULT_CONFIG: IceCoderConfigFile = {
-  supervisorMode: 'adaptive',
-  shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
-  providers: [
-    {
-      id: 'default',
-      apiUrl: 'https://api.openai.com/v1',
-      apiKey: 'sk-your-api-key-here',
-      modelName: 'gpt-4o',
-      parameters: {
-        temperature: 0.7,
-        maxTokens: 16384,
+/** 惰性构造：shell-sandbox 与本文件互相导入，模块顶层读取黑名单常量会在循环加载时拿到 undefined。 */
+function createDefaultConfig(): IceCoderConfigFile {
+  return {
+    supervisorMode: 'adaptive',
+    shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
+    providers: [
+      {
+        id: 'default',
+        apiUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-your-api-key-here',
+        modelName: 'gpt-4o',
+        parameters: {
+          temperature: 0.7,
+          maxTokens: 16384,
+        },
+        isDefault: true,
       },
-      isDefault: true,
-    },
-  ],
-};
+    ],
+  };
+}
 
 export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手，具备读写文件、执行命令、搜索代码等工具能力。
 
@@ -391,7 +394,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(getMcpCacheDir(), { recursive: true });
 
   if (!(await exists(paths.configPath))) {
-    await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
+    await fs.writeFile(paths.configPath, JSON.stringify(createDefaultConfig(), null, 2), 'utf-8');
     isFirstRun = true;
   }
 

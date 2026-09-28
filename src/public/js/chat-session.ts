@@ -532,9 +532,19 @@ export const ChatSession = (() => {
   function separateToolTraces(serverMsgs) {
     const msgs = [];
     const traces = {};
+    const agentTraces = {};
     for (let i = 0; i < serverMsgs.length; i++) {
       const m = serverMsgs[i];
-      if (m.role === 'tool_trace' && m.parentId) {
+      if (m.role === 'tool_trace' && m.agentId) {
+        if (!agentTraces[m.agentId]) agentTraces[m.agentId] = [];
+        agentTraces[m.agentId].push({
+          toolName: m.toolName || '',
+          detail: m.detail || '',
+          status: m.status || 'pending',
+          toolCallId: m.toolCallId || '',
+          diffSource: typeof m.diffSource === 'string' && m.diffSource ? m.diffSource : null,
+        });
+      } else if (m.role === 'tool_trace' && m.parentId) {
         if (!traces[m.parentId]) traces[m.parentId] = [];
         const traceRow = {
           toolName: m.toolName || '',
@@ -562,6 +572,9 @@ export const ChatSession = (() => {
         }
         msgs.push(cloned);
       }
+    }
+    if (window.ChatAgentCards && Object.keys(agentTraces).length > 0) {
+      window.ChatAgentCards.setHistoryTraces(agentTraces);
     }
     return { msgs, traces };
   }

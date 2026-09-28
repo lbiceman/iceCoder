@@ -28,6 +28,8 @@ export interface ResolvedSessionHarnessToolContext extends ResolvedWorkspaceTool
   shellCollabActive: boolean;
   planModeActive: boolean;
   enableRequestAnalysis: boolean;
+  /** 默认模式向主 Agent 暴露 `task`（子 Agent）；Shell 协作与规划模式不暴露 */
+  enableAgentTask: boolean;
   mcpRuntimeContext: Record<string, string>;
 }
 
@@ -49,7 +51,9 @@ export async function resolveSessionHarnessToolContext(
       toolDefs,
       shellCollabActive: false,
       planModeActive,
-      enableRequestAnalysis: !planModeActive,
+      // 默认模式由 task 子 Agent 承担大范围探索，不再暴露 request_analysis
+      enableRequestAnalysis: false,
+      enableAgentTask: !planModeActive,
       mcpRuntimeContext: planModeActive
         ? {}
         : buildMcpRuntimeContext(
@@ -97,6 +101,7 @@ export async function resolveSessionHarnessToolContext(
     shellCollabActive: true,
     planModeActive: false,
     enableRequestAnalysis: false,
+    enableAgentTask: false,
     mcpRuntimeContext: {},
   };
 }

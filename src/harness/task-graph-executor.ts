@@ -12,6 +12,7 @@
 import type { TaskGraph as TaskGraphData, NodeContract, OutputSignal, TaskNode } from '../types/task-graph.js';
 import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
 import { buildGraph } from './task-graph-builder.js';
+import { isNeutralAgentTool } from './agents/task-tool.js';
 import {
   createTaskGraph,
   getCurrentNode,
@@ -167,6 +168,8 @@ export class GraphExecutor {
   checkToolCall(toolName: string, opts: { track?: boolean } = {}): ToolCheckResult {
     const track = opts.track ?? true;
     if (!this.graph) return { action: 'allow' };
+    // task 是中性工具：不推进、不偏离、不计入节点合约
+    if (isNeutralAgentTool(toolName)) return { action: 'allow' };
 
     // Lazy init contract validator for current node
     if (!this.contractValidator) {
@@ -201,7 +204,7 @@ export class GraphExecutor {
   }
 
   recordToolResult(toolName: string, success: boolean, signal?: OutputSignal): void {
-    if (!this.contractValidator) return;
+    if (!this.contractValidator || isNeutralAgentTool(toolName)) return;
     this.contractValidator.recordAfterToolCall(toolName, success, signal);
   }
 

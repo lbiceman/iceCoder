@@ -78,6 +78,8 @@ import {
   isWsSubscribedTo,
 } from './chat-ws-broadcast.js';
 import { createShellMandatoryConfirmHandler, createToolConfirmHandler } from './chat-ws-confirm.js';
+import { broadcastAgentStep, createWebAgentSpawner } from './chat-ws-agents.js';
+import { TASK_TOOL_NAME } from '../harness/agents/task-tool.js';
 import { rebindBgTaskPusher } from './chat-ws-bg-tasks.js';
 import {
   appendMessages,
@@ -109,6 +111,7 @@ import {
   isSessionTombstoned,
   recordSessionDeferredToolCall,
   sessionAbortControllers,
+  sessionAgentSpawners,
   setCachedMessages,
 } from './chat-ws-runtime.js';
 
@@ -121,9 +124,12 @@ export interface ToolTraceBatchEntry {
   iteration?: number;
   /** 供刷新后 UI 还原 diff 面板（不依赖 .structured.json 对齐） */
   diffSource?: string | null;
+  /** 子 Agent 的工具轨迹 */
+  agentId?: string;
+  parentToolCallId?: string;
 }
 
-function toSessionToolTrace(
+export function toSessionToolTrace(
   t: ToolTraceBatchEntry,
   agentMsgId: string,
 ): Parameters<typeof appendMessages>[0][number] {
@@ -139,6 +145,8 @@ function toSessionToolTrace(
     entry.iteration = Math.floor(t.iteration);
   }
   if (t.diffSource) entry.diffSource = t.diffSource;
+  if (t.agentId) entry.agentId = t.agentId;
+  if (t.parentToolCallId) entry.parentToolCallId = t.parentToolCallId;
   return entry;
 }
 
@@ -462,9 +470,10 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   });
   toolDefs = sessionToolCtx.toolDefs;
   const runtimeToolsDisabled = shouldDisableRuntimeTools();
+  const agentTaskEnabled = !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
-    : toolDefs.map((tool) => tool.name);
+    : [...toolDefs.map((tool) => tool.name), ...(agentTaskEnabled ? [TASK_TOOL_NAME] : [])];
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
 
@@ -557,6 +566,20 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     onConfirm: createToolConfirmHandler(runSessionId),
   };
 
+  const agentSpawner = agentTaskEnabled
+    ? createWebAgentSpawner({
+        sessionId: runSessionId,
+        messageId: userMsgId,
+        llmAdapter,
+        reasoningEffort,
+        harnessFactory: (config, executor) => new Harness(config, executor),
+      })
+    : undefined;
+  if (agentSpawner) {
+    harnessConfig.agentSpawner = agentSpawner;
+    sessionAgentSpawners.set(runSessionId, agentSpawner);
+  }
+
   const harness = new Harness(harnessConfig, runToolExecutor);
 
   try {
@@ -623,25 +646,29 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       (event) => {
         foldStepIntoRunningTurn(runSessionId, event);
 
-        broadcastToSession(runSessionId, { type: 'step', step: event });
+        if (event.agentId) {
+          broadcastAgentStep(runSessionId, event);
+        } else {
+          broadcastToSession(runSessionId, { type: 'step', step: event });
 
-        if (event.type === 'stream_retry_discard') {
-          broadcastToSession(runSessionId, { type: 'stream_retry_discard' });
-        }
-        if (event.type === 'stream_delta' && event.delta) {
-          broadcastToSession(runSessionId, { type: 'stream', delta: event.delta });
-        }
-        if (event.type === 'reasoning_stream_delta' && event.delta) {
-          broadcastToSession(runSessionId, { type: 'reasoning_stream', delta: event.delta });
-        }
+          if (event.type === 'stream_retry_discard') {
+            broadcastToSession(runSessionId, { type: 'stream_retry_discard' });
+          }
+          if (event.type === 'stream_delta' && event.delta) {
+            broadcastToSession(runSessionId, { type: 'stream', delta: event.delta });
+          }
+          if (event.type === 'reasoning_stream_delta' && event.delta) {
+            broadcastToSession(runSessionId, { type: 'reasoning_stream', delta: event.delta });
+          }
 
-        if (event.type === 'tool_output' && event.content) {
-          broadcastToSession(runSessionId, {
-            type: 'tool_output',
-            toolCallId: event.toolCallId || '',
-            toolName: event.toolName,
-            content: event.content,
-          });
+          if (event.type === 'tool_output' && event.content) {
+            broadcastToSession(runSessionId, {
+              type: 'tool_output',
+              toolCallId: event.toolCallId || '',
+              toolName: event.toolName,
+              content: event.content,
+            });
+          }
         }
 
         if (event.type === 'tool_call' && event.toolName) {
@@ -660,6 +687,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
               undefined,
               event.toolArgs as Record<string, unknown> | undefined,
             )),
+            ...(event.agentId ? { agentId: event.agentId, parentToolCallId: event.parentToolCallId } : {}),
           });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
@@ -753,11 +781,20 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         inputTokens: result.loopState.totalInputTokens,
         outputTokens: result.loopState.totalOutputTokens,
       };
+      const agentViews = agentSpawner?.listViews() ?? [];
       const agentBubble = {
         role: 'agent' as const,
         id: agentMsgId,
         turnTokenUsage,
         ...(usedModel ? { usedModel } : {}),
+        ...(agentViews.length > 0
+          ? {
+              agentTokenUsage: {
+                tokens: agentViews.reduce((sum, v) => sum + v.tokens, 0),
+                agents: agentViews.length,
+              },
+            }
+          : {}),
       };
 
       if (result.content) {
@@ -812,6 +849,12 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     stopReason = result.loopState.stopReason;
   } finally {
     clearInterval(pulseTimer);
+    if (agentSpawner) {
+      agentSpawner.stopAll();
+      if (sessionAgentSpawners.get(runSessionId) === agentSpawner) {
+        sessionAgentSpawners.delete(runSessionId);
+      }
+    }
     if (!isSessionTombstoned(runSessionId)) {
       try {
         await finalizeIntentCheckpointTurn(SESSIONS_DIR, runSessionId, userMsgId);

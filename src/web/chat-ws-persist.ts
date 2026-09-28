@@ -225,6 +225,11 @@ export type AppendableSessionMessage = {
   turnTokenUsage?: { inputTokens: number; outputTokens: number };
   usedModel?: string;
   diffSource?: string | null;
+  /** 子 Agent 的工具轨迹：所属 agentId 与发起它的 task 调用 id */
+  agentId?: string;
+  parentToolCallId?: string;
+  /** 本轮全部子 Agent 的 token 合计（主 Agent 的在 turnTokenUsage） */
+  agentTokenUsage?: { tokens: number; agents: number };
 };
 
 /**

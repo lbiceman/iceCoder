@@ -22,6 +22,9 @@ export interface TokenUsageLogEvent {
   cacheReadTokens?: number;
   cacheMissTokens?: number;
   cacheCreationTokens?: number;
+  /** 子 Agent 调用时记录，统计据此拆分主 Agent / 子 Agent */
+  agentId?: string;
+  agentType?: string;
 }
 
 const TOKEN_USAGE_SOURCES: ReadonlySet<TokenUsageSource> = new Set([
@@ -70,6 +73,8 @@ export function recordTokenUsage(event: Omit<TokenUsageLogEvent, 'type' | 'times
     ...(event.cacheReadTokens ? { cacheReadTokens: event.cacheReadTokens } : {}),
     ...(event.cacheMissTokens ? { cacheMissTokens: event.cacheMissTokens } : {}),
     ...(event.cacheCreationTokens ? { cacheCreationTokens: event.cacheCreationTokens } : {}),
+    ...(event.agentId ? { agentId: event.agentId } : {}),
+    ...(event.agentType ? { agentType: event.agentType } : {}),
   };
 
   const filePath = getTokenUsageLogPath();
@@ -79,7 +84,7 @@ export function recordTokenUsage(event: Omit<TokenUsageLogEvent, 'type' | 'times
 export function recordTokenUsageFromCall(
   usage: TokenUsage,
   provider: { name?: string; model?: unknown },
-  options?: { usageSource?: TokenUsageSource; sessionId?: string; model?: string },
+  options?: { usageSource?: TokenUsageSource; sessionId?: string; model?: string; agentId?: string; agentType?: string },
 ): void {
   const sessionId = typeof options?.sessionId === 'string' && options.sessionId.trim()
     ? options.sessionId.trim()
@@ -95,6 +100,8 @@ export function recordTokenUsageFromCall(
     ...(usage.cacheReadTokens ? { cacheReadTokens: usage.cacheReadTokens } : {}),
     ...(usage.cacheMissTokens ? { cacheMissTokens: usage.cacheMissTokens } : {}),
     ...(usage.cacheCreationTokens ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
+    ...(options?.agentType ? { agentType: options.agentType } : {}),
   });
 }
 

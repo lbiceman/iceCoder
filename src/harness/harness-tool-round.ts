@@ -61,6 +61,12 @@ import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 import { recordToolOperationOutcomes } from './operation-outcome.js';
 import {
+  importAgentVerificationEvidence,
+  mergeAgentFileChanges,
+  type AgentTaskOutcome,
+} from './agents/agent-merge.js';
+import { TASK_TOOL_NAME } from './agents/task-tool.js';
+import {
   recordVerificationCommandResult,
   syncVerificationWorkspaceMutation,
 } from './verification-state.js';
@@ -108,6 +114,8 @@ export interface ToolRoundDeps
   /** 单次 LLM max_tokens 上限（与 adapter 对齐，供 write 截断检测）。 */
   agentMaxOutputTokens?: number;
   abortSignal?: AbortSignal;
+  /** 本轮 task 调用的子 Agent 结果来源（改动文件与验证证据并入父状态） */
+  agentSpawner?: Pick<import('./agents/agent-spawner.js').AgentSpawner, 'takeOutcome'>;
 }
 
 const TASK_BEARING_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
@@ -276,10 +284,21 @@ export async function runHarnessToolRound(
   // 后台 start/running 不计入；只有真实 terminal 分类才能改变进度。
   const failedVerificationSignatures = new Set<string>();
   const runCommandClassifications = new Map<string, RunCommandResultClassification>();
+  const agentOutcomes: AgentTaskOutcome[] = [];
+  for (const tc of executableToolCalls) {
+    if (tc.name !== TASK_TOOL_NAME) continue;
+    const outcome = deps.agentSpawner?.takeOutcome(tc.id);
+    if (!outcome) continue;
+    mergeAgentFileChanges(tc.id, outcome, state);
+    agentOutcomes.push(outcome);
+  }
   syncVerificationWorkspaceMutation(state.verificationState, state.taskState);
   const currentVerificationPlan = state.verificationPlanResolution.kind === 'resolved'
     ? state.verificationPlanResolution.plan
     : null;
+  for (const outcome of agentOutcomes) {
+    importAgentVerificationEvidence(outcome, state.verificationState, currentVerificationPlan);
+  }
   if (executableToolCalls.length > 0) {
     for (const tc of executableToolCalls) {
       if (tc.name !== 'run_command') continue;
@@ -664,7 +683,7 @@ export async function runHarnessToolRound(
     }),
   });
 
-  const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
+  const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command', TASK_TOOL_NAME]);
   const hadWriteTool = executableToolCalls.some(tc => WRITE_TOOLS.has(tc.name));
   if (executableToolCalls.length > 0) {
     state.hadToolRoundThisRun = true;

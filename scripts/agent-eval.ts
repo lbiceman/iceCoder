@@ -24,6 +24,8 @@ interface CaseResult {
   metrics: EvalMetrics;
   failures: string[];
   workspace?: string;
+  taskCallCount?: number;
+  agents?: Array<{ type: string; status: string; rounds: number; toolCalls: number; description: string }>;
 }
 
 const METRIC_KEYS: Array<keyof EvalMetrics> = [
@@ -280,6 +282,14 @@ function formatReport(report: {
       lines.push(`- compaction_recovery_success_rate: ${roundMetric(result.metrics.compaction_recovery_success_rate)}`);
     }
     lines.push(`- tokens_per_successful_task: ${roundMetric(result.metrics.tokens_per_successful_task)}`);
+    if (typeof result.taskCallCount === 'number') {
+      lines.push(`- task_call_count: ${result.taskCallCount}`);
+    }
+    if (result.agents && result.agents.length > 0) {
+      for (const agent of result.agents) {
+        lines.push(`- agent: [${agent.type}] ${agent.description} status=${agent.status} rounds=${agent.rounds} tools=${agent.toolCalls}`);
+      }
+    }
     if (result.workspace) lines.push(`- workspace: ${result.workspace}`);
     if (result.failures.length > 0) {
       lines.push('- failures:');

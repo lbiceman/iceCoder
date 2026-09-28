@@ -75,6 +75,8 @@ declare global {
     ChatWsSessionHandlers?: any;
     ChatWsRestoreHandlers?: any;
     ChatWsBgTaskHandlers?: any;
+    ChatAgentCards?: any;
+    ChatAgentDrawer?: any;
     ChatPage?: any;
     MemoryPage?: any;
     SkillsPage?: any;

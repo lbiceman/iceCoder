@@ -60,12 +60,21 @@ export interface TokenUsageRecord {
   outputTokens: number;
   usedModel?: string;
   source?: string;
+  /** 子 Agent 调用 */
+  agentId?: string;
 }
 
 export type TokenUsageByModel = Record<string, TokenUsageWindows>;
 
+/** 主 Agent / 子 Agent 分开统计 */
+export interface TokenUsageByRole {
+  main: TokenUsageWindows;
+  subAgent: TokenUsageWindows;
+}
+
 export interface TokenUsageSummary extends TokenUsageWindows {
   byModel: TokenUsageByModel;
+  byRole: TokenUsageByRole;
   series: TokenUsageSeries;
 }
 
@@ -161,6 +170,7 @@ export function tokenUsageEventsToRecords(events: TokenUsageLogEvent[]): TokenUs
       outputTokens,
       ...(usedModel ? { usedModel } : {}),
       ...(event.source ? { source: event.source } : {}),
+      ...(event.agentId ? { agentId: event.agentId } : {}),
     });
   }
   return records;
@@ -267,6 +277,20 @@ export function aggregateTokenUsageByModel(
   return out;
 }
 
+export function isSubAgentTokenRecord(record: TokenUsageRecord): boolean {
+  return !!record.agentId || record.source === 'sub_agent';
+}
+
+export function aggregateTokenUsageByRole(
+  records: TokenUsageRecord[],
+  now = Date.now(),
+): TokenUsageByRole {
+  return {
+    main: aggregateTokenUsageWindows(records.filter((r) => !isSubAgentTokenRecord(r)), now),
+    subAgent: aggregateTokenUsageWindows(records.filter(isSubAgentTokenRecord), now),
+  };
+}
+
 export async function collectTokenUsageRecords(logPath?: string): Promise<TokenUsageRecord[]> {
   return tokenUsageEventsToRecords(await readTokenUsageLogEvents(logPath));
 }
@@ -279,6 +303,7 @@ export async function summarizeTokenUsage(
   return {
     ...aggregateTokenUsageWindows(records, now),
     byModel: aggregateTokenUsageByModel(records, now),
+    byRole: aggregateTokenUsageByRole(records, now),
     series: aggregateTokenUsageSeries(records, now),
   };
 }

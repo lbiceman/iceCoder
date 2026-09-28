@@ -1037,6 +1037,7 @@ export const ChatPage = (() => {
     closeComposerOverlays();
     dismissConfirmWithoutReply();
     const outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId !== sessionId && window.ChatAgentCards) window.ChatAgentCards.reset();
     if (outgoingSessionId && outgoingSessionId !== sessionId) {
       captureComposerDraft(outgoingSessionId);
       if (Pet && typeof Pet.captureSnapshot === 'function') Pet.captureSnapshot(outgoingSessionId);
@@ -1227,6 +1228,9 @@ export const ChatPage = (() => {
     // 3. 工具时间线：服务端 runningTurn 优先，否则 localStorage 缓存
     const toolTimeline = pickToolTimelineForRestore(runningTurn);
     applyLiveToolTimelineToUI(toolTimeline);
+    if (runningTurn.agents && window.ChatAgentCards) {
+      window.ChatAgentCards.restoreFromSnapshot(runningTurn.agents);
+    }
 
     // 4. token 用量 & 轮次
     if (typeof runningTurn.lastEffectiveUsed === 'number' && runningTurn.lastEffectiveUsed > 0) {

@@ -92,6 +92,10 @@ export interface ToolExecutorDeps {
   sessionDir?: string;
   /** Async Sub-Agent Phase 5：非阻塞分析请求入口。 */
   analysisSupervisor?: AnalysisSupervisor;
+  /** 写前快照与 touched files 归属（子 Agent 记到父会话）；未设置时用 sessionDir / sessionId */
+  checkpointOwner?: { sessionDir: string; sessionId: string };
+  /** 子 Agent 执行前检查（写租约 / 只读 / git 限制）与命令改动回调 */
+  agentScope?: import('./types.js').AgentToolScope;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -323,6 +327,8 @@ export async function executeToolCallsStreaming(
   const workspaceMutatedRunCommandIds = new Set<string>();
   const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
   const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
+  const checkpointSessionId = deps.checkpointOwner?.sessionId ?? deps.sessionId;
+  const checkpointSessionDir = deps.checkpointOwner?.sessionDir ?? deps.sessionDir;
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -369,6 +375,27 @@ export async function executeToolCallsStreaming(
         baseMessage: `[Harness / Tool Policy] Tool "${tc.name}" is not available in this turn.`,
         errorLabel: 'Tool not available in current turn',
         policyReason: 'tool_not_available_this_turn',
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
+    }
+
+    const agentBlock = deps.agentScope?.checkBeforeTool(tc);
+    if (agentBlock) {
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: agentBlock.message,
+        errorLabel: 'Sub-agent policy block',
+        policyReason: agentBlock.reason,
         messages,
         onStep,
         logger,
@@ -698,7 +725,7 @@ export async function executeToolCallsStreaming(
     }
     for (const p of collectSessionTouchedPaths(tc.name, tc.arguments)) snapshotPaths.add(p);
     for (const p of snapshotPaths) {
-      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, p);
+      await capturePreTurnWriteSnapshot(checkpointSessionId, deps.workspaceRoot, p);
     }
     if (
       commandInventoryScope
@@ -806,6 +833,7 @@ export async function executeToolCallsStreaming(
     if (inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot);
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
+      deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
       const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
       const touchedPaths = [
         ...commandInventoryDiff.created,
@@ -832,20 +860,20 @@ export async function executeToolCallsStreaming(
         workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
       }
     }
-    if (result.success && deps.sessionDir && deps.sessionId) {
+    if (result.success && checkpointSessionDir && checkpointSessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
         .map((p) => remapPathToWorkspace(deps.workspaceRoot, p) ?? p)
         .filter(Boolean);
       if (commandInventoryDiff) {
         for (const created of commandInventoryDiff.created) {
-          recordPreTurnMissingFile(deps.sessionId, deps.workspaceRoot, created);
+          recordPreTurnMissingFile(checkpointSessionId, deps.workspaceRoot, created);
           touchedPaths.push(created);
         }
         // 不把 mtime 变化的已有文件算进会话改动：npm test 等会误伤 lockfile。
         // 命令里写明的删除/改写路径已由 collectSessionTouchedPaths 覆盖。
       }
       if (touchedPaths.length) {
-        await touchSessionTouchedPaths(deps.sessionDir, deps.sessionId, touchedPaths).catch(() => {
+        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch(() => {
           /* ignore */
         });
       }

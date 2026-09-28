@@ -228,6 +228,36 @@ export interface HarnessConfig {
    * 严格工具域（Shell 协作、普通 agent-eval）应显式设为 false。
    */
   enableRequestAnalysis?: boolean;
+  /**
+   * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；
+   * 不传时不暴露 task，Shell 协作 / 规划模式 / CLI 行为不变。子 Harness 不传，禁止嵌套。
+   */
+  agentSpawner?: import('./agents/agent-spawner.js').AgentSpawner;
+  /**
+   * 写前快照、touched files 的归属会话。子 Agent 的写入记在父会话、当前用户消息名下，
+   * 回滚与 diff 查看因此不需要另写一套。未设置时使用自身 sessionDir / sessionId。
+   */
+  checkpointOwner?: { sessionDir: string; sessionId: string };
+  /** 子 Agent 专用：写租约、只读约束等执行前检查，以及命令改动的事后回调。 */
+  agentScope?: AgentToolScope;
+  /** 继承父会话的工作区锁定，不再从 prompt 中重新检测工作区。 */
+  workspaceLock?: { lockedRoot?: string; referenceReads: string[] };
+  /** 不召回、不提取长期记忆，不写会话笔记（子 Agent）。 */
+  memoryDisabled?: boolean;
+}
+
+/** 子 Agent 工具作用域：由 AgentSpawner 为每个子 Harness 构造。 */
+export interface AgentToolScope {
+  agentId: string;
+  /** 返回非空时按 Harness 策略拦截该调用（不执行）。 */
+  checkBeforeTool(
+    toolCall: import('../llm/types.js').ToolCall,
+  ): { reason: string; message: string } | null;
+  /** run_command 前后工作区清单差异（无法事先加租约，只能事后发现）。 */
+  onCommandWorkspaceChange?(
+    toolCall: import('../llm/types.js').ToolCall,
+    paths: { created: string[]; changed: string[]; deleted: string[] },
+  ): void;
 }
 
 /**
@@ -273,7 +303,14 @@ export interface HarnessStepEvent {
     | 'task_graph_branch'
     | 'task_graph_done'
     | 'execution_mode_enter'
-    | 'execution_mode_exit';
+    | 'execution_mode_exit'
+    | 'agent_update';
+  /** 子 Agent 转发的事件带上来源；主 Agent 自身事件为空 */
+  agentId?: string;
+  /** 发起该子 Agent 的那次 `task` 调用 id */
+  parentToolCallId?: string;
+  /** 子 Agent 卡片状态（仅 agent_update） */
+  agent?: import('./agents/agent-result.js').AgentView;
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（stream_delta / reasoning_stream_delta） */

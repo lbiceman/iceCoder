@@ -42,6 +42,8 @@ export const ChatWebSocket = (() => {
     confirm_resolved: 1,
     confirm_timeout: 1,
     tool_output: 1,
+    agent_update: 1,
+    agent_stream: 1,
     memory_notice: 1,
     harness_state: 1,
     error: 1,
@@ -285,6 +287,7 @@ export const ChatWebSocket = (() => {
           args: data.args,
           confirmKind: data.confirmKind,
           shellMandatory: data.shellMandatory,
+          agentSource: data.agentSource || null,
           sessionId: sid,
         });
         break;
@@ -346,6 +349,26 @@ export const ChatWebSocket = (() => {
           toolCallId: data.toolCallId || '',
           toolName: data.toolName || '',
           content: data.content || '',
+          agentId: data.agentId || '',
+          sessionId: sid,
+        });
+        break;
+      case 'agent_update':
+        if (data.agent) emit('agent_update', { agent: data.agent, sessionId: sid });
+        break;
+      case 'agent_stream':
+        emit('agent_stream', {
+          agentId: data.agentId || '',
+          kind: data.kind || 'text',
+          delta: data.delta || '',
+          sessionId: sid,
+        });
+        break;
+      case 'agent_stop_result':
+        emit('agent_stop_result', {
+          agentId: data.agentId || '',
+          ok: data.ok !== false,
+          error: data.error || '',
           sessionId: sid,
         });
         break;

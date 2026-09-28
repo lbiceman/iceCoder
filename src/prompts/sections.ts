@@ -252,11 +252,41 @@ Document tools are available only when present in the current tool definitions. 
   };
 }
 
+/** 仅当本轮暴露 `task` 工具时出现；何时委派由主模型自行判断。 */
+export function createSubAgentsSection(): PromptSection {
+  return {
+    id: 'sub_agents',
+    title: 'Sub-agents',
+    // 中文说明：引导主 Agent 何时派子 Agent、如何写 prompt、如何验收；不强制使用。
+    content: `# Sub-agents
+
+The \`task\` tool launches a sub-agent with its own fresh context. Using it is optional; do simple work yourself.
+
+Good fits:
+- \`explore\`: questions whose answer is spread across many files and needs broad searching or call-chain tracing.
+- Several \`general\` agents in parallel: work that splits into independent pieces with non-overlapping file scopes.
+- One \`general\` agent: a large, clearly bounded piece of work you want to keep out of your own context.
+
+Poor fits: reading a known file, changing a few lines, or anything one or two searches can answer.
+
+How to use it:
+- When pieces can run in parallel, send all \`task\` calls in the same reply.
+- Give parallel \`general\` agents non-overlapping file scopes.
+- The prompt must be self-contained: the sub-agent cannot see this conversation. State the goal, the paths it may change, known facts, how to verify, and what the report must contain.
+- The user does not see sub-agent reports. Review each report and relay the key points yourself.
+- Sub-agent changes are already written to the workspace. Review them and run the final verification yourself before you finish.`,
+    isStatic: true,
+    priority: 42,
+    enabled: true,
+  };
+}
+
 /** 规划模式下需从静态 system 中移除的实现向段落，避免鼓励改代码。 */
 export const PLAN_MODE_REMOVED_SECTION_IDS = [
   'doing_tasks',
   'actions',
   'tool_usage',
+  'sub_agents',
   'shell_guide',
 ] as const;
 
@@ -295,6 +325,7 @@ export const SHELL_COLLAB_REMOVED_SECTION_IDS = [
   'doing_tasks',
   'actions',
   'tool_usage',
+  'sub_agents',
   'shell_guide',
 ] as const;
 

@@ -49,7 +49,11 @@ export const ChatWsRestoreHandlers = (() => {
       return get('isStreaming') ? 'streaming' : (WS.isProcessing() ? 'running' : 'idle');
     }
 
+    /** 同时到达的确认（多个子 Agent / 并行工具）按到达顺序逐个弹出 */
+    const confirmQueue = [];
+
     function dismissConfirmWithoutReply() {
+      confirmQueue.length = 0;
       if (!activeConfirmId) return;
       activeConfirmResolved = true;
       dismissActiveConfirmModal(false);
@@ -58,8 +62,29 @@ export const ChatWsRestoreHandlers = (() => {
 
     dismissConfirmWithoutReplyFn = dismissConfirmWithoutReply;
 
+    function showNextConfirm() {
+      const next = confirmQueue.shift();
+      if (next) showConfirm(next);
+    }
+
+    function agentSourcePrefix(data) {
+      const src = data && data.agentSource;
+      if (!src || !src.description) return '';
+      return `子 Agent『${src.description}』请求执行：`;
+    }
+
     function onConfirm(data) {
       if (isForeignSessionEvent(data)) return;
+      if (activeConfirmId) {
+        const dup = data.confirmId === activeConfirmId
+          || confirmQueue.some((q) => q.confirmId === data.confirmId);
+        if (!dup) confirmQueue.push(data);
+        return;
+      }
+      showConfirm(data);
+    }
+
+    function showConfirm(data) {
       const sessionPet = ctx.getSessionPet();
       if (sessionPet) {
         sessionPet.setState('error');
@@ -83,7 +108,7 @@ export const ChatWsRestoreHandlers = (() => {
           '此确认不会被「自动执行」设置跳过。',
         ];
         modalOpts = {
-          title: 'Shell 敏感命令确认',
+          title: agentSourcePrefix(data) ? `${agentSourcePrefix(data)}Shell 敏感命令` : 'Shell 敏感命令确认',
           message: lines.join('\n'),
           type: 'danger',
           dangerConfirm: true,
@@ -94,7 +119,7 @@ export const ChatWsRestoreHandlers = (() => {
       } else {
         const argsText = data.args ? JSON.stringify(data.args) : '';
         modalOpts = {
-          title: '危险操作确认',
+          title: agentSourcePrefix(data) ? `${agentSourcePrefix(data)}${data.toolName}` : '危险操作确认',
           message: `工具: ${data.toolName}
 参数: ${argsText}`,
           type: 'danger',
@@ -104,6 +129,7 @@ export const ChatWsRestoreHandlers = (() => {
         };
       }
 
+      const confirmId = activeConfirmId;
       Modal.confirm(modalOpts).then((ok) => {
         if (activeConfirmResolved) {
           activeConfirmId = null;
@@ -112,11 +138,13 @@ export const ChatWsRestoreHandlers = (() => {
             sessionPet.setState(petBusyFace());
             sessionPet.setBubbleText('');
           }
+          showNextConfirm();
           return;
         }
-        WS.sendConfirmReply(ok, activeConfirmId);
+        WS.sendConfirmReply(ok, confirmId);
         activeConfirmId = null;
-        const confirmMsg = { role: 'agent', content: ok ? `[ok] 用户已确认: ${data.toolName}` : `[denied] 用户已拒绝: ${data.toolName}` };
+        const who = agentSourcePrefix(data) ? `子 Agent『${data.agentSource.description}』的 ` : '';
+        const confirmMsg = { role: 'agent', content: ok ? `[ok] 用户已确认: ${who}${data.toolName}` : `[denied] 用户已拒绝: ${who}${data.toolName}` };
         Session.appendMessage(confirmMsg);
         UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
         Session.saveMessages();
@@ -124,13 +152,24 @@ export const ChatWsRestoreHandlers = (() => {
           sessionPet.setState(petBusyFace());
           sessionPet.setBubbleText('');
         }
+        showNextConfirm();
       });
+    }
+
+    function dropQueuedConfirm(confirmId) {
+      for (let i = confirmQueue.length - 1; i >= 0; i--) {
+        if (confirmQueue[i].confirmId === confirmId) confirmQueue.splice(i, 1);
+      }
     }
 
     function onConfirmResolved(data) {
       if (!data) return;
       if (isForeignSessionEvent(data)) return;
       // 其它端 first-win 后关闭本地弹窗，避免 PC/移动端各弹各的
+      if (activeConfirmId && data.confirmId && data.confirmId !== activeConfirmId) {
+        dropQueuedConfirm(data.confirmId);
+        return;
+      }
       if (!activeConfirmId || data.confirmId === activeConfirmId) {
         activeConfirmResolved = true;
         dismissActiveConfirmModal(!!data.approved);
@@ -140,6 +179,10 @@ export const ChatWsRestoreHandlers = (() => {
     function onConfirmTimeout(data) {
       if (!data) return;
       if (isForeignSessionEvent(data)) return;
+      if (activeConfirmId && data.confirmId && data.confirmId !== activeConfirmId) {
+        dropQueuedConfirm(data.confirmId);
+        return;
+      }
       if (!activeConfirmId || data.confirmId === activeConfirmId) {
         activeConfirmResolved = true;
         dismissActiveConfirmModal(false);

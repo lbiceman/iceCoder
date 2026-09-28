@@ -51,6 +51,7 @@ import {
   subscribeWsToSession,
 } from './chat-ws-broadcast.js';
 import { handleConfirmReply, replayPendingConfirmsToWs } from './chat-ws-confirm.js';
+import { stopSessionAgent } from './chat-ws-agents.js';
 import {
   appendMessages,
   broadcastHarnessState,
@@ -184,6 +185,23 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         if (abortSession(sid)) {
           console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
         }
+        return;
+      }
+
+      if (msg.type === 'agent_stop') {
+        const sid = getSubscribedSessionId(ws);
+        const agentId = typeof msg.agentId === 'string' ? msg.agentId.trim() : '';
+        if (!sid || !agentId) {
+          sendJSON(ws, { type: 'agent_stop_result', agentId, ok: false, error: '缺少 agentId 或未订阅会话' });
+          return;
+        }
+        const ok = stopSessionAgent(sid, agentId);
+        sendJSON(ws, {
+          type: 'agent_stop_result',
+          agentId,
+          ok,
+          ...(ok ? {} : { error: '该子 Agent 已结束或不在运行中' }),
+        });
         return;
       }
 

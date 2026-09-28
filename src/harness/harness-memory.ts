@@ -229,6 +229,8 @@ export interface HarnessMemoryConfig {
   sessionId?: string;
   /** 工作区根目录（用于 package.json 锚定） */
   workspaceRoot?: string;
+  /** 为 true 时不注入召回记忆（子 Agent） */
+  disabled?: boolean;
 }
 
 /** 记忆注入模式 */
@@ -606,8 +608,10 @@ export class HarnessMemoryIntegration {
   private sessionMemoryWriteCap!: LongTermMemoryWriteCap;
   /** 上次提取时的工具调用计数 cursor */
   private toolCallsAtLastExtract = 0;
+  private readonly disabled: boolean;
 
   constructor(config: HarnessMemoryConfig) {
+    this.disabled = config.disabled === true;
     this.memoryDir = config.memoryDir || 'data/memory-files';
     this.sessionId = config.sessionId || 'default';
     this.fileMemoryManager = config.fileMemoryManager;
@@ -733,6 +737,7 @@ export class HarnessMemoryIntegration {
     messages: UnifiedMessage[],
     options?: { mode?: InjectMemoryMode; onStep?: (event: HarnessStepEvent) => void },
   ): Promise<void> {
+    if (this.disabled) return;
     if (!this.memoryDir && !this.fileMemoryManager) return;
     if (this.memoryDirExists === false) return;
 

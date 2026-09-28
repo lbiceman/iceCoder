@@ -1,7 +1,8 @@
 // @ts-nocheck
 /**
  * ChatPage 的 WS 流式事件处理（从 chat-page.js 拆分，2026-08-11）。
- * 职责：stream / reasoning_stream / stream_end / response / step / status / error / tool_output。
+ * 职责：stream / reasoning_stream / stream_end / response / step / status / error / tool_output，
+ *       以及子 Agent 的 agent_update / agent_stream / agent_stop_result（带 agentId 的 step 转给 ChatAgentCards）。
  * 共享状态（isStreaming / userStopped / streamFinalized / streamChunksReceived /
  * visibleStreamChunksReceived / pendingTurnTokenUsage / streamingDiffBuffer）留在 chat-page.js
  * 闭包中，经 ctx.get/set 与专用访问器读写。
@@ -154,6 +155,11 @@ export const ChatWsStreamHandlers = (() => {
       // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
       if (get('userStopped')) return;
 
+      if (step.agentId) {
+        onAgentStep(step);
+        return;
+      }
+
       if (step.type === 'thinking' && typeof step.iteration === 'number') {
         forwardExecutionRoundMarker('model_round_start', step);
       } else if (step.type === 'context_usage' && typeof step.iteration === 'number') {
@@ -287,6 +293,37 @@ export const ChatWsStreamHandlers = (() => {
       Pet.applyHarnessStepToPet(step, get('isStreaming'), WS.isProcessing());
     }
 
+    /** 子 Agent 的 step：只进对应卡片，不碰主 Agent 的气泡、工具区、执行面板与冰豆 */
+    function onAgentStep(step) {
+      const Cards = window.ChatAgentCards;
+      if (!Cards) return;
+      const fmt = window.ToolTraceFormat;
+      if (step.type === 'tool_call' && step.toolName) {
+        const detail = fmt ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs) : '';
+        const callStatus = fmt && fmt.resolveToolCallInitialStatus
+          ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
+          : 'pending';
+        const diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
+          ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
+          : null;
+        Cards.onAgentToolCall(step, detail, callStatus, diffFromArgs);
+        return;
+      }
+      if (step.type === 'tool_result' && step.toolName) {
+        const resultStatus = fmt
+          ? fmt.resolveToolTraceResultStatus(step.toolName, step.toolSuccess, step.toolOutcome, step.toolOutput)
+          : (step.toolSuccess ? 'success' : 'error');
+        Cards.onAgentToolResult(step, resultStatus);
+        if (window.ToolDisplayHistory) {
+          let diffSource = window.ToolDisplayHistory.extractDiffSource(step.toolName, step.toolOutput, step.toolArgs);
+          if (!diffSource && window.DiffViewer && step.toolOutput) {
+            diffSource = window.DiffViewer.extractUnifiedDiff(step.toolOutput);
+          }
+          tryMountToolDiff(step.toolCallId || '', diffSource);
+        }
+      }
+    }
+
     function onStatus(data) {
       if (isForeignSessionEvent(data)) return;
       const processing = data.status === 'processing';
@@ -335,6 +372,8 @@ export const ChatWsStreamHandlers = (() => {
     function onToolOutput(data) {
       if (isForeignSessionEvent(data)) return;
       if (!data || !data.content || !data.toolCallId) return;
+      // 子 Agent 的命令输出不占用主 Agent 的流式 diff 缓冲
+      if (data.agentId) return;
       let buf = ctx.getStreamingDiffBuffer();
       if (buf.toolCallId && buf.toolCallId !== data.toolCallId) {
         buf = { toolCallId: data.toolCallId, text: '' };
@@ -377,6 +416,17 @@ export const ChatWsStreamHandlers = (() => {
     WS.on('status', onStatus);
     WS.on('error', onError);
     WS.on('tool_output', onToolOutput);
+    WS.on('agent_update', (data) => {
+      if (isForeignSessionEvent(data) || !window.ChatAgentCards) return;
+      window.ChatAgentCards.applyView(data.agent);
+    });
+    WS.on('agent_stream', (data) => {
+      if (isForeignSessionEvent(data) || !window.ChatAgentCards) return;
+      window.ChatAgentCards.onAgentStream(data);
+    });
+    WS.on('agent_stop_result', (data) => {
+      if (window.ChatAgentCards) window.ChatAgentCards.onStopResult(data);
+    });
   }
 
   return { bind };

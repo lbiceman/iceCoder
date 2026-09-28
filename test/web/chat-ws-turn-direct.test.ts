@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { handleChatMessage } from '../../src/web/chat-ws-turn.js';
+import { handleChatMessage, toSessionToolTrace } from '../../src/web/chat-ws-turn.js';
 import { subscribeWsToSession, clearBroadcastState } from '../../src/web/chat-ws-broadcast.js';
 import { clearRunningTurn } from '../../src/web/chat-ws-running-turn.js';
 import { getFileBrowserState } from '../../src/web/chat-ws-runtime.js';
@@ -126,5 +126,40 @@ describe('chat-ws-turn file-browser 旁路', () => {
       && (m as { step?: { type?: string } }).step?.type === 'tool_call',
     )).toBe(true);
     expect(getFileBrowserState(SID).active).toBe(true);
+  });
+});
+
+describe('子 Agent 工具轨迹', () => {
+  it('带 agentId 的条目写入 tool_trace，并挂上父 task 调用', () => {
+    const row = toSessionToolTrace({
+      toolName: 'edit_file',
+      detail: 'src/payment/retry.ts',
+      status: 'success',
+      toolCallId: 'agent-1:e1',
+      iteration: 3,
+      diffSource: '--- a\n+++ b',
+      agentId: 'agent-1',
+      parentToolCallId: 'task-9',
+    }, 'agent-msg');
+    expect(row).toMatchObject({
+      role: 'tool_trace',
+      parentId: 'agent-msg',
+      toolName: 'edit_file',
+      toolCallId: 'agent-1:e1',
+      iteration: 3,
+      agentId: 'agent-1',
+      parentToolCallId: 'task-9',
+    });
+  });
+
+  it('主 Agent 的条目不带 agentId', () => {
+    const row = toSessionToolTrace({
+      toolName: 'read_file',
+      detail: 'a.ts',
+      status: 'success',
+      toolCallId: 'c1',
+    }, 'agent-msg');
+    expect(row).not.toHaveProperty('agentId');
+    expect(row).not.toHaveProperty('parentToolCallId');
   });
 });

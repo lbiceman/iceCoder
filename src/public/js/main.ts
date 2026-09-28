@@ -39,6 +39,8 @@ import './tool-display-history.ts';
 import './chat-virtual-history.ts';
 import './chat-staircase-nav.ts';
 import './chat-bg-task-chip.ts';
+import './chat-agent-cards.ts';
+import './chat-agent-session-drawer.ts';
 import './chat-skills.ts';
 import './chat-file-ref.ts';
 import './shell/mobile-session-drawer.ts';

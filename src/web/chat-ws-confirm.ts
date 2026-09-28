@@ -122,7 +122,11 @@ function startPendingConfirm(
   return confirmId;
 }
 
-export function resolveConfirm(confirmId: string, approved: boolean, reason: 'reply' | 'timeout'): void {
+export function resolveConfirm(
+  confirmId: string,
+  approved: boolean,
+  reason: 'reply' | 'timeout' | 'cancelled',
+): void {
   const entry = pendingConfirms.get(confirmId);
   if (!entry) return;
   pendingConfirms.delete(confirmId);
@@ -202,6 +206,65 @@ export function createToolConfirmHandler(
       }, resolve);
     });
   };
+}
+
+/** 确认弹窗上展示的发起方子 Agent。 */
+export interface ConfirmAgentSource {
+  agentId: string;
+  description: string;
+  type: string;
+}
+
+/** 子 Agent 停止后撤掉它挂着的确认，按拒绝处理。 */
+function cancelConfirmOnAbort(confirmId: string, signal?: AbortSignal): void {
+  if (!signal) return;
+  if (signal.aborted) {
+    resolveConfirm(confirmId, false, 'cancelled');
+    return;
+  }
+  signal.addEventListener('abort', () => resolveConfirm(confirmId, false, 'cancelled'), { once: true });
+}
+
+export function createAgentToolConfirmHandler(
+  runSessionId: string,
+): (source: ConfirmAgentSource, toolName: string, args: Record<string, any>, signal?: AbortSignal) => Promise<boolean> {
+  return (source, toolName, args, signal) => new Promise<boolean>((resolve) => {
+    const confirmId = startPendingConfirm(runSessionId, toolName, {
+      type: 'confirm',
+      toolName,
+      args,
+      agentSource: source,
+    }, resolve);
+    cancelConfirmOnAbort(confirmId, signal);
+  });
+}
+
+export function createAgentShellMandatoryConfirmHandler(
+  runSessionId: string,
+): (source: ConfirmAgentSource, request: ShellMandatoryConfirmRequest, signal?: AbortSignal) => Promise<boolean> {
+  return (source, request, signal) => new Promise<boolean>((resolve) => {
+    const toolName = formatShellMandatoryConfirmToolName(request);
+    const confirmId = startPendingConfirm(runSessionId, toolName, {
+      type: 'confirm',
+      toolName,
+      args: {
+        ...redactToolArguments(request.toolName, request.args),
+        command: request.commandDisplay,
+      },
+      confirmKind: 'shell_mandatory',
+      agentSource: source,
+      shellMandatory: {
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+        command: request.commandDisplay,
+        matchedPattern: request.risk.matchedPattern,
+        category: request.risk.category,
+        impact: request.risk.impact,
+        normalizedCommandHash: request.normalizedCommandHash,
+      },
+    }, resolve, 'shell_mandatory');
+    cancelConfirmOnAbort(confirmId, signal);
+  });
 }
 
 export function purgeSessionConfirms(sessionId: string): void {

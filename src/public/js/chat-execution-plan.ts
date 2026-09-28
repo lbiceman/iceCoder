@@ -1456,6 +1456,7 @@ export const ChatExecutionPlan = (() => {
     if (name === 'run_command') return inferCommandIntent(tool);
     if (name === 'fetch_url' || name === 'web_search') return `联网查询外部信息${hint}`;
     if (name === 'git') return `执行 Git 操作${hint}`;
+    if (name === 'task') return `派出子 Agent${hint}`;
     if (name === 'env_info') return '获取运行环境信息';
     const mcpIntent = inferMcpToolIntent(name);
     if (mcpIntent) return mcpIntent + hint;
@@ -1519,6 +1520,12 @@ export const ChatExecutionPlan = (() => {
 
   function deriveRoundToolIntents(tools) {
     if (!tools.length) return ['理解用户目标并规划下一步执行'];
+    const agentTasks = tools.filter((t) => t.toolName === 'task');
+    if (agentTasks.length > 0) {
+      const rest = tools.filter((t) => t.toolName !== 'task');
+      const head = `派出 ${agentTasks.length} 个 Agent`;
+      return rest.length ? [head].concat(deriveRoundToolIntents(rest)) : [head];
+    }
     if (tools.length > 3) return summarizeToolIntents(tools);
     const intents = [];
     const seen = Object.create(null);

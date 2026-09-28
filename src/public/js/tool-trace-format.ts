@@ -78,6 +78,9 @@ function formatToolArgsDetailPreview(toolName, toolArgs) {
     return formatRunCommandToolDetail(toolArgs);
   }
   if (!toolArgs || typeof toolArgs !== 'object') return '';
+  if (toolName === 'task' && typeof toolArgs.description === 'string') {
+    return `[${toolArgs.subagent_type || 'general'}] ${toolArgs.description}`;
+  }
   const direct = toolArgs.path || toolArgs.file || toolArgs.command || toolArgs.query;
   if (typeof direct === 'string' && direct) return direct;
   try {
