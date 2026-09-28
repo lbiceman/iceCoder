@@ -70,7 +70,6 @@ describe('session-tool-policy', () => {
     expect(ctx.toolDefs.map((t) => t.name)).not.toContain('run_command');
     expect(ctx.toolExecutor).not.toBe(workspaceCtx.toolExecutor);
     expect(ctx.toolRegistry).not.toBe(workspaceCtx.toolRegistry);
-    expect(ctx.enableRequestAnalysis).toBe(false);
     expect(ctx.enableAgentTask).toBe(false);
     expect(ctx.mcpRuntimeContext).toEqual({});
     expect(resolveWorkspaceToolContext).not.toHaveBeenCalled();
@@ -95,7 +94,6 @@ describe('session-tool-policy', () => {
     expect(ctx.toolDefs.map((t) => t.name)).toEqual(['run_command']);
     expect(ctx.toolExecutor).toBe(workspaceCtx.toolExecutor);
     expect(ctx.toolRegistry).toBe(workspaceCtx.toolRegistry);
-    expect(ctx.enableRequestAnalysis).toBe(false);
     expect(ctx.enableAgentTask).toBe(true);
     expect(ctx.mcpRuntimeContext).toEqual({});
     expect(resolveWorkspaceToolContext).toHaveBeenCalledOnce();
@@ -172,7 +170,6 @@ describe('session-tool-policy', () => {
 
     expect(ctx.planModeActive).toBe(true);
     expect(ctx.shellCollabActive).toBe(false);
-    expect(ctx.enableRequestAnalysis).toBe(false);
     expect(ctx.enableAgentTask).toBe(false);
     expect(ctx.toolDefs.map((t) => t.name)).not.toContain('run_command');
     expect(ctx.mcpRuntimeContext).toEqual({});

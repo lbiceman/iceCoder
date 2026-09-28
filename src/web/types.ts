@@ -91,6 +91,11 @@ export interface IceCoderConfigFile {
    */
   skipPermissionChecks?: boolean;
   /**
+   * 是否启用子 Agent。缺失或为 `true` 时，默认模式暴露 `task` 并注入 Sub-agents 提示词。
+   * 显式 `false` 时不暴露工具、不注入这段提示词。
+   */
+  enableSubAgents?: boolean;
+  /**
    * Shell 协作强制确认规则（字符串正则，不含首尾 `/`）。
    * 缺失时使用内置默认；空数组 `[]` 表示仅保留不可配置的 hard block / 宿主保护。
    * 字段名为兼容既有配置暂保留 shellBlacklist。

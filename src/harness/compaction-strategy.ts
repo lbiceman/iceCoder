@@ -19,7 +19,6 @@ export const LIGHT_MICROCLEAR_TOOLS = new Set<string>([
   'list_drives',
   'browse_directory',
   'open_file',
-  'request_analysis',
   'parse_document',
   'fs_operation',
   'image_read',

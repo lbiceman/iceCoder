@@ -197,7 +197,6 @@ export function createToolUsageSection(toolNames?: readonly string[]): PromptSec
 
 ## Principles
 - The current tool definitions are the source of truth. Only call tools that are actually available, and follow their declared parameter schema.
-${has('request_analysis') ? '- For broad repository exploration, use request_analysis. Reserve direct search/read tools for targeted lookups.' : ''}
 - Do not use a general command tool when a dedicated tool is available.
 - Run independent tools in parallel and dependent tools in order. Do not repeat calls unless data may have changed.`,
     has('run_command')

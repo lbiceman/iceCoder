@@ -176,6 +176,4 @@ export interface HarnessRunState {
   filesChangedAtRoundStart?: number;
   /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
   branchSwitchedThisRound?: boolean;
-  /** Async Sub-Agent：本 run 是否已自动触发过后台分析（防 token 风暴）。 */
-  analysisAutoTriggered?: boolean;
 }

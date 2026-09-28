@@ -18,7 +18,7 @@ function definition(name: string): ToolDefinition {
 
 const shellDefinitions = SHELL_COLLAB_TOOL_NAMES.map(definition);
 
-function harnessConfig(enableRequestAnalysis?: boolean): HarnessConfig {
+function harnessConfig(): HarnessConfig {
   return {
     context: {
       systemPrompt: 'test',
@@ -28,33 +28,11 @@ function harnessConfig(enableRequestAnalysis?: boolean): HarnessConfig {
     compactionThreshold: 9999,
     compactionTokenThreshold: 999999,
     memoryDir: '__test_nonexistent_memory_dir__',
-    enableRequestAnalysis,
   };
 }
 
 describe('Shell collaboration Harness tool policy', () => {
-  it('does not inject request_analysis when disabled', async () => {
-    const chat = vi.fn(async (): Promise<LLMResponse> => ({
-      content: 'done',
-      finishReason: 'stop',
-      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, provider: 'test' },
-    }));
-    const harness = new Harness(
-      harnessConfig(false),
-      { executeTool: vi.fn() } as never,
-    );
-
-    await harness.run('continue', chat);
-
-    const toolNameLists = chat.mock.calls.map(call => {
-      const options = call[1] as { tools?: ToolDefinition[] } | undefined;
-      return options?.tools?.map(tool => tool.name) ?? [];
-    });
-    expect(toolNameLists).toContainEqual([...SHELL_COLLAB_TOOL_NAMES]);
-    expect(toolNameLists.every(names => !names.includes('request_analysis'))).toBe(true);
-  });
-
-  it('keeps request_analysis enabled by default for ordinary Harness runs', async () => {
+  it('does not add tools beyond the shell whitelist', async () => {
     const chat = vi.fn(async (): Promise<LLMResponse> => ({
       content: 'done',
       finishReason: 'stop',
@@ -71,7 +49,8 @@ describe('Shell collaboration Harness tool policy', () => {
       const options = call[1] as { tools?: ToolDefinition[] } | undefined;
       return options?.tools?.map(tool => tool.name) ?? [];
     });
-    expect(toolNameLists.some(names => names.includes('request_analysis'))).toBe(true);
+    expect(toolNameLists).toContainEqual([...SHELL_COLLAB_TOOL_NAMES]);
+    expect(toolNameLists.every(names => names.length === SHELL_COLLAB_TOOL_NAMES.length)).toBe(true);
   });
 
   it('blocks forged calls absent from currentTools before reaching ToolExecutor', async () => {
@@ -82,7 +61,6 @@ describe('Shell collaboration Harness tool policy', () => {
       'glob',
       'parse_document',
       'mcp_fake_exec',
-      'request_analysis',
     ].map((name, index) => ({
       id: `forged-${index}`,
       name,

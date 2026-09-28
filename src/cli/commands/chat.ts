@@ -465,7 +465,6 @@ ${c.bold}终端内置命令:${c.reset}
           ...harnessDynamic,
           ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
         },
-        enableRequestAnalysis: !shouldDisableRuntimeTools(),
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
           timeout: getHarnessTimeoutMsFromEnv(),

@@ -4,12 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { ToolDefinition } from '../../../src/llm/types.js';
+import { agentConfig, resolveAgentLimits } from '../../../src/harness/agents/agent-config.js';
 import {
-  AGENT_PARENT_DEADLINE_MARGIN_MS,
   EXPLORE_AGENT_TYPE,
   GENERAL_AGENT_TYPE,
   filterToolsForAgentType,
-  resolveAgentLimits,
 } from '../../../src/harness/agents/agent-types.js';
 import { findBlockedSubAgentGitSubcommand } from '../../../src/harness/agents/agent-git-policy.js';
 import { importAgentVerificationEvidence, mergeAgentFileChanges } from '../../../src/harness/agents/agent-merge.js';
@@ -60,19 +59,7 @@ describe('agent-types', () => {
     expect(resolveAgentLimits(EXPLORE_AGENT_TYPE)).toMatchObject({ maxRounds: 300, timeoutMs: 30 * 60_000 });
     const now = 1_000_000;
     const limits = resolveAgentLimits(GENERAL_AGENT_TYPE, { parentDeadline: now + 30 * 60_000, now });
-    expect(limits.timeoutMs).toBe(30 * 60_000 - AGENT_PARENT_DEADLINE_MARGIN_MS);
-  });
-
-  it('环境变量覆盖', () => {
-    process.env.ICE_AGENT_MAX_ROUNDS = '77';
-    process.env.ICE_AGENT_EXPLORE_TIMEOUT_MS = '1234';
-    try {
-      expect(resolveAgentLimits(GENERAL_AGENT_TYPE).maxRounds).toBe(77);
-      expect(resolveAgentLimits(EXPLORE_AGENT_TYPE).timeoutMs).toBe(1234);
-    } finally {
-      delete process.env.ICE_AGENT_MAX_ROUNDS;
-      delete process.env.ICE_AGENT_EXPLORE_TIMEOUT_MS;
-    }
+    expect(limits.timeoutMs).toBe(30 * 60_000 - agentConfig.parentDeadlineMarginMs);
   });
 });
 

@@ -54,11 +54,8 @@ import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { GraphExecutor } from './task-graph-executor.js';
-import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
 import { ensureTaskTool, stripTaskTool } from './agents/task-tool.js';
 import { AgentAwareToolExecutor } from './agents/agent-tool-executors.js';
-import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
-import { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
@@ -163,9 +160,6 @@ export class Harness {
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
   private verificationExemptDirs?: string[];
-  private analysisSupervisor?: AnalysisSupervisor;
-  /** 为 false 时不暴露 request_analysis，也不自动拉起后台分析 */
-  private enableRequestAnalysis: boolean;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
   private agentMaxOutputTokens: number;
@@ -179,14 +173,11 @@ export class Harness {
     config: HarnessConfig,
     toolExecutor: ToolExecutor,
   ) {
-    const baseTools = config.enableRequestAnalysis === false
-      ? config.context.tools
-      : ensureRequestAnalysisTool(config.context.tools);
     const context = {
       ...config.context,
       tools: config.agentSpawner
-        ? ensureTaskTool(baseTools, config.agentSpawner.agentTypes)
-        : stripTaskTool(baseTools),
+        ? ensureTaskTool(config.context.tools, config.agentSpawner.agentTypes)
+        : stripTaskTool(config.context.tools),
     };
     this.config = config;
     this.contextAssembler = new ContextAssembler(context);
@@ -220,8 +211,6 @@ export class Harness {
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
-    this.enableRequestAnalysis = config.enableRequestAnalysis !== false;
-    this.analysisSupervisor = config.analysisSupervisor;
     this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
     this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
     this.checkpointManager = config.sessionDir
@@ -280,7 +269,6 @@ export class Harness {
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
       globalPolicy: this.globalPolicy,
-      analysisSupervisor: this.analysisSupervisor,
       agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
       checkpointOwner: this.config.checkpointOwner,
@@ -555,20 +543,6 @@ export class Harness {
     }
 
     const tools = this.contextAssembler.getTools();
-    if (!this.analysisSupervisor && this.sessionDir && this.enableRequestAnalysis) {
-      const manager = new AsyncSubAgentManager({
-        sessionDir: this.sessionDir,
-        toolExecutor: this.toolExecutor,
-        toolDefinitions: tools,
-        chatFn,
-        workspaceRoot: this.workspaceRoot,
-      });
-      this.analysisSupervisor = new AnalysisSupervisor({
-        sessionDir: this.sessionDir,
-        manager,
-      });
-      deps.analysisSupervisor = this.analysisSupervisor;
-    }
     logger.loopStart(tools.length, messages.length);
 
     const persistedGoalForAnchor = projectCheckpoint

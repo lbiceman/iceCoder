@@ -97,7 +97,6 @@ function parentConfig(root: string, sessionsDir: string, overrides: Partial<Harn
     sessionId: 'parent-session',
     workspaceRoot: root,
     workspaceLock: { lockedRoot: root, referenceReads: [] },
-    enableRequestAnalysis: false,
     ...overrides,
   };
 }
@@ -586,7 +585,6 @@ describe('AgentSpawner 并发与生命周期', () => {
     expect(seen?.checkpointOwner).toEqual({ sessionDir: sessionsDir, sessionId: 'parent-session' });
     expect(seen?.memoryDisabled).toBe(true);
     expect(seen?.agentSpawner).toBeUndefined();
-    expect(seen?.enableRequestAnalysis).toBe(false);
     expect(seen?.workspaceLock).toEqual({ lockedRoot: root, referenceReads: ['ref.md'] });
     expect(seen?.sessionDir).toBe(path.join(sessionsDir, 'parent-session', 'agents'));
     expect(seen?.sessionId?.startsWith('agent-')).toBe(true);

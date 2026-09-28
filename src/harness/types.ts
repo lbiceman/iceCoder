@@ -220,14 +220,6 @@ export interface HarnessConfig {
   globalPolicy?: GlobalModePolicy;
   /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
   supervisorConfig?: ResolvedSupervisorConfig;
-  /** Async Sub-Agent Phase 4：AnalysisSupervisor；本阶段仅承载依赖，不接入主循环。 */
-  analysisSupervisor?: import('./supervisor/analysis-supervisor.js').AnalysisSupervisor;
-  /**
-   * 是否向模型暴露 request_analysis 虚拟工具；默认 true。
-   * 为 false 时也不自动创建 AnalysisSupervisor / 不拉起后台分析。
-   * 严格工具域（Shell 协作、普通 agent-eval）应显式设为 false。
-   */
-  enableRequestAnalysis?: boolean;
   /**
    * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；
    * 不传时不暴露 task，Shell 协作 / 规划模式 / CLI 行为不变。子 Harness 不传，禁止嵌套。

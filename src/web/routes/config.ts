@@ -10,7 +10,9 @@ import {
   DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
   normalizeSupervisorMode,
   readMainConfigFile,
+  resolveEnableSubAgents,
   resolveSkipPermissionChecks,
+  writeEnableSubAgentsToMainConfig,
   writeShellBlacklistToMainConfig,
   writeSkipPermissionChecksToMainConfig,
   writeSupervisorModeToMainConfig,
@@ -203,6 +205,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingProviders: ProviderConfig[] = [];
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
+      let existingEnableSubAgents: IceCoderConfigFile['enableSubAgents'];
       let existingShellBlacklist: IceCoderConfigFile['shellBlacklist'];
       let existingIceEtlPrefs: IceCoderConfigFile['iceEtlPrefs'];
       try {
@@ -211,6 +214,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         existingProviders = existing.providers || [];
         existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
+        existingEnableSubAgents = existing.enableSubAgents;
         existingShellBlacklist = existing.shellBlacklist;
         existingIceEtlPrefs = existing.iceEtlPrefs;
       } catch { /* 文件不存在，首次保存 */ }
@@ -251,6 +255,9 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: normalizedProviders,
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
+          ...(existingEnableSubAgents !== undefined
+            ? { enableSubAgents: existingEnableSubAgents === true }
+            : {}),
           ...(existingShellBlacklist !== undefined ? { shellBlacklist: existingShellBlacklist } : {}),
           ...(existingIceEtlPrefs !== undefined ? { iceEtlPrefs: existingIceEtlPrefs } : {}),
         },
@@ -302,6 +309,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
+        enableSubAgents: resolveEnableSubAgents(config.enableSubAgents),
         shellBlacklist: config.shellBlacklist !== undefined
           ? config.shellBlacklist
           : [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
@@ -316,6 +324,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: [],
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
+          enableSubAgents: true,
           shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
           shellBlacklistIsDefault: true,
           iceEtlPrefs: { ...DEFAULT_ICE_ETL_PREFS },
@@ -404,6 +413,24 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `更新权限确认设置失败：${message}` });
+    }
+  });
+
+  /**
+   * PATCH /api/config/sub-agents — 是否启用子 Agent（工具与提示词一起开关）。
+   */
+  router.patch('/sub-agents', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { enableSubAgents?: unknown })?.enableSubAgents;
+      if (typeof raw !== 'boolean') {
+        res.status(400).json({ error: 'enableSubAgents 须为 boolean' });
+        return;
+      }
+      const saved = await writeEnableSubAgentsToMainConfig(configFile, raw);
+      res.json({ success: true, enableSubAgents: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新子 Agent 设置失败：${message}` });
     }
   });
 

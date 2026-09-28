@@ -132,7 +132,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
         ...harnessOverlayToContextFields(effectiveAssembled),
         ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
       },
-      enableRequestAnalysis: !shouldDisableRuntimeTools(),
       loop: {
         maxRounds,
         timeout: getHarnessTimeoutMsFromEnv(),

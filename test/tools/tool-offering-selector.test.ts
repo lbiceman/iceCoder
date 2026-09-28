@@ -13,7 +13,6 @@ function makeDefs(): ToolDefinition[] {
   const names = [
     ...CORE_NAMES,
     ...DEFERRED_TOOLS,
-    'request_analysis',
     'mcp_puppeteer_navigate',
   ];
   return names.map((name) => ({
@@ -47,7 +46,6 @@ describe('selectToolsForOffering', () => {
     expect(names).not.toContain('parse_xlsx_deep');
     expect(names).toContain('read_file');
     expect(names).toContain('run_command');
-    expect(names).toContain('request_analysis');
     expect(names).toContain('mcp_puppeteer_navigate');
   });
 
@@ -143,7 +141,7 @@ describe('summarizeToolCategories', () => {
   it('splits builtin tools into chat, doc lazy, and shell counts', () => {
     const names = makeDefs().map((d) => d.name);
     const summary = summarizeToolCategories(names);
-    expect(summary.chat.count).toBe(CORE_NAMES.length + 1); // + request_analysis
+    expect(summary.chat.count).toBe(CORE_NAMES.length);
     expect(summary.doc.count).toBe(DEFERRED_TOOLS.size);
     expect(summary.doc.lazy).toBe(true);
     expect(summary.shell.count).toBe(8);

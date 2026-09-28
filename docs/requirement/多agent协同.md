@@ -6,7 +6,7 @@
 
 实现方式：**子 Agent 就是一个子 `Harness` 实例。** 它直接复用主 Harness 已有的全部能力——长循环（默认 5000 轮上限）、上下文压缩、失败恢复、权限确认、验证计划与停止判定——而不是另写一个几轮就结束的小循环。
 
-适用范围：**只在默认模式生效。** Shell 协作模式、规划模式下不暴露 `task` 工具，行为保持现状。
+适用范围：**只在默认模式生效。** Shell 协作模式、规划模式下不暴露 `task` 工具，行为保持现状。设置页可以关闭子 Agent；关闭后不暴露 `task`，也不注入 Sub-agents 提示词。字段缺失视为开启。
 
 是否使用：**由主 Agent 自行决定，不强制。** 默认模式下 `task` 只是主 Agent 可用的一个工具；用不用、何时用、派几个、派哪种类型，都由主模型判断。系统没有任何规则强制派出子 Agent，也不会因为没派子 Agent 而拦截停止或判定任务失败。简单任务主 Agent 直接自己做即可。
 
@@ -121,7 +121,7 @@ commands: npm test -- test/payment → exit 0 (18 passed); npx tsc --noEmit → 
 | `general` | 默认模式下主 Agent 的全部工具，去掉 §3.5 的排除项 | 独立完成一块实现、修复、重构、补测试、排查 | 2000 轮 / 4 小时 |
 | `explore` | 只读工具：`read_file`、`glob`、`grep`、`fs_operation`（list）、文档解析类、只读 MCP 工具 | 大范围搜索、梳理调用链、定位问题，不改任何东西 | 300 轮 / 30 分钟 |
 
-- 上限可通过 `ICE_AGENT_MAX_ROUNDS`、`ICE_AGENT_TIMEOUT_MS`、`ICE_AGENT_EXPLORE_MAX_ROUNDS`、`ICE_AGENT_EXPLORE_TIMEOUT_MS` 覆盖；token 预算每个子 Agent 默认 2000 万（`ICE_AGENT_TOKEN_BUDGET`）。
+- 轮次、超时和 token 预算写在 `src/harness/agents/agent-config.ts`，不通过环境变量覆盖。`general` 默认 2000 轮、4 小时；`explore` 默认 300 轮、30 分钟；每个子 Agent token 预算 2000 万。
 - 子 Agent 超时不得超过主 Harness 剩余时长减 2 分钟。
 - 每种类型有自己的系统提示（§3.9），在主 Agent 看到的 `task` 工具描述里列出每种类型的适用场景。
 - Phase 2 支持用户自定义类型（§7.2）。
@@ -130,7 +130,7 @@ commands: npm test -- test/payment → exit 0 (18 passed); npx tsc --noEmit → 
 
 - `task` 在 `tool-metadata.ts` 中标为 `isConcurrencySafe: true`。同一条回复里的多个 `task` 由 `StreamingToolExecutor` 并行执行；同一批里的其它非并发安全工具（如写文件）会等所有 `task` 完成后再执行，与现有语义一致。
 - 主 Agent 在 `task` 返回前阻塞，这与参考产品的默认行为一致。需要主 Agent 同时继续干活的场景由 Phase 2 的后台模式解决。
-- 并发上限：同时运行的子 Agent 最多 4 个（`ICE_AGENT_MAX_CONCURRENT`），超出的排队；每次 `run()` 最多派出 16 个（`ICE_AGENT_MAX_PER_RUN`），超出时 `task` 直接返回错误并说明原因。
+- 并发上限：同时运行的子 Agent 最多 4 个，超出的排队；每次 `run()` 最多派出 16 个，超出时 `task` 直接返回错误并说明原因。这两个数同样在 `src/harness/agents/agent-config.ts`。
 - `task` 属于中性工具：forced 模式下 ToolGate 不按 TaskGraph 节点拦截它，TaskGraph 偏离检测不把它计入同工具重复次数。
 
 ### 3.5 子 Harness 的配置

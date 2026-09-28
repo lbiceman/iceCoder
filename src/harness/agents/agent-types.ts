@@ -38,7 +38,7 @@ export function findAgentType(name: string): AgentTypeDefinition | undefined {
 
 // ─── 工具过滤 ───
 
-/** 任何子 Agent 都不能拿到的工具：派子 Agent、旧分析链路。 */
+/** 任何子 Agent 都不能拿到的工具。request_analysis 是已删除的旧只读分析工具名，避免残留定义被交下去。 */
 const EXCLUDED_FOR_ALL_AGENTS = new Set(['task', 'request_analysis']);
 
 /** 记忆写入、向用户提问、会话模式切换类工具（按名称识别，含 MCP 同类工具）。 */
@@ -95,62 +95,4 @@ export function filterToolsForAgentType(
   tools: readonly ToolDefinition[],
 ): ToolDefinition[] {
   return tools.filter(tool => isToolAllowedForAgentType(type, tool.name));
-}
-
-// ─── 上限 ───
-
-export const DEFAULT_GENERAL_AGENT_MAX_ROUNDS = 2000;
-export const DEFAULT_GENERAL_AGENT_TIMEOUT_MS = 4 * 60 * 60 * 1000;
-export const DEFAULT_EXPLORE_AGENT_MAX_ROUNDS = 300;
-export const DEFAULT_EXPLORE_AGENT_TIMEOUT_MS = 30 * 60 * 1000;
-export const DEFAULT_AGENT_TOKEN_BUDGET = 20_000_000;
-export const DEFAULT_AGENT_MAX_CONCURRENT = 4;
-export const DEFAULT_AGENT_MAX_PER_RUN = 16;
-/** 子 Agent 必须比主 Harness 早结束的余量 */
-export const AGENT_PARENT_DEADLINE_MARGIN_MS = 2 * 60 * 1000;
-/** 被主 Harness 剩余时长压缩后的最小超时，避免 0ms 立即超时 */
-export const MIN_AGENT_TIMEOUT_MS = 10_000;
-
-function readPositiveIntEnv(name: string): number | undefined {
-  const raw = process.env[name]?.trim();
-  if (!raw) return undefined;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-export interface AgentLimits {
-  maxRounds: number;
-  timeoutMs: number;
-  tokenBudget: number;
-}
-
-export function resolveAgentLimits(
-  type: AgentTypeDefinition,
-  options: { parentDeadline?: number; now?: number } = {},
-): AgentLimits {
-  const explore = type.name === 'explore';
-  const maxRounds = explore
-    ? readPositiveIntEnv('ICE_AGENT_EXPLORE_MAX_ROUNDS') ?? DEFAULT_EXPLORE_AGENT_MAX_ROUNDS
-    : readPositiveIntEnv('ICE_AGENT_MAX_ROUNDS') ?? DEFAULT_GENERAL_AGENT_MAX_ROUNDS;
-  let timeoutMs = explore
-    ? readPositiveIntEnv('ICE_AGENT_EXPLORE_TIMEOUT_MS') ?? DEFAULT_EXPLORE_AGENT_TIMEOUT_MS
-    : readPositiveIntEnv('ICE_AGENT_TIMEOUT_MS') ?? DEFAULT_GENERAL_AGENT_TIMEOUT_MS;
-  if (options.parentDeadline !== undefined && Number.isFinite(options.parentDeadline)) {
-    const now = options.now ?? Date.now();
-    const ceiling = options.parentDeadline - now - AGENT_PARENT_DEADLINE_MARGIN_MS;
-    timeoutMs = Math.max(MIN_AGENT_TIMEOUT_MS, Math.min(timeoutMs, ceiling));
-  }
-  return {
-    maxRounds,
-    timeoutMs,
-    tokenBudget: readPositiveIntEnv('ICE_AGENT_TOKEN_BUDGET') ?? DEFAULT_AGENT_TOKEN_BUDGET,
-  };
-}
-
-export function resolveAgentMaxConcurrent(): number {
-  return readPositiveIntEnv('ICE_AGENT_MAX_CONCURRENT') ?? DEFAULT_AGENT_MAX_CONCURRENT;
-}
-
-export function resolveAgentMaxPerRun(): number {
-  return readPositiveIntEnv('ICE_AGENT_MAX_PER_RUN') ?? DEFAULT_AGENT_MAX_PER_RUN;
 }

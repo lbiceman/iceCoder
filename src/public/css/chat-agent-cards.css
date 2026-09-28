@@ -12,16 +12,16 @@
   color: var(--text-secondary);
   margin: 2px 0 4px 4px;
 }
-.tool-action-row-block.agent-group-member {
+/* .tool-action-row-block.agent-group-member {
   padding-left: 12px;
   border-left: 1px dashed var(--border-strong);
   margin-left: 6px;
-}
+} */
 
 .agent-card {
   --agent-status-color: var(--text-muted);
   border: 1px solid var(--border-color);
-  border-left: 3px solid var(--agent-status-color);
+  border-left: 3px solid var(--text-primary);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   margin: 2px 0 2px 4px;

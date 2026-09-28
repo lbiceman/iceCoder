@@ -119,7 +119,6 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
-      enableRequestAnalysis: testCase.expected.requiresAnalysisArtifact === true,
     };
 
     if (testCase.subAgents) {
@@ -376,9 +375,6 @@ async function scoreCase(args: {
   const finalEvent = [...events].reverse().find(event => event.type === 'final');
   const agentVerificationPassed = didAgentRunVerification(events, testCase.verifyCommands);
   const anyFileChanged = await didAnyCaseFileChange(workspace, initialFiles);
-  const analysisArtifactCount = testCase.expected.requiresAnalysisArtifact
-    ? await countAnalysisArtifacts(workspace, testCase.id)
-    : 0;
 
   if (testCase.expected.requiresTool && toolCallEvents.length === 0) {
     failures.push('expected tool use');
@@ -391,9 +387,6 @@ async function scoreCase(args: {
   }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
-  }
-  if (testCase.expected.requiresAnalysisArtifact && analysisArtifactCount === 0) {
-    failures.push('expected async sub-agent analysis artifact');
   }
   if (
     testCase.expected.completionStatus
@@ -536,22 +529,6 @@ async function scoreCase(args: {
       })),
     } : {}),
   };
-}
-
-async function countAnalysisArtifacts(workspace: string, sessionId: string): Promise<number> {
-  const analysisDir = path.join(workspace, '.icecoder', 'sessions', sessionId, 'analysis');
-  const deadline = Date.now() + 10_000;
-  do {
-    try {
-      const entries = await fs.readdir(analysisDir);
-      const count = entries.filter(entry => entry.endsWith('.meta.json')).length;
-      if (count > 0) return count;
-    } catch {
-      // Detached analysis may not have created its directory yet.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
-  return 0;
 }
 
 async function seedLegacyCheckpoint(sessionDir: string, sessionId: string): Promise<void> {

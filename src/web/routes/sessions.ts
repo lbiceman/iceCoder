@@ -230,7 +230,7 @@ async function readSessionPlan(sessionId: string): Promise<any> {
  *  - `{id}.checkpoint.json`      TaskCheckpoint（断点恢复）
  *  - `{id}.workspace.json`       工作区锁定
  *  - `{id}.session-notes.md`     会话笔记（含 runtime / plan fence）
- *  - `{id}/analysis|subtasks|artifacts` 异步子代理分析工作区
+ *  - `{id}/` 会话目录（checkpoints、后台任务等）
  */
 type SessionCleanupHook = (sessionId: string) => void | Promise<void>;
 let sessionCleanupHook: SessionCleanupHook | null = null;

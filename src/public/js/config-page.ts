@@ -85,6 +85,24 @@ export const SettingsPage = (() => {
           '</div>' +
         '</section>' +
         dataDirectorySection +
+        '<section class="settings-section settings-section-spaced" id="settings-sub-agents-section">' +
+          '<h2 class="settings-section-title">子 Agent</h2>' +
+          '<p class="settings-section-desc">关闭后不再把子 Agent 的说明和 task 工具发给模型，减少每次对话的 token</p>' +
+          '<div class="settings-card" id="settings-sub-agents-card" hidden>' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">启用子 Agent</span>' +
+                '<p class="settings-card-desc">开启后，默认模式可以派出子 Agent。关闭后提示词和工具都不下发，下一条消息生效</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="启用子 Agent">' +
+                  '<input type="checkbox" id="settings-sub-agents-input" checked />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-security-section">' +
           '<div class="settings-section-head">' +
             '<h2 class="settings-section-title">安全与执行</h2>' +
@@ -605,12 +623,16 @@ export const SettingsPage = (() => {
         const loading = parentEl.querySelector('#settings-security-loading');
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
+        const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
         if (loading) loading.hidden = true;
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
+        if (subAgentCard) subAgentCard.hidden = false;
 
         const skipEnabled = data && data.skipPermissionChecks === true;
         syncSkipPermissionUi(parentEl, skipEnabled);
+        const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
+        if (subAgentInput) subAgentInput.checked = !data || data.enableSubAgents !== false;
 
         const patterns = (data && Array.isArray(data.shellBlacklist)) ? data.shellBlacklist : [];
         const textarea = parentEl.querySelector('#settings-blacklist-textarea');
@@ -626,12 +648,14 @@ export const SettingsPage = (() => {
         const loading = parentEl.querySelector('#settings-security-loading');
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
+        const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
         if (loading) {
           loading.textContent = '加载失败';
           loading.classList.add('is-error');
         }
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
+        if (subAgentCard) subAgentCard.hidden = false;
         bindGeneralSecurityEvents(parentEl);
         if (window.Notification) window.Notification.error('无法加载安全设置');
       });
@@ -640,6 +664,42 @@ export const SettingsPage = (() => {
   function bindGeneralSecurityEvents(parentEl) {
     if (parentEl._securityBound) return;
     parentEl._securityBound = true;
+
+    const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
+    if (subAgentInput) {
+      subAgentInput.addEventListener('change', () => {
+        const next = subAgentInput.checked;
+        subAgentInput.disabled = true;
+        fetch('/api/config/sub-agents', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enableSubAgents: next }),
+        })
+          .then((res) => { return res.json().then((body) => ({ ok: res.ok, body })); })
+          .then((result) => {
+            if (result.ok && result.body.success) {
+              subAgentInput.checked = result.body.enableSubAgents !== false;
+              if (window.Notification) {
+                window.Notification.success(
+                  subAgentInput.checked
+                    ? '已开启子 Agent（下一条消息生效）'
+                    : '已关闭子 Agent（下一条消息生效）'
+                );
+              }
+            } else {
+              subAgentInput.checked = !next;
+              if (window.Notification) {
+                window.Notification.error((result.body && result.body.error) || '更新失败');
+              }
+            }
+          })
+          .catch(() => {
+            subAgentInput.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => { subAgentInput.disabled = false; });
+      });
+    }
 
     const skipInput = parentEl.querySelector('#settings-skip-permission-input');
     if (skipInput) {

@@ -5,7 +5,6 @@ export type AgentEvalCategory =
   | 'compression'
   | 'memory-conflict'
   | 'tool-failure'
-  | 'async-subagent'
   | 'eval-mode'
   | 'completion-gate'
   | 'stop-verification'
@@ -45,7 +44,6 @@ export interface AgentEvalCase {
     requiresTool: boolean;
     requiresVerification?: boolean;
     allowFileChanges?: boolean;
-    requiresAnalysisArtifact?: boolean;
     /** 软验证场景：不允许 Harness 强推 shell 验证。 */
     forbidVerification?: boolean;
     /** 通用收尾协议的结构化终态。 */
@@ -273,11 +271,10 @@ export const agentEvalCases: AgentEvalCase[] = [
   },
   {
     id: 'async-subagent-oauth-context',
-    category: 'async-subagent',
+    category: 'test-fix',
     prompt: [
       'Inspect the OAuth login flow before editing.',
       'Then update the callback route to return "oauth-ready" and run npm test.',
-      'Use background analysis when gathering context.',
     ].join(' '),
     files: {
       'package.json': packageJson(),
@@ -311,7 +308,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       ].join('\n'),
     },
     verifyCommands: ['npm test'],
-    expected: { requiresTool: true, requiresVerification: true, requiresAnalysisArtifact: true },
+    expected: { requiresTool: true, requiresVerification: true },
     assertions: [
       { path: 'src/auth/oauth.js', contains: "return 'oauth-ready'" },
       { path: 'src/auth/oauth.js', notContains: "return 'oauth-pending'" },

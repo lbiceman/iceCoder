@@ -53,12 +53,10 @@ import {
   type AgentMetaRecord,
 } from './agent-store.js';
 import { AgentRecordingToolExecutor, type AgentToolRecorder } from './agent-tool-executors.js';
+import { agentConfig, resolveAgentLimits } from './agent-config.js';
 import {
   BUILTIN_AGENT_TYPES,
   filterToolsForAgentType,
-  resolveAgentLimits,
-  resolveAgentMaxConcurrent,
-  resolveAgentMaxPerRun,
   type AgentTypeDefinition,
 } from './agent-types.js';
 import { parseTaskToolInput } from './task-tool.js';
@@ -306,8 +304,8 @@ export class AgentSpawner {
   private writeSeq = 0;
 
   constructor(private readonly options: AgentSpawnerOptions) {
-    this.semaphore = new Semaphore(Math.max(1, options.maxConcurrent ?? resolveAgentMaxConcurrent()));
-    this.maxPerRun = Math.max(1, options.maxPerRun ?? resolveAgentMaxPerRun());
+    this.semaphore = new Semaphore(Math.max(1, options.maxConcurrent ?? agentConfig.maxConcurrent));
+    this.maxPerRun = Math.max(1, options.maxPerRun ?? agentConfig.maxPerRun);
     this.leases = options.leaseRegistry ?? defaultWriteLeaseRegistry;
   }
 
@@ -557,7 +555,6 @@ export class AgentSpawner {
       sessionId: childSessionIdFor(run.agentId),
       workspaceRoot: parent.workspaceRoot,
       verificationExemptDirs: pc.verificationExemptDirs,
-      enableRequestAnalysis: false,
       memoryDisabled: true,
       checkpointOwner: {
         sessionDir: pc.checkpointOwner?.sessionDir ?? pc.sessionDir ?? this.options.sessionsDir,

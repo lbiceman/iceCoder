@@ -93,6 +93,30 @@ export async function writeSkipPermissionChecksToMainConfig(
   return skipPermissionChecks;
 }
 
+/** 仅当 config.json 显式 `"enableSubAgents": false` 时关闭；缺失视为开启。 */
+export function resolveEnableSubAgents(value: unknown): boolean {
+  return value !== false;
+}
+
+/** 读取 config.json 中的 enableSubAgents；缺失时返回 true。 */
+export async function readEnableSubAgentsFromMainConfig(
+  configPath: string,
+): Promise<boolean> {
+  const config = await readMainConfigFile(configPath);
+  return resolveEnableSubAgents(config.enableSubAgents);
+}
+
+export async function writeEnableSubAgentsToMainConfig(
+  configPath: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const enableSubAgents = enabled === true;
+  const config = await readMainConfigFile(configPath);
+  config.enableSubAgents = enableSubAgents;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  return enableSubAgents;
+}
+
 export async function writeShellBlacklistToMainConfig(
   configPath: string,
   patterns: string[],

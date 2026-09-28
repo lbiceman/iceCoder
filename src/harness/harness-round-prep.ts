@@ -18,8 +18,6 @@ import type { InjectMemoryMode } from './harness-memory.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
 import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
-import { takeAnalysisReadyForInjection } from './analysis-ready-injector.js';
-import { inferKindFromIntent } from './sub-agent-prompts.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -35,7 +33,6 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import type { GlobalModePolicy } from '../types/supervisor.js';
-import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -50,14 +47,10 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
   globalPolicy?: GlobalModePolicy;
-  /** Async Sub-Agent：ready analysis prompt injection. */
-  analysisSupervisor?: AnalysisSupervisor;
   /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
   workspaceRoot?: string;
-  /** 规划模式：不自动拉起可能改仓库的后台分析。 */
-  planModeActive?: boolean;
   /** 当前用户轮次的易变工具/MCP 上下文；仅进入发送视图，不写主历史。 */
   ephemeralSystemContext?: string | null;
 }
@@ -198,36 +191,6 @@ export async function prepareHarnessRound(
     }
   }
 
-  if (
-    !deps.planModeActive
-    && !deps.graphExecutor?.hasGraph()
-    && !state.analysisAutoTriggered
-    && deps.analysisSupervisor
-    && deps.sessionId
-  ) {
-    const taskSnapshot = state.taskState.snapshot();
-    const inferredKind = inferKindFromIntent(
-      taskSnapshot.intent,
-      taskSnapshot.phase,
-      taskSnapshot.goal || userMessage,
-    );
-    if (inferredKind && deps.analysisSupervisor.shouldAutoTrigger(inferredKind)) {
-      deps.analysisSupervisor.requestAnalysis({
-        sessionId: deps.sessionId,
-        kind: inferredKind,
-        prompt: taskSnapshot.goal || userMessage,
-        context: 'Automatically triggered from the current task intent. Keep the analysis read-only and concise.',
-        scope: {
-          scopeHash: `auto:${inferredKind}:${taskSnapshot.goal || userMessage}`,
-        },
-        intent: taskSnapshot.intent,
-        phase: taskSnapshot.phase,
-        requestedBy: 'supervisor',
-      });
-      state.analysisAutoTriggered = true;
-    }
-  }
-
   // 后台任务摘要：running 5min 节流；任意终态 dirty 立即注入。启动 ≠ 通过，由模型看 exit。
   if (deps.workspaceRoot) {
     const sessionId = deps.sessionId ?? 'default';
@@ -235,14 +198,6 @@ export async function prepareHarnessRound(
     if (bgStatus) {
       ephemeralBlocks.push(bgStatus);
     }
-  }
-
-  const analysisReady = await takeAnalysisReadyForInjection({
-    supervisor: deps.analysisSupervisor,
-    sessionId: deps.sessionId,
-  });
-  if (analysisReady) {
-    ephemeralBlocks.push(analysisReady);
   }
 
   {

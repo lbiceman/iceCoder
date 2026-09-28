@@ -7,7 +7,7 @@
  *
  * 分层：
  * - Tier-0 Core / Tier-2 特殊：非 deferred 工具，永远携带
- *   （含 mcp_*、request_analysis、Shell 协作白名单工具）
+ *   （含 mcp_*、Shell 协作白名单工具）
  * - Tier-1 Deferred：文档/媒体解析工具，按需激活
  *
  * 规格：docs/requirement/文档工具按需携带-lazy-tool-offering.md

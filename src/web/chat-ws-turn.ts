@@ -36,7 +36,10 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
+import {
+  readEnableSubAgentsFromMainConfig,
+  readSkipPermissionChecksFromMainConfig,
+} from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
 import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
@@ -452,6 +455,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
+  const enableSubAgents = await readEnableSubAgentsFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
   const usedModel = typeof modelMeta?.modelName === 'string' ? modelMeta.modelName.trim() : '';
@@ -470,7 +474,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   });
   toolDefs = sessionToolCtx.toolDefs;
   const runtimeToolsDisabled = shouldDisableRuntimeTools();
-  const agentTaskEnabled = !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
+  const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
     : [...toolDefs.map((tool) => tool.name), ...(agentTaskEnabled ? [TASK_TOOL_NAME] : [])];
@@ -557,9 +561,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
-    enableRequestAnalysis: runtimeToolsDisabled
-      ? false
-      : sessionToolCtx.enableRequestAnalysis,
     shellCollabActive: runtimeToolsDisabled ? false : sessionToolCtx.shellCollabActive,
     planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),

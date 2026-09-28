@@ -115,7 +115,6 @@ function harness(
     sessionDir,
     sessionId: 'stop-loop',
     skipPermissionChecks: true,
-    enableRequestAnalysis: false,
     compactionThreshold: 999,
     compactionTokenThreshold: 999_999,
     memoryDir: path.join(root, 'missing-memory'),
