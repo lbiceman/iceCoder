@@ -13,6 +13,7 @@ import {
   resolveToolTraceResultStatus,
 } from './tool-trace-format.js';
 import { registerSessionRuntimeBusyProbe } from './session-runtime-busy.js';
+import type { AgentView } from '../harness/agents/agent-result.js';
 import {
   SESSIONS_DIR,
   hasActiveSessionRun,
@@ -41,7 +42,18 @@ export interface RunningTurnSnapshot {
   startedAt: number;
   /** 重放的执行计划 / 任务图 / 执行模式相关 step 事件，前端按现有 bridge 喂回即可重建 UI */
   planEvents: Array<{ type: string; [k: string]: unknown }>;
+  /** 本轮子 Agent：卡片视图 + 各自的工具时间线（按 agentId） */
+  agents: Record<string, RunningAgentSnapshot>;
 }
+
+export interface RunningAgentSnapshot {
+  view: AgentView;
+  toolTimeline: RunningTurnSnapshot['toolTimeline'];
+  streamingText: string;
+}
+
+const AGENT_TIMELINE_MAX = 300;
+const AGENT_STREAM_MAX_CHARS = 8000;
 
 const runningTurns = new Map<string, RunningTurnSnapshot>();
 let nextRunningTurnId = 1;
@@ -70,6 +82,7 @@ function createEmptyRunningTurn(): RunningTurnSnapshot {
     totalOutputTokens: 0,
     startedAt: Date.now(),
     planEvents: [],
+    agents: {},
   };
 }
 
@@ -97,7 +110,78 @@ export function snapshotRunningTurn(sessionId: string): RunningTurnSnapshot | nu
     ...t,
     toolTimeline: t.toolTimeline.map((row) => ({ ...row })),
     planEvents: t.planEvents.map((ev) => ({ ...ev })),
+    agents: Object.fromEntries(Object.entries(t.agents).map(([id, a]) => [id, {
+      view: { ...a.view },
+      toolTimeline: a.toolTimeline.map((row) => ({ ...row })),
+      streamingText: a.streamingText,
+    }])),
   };
+}
+
+/** 子 Agent 事件只进它自己的快照，不混进主 Agent 的流 / 时间线 / 冰豆状态。 */
+function foldAgentStep(sessionId: string, t: RunningTurnSnapshot, event: any): void {
+  const agentId = String(event.agentId);
+  if (event.type === 'agent_update' && event.agent) {
+    const existing = t.agents[agentId];
+    t.agents[agentId] = {
+      view: { ...event.agent },
+      toolTimeline: existing?.toolTimeline ?? [],
+      streamingText: existing?.streamingText ?? '',
+    };
+    return;
+  }
+  const a = t.agents[agentId];
+  if (!a) return;
+  switch (event.type) {
+    case 'stream_delta':
+      if (typeof event.delta === 'string') {
+        a.streamingText = (a.streamingText + event.delta).slice(-AGENT_STREAM_MAX_CHARS);
+      }
+      break;
+    case 'thinking':
+    case 'stream_retry_discard':
+      a.streamingText = '';
+      break;
+    case 'tool_call':
+      if (event.toolName) {
+        a.toolTimeline.push({
+          toolName: String(event.toolName),
+          detail: toolArgsDetailPreview(String(event.toolName), event.toolArgs),
+          status: resolveToolCallInitialStatus(String(event.toolName), event.toolArgs),
+          toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
+          diffSource: extractDiffSource(String(event.toolName), undefined, event.toolArgs as Record<string, unknown> | undefined),
+        });
+        if (a.toolTimeline.length > AGENT_TIMELINE_MAX) {
+          a.toolTimeline.splice(0, a.toolTimeline.length - AGENT_TIMELINE_MAX);
+        }
+        a.streamingText = '';
+      }
+      break;
+    case 'tool_result':
+      if (event.toolName && typeof event.toolCallId === 'string') {
+        const row = [...a.toolTimeline].reverse().find(r => r.toolCallId === event.toolCallId);
+        if (row) {
+          row.status = toolResultStatusPreview(
+            String(event.toolName),
+            event.toolSuccess,
+            event.toolOutcome,
+            event.toolOutput,
+          );
+          const fromOutput = extractDiffSource(
+            String(event.toolName),
+            typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
+            event.toolArgs as Record<string, unknown> | undefined,
+          );
+          if (fromOutput) {
+            row.diffSource = fromOutput;
+            recordPersistedToolTraceDiff(sessionId, row.toolCallId, fromOutput);
+          }
+        }
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 export function clearRunningTurn(sessionId: string): void {
@@ -148,6 +232,10 @@ export function recordPersistedToolTraceDiff(
 export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
   const t = ensureRunningTurn(sessionId);
   if (!event || typeof event !== 'object') return;
+  if (typeof event.agentId === 'string' && event.agentId) {
+    foldAgentStep(sessionId, t, event);
+    return;
+  }
 
   if (typeof event.iteration === 'number' && event.iteration > t.iteration) {
     t.iteration = event.iteration;

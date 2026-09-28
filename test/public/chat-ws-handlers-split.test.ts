@@ -3,23 +3,23 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const CHAT_PAGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-page.js'),
+  path.join(__dirname, '../../src/public/js/chat-page.ts'),
   'utf-8',
 );
 const STREAM_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.js'),
+  path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.ts'),
   'utf-8',
 );
 const SESSION_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-session-handlers.js'),
+  path.join(__dirname, '../../src/public/js/chat-ws-session-handlers.ts'),
   'utf-8',
 );
 const RESTORE_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-restore-handlers.js'),
+  path.join(__dirname, '../../src/public/js/chat-ws-restore-handlers.ts'),
   'utf-8',
 );
 const BG_TASK_HANDLERS_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-ws-bg-task-handlers.js'),
+  path.join(__dirname, '../../src/public/js/chat-ws-bg-task-handlers.ts'),
   'utf-8',
 );
 
@@ -87,7 +87,7 @@ describe('chat-page WS handler 拆分（块 1-4）', () => {
     );
     expect(ctxBlock).not.toBeNull();
     const providedKeys = new Set(
-      [...ctxBlock![1].matchAll(/^\s{6}([a-zA-Z]+):/gm)].map((m) => m[1]),
+      [...ctxBlock![1].matchAll(/^\s{6}([a-zA-Z]+)(?:\(|:|,)/gm)].map((m) => m[1]),
     );
     // 排除 get/set 键本身
     providedKeys.delete('get');
@@ -100,13 +100,13 @@ describe('chat-page WS handler 拆分（块 1-4）', () => {
 
   it('main.js 在 chat-page.js 之前 import 全部 handler 模块', () => {
     const mainSource = readFileSync(
-      path.join(__dirname, '../../src/public/js/main.js'),
+      path.join(__dirname, '../../src/public/js/main.ts'),
       'utf-8',
     );
-    const chatPageIdx = mainSource.indexOf("import './chat-page.js';");
+    const chatPageIdx = mainSource.indexOf("import './chat-page.ts';");
     expect(chatPageIdx).toBeGreaterThan(-1);
     for (const mod of ['chat-ws-stream-handlers', 'chat-ws-session-handlers', 'chat-ws-restore-handlers', 'chat-ws-bg-task-handlers']) {
-      const idx = mainSource.indexOf(`import './${mod}.js';`);
+      const idx = mainSource.indexOf(`import './${mod}.ts';`);
       expect(idx).toBeGreaterThan(-1);
       expect(idx).toBeLessThan(chatPageIdx);
     }

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { classicWindowSource } from './classic-window-source.ts';
 
 import { describe, expect, it } from 'vitest';
 
@@ -31,7 +32,7 @@ function loadChatSession(options?: {
   storedMessages?: unknown[];
   fetchImpl?: (url?: string) => Promise<unknown>;
 }): ChatSessionApi {
-  const src = readFileSync(path.join(__dirname, '../../src/public/js/chat-session.js'), 'utf-8');
+  const src = classicWindowSource(readFileSync(path.join(__dirname, '../../src/public/js/chat-session.ts'), 'utf-8'));
   const storage = new Map<string, string>();
   if (options?.storedMessages) {
     storage.set('ice-chat-messages:default', JSON.stringify(options.storedMessages));

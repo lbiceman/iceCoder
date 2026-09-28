@@ -137,6 +137,7 @@
 
 .stats-aux-metric-label {
   font-size: 11px;
+  line-height: 1.2;
   color: var(--text-muted);
 }
 
@@ -401,11 +402,34 @@
 .stats-skel.is-value { width: 68%; height: 18px; margin-top: 2px; }
 .stats-skel.is-hint { width: 54%; }
 
+/* 骨架与加载后共用同一行盒，避免指标卡高度变化把图表顶一下 */
+.stats-aux-metric .stats-skel {
+  margin-top: 0;
+}
+
+.stats-aux-metric-label .stats-skel.is-label {
+  height: 1.2em;
+}
+
+.stats-aux-metric-value .stats-skel.is-value {
+  height: 1.2em;
+  margin-top: 0;
+}
+
+.stats-aux-metric-sub .stats-skel.is-hint {
+  height: 1.35em;
+}
+
 .stats-skel-chart {
   flex: 1;
   min-height: 0;
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.stats-chart > .stats-skel-chart {
+  position: absolute;
+  inset: 0;
 }
 
 .stats-tooltip {

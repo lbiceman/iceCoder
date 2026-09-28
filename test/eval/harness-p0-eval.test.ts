@@ -72,7 +72,6 @@ function minConfig(overrides: Partial<HarnessConfig> & { tools: ToolDefinition[]
     compactionTokenThreshold: 999_999,
     memoryDir: '__test_nonexistent_memory_dir__',
     skipPermissionChecks: true,
-    enableRequestAnalysis: false,
     ...rest,
   };
 }

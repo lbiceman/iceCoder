@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BRIDGE_PATH = path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js');
+const BRIDGE_PATH = path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.ts');
 
 interface PanelStub {
   setVisible: ReturnType<typeof vi.fn>;
@@ -60,7 +62,7 @@ function loadBridge(
   panel: PanelStub,
   activeSessionId: { value: string | null } = { value: null },
 ) {
-  const src = readFileSync(BRIDGE_PATH, 'utf-8');
+  const src = classicWindowSource(readFileSync(BRIDGE_PATH, 'utf-8'));
   const fetchSpy = vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve({ plan: null }) }));
   const capabilityEvents: boolean[] = [];
   const context: Record<string, unknown> = {

@@ -385,6 +385,7 @@ export class LLMMemoryExtractor {
       const response = await llmAdapter.chat(messages, {
         maxTokens: this.config.maxOutputTokens,
         temperature: 0,
+        usageSource: 'memory_extract',
       });
 
       // 检测提供商是否真正命中了 prompt cache

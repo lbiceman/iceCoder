@@ -11,7 +11,7 @@ describe('plan-mode-tool-policy', () => {
     expect(evaluatePlanModeToolCall('read_file', { path: 'src/a.ts' })).toEqual({ allowed: true });
     expect(evaluatePlanModeToolCall('write_file', { path: 'docs/plan.md' })).toEqual({ allowed: true });
     expect(evaluatePlanModeToolCall('edit_file', { path: 'notes.txt' })).toEqual({ allowed: true });
-    expect(evaluatePlanModeToolCall('request_analysis', { task: 'review gaps' }).allowed).toBe(false);
+    expect(evaluatePlanModeToolCall('task', { prompt: 'review gaps' }).allowed).toBe(false);
   });
 
   it('blocks code writes, commands, git, fs, and MCP', () => {

@@ -282,7 +282,7 @@ async function llmReview(
 ): Promise<StepReviewResult | null> {
   const prompt = buildPrompt(ctx);
   const messages: UnifiedMessage[] = [{ role: 'user', content: prompt }];
-  const response = await chatFn(messages, { tools: [] });
+  const response = await chatFn(messages, { tools: [], usageSource: 'step_review' });
   const text = (response?.content ?? '').trim();
   const parsed = tryParseJson(text);
   if (!parsed) return null;

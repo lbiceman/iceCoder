@@ -27,6 +27,7 @@ const PUBLIC_EXPORTS = [
   'purgeSessionRuntimeCaches',
   'notifyTaskQueueUpdated',
   'getSessionsDir',
+  'getSessionAgentSpawner',
   'isSessionTombstoned',
   'ChatWSOptions',
 ];

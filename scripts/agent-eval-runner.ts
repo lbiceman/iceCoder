@@ -8,6 +8,8 @@ import { HtmlParserStrategy } from '../src/parser/html-strategy.js';
 import { OfficeParserStrategy } from '../src/parser/office-strategy.js';
 import { XMindParserStrategy } from '../src/parser/xmind-strategy.js';
 import { Harness } from '../src/harness/harness.js';
+import { AgentSpawner } from '../src/harness/agents/agent-spawner.js';
+import { listAgentMetas } from '../src/harness/agents/agent-store.js';
 import type { ChatFunction, HarnessConfig, HarnessResult, HarnessStepEvent } from '../src/harness/types.js';
 import type { RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
 import { initializeToolSystem } from '../src/tools/index.js';
@@ -34,6 +36,9 @@ export interface CaseResult {
   metrics: EvalMetrics;
   failures: string[];
   workspace?: string;
+  /** 父模型发出的 task 次数。真实模型不强制派出，只做记录。 */
+  taskCallCount?: number;
+  agents?: Array<{ type: string; status: string; rounds: number; toolCalls: number; description: string }>;
 }
 
 export interface RunAgentEvalCaseOptions {
@@ -114,8 +119,21 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
-      enableRequestAnalysis: testCase.expected.requiresAnalysisArtifact === true,
     };
+
+    if (testCase.subAgents) {
+      const scripts = testCase.subAgents.scripts;
+      const parentChat = options.chatFn;
+      harnessConfig.agentSpawner = new AgentSpawner({
+        parentSessionId: testCase.id,
+        sessionsDir: sessionDir,
+        messageId: `eval-${testCase.id}`,
+        harnessFactory: (config, childExecutor) => new Harness(config, childExecutor),
+        createLlm: () => ({
+          chat: parentChat ?? createChildScriptedChat(scripts),
+        }),
+      });
+    }
 
     const chatFn = options.chatFn ?? createScriptedEvalChat(testCase.scriptedTurns);
     if (!chatFn) {
@@ -139,6 +157,8 @@ export async function runAgentEvalCase(
       events,
       telemetry,
       judgeResults,
+      sessionDir,
+      scriptedParent: !options.chatFn,
     });
 
     return options.keepWorkspace
@@ -195,14 +215,62 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
     if (turn.type === 'final') {
       return { content: turn.content, usage: usage(), finishReason: 'stop' };
     }
-    toolSeq += 1;
+    const calls = turn.type === 'tools'
+      ? turn.calls
+      : [{ name: turn.name, arguments: turn.arguments }];
     return {
       content: '',
-      toolCalls: [{
-        id: `scripted-${toolSeq}`,
-        name: turn.name,
-        arguments: turn.arguments,
-      }],
+      toolCalls: calls.map((call) => {
+        toolSeq += 1;
+        return { id: `scripted-${toolSeq}`, name: call.name, arguments: call.arguments };
+      }),
+      usage: usage(),
+      finishReason: 'tool_calls',
+    };
+  };
+}
+
+/** 每个子 Agent 一份独立脚本，按它收到的任务文本选择。 */
+function createChildScriptedChat(
+  scripts: NonNullable<AgentEvalCase['subAgents']>['scripts'],
+): ChatFunction {
+  let turns: AgentEvalScriptedTurn[] | undefined;
+  let index = 0;
+  let toolSeq = 0;
+  return async (msgs) => {
+    if (!turns) {
+      const text = msgs
+        .filter(message => message.role === 'user')
+        .map(message => typeof message.content === 'string' ? message.content : '')
+        .join('\n');
+      const found = scripts.find(script => text.includes(script.match));
+      // 工具规划等旁路调用不含任务文本，不消耗子脚本。
+      if (!found) {
+        return { content: 'side-query noop', usage: usage(), finishReason: 'stop' };
+      }
+      turns = found.turns;
+    }
+    if (index >= turns.length) {
+      const last = turns.at(-1);
+      return {
+        content: last && last.type === 'final' ? last.content : 'done',
+        usage: usage(),
+        finishReason: 'stop',
+      };
+    }
+    const turn = turns[index++];
+    if (turn.type === 'final') {
+      return { content: turn.content, usage: usage(), finishReason: 'stop' };
+    }
+    const calls = turn.type === 'tools'
+      ? turn.calls
+      : [{ name: turn.name, arguments: turn.arguments }];
+    return {
+      content: '',
+      toolCalls: calls.map((call) => {
+        toolSeq += 1;
+        return { id: `child-${toolSeq}`, name: call.name, arguments: call.arguments };
+      }),
       usage: usage(),
       finishReason: 'tool_calls',
     };
@@ -288,8 +356,10 @@ async function scoreCase(args: {
   events: HarnessStepEvent[];
   telemetry: RuntimeTelemetryEvent[];
   judgeResults: JudgeCommandResult[];
+  sessionDir: string;
+  scriptedParent: boolean;
 }): Promise<CaseResult> {
-  const { testCase, workspace, initialFiles, result, events, telemetry, judgeResults } = args;
+  const { testCase, workspace, initialFiles, result, events, telemetry, judgeResults, sessionDir, scriptedParent } = args;
   const failures: string[] = [];
   const assertionFailures = await evaluateAssertions(workspace, initialFiles, testCase);
   failures.push(...assertionFailures);
@@ -305,9 +375,6 @@ async function scoreCase(args: {
   const finalEvent = [...events].reverse().find(event => event.type === 'final');
   const agentVerificationPassed = didAgentRunVerification(events, testCase.verifyCommands);
   const anyFileChanged = await didAnyCaseFileChange(workspace, initialFiles);
-  const analysisArtifactCount = testCase.expected.requiresAnalysisArtifact
-    ? await countAnalysisArtifacts(workspace, testCase.id)
-    : 0;
 
   if (testCase.expected.requiresTool && toolCallEvents.length === 0) {
     failures.push('expected tool use');
@@ -320,9 +387,6 @@ async function scoreCase(args: {
   }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
-  }
-  if (testCase.expected.requiresAnalysisArtifact && analysisArtifactCount === 0) {
-    failures.push('expected async sub-agent analysis artifact');
   }
   if (
     testCase.expected.completionStatus
@@ -358,6 +422,46 @@ async function scoreCase(args: {
     for (const command of testCase.expected.forbidCommands) {
       if (countCommandRuns(events, command) > 0) {
         failures.push(`unexpected run_command matching ${JSON.stringify(command)}`);
+      }
+    }
+  }
+  const taskCallCount = events.filter(event =>
+    event.type === 'tool_call' && event.toolName === 'task' && !event.agentId,
+  ).length;
+  const enforceTaskCalls = scriptedParent || testCase.expected.taskCalls?.enforce === 'always';
+  if (enforceTaskCalls && testCase.expected.taskCalls) {
+    const bounds = testCase.expected.taskCalls;
+    if (bounds.min !== undefined && taskCallCount < bounds.min) {
+      failures.push(`expected at least ${bounds.min} task call(s), got ${taskCallCount}`);
+    }
+    if (bounds.max !== undefined && taskCallCount > bounds.max) {
+      failures.push(`expected at most ${bounds.max} task call(s), got ${taskCallCount}`);
+    }
+  }
+  const agentMetas = testCase.subAgents
+    ? await listAgentMetas(sessionDir, testCase.id)
+    : [];
+  if (scriptedParent && testCase.expected.taskResultContains) {
+    const blob = result.messages
+      .filter(message => message.role === 'tool')
+      .map(message => typeof message.content === 'string' ? message.content : '')
+      .join('\n');
+    for (const snippet of testCase.expected.taskResultContains) {
+      if (!blob.includes(snippet)) {
+        failures.push(`task result does not contain ${JSON.stringify(snippet)}`);
+      }
+    }
+  }
+  if (testCase.expected.requireAgentMeta && (enforceTaskCalls || taskCallCount > 0)) {
+    const expectedCount = enforceTaskCalls ? Math.max(1, taskCallCount) : taskCallCount;
+    if (agentMetas.length < expectedCount) {
+      failures.push(`expected ${expectedCount} sub-agent record(s), found ${agentMetas.length}`);
+    }
+    if (enforceTaskCalls && testCase.expected.agentTypes) {
+      const actual = agentMetas.map(meta => meta.type).sort();
+      const wanted = [...testCase.expected.agentTypes].sort();
+      if (actual.join(',') !== wanted.join(',')) {
+        failures.push(`expected sub-agent types ${wanted.join(',')}, got ${actual.join(',') || '(none)'}`);
       }
     }
   }
@@ -414,23 +518,17 @@ async function scoreCase(args: {
     passed: failures.length === 0,
     metrics,
     failures,
+    ...(testCase.subAgents ? {
+      taskCallCount,
+      agents: agentMetas.map(meta => ({
+        type: meta.type,
+        status: meta.status,
+        rounds: meta.rounds,
+        toolCalls: meta.toolCalls,
+        description: meta.description,
+      })),
+    } : {}),
   };
-}
-
-async function countAnalysisArtifacts(workspace: string, sessionId: string): Promise<number> {
-  const analysisDir = path.join(workspace, '.icecoder', 'sessions', sessionId, 'analysis');
-  const deadline = Date.now() + 10_000;
-  do {
-    try {
-      const entries = await fs.readdir(analysisDir);
-      const count = entries.filter(entry => entry.endsWith('.meta.json')).length;
-      if (count > 0) return count;
-    } catch {
-      // Detached analysis may not have created its directory yet.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
-  return 0;
 }
 
 async function seedLegacyCheckpoint(sessionDir: string, sessionId: string): Promise<void> {

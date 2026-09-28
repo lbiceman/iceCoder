@@ -37,8 +37,8 @@ describe('企业级 UI 主题体系', () => {
   });
 
   it('主题切换只保留在设置页，不占用桌面侧栏', () => {
-    const sidebar = readPublic('js/chat-session-sidebar.js');
-    const settings = readPublic('js/config-page.js');
+    const sidebar = readPublic('js/chat-session-sidebar.ts');
+    const settings = readPublic('js/config-page.ts');
 
     expect(sidebar).not.toContain('chat-sidebar-theme-btn');
     expect(sidebar).not.toContain('shell.toggleTheme()');

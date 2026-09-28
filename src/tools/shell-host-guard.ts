@@ -75,9 +75,7 @@ export function findSelfPidKillInText(text: string, rootPid = process.pid): stri
 export const HOST_GUARD_HINT = [
   'Broad process kills (taskkill /IM node, killall node, pkill node) terminate the running iceCoder agent.',
   'Never kill the agent root PID (ICE_AGENT_ROOT_PID / current node process).',
-  'To stop a dev/preview server, kill by port/PID instead:',
-  '  netstat -ano | findstr :4173',
-  '  taskkill /F /PID <other-pid>',
+  'To stop a dev or preview server, find the PID listening on that server\'s port and stop only that PID.',
   'Do not retry the same command or embed it in scripts.',
 ].join('\n');
 

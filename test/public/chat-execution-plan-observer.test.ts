@@ -3,28 +3,30 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PANEL_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
+const PANEL_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-plan.ts'),
   'utf-8',
-);
-const CHRONICLE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+));
+const CHRONICLE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.ts'),
   'utf-8',
-);
-const CONFIG_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/config-page.js'),
+));
+const CONFIG_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/config-page.ts'),
   'utf-8',
-);
+));
 const CONFIG_CSS_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/css/config.css'),
   'utf-8',
 );
-const APP_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/app.js'),
+const APP_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/app.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -1037,10 +1039,10 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
   });
 
   it('打包桌面宠物保持独立，不引用透明层互斥状态', () => {
-    const floatingPetSource = readFileSync(
+    const floatingPetSource = classicWindowSource(readFileSync(
       path.join(__dirname, '../../src/public/js/pet-floating-page.js'),
       'utf-8',
-    );
+    ));
     expect(floatingPetSource).toMatch(/petRequestShowMain/);
     expect(floatingPetSource).not.toMatch(/ChatExecutionPlan|etl-pet-hidden-by-panel/);
   });

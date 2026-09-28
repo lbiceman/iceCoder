@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const PREVIEW_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-image-preview.js'), 'utf-8');
-const MAIN_SOURCE = readFileSync(path.join(publicRoot, 'js/main.js'), 'utf-8');
+const PREVIEW_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-image-preview.ts'), 'utf-8'));
+const MAIN_SOURCE = readFileSync(path.join(publicRoot, 'js/main.ts'), 'utf-8');
 const CHAT_CSS = readFileSync(path.join(publicRoot, 'css/chat.css'), 'utf-8');
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -35,7 +37,7 @@ afterEach(async () => {
 
 describe('聊天气泡图片预览', () => {
   it('入口会加载预览模块，样式支持全图遮罩', () => {
-    expect(MAIN_SOURCE).toContain("import './chat-image-preview.js'");
+    expect(MAIN_SOURCE).toContain("import './chat-image-preview.ts'");
     expect(CHAT_CSS).toContain('.image-preview-overlay');
     expect(PREVIEW_SOURCE).toContain('msg-image-thumb');
   });

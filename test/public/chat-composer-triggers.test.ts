@@ -3,13 +3,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const FILE_REF_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-file-ref.js'), 'utf-8');
-const SKILLS_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-skills.js'), 'utf-8');
-const DROPDOWN_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-dropdown.js'), 'utf-8');
-const PAGE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-page.js'), 'utf-8');
+const FILE_REF_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-file-ref.ts'), 'utf-8'));
+const SKILLS_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-skills.ts'), 'utf-8'));
+const DROPDOWN_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-dropdown.ts'), 'utf-8'));
+const PAGE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-page.ts'), 'utf-8'));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -39,7 +41,7 @@ describe('输入框 @ # 触发与工具栏', () => {
     expect(PAGE_SOURCE).toContain('composer-file-input');
     expect(PAGE_SOURCE).toContain('bindComposerInteractions');
     expect(PAGE_SOURCE).toContain('function stripNextPrefix');
-    expect(PAGE_SOURCE).toContain('var appendUserMessageNow = !busyAtSend');
+    expect(PAGE_SOURCE).toContain('const appendUserMessageNow = !busyAtSend');
     expect(PAGE_SOURCE).toContain('addOptimistic');
     expect(PAGE_SOURCE).toContain('sendOpts.images = msgImages');
     expect(PAGE_SOURCE).toContain('waitForPendingImageLoads');

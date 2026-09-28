@@ -19,11 +19,6 @@ function sanitizeRuntimeError(value: string | undefined): string {
     .slice(0, 500);
 }
 
-function looksLikePuppeteerServer(name: string, toolNames: readonly string[]): boolean {
-  if (/puppeteer/i.test(name)) return true;
-  return toolNames.some((tool) => /puppeteer/i.test(tool));
-}
-
 export function buildMcpRuntimeContext(
   mcpManager: MCPManager | undefined,
   registeredToolNames: readonly string[],
@@ -56,7 +51,7 @@ export function buildMcpRuntimeContext(
   const out: Record<string, string> = {
     mcpServers: [
       'Configured MCP servers and registered tool names for this turn (call listed mcp_* tools directly when status is ready).',
-      'ready = MCP process is up, not that every backend (browser extension, Chrome) is attached.',
+      'ready = MCP process is up, not that every backend session is attached.',
       ...serverLines,
     ].join('\n'),
   };
@@ -72,34 +67,28 @@ export function buildMcpRuntimeContext(
     s.backendKind === 'browser_extension'
     || isBrowserExtensionMcp(s.name, s.tools.map((t) => t.name)),
   );
-  const hasPuppeteer = infos.some((s) =>
-    looksLikePuppeteerServer(s.name, s.tools.map((t) => t.name)),
-  );
   const hasDetachedBrowser = infos.some((s) =>
     s.backendKind === 'browser_extension' && s.backendSession === 'detached',
   );
-  if (mcpToolNames.length > 0 || hasBrowserExt || hasPuppeteer) {
+  if (mcpToolNames.length > 0 || hasBrowserExt || infos.some((s) => s.status === 'error')) {
+    // 中文说明：重试提示只描述本轮服务器状态，不点名用户配置的具体 MCP。
     const hints: string[] = [];
     if (hasDetachedBrowser) {
       hints.push(
-        'A listed extension-browser MCP is ready but its browser session is detached. Retry the same mcp_*browser_* tool; do not claim the server is unconfigured or permanently switch to puppeteer.',
+        'A listed browser-extension MCP is ready but its browser session is detached. Retry the same tool; do not claim the server is unconfigured or switch to another server while this one stays ready.',
       );
-    } else {
+    } else if (mcpToolNames.length > 0) {
       hints.push(
         'If an mcp_* call failed but that server is still ready, retry the same tool once. Do not claim MCP is unconfigured.',
       );
     }
     if (hasBrowserExt) {
       hints.push(
-        'If the error is "No connection to browser extension", that is a tab-attach error. Retry the same extension-browser tool once, then ask the user to attach the extension.',
+        'If the error says the browser extension is not connected, that is a tab-attach error. Retry the same tool once, then ask the user to attach the extension.',
       );
     }
-    if (hasBrowserExt && hasPuppeteer) {
-      hints.push(
-        'Prefer extension-browser MCP (browsermcp / browser_*) for the page the user is looking at. Puppeteer is a separate Chrome fallback after that retry, not a permanent replacement.',
-      );
-    } else if (hasPuppeteer) {
-      hints.push('For puppeteer, ensure Chrome is installed at PUPPETEER_EXECUTABLE_PATH in mcp.json.');
+    if (infos.some((s) => s.status === 'error')) {
+      hints.push('If a server status is error, use the error on that server. Do not invent a replacement server.');
     }
     out.mcpRetryHint = hints.join(' ');
   }

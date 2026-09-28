@@ -5,10 +5,10 @@ export type AgentEvalCategory =
   | 'compression'
   | 'memory-conflict'
   | 'tool-failure'
-  | 'async-subagent'
   | 'eval-mode'
   | 'completion-gate'
-  | 'stop-verification';
+  | 'stop-verification'
+  | 'sub-agent';
 
 export interface AgentEvalFileAssertion {
   path: string;
@@ -22,6 +22,11 @@ export type AgentEvalScriptedTurn =
       type: 'tool';
       name: string;
       arguments: Record<string, unknown>;
+    }
+  | {
+      /** 同一条模型回复里的多个工具调用（用于并行 task） */
+      type: 'tools';
+      calls: Array<{ name: string; arguments: Record<string, unknown> }>;
     }
   | {
       type: 'final';
@@ -39,7 +44,6 @@ export interface AgentEvalCase {
     requiresTool: boolean;
     requiresVerification?: boolean;
     allowFileChanges?: boolean;
-    requiresAnalysisArtifact?: boolean;
     /** 软验证场景：不允许 Harness 强推 shell 验证。 */
     forbidVerification?: boolean;
     /** 通用收尾协议的结构化终态。 */
@@ -53,6 +57,18 @@ export interface AgentEvalCase {
     verificationRuns?: Record<string, { min?: number; max?: number }>;
     /** 不允许出现的 run_command 子串。 */
     forbidCommands?: string[];
+    /**
+     * 父模型发出的 task 次数。
+     * enforce 默认 scripted：只约束脚本化父模型。
+     * always：真实模型也必须派出，用来反复观察子 Agent 是否真的跑起来。
+     */
+    taskCalls?: { min?: number; max?: number; enforce?: 'scripted' | 'always' };
+    /** 脚本化时，task 的工具结果文本应包含这些子串（子 Agent 报告）。 */
+    taskResultContains?: string[];
+    /** 脚本化时必须留下子 Agent 记录；真实模型若派了，记录数不能少于 task 次数。 */
+    requireAgentMeta?: boolean;
+    /** 脚本化时期望的子 Agent 类型，顺序不限。 */
+    agentTypes?: string[];
     /** 结束后断言活动 checkpoint 为 ProjectCheckpointV3。 */
     checkpoint?: {
       version: 3;
@@ -76,6 +92,13 @@ export interface AgentEvalCase {
    * mock 指标不得直接判过。
    */
   scriptedTurns?: AgentEvalScriptedTurn[];
+  /**
+   * 为本用例挂上 AgentSpawner。
+   * 脚本化运行时，子 Agent 按 prompt 子串选用 scripts；真实模型运行时，子 Agent 用同一个模型。
+   */
+  subAgents?: {
+    scripts: Array<{ match: string; turns: AgentEvalScriptedTurn[] }>;
+  };
 }
 
 const basePackageJson = {
@@ -248,11 +271,10 @@ export const agentEvalCases: AgentEvalCase[] = [
   },
   {
     id: 'async-subagent-oauth-context',
-    category: 'async-subagent',
+    category: 'test-fix',
     prompt: [
       'Inspect the OAuth login flow before editing.',
       'Then update the callback route to return "oauth-ready" and run npm test.',
-      'Use background analysis when gathering context.',
     ].join(' '),
     files: {
       'package.json': packageJson(),
@@ -286,7 +308,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       ].join('\n'),
     },
     verifyCommands: ['npm test'],
-    expected: { requiresTool: true, requiresVerification: true, requiresAnalysisArtifact: true },
+    expected: { requiresTool: true, requiresVerification: true },
     assertions: [
       { path: 'src/auth/oauth.js', contains: "return 'oauth-ready'" },
       { path: 'src/auth/oauth.js', notContains: "return 'oauth-pending'" },
@@ -953,5 +975,266 @@ export const agentEvalCases: AgentEvalCase[] = [
     ],
     maxRounds: 4,
     timeoutMs: 30_000,
+  },
+  {
+    id: 'local-subagent-payment-fix',
+    category: 'sub-agent',
+    prompt: [
+      'Fix retryDelayMs in src/payment/timeout.js so it returns 200.',
+      'Leave src/refund/flow.js unchanged.',
+      'Run npm test before finishing.',
+      'You may edit it yourself, or delegate the fix to one general sub-agent.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson({ test: 'node --test' }),
+      'src/payment/timeout.js': [
+        'function retryDelayMs() {',
+        '  return 0;',
+        '}',
+        '',
+        'module.exports = { retryDelayMs };',
+        '',
+      ].join('\n'),
+      'src/refund/flow.js': [
+        'function refundStatus() {',
+        "  return 'ok';",
+        '}',
+        '',
+        'module.exports = { refundStatus };',
+        '',
+      ].join('\n'),
+      'test/payment.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { retryDelayMs } = require('../src/payment/timeout');",
+        "const { refundStatus } = require('../src/refund/flow');",
+        '',
+        "test('payment retry waits', () => {",
+        '  assert.equal(retryDelayMs(), 200);',
+        '});',
+        '',
+        "test('refund flow stays ok', () => {",
+        "  assert.equal(refundStatus(), 'ok');",
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+      verificationRuns: { 'npm test': { min: 1 } },
+      finalContains: '200',
+      taskCalls: { min: 1, max: 1 },
+      taskResultContains: ['retryDelayMs now returns 200'],
+      requireAgentMeta: true,
+      agentTypes: ['general'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        hasVerificationState: true,
+        mutationVersionAtLeast: 1,
+      },
+    },
+    assertions: [
+      { path: 'src/payment/timeout.js', contains: 'return 200;' },
+      { path: 'src/payment/timeout.js', notContains: 'return 0;' },
+      { path: 'src/refund/flow.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      {
+        type: 'tool',
+        name: 'task',
+        arguments: {
+          description: '修复支付超时',
+          subagent_type: 'general',
+          prompt: [
+            'FIX-PAYMENT',
+            'Change retryDelayMs in src/payment/timeout.js so it returns 200.',
+            'Do not modify src/refund/flow.js.',
+            'Run npm test.',
+          ].join(' '),
+        },
+      },
+      { type: 'final', content: 'Payment retry now waits 200ms. Refund flow unchanged.' },
+    ],
+    subAgents: {
+      scripts: [
+        {
+          match: 'FIX-PAYMENT',
+          turns: [
+            { type: 'tool', name: 'read_file', arguments: { path: 'src/payment/timeout.js' } },
+            {
+              type: 'tool',
+              name: 'edit_file',
+              arguments: {
+                path: 'src/payment/timeout.js',
+                search: 'return 0;',
+                replace: 'return 200;',
+              },
+            },
+            { type: 'final', content: 'retryDelayMs now returns 200. Refund flow was not modified.' },
+          ],
+        },
+      ],
+    },
+    maxRounds: 8,
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'local-subagent-parallel-explore',
+    category: 'sub-agent',
+    prompt: [
+      'Read src/payment/timeout.js and src/refund/flow.js.',
+      'The final answer must contain the exact text payment-delay=0; refund=ok.',
+      'Do not modify any file.',
+      'You may read the files yourself, or delegate two read-only explore sub-agents in the same reply.',
+    ].join(' '),
+    files: {
+      'src/payment/timeout.js': 'function retryDelayMs() {\n  return 0;\n}\n\nmodule.exports = { retryDelayMs };\n',
+      'src/refund/flow.js': "function refundStatus() {\n  return 'ok';\n}\n\nmodule.exports = { refundStatus };\n",
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      forbidVerification: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_not_required',
+      finalContains: 'payment-delay=0; refund=ok',
+      taskCalls: { min: 2, max: 2 },
+      taskResultContains: ['payment-delay=0', 'refund=ok'],
+      requireAgentMeta: true,
+      agentTypes: ['explore', 'explore'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+      },
+    },
+    assertions: [
+      { path: 'src/payment/timeout.js', unchanged: true },
+      { path: 'src/refund/flow.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      {
+        type: 'tools',
+        calls: [
+          {
+            name: 'task',
+            arguments: {
+              description: '查看支付超时',
+              subagent_type: 'explore',
+              prompt: 'EXPLORE-PAYMENT Read src/payment/timeout.js. Do not modify files or run commands.',
+            },
+          },
+          {
+            name: 'task',
+            arguments: {
+              description: '查看退款状态',
+              subagent_type: 'explore',
+              prompt: 'EXPLORE-REFUND Read src/refund/flow.js. Do not modify files or run commands.',
+            },
+          },
+        ],
+      },
+      { type: 'final', content: 'payment-delay=0; refund=ok' },
+    ],
+    subAgents: {
+      scripts: [
+        {
+          match: 'EXPLORE-PAYMENT',
+          turns: [
+            { type: 'tool', name: 'read_file', arguments: { path: 'src/payment/timeout.js' } },
+            { type: 'final', content: 'payment-delay=0' },
+          ],
+        },
+        {
+          match: 'EXPLORE-REFUND',
+          turns: [
+            { type: 'tool', name: 'read_file', arguments: { path: 'src/refund/flow.js' } },
+            { type: 'final', content: 'refund=ok' },
+          ],
+        },
+      ],
+    },
+    maxRounds: 6,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'real-subagent-payment-delegate',
+    category: 'sub-agent',
+    prompt: [
+      'Fix retryDelayMs in src/payment/timeout.js so it returns 200.',
+      'Do not modify src/refund/flow.js.',
+      'You must delegate the edit to exactly one general sub-agent with the task tool.',
+      'Do not edit or write files yourself.',
+      'The task prompt must be self-contained: tell the sub-agent the file, the required return value, that it must not touch src/refund/flow.js, and that it must run npm test.',
+      'After the sub-agent finishes, review its report and run npm test yourself before you finish.',
+      'Your final answer must mention 200 and whether npm test passed.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson({ test: 'node --test' }),
+      'src/payment/timeout.js': [
+        'function retryDelayMs() {',
+        '  return 0;',
+        '}',
+        '',
+        'module.exports = { retryDelayMs };',
+        '',
+      ].join('\n'),
+      'src/refund/flow.js': [
+        'function refundStatus() {',
+        "  return 'ok';",
+        '}',
+        '',
+        'module.exports = { refundStatus };',
+        '',
+      ].join('\n'),
+      'test/payment.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { retryDelayMs } = require('../src/payment/timeout');",
+        "const { refundStatus } = require('../src/refund/flow');",
+        '',
+        "test('payment retry waits', () => {",
+        '  assert.equal(retryDelayMs(), 200);',
+        '});',
+        '',
+        "test('refund flow stays ok', () => {",
+        "  assert.equal(refundStatus(), 'ok');",
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      finalContains: '200',
+      taskCalls: { min: 1, max: 1, enforce: 'always' },
+      requireAgentMeta: true,
+      agentTypes: ['general'],
+    },
+    assertions: [
+      { path: 'src/payment/timeout.js', contains: 'return 200;' },
+      { path: 'src/payment/timeout.js', notContains: 'return 0;' },
+      { path: 'src/refund/flow.js', unchanged: true },
+    ],
+    subAgents: {
+      scripts: [
+        {
+          match: 'NEVER-MATCHED-REAL-MODEL',
+          turns: [{ type: 'final', content: 'unused' }],
+        },
+      ],
+    },
+    maxRounds: 10,
+    timeoutMs: 240_000,
   },
 ];

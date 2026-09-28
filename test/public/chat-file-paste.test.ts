@@ -3,16 +3,18 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CHAT_FILE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-file.js'),
+const CHAT_FILE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-file.ts'),
   'utf-8',
-);
-const CHAT_PAGE_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-page.js'),
+));
+const CHAT_PAGE_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-page.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -43,7 +45,7 @@ describe('聊天图片粘贴', () => {
     expect(CHAT_FILE_SOURCE).toContain('looksLikeImagePath');
     expect(CHAT_PAGE_SOURCE).toContain('bindComposerInteractions');
     expect(CHAT_FILE_SOURCE).toContain('waitForPendingImageLoads');
-    expect(CHAT_PAGE_SOURCE).toContain('var appendUserMessageNow = !busyAtSend');
+    expect(CHAT_PAGE_SOURCE).toContain('const appendUserMessageNow = !busyAtSend');
     expect(CHAT_PAGE_SOURCE).toContain('function stripNextPrefix');
   });
 

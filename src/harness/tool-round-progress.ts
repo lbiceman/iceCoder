@@ -49,6 +49,8 @@ function isMeaningfulSuccessfulTool(
   if (call.name === 'run_command') {
     return isCompletedRunCommand(input.runCommandClassifications?.get(call.id));
   }
+  // 子 Agent 完成了一整块工作（成败都已写进结果），不是空转。
+  if (call.name === 'task') return true;
   return false;
 }
 

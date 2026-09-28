@@ -6,6 +6,8 @@ import {
   aggregateExecutionModeSeries,
   aggregateExecutionModeStats,
   extractExecutionModeEvents,
+  filterExecutionModeEvents,
+  formatExecutionModeReport,
   readJsonlFile,
 } from '../../../src/web/routes/supervisor-events.js';
 
@@ -127,5 +129,85 @@ describe('execution-mode telemetry API helpers', () => {
     ], 1, now);
     expect(series).toHaveLength(24);
     expect(series[0]?.enter).toBe(1);
+  });
+
+  it('formats a compact text report for ~supervisor without changing JSON stats', () => {
+    const stats = aggregateExecutionModeStats([
+      {
+        type: 'execution_mode_enter',
+        timestamp: 't1',
+        payload: {
+          executionMode: 'forced',
+          enteredBy: ['tool_failure'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: '工具失败',
+          round: 2,
+        },
+      },
+      {
+        type: 'execution_mode_exit',
+        timestamp: 't2',
+        payload: {
+          executionMode: 'free',
+          enteredBy: ['tool_failure'],
+          enteredByPrimary: 'tool_failure',
+          primaryReasonHuman: 'free',
+          round: 6,
+        },
+      },
+    ]);
+    const report = formatExecutionModeReport(stats, 7);
+    expect(report).toContain('**执行模式报告**（最近 7 天）');
+    expect(report).toContain('**进入** 1 次 | 退出 1 次');
+    expect(report).toContain('forced:1');
+    expect(report).toContain('工具失败:1');
+    expect(report).toContain('- 进入 forced · 工具失败 · 第 2 轮');
+    expect(report).toContain('- 退出 free · 第 6 轮');
+    expect(stats.enter).toBe(1);
+    expect(stats.exit).toBe(1);
+    expect(stats.recent).toHaveLength(2);
+  });
+
+  it('returns an empty-state text report when there are no events', () => {
+    const report = formatExecutionModeReport({
+      enter: 0,
+      exit: 0,
+      byMode: {},
+      bySignal: {},
+      recent: [],
+    }, 7);
+    expect(report).toContain('暂无监管触发记录。');
+  });
+
+  it('filters events for the text report only', () => {
+    const events = extractExecutionModeEvents([
+      {
+        timestamp: new Date().toISOString(),
+        type: 'execution_mode_enter',
+        executionMode: 'forced',
+        enteredBy: ['tool_failure'],
+        enteredByPrimary: 'tool_failure',
+        primaryReasonHuman: '工具失败',
+        round: 2,
+      },
+      {
+        timestamp: new Date().toISOString(),
+        type: 'execution_mode_enter',
+        executionMode: 'forced',
+        enteredBy: ['multi_write'],
+        enteredByPrimary: 'multi_write',
+        primaryReasonHuman: '多文件写入',
+        round: 4,
+      },
+      {
+        timestamp: new Date().toISOString(),
+        type: 'execution_mode_exit',
+        executionMode: 'free',
+        round: 6,
+      },
+    ]);
+    expect(filterExecutionModeEvents(events, 'enter')).toHaveLength(2);
+    expect(filterExecutionModeEvents(events, 'tool_failure')).toHaveLength(1);
+    expect(filterExecutionModeEvents(events, '')).toEqual(events);
   });
 });

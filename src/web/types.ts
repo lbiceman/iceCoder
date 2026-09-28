@@ -62,7 +62,7 @@ export interface ProviderConfig {
  * ⚠️ 新增字段 checklist（防前后端漂移，4 处必须同步）：
  * 1. 此处接口类型 + 注释
  * 2. `src/config/main-config-ice-etl-prefs.ts` 的 `DEFAULT_ICE_ETL_PREFS` + `sanitizeIceEtlPrefs`
- * 3. `src/public/js/etl-prefs.js` 的 `DEFAULTS` + `sanitize`（前端独立实现）
+ * 3. `src/public/js/etl-prefs.ts` 的 `DEFAULTS` + `sanitize`（前端独立实现）
  * 4. `src/web/routes/config.ts` 的 PATCH 校验（allowedKeys + 类型规则均由 `validateIceEtlPrefsPatch` 派生，见 `main-config-ice-etl-prefs.ts`）
  * 防漂移测试：`test/public/etl-prefs-parity.test.ts`（两端一致）、`test/web/config-ice-etl-prefs-route.test.ts`（路由清单）
  */
@@ -90,6 +90,11 @@ export interface IceCoderConfigFile {
    * 字段缺失或为 `false` 时走默认权限规则。
    */
   skipPermissionChecks?: boolean;
+  /**
+   * 是否启用子 Agent。缺失或为 `true` 时，默认模式暴露 `task` 并注入 Sub-agents 提示词。
+   * 显式 `false` 时不暴露工具、不注入这段提示词。
+   */
+  enableSubAgents?: boolean;
   /**
    * Shell 协作强制确认规则（字符串正则，不含首尾 `/`）。
    * 缺失时使用内置默认；空数组 `[]` 表示仅保留不可配置的 hard block / 宿主保护。

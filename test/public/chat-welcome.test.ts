@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WELCOME_SOURCE = readFileSync(
-  path.join(__dirname, '../../src/public/js/chat-welcome.js'),
+const WELCOME_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-welcome.ts'),
   'utf-8',
-);
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -73,7 +75,7 @@ describe('欢迎页门控卡片', () => {
     });
 
     expect(result).toEqual({
-      label: '门控',
+      label: '验收门控',
       value: '就绪',
       title: '工具执行前的审批：allow / confirm / deny',
     });

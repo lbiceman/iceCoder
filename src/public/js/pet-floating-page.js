@@ -4,7 +4,7 @@
 import './session-pet.js';
 
 function applyTheme(theme) {
-  var t = theme === 'light' ? 'light' : 'dark';
+  const t = theme === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', t);
 }
 
@@ -17,26 +17,26 @@ function readStoredTheme() {
 }
 
 applyTheme(readStoredTheme());
-window.addEventListener('storage', function (e) {
+window.addEventListener('storage', (e) => {
   if (e.key === 'ice-theme') applyTheme(e.newValue);
 });
 
-var DRAG_THRESHOLD = 5;
+const DRAG_THRESHOLD = 5;
 
-var root = document.getElementById('pet-root');
-var canvas = document.getElementById('pet-canvas');
-var pet = window.SessionPet.create(root, { enableDrag: false });
+const root = document.getElementById('pet-root');
+const canvas = document.getElementById('pet-canvas');
+const pet = window.SessionPet.create(root, { enableDrag: false });
 
 /**
  * 透明区 OS 级点击穿透：默认穿透，鼠标在 canvas 上时取消穿透以便拖/双击。
  * 依赖主进程 setIgnoreMouseEvents(true, { forward: true })。
  */
 function initFloatingClickThrough(el, dragHooks) {
-  var api = window.iceDesktop;
+  const api = window.iceDesktop;
   if (!api || typeof api.petSetMousePassthrough !== 'function' || !el) return null;
 
-  var passthrough = true;
-  var pointerLocked = false;
+  let passthrough = true;
+  let pointerLocked = false;
 
   function setPassthrough(next) {
     if (passthrough === next) return;
@@ -45,7 +45,7 @@ function initFloatingClickThrough(el, dragHooks) {
   }
 
   function isOverInteractive(clientX, clientY) {
-    var rect = el.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
     return (
       clientX >= rect.left &&
       clientX <= rect.right &&
@@ -62,11 +62,11 @@ function initFloatingClickThrough(el, dragHooks) {
     setPassthrough(!isOverInteractive(clientX, clientY));
   }
 
-  document.addEventListener('mousemove', function (e) {
+  document.addEventListener('mousemove', (e) => {
     syncFromPoint(e.clientX, e.clientY);
   });
 
-  document.addEventListener('mouseleave', function () {
+  document.addEventListener('mouseleave', () => {
     if (!pointerLocked) setPassthrough(true);
   });
 
@@ -82,22 +82,22 @@ function initFloatingClickThrough(el, dragHooks) {
   }
 
   setPassthrough(true);
-  return { syncFromPoint: syncFromPoint };
+  return { syncFromPoint };
 }
 
 function initFloatingWindowDrag(el, dragHooks) {
-  var api = window.iceDesktop;
+  const api = window.iceDesktop;
   if (!api || typeof api.petDragMove !== 'function' || !el) return { moved: false };
 
-  var dragId = null;
-  var dragActive = false;
-  var moved = false;
-  var startX = 0;
-  var startY = 0;
-  var lastX = 0;
-  var lastY = 0;
+  let dragId = null;
+  let dragActive = false;
+  let moved = false;
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let lastY = 0;
 
-  el.addEventListener('pointerdown', function (e) {
+  el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     dragId = e.pointerId;
     dragActive = false;
@@ -113,18 +113,18 @@ function initFloatingWindowDrag(el, dragHooks) {
     e.preventDefault();
   });
 
-  el.addEventListener('pointermove', function (e) {
+  el.addEventListener('pointermove', (e) => {
     if (dragId === null || e.pointerId !== dragId) return;
-    var totalDx = e.screenX - startX;
-    var totalDy = e.screenY - startY;
+    const totalDx = e.screenX - startX;
+    const totalDy = e.screenY - startY;
     if (!dragActive) {
       if (Math.hypot(totalDx, totalDy) < DRAG_THRESHOLD) return;
       dragActive = true;
       moved = true;
       el.classList.add('pet-dragging');
     }
-    var dx = e.screenX - lastX;
-    var dy = e.screenY - lastY;
+    const dx = e.screenX - lastX;
+    const dy = e.screenY - lastY;
     lastX = e.screenX;
     lastY = e.screenY;
     api.petDragMove(dx, dy);
@@ -145,7 +145,7 @@ function initFloatingWindowDrag(el, dragHooks) {
   el.addEventListener('pointercancel', endDrag);
 
   return {
-    consumeIfMoved: function () {
+    consumeIfMoved() {
       if (!moved) return false;
       moved = false;
       return true;
@@ -153,8 +153,8 @@ function initFloatingWindowDrag(el, dragHooks) {
   };
 }
 
-var dragHooks = {};
-var dragState = canvas ? initFloatingWindowDrag(canvas, dragHooks) : null;
+const dragHooks = {};
+const dragState = canvas ? initFloatingWindowDrag(canvas, dragHooks) : null;
 initFloatingClickThrough(canvas, dragHooks);
 
 function applySnapshot(snap) {
@@ -169,13 +169,13 @@ function applySnapshot(snap) {
   pet.setVisible(true);
 }
 
-var api = window.iceDesktop;
+const api = window.iceDesktop;
 if (api) {
   if (typeof api.onPetStateSnapshot === 'function') {
     api.onPetStateSnapshot(applySnapshot);
   }
   if (typeof api.onPetMode === 'function') {
-    api.onPetMode(function (mode) {
+    api.onPetMode((mode) => {
       pet.setVisible(mode === 'floating');
     });
   }
@@ -183,13 +183,13 @@ if (api) {
 
 if (canvas) {
   canvas.setAttribute('tabindex', '-1');
-  canvas.addEventListener('dblclick', function () {
+  canvas.addEventListener('dblclick', () => {
     if (dragState && dragState.consumeIfMoved()) return;
     if (api && typeof api.petRequestShowMain === 'function') {
       api.petRequestShowMain();
     }
   });
-  canvas.addEventListener('contextmenu', function (e) {
+  canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
   });
 }

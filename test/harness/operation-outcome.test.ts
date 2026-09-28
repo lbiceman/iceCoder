@@ -53,7 +53,7 @@ describe('operation outcome normalization', () => {
 
   it('treats a detached background launch as a settled launch receipt', () => {
     const outcome = normalizeOperationOutcome(
-      { id: 'a1', name: 'request_analysis', arguments: { task: 'inspect' } },
+      { id: 'a1', name: 'run_command', arguments: { command: 'npm test', background: true } },
       {
         success: true,
         output: 'taskId: asa_1\nstatus: pending\nlifespan: detached\nrunning in the background',

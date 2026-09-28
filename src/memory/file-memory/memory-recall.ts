@@ -418,6 +418,7 @@ async function llmSelectAndRankMemories(
   const response = await llmAdapter.chat(messages, {
     maxTokens: LLM_RECALL_MAX_TOKENS,
     temperature: 0,
+    usageSource: 'memory_recall',
   });
 
   // 解析 JSON 响应
@@ -1445,7 +1446,7 @@ Return ONLY the JSON object, no other text.`;
         { role: 'system', content: 'You are a relevance filter. Return only JSON.' },
         { role: 'user', content: prompt },
       ],
-      { tools: [] },
+      { tools: [], usageSource: 'memory_recall' },
     );
 
     const content = response.content.trim();

@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const STEPPER_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-reasoning-stepper.js'), 'utf-8');
-const WS_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-websocket.js'), 'utf-8');
-const CONFIG_PANEL_SOURCE = readFileSync(path.join(publicRoot, 'js/config-model-panel.js'), 'utf-8');
+const STEPPER_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-reasoning-stepper.ts'), 'utf-8'));
+const WS_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-websocket.ts'), 'utf-8'));
+const CONFIG_PANEL_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/config-model-panel.ts'), 'utf-8'));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -40,7 +42,7 @@ const STEPPER_HTML = [
 
 describe('推理强度步骤器', () => {
   it('源码会把当前档位写入消息并持久化', () => {
-    expect(STEPPER_SOURCE).toContain("var STORAGE_KEY = 'ice-reasoning-effort'");
+    expect(STEPPER_SOURCE).toContain("const STORAGE_KEY = 'ice-reasoning-effort'");
     expect(STEPPER_SOURCE).toContain('function setLevels');
     expect(STEPPER_SOURCE).toContain('function getLevel');
     expect(WS_SOURCE).toContain('payload.reasoningEffort = reasoningEffort');

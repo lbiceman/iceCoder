@@ -7,14 +7,14 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <script>
-    (function () {
+    (() => {
       try {
-        var p = (location.pathname || '/').replace(/\/+$/, '') || '/';
-        var mobile = /^\/m(\/|$)/.test(p) || (p === '/' && /(?:^|[?&])token=/.test(location.search || ''));
-        if (!mobile && (location.hash || '').indexOf('#/m/') === 0) mobile = true;
-        var key = mobile ? 'ice-theme-mobile' : 'ice-theme';
-        var stored = localStorage.getItem(key);
-        var theme = (stored === 'light' || stored === 'dark') ? stored : (mobile ? 'light' : 'dark');
+        const p = (location.pathname || '/').replace(/\/+$/, '') || '/';
+        let mobile = /^\/m(\/|$)/.test(p) || (p === '/' && /(?:^|[?&])token=/.test(location.search || ''));
+        if (!mobile && (location.hash || '').startsWith('#/m/')) mobile = true;
+        const key = mobile ? 'ice-theme-mobile' : 'ice-theme';
+        const stored = localStorage.getItem(key);
+        const theme = (stored === 'light' || stored === 'dark') ? stored : (mobile ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) { /* ignore */ }
     })();
@@ -31,6 +31,6 @@
     <div class="page-container" id="page-container"></div>
   </div>
 
-  <script type="module" src="/js/main.js"></script>
+  <script type="module" src="/js/main.ts"></script>
 </body>
 </html>

@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const QUEUE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-task-queue.js'), 'utf-8');
-const PAGE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-page.js'), 'utf-8');
+const QUEUE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-task-queue.ts'), 'utf-8'));
+const PAGE_SOURCE = classicWindowSource(readFileSync(path.join(publicRoot, 'js/chat-page.ts'), 'utf-8'));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -33,7 +35,7 @@ afterEach(async () => {
 describe('消息队列卡片', () => {
   it('直接发送与 /next 走同一套忙碌入队，不单独标 explicit', () => {
     expect(PAGE_SOURCE).toContain('function stripNextPrefix');
-    expect(PAGE_SOURCE).toContain('var appendUserMessageNow = !busyAtSend');
+    expect(PAGE_SOURCE).toContain('const appendUserMessageNow = !busyAtSend');
     expect(PAGE_SOURCE).toContain('addOptimistic');
     expect(PAGE_SOURCE).not.toContain('sendOpts.source = \'explicit\'');
     expect(PAGE_SOURCE).not.toContain('sendOpts.command = \'next\'');

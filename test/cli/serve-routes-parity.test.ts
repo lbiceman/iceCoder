@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -29,11 +29,24 @@ function mountedApiPaths(source: string): string[] {
   return [...new Set(paths)].sort();
 }
 
+function walkPublicScripts(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name);
+    if (statSync(full).isDirectory()) {
+      out.push(...walkPublicScripts(full));
+      continue;
+    }
+    if (name.endsWith('.d.ts')) continue;
+    if (name.endsWith('.js') || name.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
+
 function frontendApiPrefixes(): string[] {
   const prefixes = new Set<string>();
-  for (const name of readdirSync(PUBLIC_JS_DIR)) {
-    if (!name.endsWith('.js')) continue;
-    const source = readFileSync(path.join(PUBLIC_JS_DIR, name), 'utf-8');
+  for (const file of walkPublicScripts(PUBLIC_JS_DIR)) {
+    const source = readFileSync(file, 'utf-8');
     for (const match of source.matchAll(/['"`](\/api\/[A-Za-z0-9/_-]+)/g)) {
       const raw = match[1];
       const known = REQUIRED_API_PREFIXES.find((prefix) => raw === prefix || raw.startsWith(`${prefix}/`));

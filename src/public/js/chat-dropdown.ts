@@ -1,0 +1,302 @@
+// @ts-nocheck
+/**
+ * 统一下拉浮层。
+ * 取代之前 chat-commands 的 #cmd-dropdown 与 chat-model-picker 的 #model-palette。
+ *
+ * 用法：
+ *   ChatDropdown.open({
+ *     anchor: buttonEl,             // 触发元素；用于定位 + 关闭
+ *     items: [{ key, name, description, isCurrent }],   // 也可只传 {name, ...}
+ *     onSelect: function (item, idx, ev) { ... },       // 点击 item 触发
+ *     onClose: function () { ... },                     // 关闭后回调
+ *     placement: 'top' | 'bottom' | 'auto',             // 默认 'top'（悬浮在 anchor 上方）
+ *     minWidth: 220,                                    // 浮层最小宽
+ *     maxWidth: 300,                                    // 浮层最大宽
+ *     align: 'end' | 'start' | 'center',                // 默认 'end'；center 相对 anchor 水平居中
+ *     fitContent: false,                                // true 时宽度随内容，不超过 maxWidth
+ *     placementRef: 'anchor' | 'toolbar',               // top 定位基准：anchor 或 composer-toolbar 顶边
+ *     variant: 'default' | 'model',                       // model：仅名称、普通字体样式
+ *     markAnchorActive: true,                             // 是否在 anchor 上添加 active（技能 # 下拉应传 false）
+ *     onHighlight: function (item, idx) { ... },          // 鼠标悬停条目时（供键盘选中索引同步）
+ *   });
+ *   ChatDropdown.close();
+ *   ChatDropdown.isOpen();
+ *   ChatDropdown.toggle(opts);     // 切换：已开则关，未开则开
+ *
+ * 单例浮层：同一时刻只能开一个；open 第二个会先关掉前一个。
+ */
+
+/* exported ChatDropdown */
+
+export const ChatDropdown = (() => {
+
+  let elContainer = null;
+  const elList = null;
+  let isOpen = false;
+  const current = {
+    anchor: null,
+    items: [],
+    onSelect: null,
+    onClose: null,
+    placement: 'top',
+    minWidth: 220,
+    maxWidth: 300,
+    align: 'end',
+    fitContent: false,
+    placementRef: 'anchor',
+    variant: 'default',
+    markAnchorActive: true,
+    onHighlight: null,
+  };
+  let outsideBound = false;
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function ensureContainer() {
+    if (elContainer) return elContainer;
+    const c = document.createElement('div');
+    c.className = 'cmd-dropdown hidden';
+    c.id = 'chat-dropdown';
+    c.setAttribute('role', 'menu');
+    c.setAttribute('aria-label', '下拉选项');
+    // 阻止浮层内 mousedown 触发 outside-click
+    c.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+    c.addEventListener('click', (e) => {
+      const item = e.target.closest('.cmd-item');
+      if (!item || item.classList.contains('is-separator')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = parseInt(item.getAttribute('data-index'), 10);
+      if (isNaN(idx)) return;
+      const it = current.items[idx];
+      if (!it) return;
+      const cb = current.onSelect;
+      if (typeof cb === 'function') {
+        try { cb(it, idx, e); } catch (_e) { /* ignore */ }
+      }
+      close();
+    });
+    document.body.appendChild(c);
+    elContainer = c;
+    return c;
+  }
+
+  function render() {
+    if (!elContainer) return;
+    if (!current.items || !current.items.length) {
+      elContainer.innerHTML = '<div class="cmd-empty">暂无可选项</div>';
+      return;
+    }
+    let html = '';
+    for (let i = 0; i < current.items.length; i++) {
+      const it = current.items[i];
+      if (it.type === 'separator' || it.isSeparator) {
+        const sepLabel = it.label != null ? String(it.label) : '';
+        if (sepLabel) {
+          html +=
+            `<div class="cmd-item is-separator" role="separator" aria-hidden="true"><span class="cmd-separator-line" aria-hidden="true"></span><span class="cmd-separator-label">${escapeHtml(sepLabel)}</span><span class="cmd-separator-line" aria-hidden="true"></span></div>`;
+        } else {
+          html += '<div class="cmd-item is-separator is-separator-plain" role="separator" aria-hidden="true"></div>';
+        }
+        continue;
+      }
+      const name = it.name || it.key || '';
+      let desc = it.description != null ? it.description : (it.desc || '');
+      if (desc === '' && it.apiUrl && current.variant !== 'model') desc = it.apiUrl;
+      const isCurrent = !!it.isCurrent;
+      // 面板内只展示命令名；prefix（~ / /）由触发方式隐含，选中时再拼完整指令
+      html +=
+        '<div class="cmd-item' + (isCurrent ? ' active' : '') + '" data-index="' + i + '" role="menuitem">' +
+          '<span class="cmd-name">' + escapeHtml(name) + '</span>' +
+          (desc ? `<span class="cmd-desc">${escapeHtml(desc)}</span>` : '') +
+        '</div>';
+    }
+    elContainer.innerHTML = html;
+    let selectableCount = 0;
+    for (let n = 0; n < current.items.length; n++) {
+      const row = current.items[n];
+      if (row && row.type !== 'separator' && !row.isSeparator) selectableCount++;
+    }
+    if (selectableCount > 6) {
+      elContainer.classList.add('is-scrollable');
+    } else {
+      elContainer.classList.remove('is-scrollable');
+    }
+    bindItemHover();
+  }
+
+  function setHighlightedIndex(idx) {
+    if (!elContainer) return;
+    const items = elContainer.querySelectorAll('.cmd-item:not(.is-separator)');
+    for (let j = 0; j < items.length; j++) {
+      const itemIdx = parseInt(items[j].getAttribute('data-index'), 10);
+      items[j].classList.toggle('active', !isNaN(itemIdx) && itemIdx === idx);
+    }
+  }
+
+  function bindItemHover() {
+    if (!elContainer) return;
+    const items = elContainer.querySelectorAll('.cmd-item:not(.is-separator)');
+    for (let i = 0; i < items.length; i++) {
+      items[i].addEventListener('mouseenter', function () {
+        const idx = parseInt(this.getAttribute('data-index'), 10);
+        if (isNaN(idx)) return;
+        setHighlightedIndex(idx);
+        if (typeof current.onHighlight === 'function') {
+          try { current.onHighlight(current.items[idx], idx); } catch (_e) { /* ignore */ }
+        }
+      });
+    }
+  }
+
+  function getTopRef(rect) {
+    if (current.placementRef !== 'toolbar' || !current.anchor) return rect.top;
+    const tb = current.anchor.closest && current.anchor.closest('.composer-toolbar');
+    return tb ? tb.getBoundingClientRect().top : rect.top;
+  }
+
+  function position() {
+    if (!elContainer || !current.anchor) return;
+    const rect = current.anchor.getBoundingClientRect();
+    const margin = 6;
+    const maxW = Math.min(current.maxWidth, window.innerWidth - 32);
+    let w;
+    elContainer.style.position = 'fixed';
+    elContainer.style.visibility = 'hidden';
+    elContainer.style.left = '0px';
+    elContainer.style.top = '0px';
+    if (current.fitContent) {
+      elContainer.style.width = 'max-content';
+      elContainer.style.minWidth = current.minWidth ? `${current.minWidth}px` : '';
+      elContainer.style.maxWidth = `${maxW}px`;
+    } else {
+      w = Math.max(current.minWidth, maxW);
+      elContainer.style.width = `${w}px`;
+      elContainer.style.minWidth = '';
+      elContainer.style.maxWidth = '';
+    }
+    void elContainer.offsetHeight;
+    w = elContainer.offsetWidth;
+    const h = elContainer.offsetHeight;
+    elContainer.style.visibility = '';
+    let left;
+    if (current.align === 'start') {
+      left = rect.left;
+    } else if (current.align === 'center') {
+      left = rect.left + (rect.width - w) / 2;
+    } else {
+      left = rect.right - w;
+    }
+    if (left < 8) left = 8;
+    if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+    const topRef = getTopRef(rect);
+    let top;
+    if (current.placement === 'bottom') {
+      top = rect.bottom + margin;
+    } else if (current.placement === 'top') {
+      top = topRef - h - margin;
+      if (top < 8) top = 8;
+    } else {
+      if (topRef - h - margin >= 8) {
+        top = topRef - h - margin;
+      } else {
+        top = rect.bottom + margin;
+      }
+    }
+    elContainer.style.left = `${left}px`;
+    elContainer.style.top = `${top}px`;
+  }
+
+  function bindOutside() {
+    if (outsideBound) return;
+    outsideBound = true;
+    document.addEventListener('mousedown', (e) => {
+      if (!isOpen) return;
+      if (elContainer && elContainer.contains(e.target)) return;
+      if (current.anchor && current.anchor.contains && current.anchor.contains(e.target)) return;
+      close();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (!isOpen) return;
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    window.addEventListener('resize', () => { if (isOpen) position(); });
+    window.addEventListener('scroll', () => { if (isOpen) position(); }, true);
+  }
+
+  function close() {
+    if (!isOpen) return;
+    if (elContainer) {
+      elContainer.classList.add('hidden');
+      elContainer.classList.remove('is-model-menu');
+    }
+    isOpen = false;
+    if (current.anchor && current.anchor.classList && current.markAnchorActive) {
+      current.anchor.classList.remove('active');
+      current.anchor.setAttribute && current.anchor.setAttribute('aria-expanded', 'false');
+    }
+    const cb = current.onClose;
+    current.anchor = null;
+    current.items = [];
+    current.onSelect = null;
+    current.onClose = null;
+    current.onHighlight = null;
+    if (typeof cb === 'function') {
+      try { cb(); } catch (_e) { /* ignore */ }
+    }
+  }
+
+  function open(opts) {
+    opts = opts || {};
+    if (isOpen) close();
+    current.anchor = opts.anchor || null;
+    current.items = Array.isArray(opts.items) ? opts.items : [];
+    current.onSelect = typeof opts.onSelect === 'function' ? opts.onSelect : null;
+    current.onClose = typeof opts.onClose === 'function' ? opts.onClose : null;
+    current.placement = opts.placement || 'top';
+    current.minWidth = opts.minWidth != null ? opts.minWidth : 220;
+    current.maxWidth = opts.maxWidth != null ? opts.maxWidth : 300;
+    current.align = opts.align || 'end';
+    current.fitContent = !!opts.fitContent;
+    current.placementRef = opts.placementRef || 'anchor';
+    current.variant = opts.variant || 'default';
+    current.markAnchorActive = opts.markAnchorActive !== false;
+    current.onHighlight = typeof opts.onHighlight === 'function' ? opts.onHighlight : null;
+    ensureContainer();
+    bindOutside();
+    elContainer.classList.remove('is-model-menu');
+    if (current.variant === 'model') elContainer.classList.add('is-model-menu');
+    render();
+    elContainer.classList.remove('hidden');
+    isOpen = true;
+    if (current.anchor && current.anchor.classList && current.markAnchorActive) {
+      current.anchor.classList.add('active');
+      current.anchor.setAttribute && current.anchor.setAttribute('aria-expanded', 'true');
+    }
+    position();
+  }
+
+  function toggle(opts) {
+    if (isOpen) close();
+    else open(opts);
+  }
+
+  return {
+    open,
+    close,
+    toggle,
+    isOpen() { return isOpen; },
+    getContainer() { return elContainer; },
+  };
+})();
+
+if (typeof window !== 'undefined') {
+  window.ChatDropdown = ChatDropdown;
+}

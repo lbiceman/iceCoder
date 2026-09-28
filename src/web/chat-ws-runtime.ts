@@ -13,6 +13,7 @@ import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-c
 import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import type { AgentSpawner } from '../harness/agents/agent-spawner.js';
 
 applyRuntimeDataEnvDefaults();
 
@@ -144,6 +145,13 @@ export function getSessionDeferredToolCalls(sessionId: string): string[] {
  */
 export const sessionAbortControllers = new Map<string, AbortController>();
 
+/** 本轮的子 Agent 派发器（agent_stop / REST 判断存活用）；回合结束移除。 */
+export const sessionAgentSpawners = new Map<string, AgentSpawner>();
+
+export function getSessionAgentSpawner(sessionId: string): AgentSpawner | undefined {
+  return sessionAgentSpawners.get(sessionId);
+}
+
 /** 当前正在运行 harness 的会话集合（跨连接共享，防止同一会话被多标签并发跑两个 harness）。 */
 export const sessionProcessing = new Set<string>();
 
@@ -246,6 +254,8 @@ export function dropSessionRunLocks(sessionId: string): void {
   abortSession(sessionId);
   sessionAbortControllers.delete(sessionId);
   sessionProcessing.delete(sessionId);
+  sessionAgentSpawners.get(sessionId)?.stopAll();
+  sessionAgentSpawners.delete(sessionId);
 }
 
 export function clearRuntimeOnShutdown(): void {

@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { classicWindowSource } from './classic-window-source.ts';
 import {
   DEFAULT_ICE_ETL_PREFS,
   sanitizeIceEtlPrefs,
 } from '../../src/config/main-config-ice-etl-prefs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ETL_PREFS_PATH = path.join(__dirname, '../../src/public/js/etl-prefs.js');
+const ETL_PREFS_PATH = path.join(__dirname, '../../src/public/js/etl-prefs.ts');
 
 interface FrontEtlPrefs {
   get: () => Record<string, unknown>;
@@ -22,7 +23,7 @@ interface FrontEtlPrefs {
  * - set() 走本地 sanitize 路径（fetch 不可用分支）
  */
 function loadFrontEtlPrefs(): FrontEtlPrefs {
-  const src = readFileSync(ETL_PREFS_PATH, 'utf-8');
+  const src = classicWindowSource(readFileSync(ETL_PREFS_PATH, 'utf-8'));
   const context: Record<string, unknown> = { window: {}, console };
   context.window = context;
   vm.createContext(context);

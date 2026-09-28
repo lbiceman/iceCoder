@@ -18,8 +18,6 @@ import {
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { RepoContext } from './repo-context.js';
-import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
-import type { SubAgentKind } from '../types/async-sub-agent.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
@@ -90,8 +88,10 @@ export interface ToolExecutorDeps {
   sessionId?: string;
   /** 会话目录（Session manifest 跟踪用） */
   sessionDir?: string;
-  /** Async Sub-Agent Phase 5：非阻塞分析请求入口。 */
-  analysisSupervisor?: AnalysisSupervisor;
+  /** 写前快照与 touched files 归属（子 Agent 记到父会话）；未设置时用 sessionDir / sessionId */
+  checkpointOwner?: { sessionDir: string; sessionId: string };
+  /** 子 Agent 执行前检查（写租约 / 只读 / git 限制）与命令改动回调 */
+  agentScope?: import('./types.js').AgentToolScope;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -108,28 +108,6 @@ function observableToolArgs(tc: ToolCall): Record<string, any> {
 function isEnoentError(error: string | undefined, output: string): boolean {
   const text = `${error ?? ''}\n${output}`.toLowerCase();
   return /enoent|no such file|not found/.test(text);
-}
-
-function normalizeAnalysisKind(value: unknown): SubAgentKind {
-  const kind = String(value ?? '').trim();
-  if (
-    kind === 'explorer'
-    || kind === 'search'
-    || kind === 'review'
-    || kind === 'dependency'
-    || kind === 'test_analysis'
-  ) {
-    return kind;
-  }
-  throw new Error(`Invalid request_analysis kind: ${kind || '(empty)'}`);
-}
-
-function stringArrayArg(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const items = value
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map(item => item.trim());
-  return items.length > 0 ? items : undefined;
 }
 
 interface PolicyBlockContext {
@@ -323,6 +301,8 @@ export async function executeToolCallsStreaming(
   const workspaceMutatedRunCommandIds = new Set<string>();
   const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
   const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
+  const checkpointSessionId = deps.checkpointOwner?.sessionId ?? deps.sessionId;
+  const checkpointSessionDir = deps.checkpointOwner?.sessionDir ?? deps.sessionDir;
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -360,7 +340,7 @@ export async function executeToolCallsStreaming(
     }
 
     // LLM 输出、checkpoint salvage 或外部恢复数据都不得调用本轮未暴露的工具。
-    // 此校验必须位于 request_analysis 特殊分支和底层 ToolExecutor 之前。
+    // 此校验必须位于底层 ToolExecutor 之前。
     if (currentToolNames && !currentToolNames.has(tc.name)) {
       emitHarnessPolicyBlock({
         deps,
@@ -381,74 +361,23 @@ export async function executeToolCallsStreaming(
       continue;
     }
 
-    if (tc.name === 'request_analysis') {
-      logger.toolCall(tc.name, tc.arguments);
-      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: observableToolArgs(tc) });
-
-      let output: string;
-      let success = true;
-      let error: string | undefined;
-      try {
-        if (!deps.analysisSupervisor) {
-          throw new Error('request_analysis requires AnalysisSupervisor');
-        }
-        const kind = normalizeAnalysisKind(tc.arguments.kind);
-        const task = String(tc.arguments.task ?? '').trim();
-        if (!task) throw new Error('request_analysis requires a non-empty task');
-        const result = deps.analysisSupervisor.requestAnalysis({
-          sessionId: deps.sessionId ?? 'default',
-          kind,
-          prompt: task,
-          context: typeof tc.arguments.context === 'string' ? tc.arguments.context : undefined,
-          scope: {
-            paths: stringArrayArg(tc.arguments.paths),
-            keywords: stringArrayArg(tc.arguments.keywords),
-          },
-        });
-        output = [
-          '[Analysis Requested]',
-          `taskId: ${result.taskId}`,
-          `status: ${result.status}`,
-          'lifespan: detached',
-          `submitted: ${result.submitted}`,
-          'The analysis is detached and will appear later as an [Analysis Ready] context block. Continue independent work now; do not wait or repeatedly retry.',
-        ].join('\n');
-      } catch (err) {
-        success = false;
-        error = err instanceof Error ? err.message : String(err);
-        output = `工具执行错误: ${error}`;
-      }
-
-      directTotalCount++;
-      if (!success) {
-        directFailedCount++;
-        directFailedSignatures.push(toolCallSignature(tc));
-      }
-      logger.toolResult(tc.name, success, output.length, error);
-      deps.runtimeTelemetry?.recordTool({
-        round: iteration,
-        toolName: tc.name,
-        success,
-        outputLength: output.length,
-      });
-      onStep?.({
-        type: 'tool_result',
+    const agentBlock = deps.agentScope?.checkBeforeTool(tc);
+    if (agentBlock) {
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
         iteration,
-        toolCallId: tc.id,
-        toolName: tc.name,
-        toolSuccess: success,
-        toolOutput: stepToolOutputPreview(tc.name, output),
-        toolError: success ? undefined : error,
-        toolArgs: observableToolArgs(tc),
+        baseMessage: agentBlock.message,
+        errorLabel: 'Sub-agent policy block',
+        policyReason: agentBlock.reason,
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
       });
-      messages.push({
-        role: 'tool',
-        content: output,
-        toolCallId: tc.id,
-      });
-      taskState?.recordToolResult(tc, { success, output, error });
-      repoContext?.recordToolResult(tc, { success, output, error });
-      deps.loopController.recordToolCalls(1);
+      directTotalCount++;
       submittedIds.add(tc.id);
       continue;
     }
@@ -698,7 +627,7 @@ export async function executeToolCallsStreaming(
     }
     for (const p of collectSessionTouchedPaths(tc.name, tc.arguments)) snapshotPaths.add(p);
     for (const p of snapshotPaths) {
-      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, p);
+      await capturePreTurnWriteSnapshot(checkpointSessionId, deps.workspaceRoot, p);
     }
     if (
       commandInventoryScope
@@ -806,6 +735,7 @@ export async function executeToolCallsStreaming(
     if (inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot);
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
+      deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
       const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
       const touchedPaths = [
         ...commandInventoryDiff.created,
@@ -832,20 +762,20 @@ export async function executeToolCallsStreaming(
         workspaceMutationVersionBeforeRunCommand[tc.id] = mutationVersionBefore;
       }
     }
-    if (result.success && deps.sessionDir && deps.sessionId) {
+    if (result.success && checkpointSessionDir && checkpointSessionId) {
       const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
         .map((p) => remapPathToWorkspace(deps.workspaceRoot, p) ?? p)
         .filter(Boolean);
       if (commandInventoryDiff) {
         for (const created of commandInventoryDiff.created) {
-          recordPreTurnMissingFile(deps.sessionId, deps.workspaceRoot, created);
+          recordPreTurnMissingFile(checkpointSessionId, deps.workspaceRoot, created);
           touchedPaths.push(created);
         }
         // 不把 mtime 变化的已有文件算进会话改动：npm test 等会误伤 lockfile。
         // 命令里写明的删除/改写路径已由 collectSessionTouchedPaths 覆盖。
       }
       if (touchedPaths.length) {
-        await touchSessionTouchedPaths(deps.sessionDir, deps.sessionId, touchedPaths).catch(() => {
+        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch(() => {
           /* ignore */
         });
       }

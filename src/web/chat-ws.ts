@@ -68,6 +68,7 @@ import {
   getActiveSessionId,
   buildSessionRunStatesSnapshot,
   getSessionsDir,
+  getSessionAgentSpawner,
   isSessionTombstoned,
   purgeSessionMaps,
   resolveSessionWorkspacePayload,
@@ -84,6 +85,7 @@ export interface ChatWSOptions {
 
 export {
   getActiveSessionId,
+  getSessionAgentSpawner,
   getSessionsDir,
   isSessionTombstoned,
 };

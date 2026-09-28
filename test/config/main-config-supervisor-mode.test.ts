@@ -4,9 +4,12 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  readEnableSubAgentsFromMainConfig,
   readSkipPermissionChecksFromMainConfig,
   readSupervisorModeFromMainConfig,
+  resolveEnableSubAgents,
   resolveSkipPermissionChecks,
+  writeEnableSubAgentsToMainConfig,
   writeShellBlacklistToMainConfig,
   writeSkipPermissionChecksToMainConfig,
   writeSupervisorModeToMainConfig,
@@ -60,6 +63,21 @@ describe('main-config-supervisor-mode', () => {
     expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(true);
     expect(await writeSkipPermissionChecksToMainConfig(configPath, false)).toBe(false);
     expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(false);
+  });
+
+  it('enableSubAgents 缺失时为开启，显式 false 才关闭', async () => {
+    expect(resolveEnableSubAgents(undefined)).toBe(true);
+    expect(resolveEnableSubAgents(true)).toBe(true);
+    expect(resolveEnableSubAgents(false)).toBe(false);
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-config-'));
+    const configPath = path.join(dir, 'config.json');
+    await fs.writeFile(configPath, JSON.stringify({ providers: [] }, null, 2), 'utf-8');
+    expect(await readEnableSubAgentsFromMainConfig(configPath)).toBe(true);
+    expect(await writeEnableSubAgentsToMainConfig(configPath, false)).toBe(false);
+    expect(await readEnableSubAgentsFromMainConfig(configPath)).toBe(false);
+    expect(await writeEnableSubAgentsToMainConfig(configPath, true)).toBe(true);
+    expect(await readEnableSubAgentsFromMainConfig(configPath)).toBe(true);
   });
 
   it('writeShellBlacklistToMainConfig persists patterns', async () => {

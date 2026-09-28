@@ -44,6 +44,25 @@ import { openWorkspaceChangedFile } from '../open-workspace-file.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
 import { buildPlanModeActiveIndex } from '../../session/plan-mode-store.js';
+import {
+  isValidAgentId,
+  listAgentMetas,
+  loadAgentMessages,
+  loadAgentMeta,
+  normalizeInterruptedAgentMeta,
+  toAgentView,
+} from '../../harness/agents/agent-store.js';
+import type { AgentSpawner } from '../../harness/agents/agent-spawner.js';
+
+/** WS 运行时未挂载（纯 REST 测试）时返回 undefined。 */
+async function liveAgentSpawner(sessionId: string): Promise<AgentSpawner | undefined> {
+  try {
+    const { getSessionAgentSpawner } = await import('../chat-ws.js');
+    return getSessionAgentSpawner(sessionId);
+  } catch {
+    return undefined;
+  }
+}
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = DEFAULT_SESSION_ID;
@@ -211,7 +230,7 @@ async function readSessionPlan(sessionId: string): Promise<any> {
  *  - `{id}.checkpoint.json`      TaskCheckpoint（断点恢复）
  *  - `{id}.workspace.json`       工作区锁定
  *  - `{id}.session-notes.md`     会话笔记（含 runtime / plan fence）
- *  - `{id}/analysis|subtasks|artifacts` 异步子代理分析工作区
+ *  - `{id}/` 会话目录（checkpoints、后台任务等）
  */
 type SessionCleanupHook = (sessionId: string) => void | Promise<void>;
 let sessionCleanupHook: SessionCleanupHook | null = null;
@@ -532,6 +551,69 @@ export function createSessionsRouter(): Router {
     } catch {
       /* WS 未挂载时忽略广播 */
     }
+  });
+
+  /**
+   * GET /api/sessions/:id/agents - 该会话的子 Agent 列表（卡片还原用；可按 messageId 过滤）
+   */
+  router.get('/:id/agents', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const messageId = typeof req.query.messageId === 'string' ? req.query.messageId.trim() : '';
+    const spawner = await liveAgentSpawner(sessionId);
+    const liveViews = new Map((spawner?.listViews() ?? []).map((v) => [v.agentId, v]));
+    const metas = await listAgentMetas(SESSIONS_DIR, sessionId);
+    const views = metas
+      .map((meta) => normalizeInterruptedAgentMeta(meta, (id) => spawner?.isLive(id) ?? false))
+      .map((meta) => liveViews.get(meta.agentId) ?? toAgentView(meta));
+    for (const [agentId, view] of liveViews) {
+      if (!metas.some((m) => m.agentId === agentId)) views.push(view);
+    }
+    res.json({
+      ok: true,
+      agents: messageId ? views.filter((v) => v.messageId === messageId) : views,
+    });
+  });
+
+  /**
+   * GET /api/sessions/:id/agents/:agentId - 单个子 Agent 详情（含 prompt、完整报告、改动与命令）
+   */
+  router.get('/:id/agents/:agentId', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const agentId = String(req.params.agentId || '');
+    if (!isValidAgentId(agentId)) {
+      res.status(400).json({ ok: false, error: 'invalid agentId' });
+      return;
+    }
+    const spawner = await liveAgentSpawner(sessionId);
+    const meta = await loadAgentMeta(SESSIONS_DIR, sessionId, agentId);
+    if (!meta) {
+      res.status(404).json({ ok: false, error: 'not found' });
+      return;
+    }
+    const normalized = normalizeInterruptedAgentMeta(meta, (id) => spawner?.isLive(id) ?? false);
+    const live = spawner?.listViews().find((v) => v.agentId === agentId);
+    res.json({ ok: true, agent: { ...normalized, ...(live ?? {}) } });
+  });
+
+  /**
+   * GET /api/sessions/:id/agents/:agentId/messages - 子 Agent 结构化消息（子会话抽屉）
+   */
+  router.get('/:id/agents/:agentId/messages', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const agentId = String(req.params.agentId || '');
+    if (!isValidAgentId(agentId)) {
+      res.status(400).json({ ok: false, error: 'invalid agentId' });
+      return;
+    }
+    const spawner = await liveAgentSpawner(sessionId);
+    const messages = await loadAgentMessages(SESSIONS_DIR, sessionId, agentId);
+    res.json({ ok: true, live: spawner?.isLive(agentId) ?? false, messages: messages ?? [] });
   });
 
   /**

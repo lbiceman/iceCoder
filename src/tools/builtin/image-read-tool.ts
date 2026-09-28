@@ -85,7 +85,7 @@ export function createImageReadTool(
               ],
             },
           ],
-          { maxTokens: 2048, skipVisionFallback: true },
+          { maxTokens: 2048, skipVisionFallback: true, usageSource: 'image_read' },
         );
 
         return {

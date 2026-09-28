@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { classicWindowSource } from './classic-window-source.ts';
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, '../../src/public');
-const STATS_JS = readFileSync(path.join(publicRoot, 'js/stats-page.js'), 'utf-8');
+const STATS_JS = classicWindowSource(readFileSync(path.join(publicRoot, 'js/stats-page.ts'), 'utf-8'));
 const STATS_CSS = readFileSync(path.join(publicRoot, 'css/stats.css'), 'utf-8');
 
 let browser: Browser;
@@ -34,12 +36,26 @@ function emptyTotals(total = 0, input = 0, output = 0) {
   return { inputTokens: input, outputTokens: output, totalTokens: total };
 }
 
+function emptyKind(total = 0, input = 0, output = 0, turns = 0) {
+  return { ...emptyTotals(total, input, output), turns };
+}
+
+function emptyByKind(chatTotal = 0, memoryTotal = 0, chatTurns = 0, memoryTurns = 0) {
+  const chatIn = Math.round(chatTotal * 0.8);
+  const memoryIn = Math.round(memoryTotal * 0.8);
+  return {
+    chat: emptyKind(chatTotal, chatIn, chatTotal - chatIn, chatTurns),
+    memory: emptyKind(memoryTotal, memoryIn, memoryTotal - memoryIn, memoryTurns),
+  };
+}
+
 function bucket(
   key: string,
   timestamp: number,
   total: number,
   byModel: Record<string, ReturnType<typeof emptyTotals>>,
   turns = total > 0 ? 1 : 0,
+  byKind = emptyByKind(total, 0, turns, 0),
 ) {
   const input = Math.round(total * 0.8);
   const output = total - input;
@@ -51,6 +67,7 @@ function bucket(
     totalTokens: total,
     turns,
     byModel,
+    byKind,
   };
 }
 
@@ -70,7 +87,16 @@ function samplePayload(now = Date.now()) {
     d.setMinutes(0, 0, 0);
     const key = `${dateKey(d)}T${pad2(d.getHours())}:00`;
     const total = i === 23 ? 1200 : 0;
-    return bucket(key, d.getTime(), total, total ? { 'gpt-4o': emptyTotals(total, 900, 300) } : {});
+    const chat = i === 23 ? 900 : 0;
+    const memory = i === 23 ? 300 : 0;
+    return bucket(
+      key,
+      d.getTime(),
+      total,
+      total ? { 'gpt-4o': emptyTotals(total, 900, 300) } : {},
+      total ? 2 : 0,
+      emptyByKind(chat, memory, chat ? 1 : 0, memory ? 1 : 0),
+    );
   });
   const daily = Array.from({ length: 31 }, (_, i) => {
     const d = new Date(now);
@@ -82,7 +108,8 @@ function samplePayload(now = Date.now()) {
     const byModel: Record<string, ReturnType<typeof emptyTotals>> = {};
     if (gpt) byModel['gpt-4o'] = emptyTotals(gpt, gpt - 100, 100);
     if (ds) byModel['DeepSeek-V3.2'] = emptyTotals(ds, ds - 40, 40);
-    return bucket(key, d.getTime(), gpt + ds, byModel, (gpt ? 1 : 0) + (ds ? 1 : 0));
+    const turns = (gpt ? 1 : 0) + (ds ? 1 : 0);
+    return bucket(key, d.getTime(), gpt + ds, byModel, turns, emptyByKind(gpt, ds, gpt ? 1 : 0, ds ? 1 : 0));
   });
   return {
     success: true,
@@ -205,6 +232,8 @@ describe('统计页 Token 图表', () => {
         trendStrokes: document.querySelectorAll('[data-chart="trend"] .stats-area-stroke').length,
         trendFills: document.querySelectorAll('[data-chart="trend"] .stats-area-fill').length,
         trendMetrics: document.querySelectorAll('[data-role="trend-metrics"] .stats-aux-metric').length,
+        trendMetricLabels: [...document.querySelectorAll('[data-role="trend-metrics"] .stats-aux-metric-label')].map((el) => el.textContent),
+        trendLegend: [...document.querySelectorAll('[data-role="trend-legend"] .stats-legend-item')].map((el) => el.textContent),
         model: document.querySelectorAll('[data-chart="model"]').length,
         turns: document.querySelectorAll('[data-chart="turns"]').length,
         split: document.querySelectorAll('.stats-split').length,
@@ -223,9 +252,11 @@ describe('统计页 Token 图表', () => {
         rootOverflow: root ? getComputedStyle(root).overflow : '',
       };
     });
-    expect(snapshot.trendStrokes).toBeGreaterThan(0);
+    expect(snapshot.trendStrokes).toBe(2);
     expect(snapshot.trendFills).toBe(0);
     expect(snapshot.trendMetrics).toBe(3);
+    expect(snapshot.trendMetricLabels).toEqual(['会话', '记忆', '请求次数']);
+    expect(snapshot.trendLegend).toEqual(['会话', '记忆']);
     expect(snapshot.model).toBe(0);
     expect(snapshot.turns).toBe(0);
     expect(snapshot.split).toBe(1);
@@ -248,5 +279,80 @@ describe('统计页 Token 图表', () => {
     expect(headerPressed).toBe('true');
     const dayChart = await page.evaluate(() => document.querySelectorAll('[data-chart="trend"] svg').length);
     expect(dayChart).toBe(1);
+  });
+
+  it('切换时间范围时，指标骨架与加载后等高，图表不跳动', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadStats(page, samplePayload());
+
+    const before = await page.evaluate(() => ({
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+    }));
+
+    await page.evaluate(() => {
+      const orig = window.fetch.bind(window);
+      const pending: Array<() => void> = [];
+      (window as unknown as { __releaseAux?: () => void }).__releaseAux = () => {
+        pending.splice(0).forEach((run) => run());
+      };
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/api/memory/telemetry') || url.includes('/api/supervisor/events')) {
+          return new Promise((resolve, reject) => {
+            pending.push(() => {
+              orig(input, init).then(resolve, reject);
+            });
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          });
+        }
+        return orig(input, init);
+      };
+    });
+
+    await page.click('.stats-range-btn[data-range="month"]');
+    const during = await page.evaluate(() => ({
+      skel: document.querySelectorAll('[data-role="memory-metrics"] .stats-aux-metric-sub .stats-skel').length,
+      memoryChartSkel: document.querySelectorAll('[data-chart="memory"] .stats-skel-chart').length,
+      supervisorChartSkel: document.querySelectorAll('[data-chart="supervisor"] .stats-skel-chart').length,
+      memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
+      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+    }));
+    expect(during.skel).toBe(3);
+    expect(during.memoryChartSkel).toBe(1);
+    expect(during.supervisorChartSkel).toBe(1);
+    expect(during.memorySvg).toBe(0);
+    expect(during.supervisorSvg).toBe(0);
+    expect(Math.abs(during.metric - before.metric)).toBeLessThan(1);
+    expect(Math.abs(during.supervisor - before.supervisor)).toBeLessThan(1);
+    expect(Math.abs(during.chart - before.chart)).toBeLessThan(1);
+    expect(Math.abs(during.supervisorChart - before.supervisorChart)).toBeLessThan(1);
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseAux?: () => void }).__releaseAux?.();
+    });
+    await page.waitForSelector('[data-chart="memory"] svg');
+    await page.waitForSelector('[data-chart="supervisor"] svg');
+    const after = await page.evaluate(() => ({
+      metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
+      chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
+      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
+      memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
+      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
+    }));
+    expect(after.memorySvg).toBe(1);
+    expect(after.supervisorSvg).toBe(1);
+    expect(Math.abs(after.metric - before.metric)).toBeLessThan(1);
+    expect(Math.abs(after.chart - before.chart)).toBeLessThan(1);
+    expect(Math.abs(after.supervisorChart - before.supervisorChart)).toBeLessThan(1);
   });
 });

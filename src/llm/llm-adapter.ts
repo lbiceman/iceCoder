@@ -16,6 +16,7 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { TokenCounter } from './token-counter.js';
+import { recordTokenUsageFromCall } from './token-usage-log.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { isAbortError } from './abort-error.js';
 import {
@@ -174,7 +175,7 @@ export class LLMAdapter implements LLMAdapterInterface {
       const response = merged.skipRetry
         ? await provider.chat(messages, merged)
         : await this.withRetry(() => provider.chat(messages, merged), undefined, merged.signal);
-      this.tokenCounter.record(response.usage);
+      this.persistUsage(response.usage, provider, merged);
       return response;
     } catch (error) {
       if (
@@ -190,7 +191,7 @@ export class LLMAdapter implements LLMAdapterInterface {
         '[LLM] API 拒绝图片 payload，已从本次请求移除图片并重试（会话文件未修改）',
       );
       const response = await provider.chat(stripped, { ...merged, skipRetry: true, skipVisionFallback: true });
-      this.tokenCounter.record(response.usage);
+      this.persistUsage(response.usage, provider, merged);
       return response;
     }
   }
@@ -223,7 +224,7 @@ export class LLMAdapter implements LLMAdapterInterface {
           () => !emittedAny,
           merged.signal,
         );
-      this.tokenCounter.record(response.usage);
+      this.persistUsage(response.usage, provider, merged);
       return response;
     } catch (error) {
       if (
@@ -240,7 +241,7 @@ export class LLMAdapter implements LLMAdapterInterface {
         '[LLM] API 拒绝图片 payload，已从本次请求移除图片并重试（会话文件未修改）',
       );
       const response = await provider.stream(stripped, callback, { ...merged, skipRetry: true, skipVisionFallback: true });
-      this.tokenCounter.record(response.usage);
+      this.persistUsage(response.usage, provider, merged);
       return response;
     }
   }
@@ -276,6 +277,12 @@ export class LLMAdapter implements LLMAdapterInterface {
    */
   getTokenUsageStats(): TokenUsage[] {
     return this.tokenCounter.getStats();
+  }
+
+  /** 进程内累计 + 独立 JSONL 账本（不阻塞调用）。 */
+  private persistUsage(usage: TokenUsage, provider: ProviderAdapter, options?: LLMOptions): void {
+    this.tokenCounter.record(usage);
+    recordTokenUsageFromCall(usage, provider, options);
   }
 
   /**

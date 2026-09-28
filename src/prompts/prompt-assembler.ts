@@ -20,7 +20,7 @@ import type {
   HarnessPromptOverlay,
   HarnessDynamicContextSlice,
 } from './types.js';
-import { createToolUsageSection, getDefaultSections } from './sections.js';
+import { createSubAgentsSection, createToolUsageSection, getDefaultSections } from './sections.js';
 
 /**
  * EnvironmentInfo → 扁平键值，供 ContextAssembler.environment 使用。
@@ -82,9 +82,11 @@ export function alignPromptWithAvailableTools(
   }
 
   const toolSection = createToolUsageSection(toolNames);
+  const subAgentSections = toolNames.includes('task') ? [createSubAgentsSection()] : [];
   const sections = assembled.systemPromptSections
-    .filter((section) => section.id !== 'tool_usage')
+    .filter((section) => section.id !== 'tool_usage' && section.id !== 'sub_agents')
     .concat(toolSection.enabled ? [toolSection] : [])
+    .concat(subAgentSections)
     .sort((a, b) => a.priority - b.priority);
 
   return {

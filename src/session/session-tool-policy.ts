@@ -27,7 +27,8 @@ import { filterPlanModeToolDefinitions } from './plan-mode-tool-policy.js';
 export interface ResolvedSessionHarnessToolContext extends ResolvedWorkspaceToolContext {
   shellCollabActive: boolean;
   planModeActive: boolean;
-  enableRequestAnalysis: boolean;
+  /** 默认模式向主 Agent 暴露 `task`（子 Agent）；Shell 协作与规划模式不暴露 */
+  enableAgentTask: boolean;
   mcpRuntimeContext: Record<string, string>;
 }
 
@@ -49,7 +50,7 @@ export async function resolveSessionHarnessToolContext(
       toolDefs,
       shellCollabActive: false,
       planModeActive,
-      enableRequestAnalysis: !planModeActive,
+      enableAgentTask: !planModeActive,
       mcpRuntimeContext: planModeActive
         ? {}
         : buildMcpRuntimeContext(
@@ -96,7 +97,7 @@ export async function resolveSessionHarnessToolContext(
     toolDefs,
     shellCollabActive: true,
     planModeActive: false,
-    enableRequestAnalysis: false,
+    enableAgentTask: false,
     mcpRuntimeContext: {},
   };
 }

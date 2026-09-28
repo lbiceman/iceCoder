@@ -24,10 +24,10 @@ const DEFAULT_FALLBACK = '#FCD7E4';
  * @returns {number} 0…colorCount-1
  */
 export function tokenPercentToPaletteIndex(pct, colorCount) {
-  var n = colorCount;
+  const n = colorCount;
   if (n <= 0) return 0;
   if (n === 1) return 0;
-  var p = Math.max(0, Math.min(100, Number(pct) || 0));
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
   return Math.min(n - 1, Math.floor((p / 100) * n));
 }
 
@@ -38,10 +38,10 @@ export function tokenPercentToPaletteIndex(pct, colorCount) {
  */
 export function eyeColorForTokenPct(pct, colors) {
   if (Array.isArray(colors) && colors.length === 0) return DEFAULT_FALLBACK;
-  var arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
+  const arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
   if (!arr.length) return DEFAULT_FALLBACK;
   if (arr.length === 1) return arr[0];
-  var idx = tokenPercentToPaletteIndex(pct, arr.length);
+  const idx = tokenPercentToPaletteIndex(pct, arr.length);
   return arr[idx];
 }
 
@@ -51,9 +51,9 @@ export function eyeColorForTokenPct(pct, colors) {
  * @returns {string}
  */
 export function supervisorModeToEyeColor(mode, colors) {
-  var arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
+  const arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
   if (!arr.length) return DEFAULT_FALLBACK;
-  var idx = SUPERVISOR_MODE_EYE_ORDER.indexOf(mode);
+  let idx = SUPERVISOR_MODE_EYE_ORDER.indexOf(mode);
   if (idx < 0) idx = SUPERVISOR_MODE_EYE_ORDER.indexOf('adaptive');
   if (idx < 0) idx = 0;
   return arr[Math.min(idx, arr.length - 1)] || DEFAULT_FALLBACK;
@@ -64,9 +64,9 @@ export function supervisorModeToEyeColor(mode, colors) {
  * @returns {string}
  */
 export function pickRandomPaletteColor(colors) {
-  var arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
+  const arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
   if (!arr.length) return DEFAULT_FALLBACK;
-  var i = Math.floor(Math.random() * arr.length);
+  const i = Math.floor(Math.random() * arr.length);
   return arr[i];
 }
 
@@ -81,15 +81,15 @@ export function pickRandomPaletteColor(colors) {
  * @param {string} o.outputLabel
  */
 export function buildSessionPetCanvasAriaLabel(o) {
-  var ring =
+  const ring =
     '外圈圆环自顶端顺时针延伸，表示上下文占用比例。眼睛颜色对应当前监管模式（自由/自适应/严格）。';
-  var usage =
+  const usage =
     '当前约 ' +
     o.tokenPct +
     '%' +
-    (o.tokenMax ? '（' + o.tokenUsedLabel + '/' + o.tokenMaxLabel + '）' : '') +
+    (o.tokenMax ? `（${o.tokenUsedLabel}/${o.tokenMaxLabel}）` : '') +
     '。本轮输出 ' +
     o.outputLabel +
     '。';
-  return SESSION_PET_DISPLAY_NAME + '。' + ring + ' ' + usage;
+  return `${SESSION_PET_DISPLAY_NAME}。${ring} ${usage}`;
 }
