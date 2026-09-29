@@ -2362,6 +2362,27 @@ export const ChatUI = (() => {
     return row.childNodes.length ? row : null;
   }
 
+  /** 助手正文走轻量 Markdown；解析失败或没有结构时按原文显示。 */
+  function setReplyContent(el, text) {
+    if (!el) return;
+    const raw = text == null ? '' : String(text);
+    el._rawMarkdown = raw;
+    let html = null;
+    try {
+      const api = window.ChatMarkdown;
+      if (api && typeof api.render === 'function') html = api.render(raw);
+    } catch (_err) {
+      html = null;
+    }
+    if (typeof html !== 'string') {
+      el.classList.remove('msg-content--md');
+      el.textContent = raw;
+      return;
+    }
+    el.classList.add('msg-content--md');
+    el.innerHTML = html;
+  }
+
   function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     let displayMsg = msg;
     if (
@@ -2444,8 +2465,12 @@ export const ChatUI = (() => {
       content.className = 'msg-content msg-system-content';
       content.textContent = displayMsg.content || '';
       el.appendChild(content);
-    } else if (displayMsg.role === 'agent') {
-      content.textContent = stripStatusTagFn(displayMsg.content);
+    } else if (displayMsg.role === 'agent' || displayMsg.role === 'assistant') {
+      const raw = typeof displayMsg.content === 'string' ? displayMsg.content : '';
+      const text = displayMsg.role === 'agent' && typeof stripStatusTagFn === 'function'
+        ? stripStatusTagFn(raw)
+        : raw;
+      setReplyContent(content, text);
       el.appendChild(content);
     } else if (displayMsg.content) {
       content.textContent = displayMsg.content;
@@ -2784,7 +2809,8 @@ export const ChatUI = (() => {
     const contentDiv = root.querySelector('.msg-content');
     if (!contentDiv) return;
     const text = msg.role === 'agent' ? stripStatusTagFn(content) : content;
-    contentDiv.textContent = text;
+    if (msg.role === 'agent' || msg.role === 'assistant') setReplyContent(contentDiv, text);
+    else contentDiv.textContent = text;
     notifyTailLayoutChange();
     followBottomAfterContentPatch();
   }
@@ -2931,7 +2957,7 @@ export const ChatUI = (() => {
 
       const contentDiv = document.createElement('div');
       contentDiv.className = 'msg-content';
-      contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
+      setReplyContent(contentDiv, stripStatusTagFn(streamReplyBuffer));
       el.appendChild(contentDiv);
       el._streamContentEl = contentDiv;
 
@@ -2948,7 +2974,7 @@ export const ChatUI = (() => {
       wrap.appendChild(createMsgLabelRow('agent', null));
       const contentDiv = document.createElement('div');
       contentDiv.className = 'msg-content';
-      contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
+      setReplyContent(contentDiv, stripStatusTagFn(streamReplyBuffer));
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
       insertTailBefore(wrap);
@@ -2956,11 +2982,11 @@ export const ChatUI = (() => {
       return;
     }
     if (streamEl && streamEl._streamContentEl) {
-      streamEl._streamContentEl.textContent = stripStatusTagFn(streamReplyBuffer);
+      setReplyContent(streamEl._streamContentEl, stripStatusTagFn(streamReplyBuffer));
     } else if (streamEl) {
       const contentEl = streamEl.lastChild;
       if (contentEl) {
-        contentEl.textContent = stripStatusTagFn(streamReplyBuffer);
+        setReplyContent(contentEl, stripStatusTagFn(streamReplyBuffer));
         streamEl._streamContentEl = contentEl;
       }
     }
@@ -2981,7 +3007,10 @@ export const ChatUI = (() => {
     const streamEl = document.getElementById('streaming-msg');
     if (streamEl) {
       if (streamEl._streamContentEl) {
-        streamEl._streamContentEl.textContent = stripStatusTagFn(streamEl._streamContentEl.textContent || '');
+        const raw = typeof streamEl._streamContentEl._rawMarkdown === 'string'
+          ? streamEl._streamContentEl._rawMarkdown
+          : (streamEl._streamContentEl.textContent || '');
+        setReplyContent(streamEl._streamContentEl, stripStatusTagFn(raw));
       }
       if (lastMsg && lastMsg.completedAt != null) {
         updateMsgLabelTime(streamEl, lastMsg.completedAt);
@@ -2999,13 +3028,20 @@ export const ChatUI = (() => {
 
   function getStreamingBubbleBodyText(streamEl) {
     if (!streamEl) return '';
-    if (streamEl._streamContentEl) return streamEl._streamContentEl.textContent || '';
+    if (streamEl._streamContentEl) {
+      if (typeof streamEl._streamContentEl._rawMarkdown === 'string') {
+        return streamEl._streamContentEl._rawMarkdown;
+      }
+      return streamEl._streamContentEl.textContent || '';
+    }
     const label = streamEl.querySelector('.msg-label');
     let n = label ? label.nextElementSibling : null;
     while (n && n.classList && n.classList.contains('msg-images')) {
       n = n.nextElementSibling;
     }
-    return n ? (n.textContent || '') : '';
+    if (!n) return '';
+    if (typeof n._rawMarkdown === 'string') return n._rawMarkdown;
+    return n.textContent || '';
   }
 
   function repairOrphanStreamingIfAny(messages, stripStatusTagFn) {
@@ -3164,6 +3200,7 @@ export const ChatUI = (() => {
     replaceUserMessageEl,
     insertRemoteUserMessageEl,
     updateMessageContent,
+    setElementReplyText: setReplyContent,
     updateMessageImagesEl,
     updateMessageTokenUsage,
     appendStreamChunk,

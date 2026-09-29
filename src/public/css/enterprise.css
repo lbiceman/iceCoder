@@ -254,7 +254,7 @@ select:focus-visible,
 }
 
 .message {
-  max-width: min(78%, 880px);
+  max-width: min(88%, 880px);
   padding: 12px 15px;
   border-radius: var(--radius-lg);
   font-size: 14px;

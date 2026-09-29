@@ -807,7 +807,10 @@ export const ChatPage = (() => {
       const streamEl = document.getElementById('streaming-msg');
       if (streamEl) {
         const contentEl = streamEl._streamContentEl || streamEl.lastChild;
-        if (contentEl) contentEl.textContent = lastMsg.content;
+        if (contentEl) {
+          if (UI.setElementReplyText) UI.setElementReplyText(contentEl, lastMsg.content);
+          else contentEl.textContent = lastMsg.content;
+        }
         if (UI.updateMsgLabelTime) UI.updateMsgLabelTime(streamEl, lastMsg.completedAt);
         streamEl.removeAttribute('id');
         delete streamEl._streamContentEl;
