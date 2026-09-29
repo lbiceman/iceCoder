@@ -812,7 +812,7 @@ export const SettingsPage = (() => {
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
             '<p class="config-center-subtitle">管理外观主题、安全选项、模型、MCP 服务器与监管模式</p>' +
-            '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）；不支持 Anthropic Messages API（A/）。</p>' +
+            '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）</p>' +
           '</div>' +
         '</header>' +
         '<nav class="config-tabs" role="tablist" aria-label="设置类型">' +
