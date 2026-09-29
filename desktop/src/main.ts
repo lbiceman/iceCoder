@@ -172,6 +172,10 @@ function registerIpcHandlers(): void {
     if (typeof passthrough !== 'boolean') return;
     petManager.setFloatingMousePassthrough(passthrough);
   });
+  ipcMain.on(IPC.PET_SET_DESKTOP_ENABLED, (_e: Electron.IpcMainEvent, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') return;
+    void petManager.setDesktopPetEnabled(enabled);
+  });
 
   ipcMain.handle(IPC.WORKSPACE_PICK, async () => {
     const ws = await pickWorkspaceInteractive();
@@ -314,6 +318,7 @@ async function bootstrap(): Promise<void> {
   void petManager.enterEmbeddedMode(mainWindow);
 
   // 5) 主窗生命周期 ↔ pet 状态机
+  // 桌面宠物关闭时 enterFloatingMode 不会把冰豆浮到桌面，窗口只收到任务栏。
   mainWindow.on('minimize', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
   mainWindow.on('hide', () => {
     if (isQuitting || !mainWindow) return;

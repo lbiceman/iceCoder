@@ -56,32 +56,48 @@ export const SettingsPage = (() => {
         '</div>' +
       '</section>';
 
+    // 主题预览：用几个色块示意真实界面（左侧栏 + 顶栏 + 用户气泡 + 回复 + 输入框），
+    // 具体配色由 CSS 里各主题的 --stp-* 变量提供。
+    const themePreview = (variant) =>
+      '<span class="settings-theme-preview settings-theme-preview-' + variant + '" aria-hidden="true">' +
+        '<span class="stp-side">' +
+          '<span class="stp-side-head"></span>' +
+          '<span class="stp-side-row"></span>' +
+          '<span class="stp-side-row"></span>' +
+        '</span>' +
+        '<span class="stp-main">' +
+          '<span class="stp-topbar"></span>' +
+          '<span class="stp-msg stp-msg--user"></span>' +
+          '<span class="stp-msg stp-msg--agent"></span>' +
+          '<span class="stp-input"></span>' +
+        '</span>' +
+      '</span>';
+
+    const themeChoices = [
+      { id: 'dark', label: '深色', icon: 'moon' },
+      { id: 'light', label: '浅色', icon: 'sun' },
+      { id: 'modern', label: '现代蓝', icon: 'work' },
+      // 暖阳用 spark 而非 sun：浅色已占用 sun，重复图标会让人分不清两张卡
+      { id: 'fresh', label: '暖阳', icon: 'spark' },
+    ];
+    const themeOptionsHtml = themeChoices.map((choice) => {
+      const on = theme === choice.id;
+      const icon = window.AppIcon
+        ? window.AppIcon.html(choice.icon, { width: 14, className: 'settings-theme-option-icon' })
+        : '';
+      return '<button type="button" class="settings-theme-option' + (on ? ' is-active' : '') + '" data-theme="' + choice.id + '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">' +
+        themePreview(choice.id) +
+        '<span class="settings-theme-option-label">' + icon + choice.label + '</span>' +
+      '</button>';
+    }).join('');
+
     parentEl.innerHTML =
       '<div class="settings-general">' +
         '<section class="settings-section">' +
           '<h2 class="settings-section-title">外观</h2>' +
-          '<p class="settings-section-desc">选择界面主题，可随时在此切换深色与浅色模式</p>' +
+          '<p class="settings-section-desc">选择界面主题，可随时在此切换</p>' +
           '<div class="settings-theme-options" role="radiogroup" aria-label="界面主题">' +
-            '<button type="button" class="settings-theme-option' + (theme === 'dark' ? ' is-active' : '') + '" data-theme="dark" role="radio" aria-checked="' + (theme === 'dark' ? 'true' : 'false') + '">' +
-              '<span class="settings-theme-preview settings-theme-preview-dark" aria-hidden="true">' +
-                '<span class="settings-theme-preview-bar"></span>' +
-                '<span class="settings-theme-preview-body"></span>' +
-              '</span>' +
-              '<span class="settings-theme-option-label">' +
-                (window.AppIcon ? window.AppIcon.html('moon', { width: 14, className: 'settings-theme-option-icon' }) : '') +
-                '深色' +
-              '</span>' +
-            '</button>' +
-            '<button type="button" class="settings-theme-option' + (theme === 'light' ? ' is-active' : '') + '" data-theme="light" role="radio" aria-checked="' + (theme === 'light' ? 'true' : 'false') + '">' +
-              '<span class="settings-theme-preview settings-theme-preview-light" aria-hidden="true">' +
-                '<span class="settings-theme-preview-bar"></span>' +
-                '<span class="settings-theme-preview-body"></span>' +
-              '</span>' +
-              '<span class="settings-theme-option-label">' +
-                (window.AppIcon ? window.AppIcon.html('sun', { width: 14, className: 'settings-theme-option-icon' }) : '') +
-                '浅色' +
-              '</span>' +
-            '</button>' +
+            themeOptionsHtml +
           '</div>' +
         '</section>' +
         dataDirectorySection +
@@ -97,6 +113,86 @@ export const SettingsPage = (() => {
               '<div class="settings-card-control">' +
                 '<label class="config-default-switch settings-card-switch" title="启用子 Agent">' +
                   '<input type="checkbox" id="settings-sub-agents-input" checked />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">执行透明层</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
+          '<div class="settings-card" id="settings-etl-main-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<div class="settings-card-title-row">' +
+                  '<span class="settings-card-title">显示执行透明层</span>' +
+                '</div>' +
+                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                  '<input type="checkbox" id="etl-show-panel" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
+                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
+                '</div>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                    '<input type="checkbox" id="etl-panel-default-expanded" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
+              '</div>' +
+              '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
+                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
+                '</div>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                    '<input type="checkbox" id="etl-panel-auto-collapse" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-row settings-etl-desktop-pet" id="etl-show-desktop-pet-row">' +
+              '<div class="settings-etl-row-info">' +
+                '<span class="settings-etl-row-label">桌面宠物</span>' +
+                '<span class="settings-etl-row-hint">关闭后，最小化应用窗口时桌面不再显示宠物；打开后，最小化时在桌面显示宠物</span>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-etl-switch" title="桌面宠物">' +
+                  '<input type="checkbox" id="etl-show-desktop-pet" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">任务通知</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
+          '<div class="settings-card" id="settings-task-notification-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">任务完成消息通知</span>' +
+                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                  '<input type="checkbox" id="settings-task-done-notification" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
               '</div>' +
@@ -155,87 +251,6 @@ export const SettingsPage = (() => {
           '</div>' +
           '</div>' +
         '</section>' +
-        '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
-          '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">执行透明层</h2>' +
-          '</div>' +
-          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
-          '<div class="settings-card" id="settings-etl-main-card">' +
-            '<div class="settings-card-row">' +
-              '<div class="settings-card-info">' +
-                '<div class="settings-card-title-row">' +
-                  '<span class="settings-card-title">显示执行透明层</span>' +
-                  '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>功能未开启</span>' +
-                '</div>' +
-                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
-              '</div>' +
-              '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
-                  '<input type="checkbox" id="etl-show-panel" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-            '</div>' +
-            '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
-              '<div class="settings-etl-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
-                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
-                '</div>' +
-                '<div class="settings-card-control">' +
-                  '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
-                    '<input type="checkbox" id="etl-panel-default-expanded" />' +
-                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                  '</label>' +
-                '</div>' +
-              '</div>' +
-              '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">面板默认宽度</span>' +
-                '</div>' +
-                '<div class="settings-card-control">' +
-                  '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
-                    '<option value="280">280 px</option>' +
-                    '<option value="320">320 px</option>' +
-                    '<option value="380">380 px</option>' +
-                  '</select>' +
-                '</div>' +
-              '</div>' +
-              '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
-                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
-                '</div>' +
-                '<div class="settings-card-control">' +
-                  '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
-                    '<input type="checkbox" id="etl-panel-auto-collapse" />' +
-                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                  '</label>' +
-                '</div>' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-        '</section>' +
-        '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
-          '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">任务通知</h2>' +
-          '</div>' +
-          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
-          '<div class="settings-card" id="settings-task-notification-card">' +
-            '<div class="settings-card-row">' +
-              '<div class="settings-card-info">' +
-                '<span class="settings-card-title">任务完成消息通知</span>' +
-                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
-              '</div>' +
-              '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
-                  '<input type="checkbox" id="settings-task-done-notification" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-        '</section>' +
       '</div>';
 
     if (window.AppIcon) window.AppIcon.hydrate(parentEl);
@@ -246,16 +261,6 @@ export const SettingsPage = (() => {
     bindTaskNotificationSettings(parentEl);
   }
 
-  function isEtlCapabilityEnabled() {
-    const bridge = window.ChatExecutionPlanBridge;
-    if (!bridge || typeof bridge.isEnabled !== 'function') return true;
-    // WS 尚未宣告 features.executionPlan 时视为可用，避免设置页首屏把全部开关锁死。
-    if (typeof bridge.isCapabilityKnown === 'function' && !bridge.isCapabilityKnown()) {
-      return true;
-    }
-    return !!bridge.isEnabled();
-  }
-
   function syncEtlSettingsUi(parentEl, prefs) {
     if (!prefs) {
       prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
@@ -263,36 +268,33 @@ export const SettingsPage = (() => {
         : {};
     }
 
-    const capabilityEnabled = isEtlCapabilityEnabled();
     const showPanel = !!prefs.showTransparencyPanel;
-    const subgroupDisabled = !capabilityEnabled || !showPanel;
+    const subgroupDisabled = !showPanel;
 
-    const capabilityBadge = parentEl.querySelector('#settings-etl-capability-badge');
     const showPanelInput = parentEl.querySelector('#etl-show-panel');
     const subgroup = parentEl.querySelector('#settings-etl-subgroup');
 
-    if (capabilityBadge) capabilityBadge.hidden = capabilityEnabled;
     if (showPanelInput) {
       showPanelInput.checked = showPanel;
-      showPanelInput.disabled = !capabilityEnabled;
+      showPanelInput.disabled = false;
     }
     if (subgroup) subgroup.classList.toggle('is-disabled', subgroupDisabled);
 
     const panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
-    const panelWidth = parentEl.querySelector('#etl-panel-width');
     const panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
+    const showDesktopPet = parentEl.querySelector('#etl-show-desktop-pet');
 
     if (panelDefaultExpanded) {
       panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
       panelDefaultExpanded.disabled = subgroupDisabled;
     }
-    if (panelWidth) {
-      panelWidth.value = String(prefs.panelWidth || 320);
-      panelWidth.disabled = subgroupDisabled;
-    }
     if (panelAutoCollapse) {
       panelAutoCollapse.checked = prefs.panelAutoCollapse === true;
       panelAutoCollapse.disabled = subgroupDisabled;
+    }
+    if (showDesktopPet) {
+      showDesktopPet.checked = prefs.showDesktopPet !== false;
+      showDesktopPet.disabled = false;
     }
   }
 
@@ -417,20 +419,14 @@ export const SettingsPage = (() => {
       });
     }
 
-    const panelWidth = parentEl.querySelector('#etl-panel-width');
-    if (panelWidth) {
-      panelWidth.addEventListener('change', () => {
-        const width = parseInt(panelWidth.value, 10);
-        const previous = panelWidth.dataset.savedValue || panelWidth.value;
-        panelWidth.disabled = true;
-        window.EtlPrefs.set({ panelWidth: width })
-          .then(() => {
-            panelWidth.dataset.savedValue = String(width);
-            syncEtlSettingsUi(parentEl);
-          })
+    const showDesktopPet = parentEl.querySelector('#etl-show-desktop-pet');
+    if (showDesktopPet) {
+      showDesktopPet.addEventListener('change', () => {
+        const next = showDesktopPet.checked;
+        showDesktopPet.disabled = true;
+        window.EtlPrefs.set({ showDesktopPet: next })
           .catch(() => {
-            panelWidth.value = previous;
-            syncEtlSettingsUi(parentEl);
+            showDesktopPet.checked = !next;
             if (window.Notification) window.Notification.error('更新失败');
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });
@@ -452,11 +448,6 @@ export const SettingsPage = (() => {
         syncEtlSettingsUi(parentEl);
       });
     }
-    if (parentEl._etlCapabilityListener) return;
-    parentEl._etlCapabilityListener = function () {
-      syncEtlSettingsUi(parentEl);
-    };
-    window.addEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
   }
 
   function unbindEtlSettings(parentEl) {
@@ -464,10 +455,6 @@ export const SettingsPage = (() => {
     if (typeof parentEl._etlUnsubscribe === 'function') {
       parentEl._etlUnsubscribe();
       parentEl._etlUnsubscribe = null;
-    }
-    if (parentEl._etlCapabilityListener) {
-      window.removeEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
-      parentEl._etlCapabilityListener = null;
     }
   }
 

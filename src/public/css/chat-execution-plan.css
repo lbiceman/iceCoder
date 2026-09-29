@@ -54,6 +54,44 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   padding-right: 0;
 }
 
+.etl-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.etl-panel-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 6px;
+  margin: auto;
+  width: 1px;
+  background: transparent;
+  transition: background-color 0.12s ease, width 0.12s ease;
+}
+
+.etl-panel-resizer:hover::after,
+.etl-panel-resizer:focus-visible::after {
+  width: 2px;
+  background: var(--accent);
+}
+
+.etl-panel-resizer:focus-visible {
+  outline: none;
+}
+
+html[data-shell="mobile"] .etl-panel-resizer {
+  display: none;
+}
+
 /* ── 头部 ── */
 .etl-header {
   display: flex;
@@ -333,13 +371,53 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 }
 
 .etl-wb-chapters {
-  flex: 1 1 46%;
+  flex: 46 1 0;
 }
 
 .etl-wb-flow {
-  flex: 1 1 54%;
-  border-top: 1px solid var(--border-color);
+  flex: 54 1 0;
   background: var(--surface-raised);
+}
+
+/* ── 检查点 / 执行流 可拖拽分隔线 ── */
+.etl-wb-splitter {
+  flex: 0 0 auto;
+  height: 9px;
+  cursor: row-resize;
+  touch-action: none;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+}
+
+.etl-wb-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  height: 1px;
+  background: var(--border-color);
+  transition: background-color 0.12s ease, height 0.12s ease;
+}
+
+.etl-wb-splitter:hover::after,
+.etl-wb-splitter:focus-visible::after {
+  background: var(--accent);
+  height: 2px;
+}
+
+.etl-wb-splitter:focus-visible {
+  outline: none;
+}
+
+/* 拖拽中禁掉文本选中与鼠标手势，避免跟滚动/选中抢事件 */
+body.etl-splitter-dragging {
+  user-select: none;
+  cursor: row-resize;
+}
+
+body.etl-splitter-dragging * {
+  cursor: row-resize !important;
 }
 
 .etl-wb-section-head {

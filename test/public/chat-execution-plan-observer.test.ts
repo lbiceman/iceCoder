@@ -879,22 +879,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('设置页离开后返回可继续响应 capability 与偏好变化', async () => {
+  it('设置页离开后返回可继续响应偏好变化', async () => {
     const page = await browser.newPage();
     openPages.add(page);
     await page.setContent('<html><body><main id="settings-root"></main></body></html>');
     await page.evaluate(() => {
-      let enabled = false;
       const prefListeners: Array<() => void> = [];
       const prefs = {
         showTransparencyPanel: false,
         panelDefaultExpanded: true,
         panelWidth: 320,
       };
-      (window as any).__setCapability = (value: boolean) => { enabled = value; };
       (window as any).__setShowPanel = (value: boolean) => { prefs.showTransparencyPanel = value; };
       (window as any).__emitPrefs = () => { prefListeners.slice().forEach((fn) => fn()); };
-      (window as any).ChatExecutionPlanBridge = { isEnabled: () => enabled };
       (window as any).EtlPrefs = {
         get: () => ({ ...prefs }),
         set: (patch: Record<string, unknown>) => {
@@ -920,44 +917,47 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const settings = (window as any).SettingsPage;
       settings.render(root);
       const input = () => document.querySelector('#etl-show-panel') as HTMLInputElement;
-      const initiallyDisabled = input().disabled;
+      const initiallyEnabled = !input().disabled;
+      const initiallyChecked = input().checked;
 
-      (window as any).__setCapability(true);
-      window.dispatchEvent(new CustomEvent('etl:capabilitychange', { detail: { enabled: true } }));
-      const enabledAfterEvent = !input().disabled;
+      (window as any).__setShowPanel(true);
+      (window as any).__emitPrefs();
+      const checkedAfterPrefs = input().checked;
 
       settings.onDeactivate();
-      (window as any).__setCapability(false);
-      window.dispatchEvent(new CustomEvent('etl:capabilitychange', { detail: { enabled: false } }));
-      const unchangedWhileInactive = !input().disabled;
+      (window as any).__setShowPanel(false);
+      (window as any).__emitPrefs();
+      const unchangedWhileInactive = input().checked;
 
       const hasOnActivate = typeof settings.onActivate === 'function';
       if (hasOnActivate) settings.onActivate();
-      const disabledAfterReturn = input().disabled;
+      const checkedAfterReturn = input().checked;
 
-      (window as any).__setCapability(true);
-      window.dispatchEvent(new CustomEvent('etl:capabilitychange', { detail: { enabled: true } }));
       (window as any).__setShowPanel(true);
       (window as any).__emitPrefs();
       return {
-        initiallyDisabled,
-        enabledAfterEvent,
+        badge: document.querySelector('#settings-etl-capability-badge'),
+        initiallyEnabled,
+        initiallyChecked,
+        checkedAfterPrefs,
         unchangedWhileInactive,
         hasOnActivate,
-        disabledAfterReturn,
-        enabledAfterReactivationEvent: !input().disabled,
-        prefCheckedAfterReactivation: input().checked,
+        checkedAfterReturn,
+        checkedAfterReactivation: input().checked,
+        enabledAfterReactivation: !input().disabled,
       };
     });
 
     expect(result).toEqual({
-      initiallyDisabled: true,
-      enabledAfterEvent: true,
+      badge: null,
+      initiallyEnabled: true,
+      initiallyChecked: false,
+      checkedAfterPrefs: true,
       unchangedWhileInactive: true,
       hasOnActivate: true,
-      disabledAfterReturn: true,
-      enabledAfterReactivationEvent: true,
-      prefCheckedAfterReactivation: true,
+      checkedAfterReturn: false,
+      checkedAfterReactivation: true,
+      enabledAfterReactivation: true,
     });
     await page.close();
   });
@@ -1036,6 +1036,34 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       desktopPaddingClass: false,
     });
     await mobile.close();
+  });
+
+  it('桌面宠物开关不影响工作台最小化后的页内宠物', async () => {
+    const desktop = await loadPanel();
+    const result = await desktop.evaluate((plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setPlan(plan);
+      return (window as any).EtlPrefs.set({ showDesktopPet: false }).then(() => {
+        panel.minimize();
+        return {
+          petHidden: document.body.classList.contains('etl-pet-hidden-by-panel'),
+          panelOpen: document.body.classList.contains('etl-panel-open'),
+          chip: !!document.querySelector('.etl-restore-chip'),
+        };
+      });
+    }, makePlan());
+    expect(result).toEqual({
+      petHidden: false,
+      panelOpen: false,
+      chip: false,
+    });
+    await desktop.close();
+  });
+
+  it('桌面宠物文案描述应用窗口最小化，不再改工作台侧边栏', () => {
+    expect(CONFIG_SOURCE).toMatch(/最小化应用窗口时桌面不再显示宠物/);
+    expect(CONFIG_SOURCE).not.toMatch(/最小化面板时不再显示宠物/);
+    expect(PANEL_SOURCE).not.toMatch(/showDesktopPet|etl-restore-chip/);
   });
 
   it('打包桌面宠物保持独立，不引用透明层互斥状态', () => {
@@ -1528,12 +1556,12 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       hasEnabled: true,
       hasExpand: true,
       hasLlm: false,
-      hasWidth: true,
+      hasWidth: false,
     });
     await page.close();
   });
 
-  it('设置页按 data-shell=mobile 隐藏宽度行，桌面窄视口仍显示', async () => {
+  it('设置页不再提供面板宽度选项', async () => {
     const page = await browser.newPage({ viewport: { width: 1200, height: 844 } });
     openPages.add(page);
     await page.setContent('<html data-shell="mobile"><body><main id="settings-root"></main></body></html>');
@@ -1559,27 +1587,18 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     });
     await page.addScriptTag({ content: CONFIG_SOURCE });
     await page.addStyleTag({ content: CONFIG_CSS_SOURCE });
-    const mobileWide = await page.evaluate(() => {
+    const missing = await page.evaluate(() => {
       (window as any).SettingsPage.render(document.querySelector('#settings-root'));
-      const widthRow = document.querySelector('#etl-panel-width-row') as HTMLElement;
       return {
-        widthDisplay: getComputedStyle(widthRow).display,
+        widthRow: document.querySelector('#etl-panel-width-row'),
         timeSettingCount: document.querySelectorAll(
           '#etl-timeline-time-mode, #etl-show-timeline, #etl-timeline-granularity, #etl-auto-scroll',
         ).length,
       };
     });
 
-    expect(mobileWide.widthDisplay).toBe('none');
-    expect(mobileWide.timeSettingCount).toBe(0);
-
-    await page.setViewportSize({ width: 390, height: 844 });
-    const desktopNarrowDisplay = await page.evaluate(() => {
-      document.documentElement.removeAttribute('data-shell');
-      const widthRow = document.querySelector('#etl-panel-width-row') as HTMLElement;
-      return getComputedStyle(widthRow).display;
-    });
-    expect(desktopNarrowDisplay).toBe('flex');
+    expect(missing.widthRow).toBeNull();
+    expect(missing.timeSettingCount).toBe(0);
     await page.close();
   });
 

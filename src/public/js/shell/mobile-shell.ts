@@ -182,7 +182,11 @@ export const MobileShell = (() => {
       theme = window.AppShell.getTheme();
     }
     btn.setAttribute('data-current-theme', theme);
-    btn.title = theme === 'dark' ? '当前：深色模式，点击切换为浅色' : '当前：浅色模式，点击切换为深色';
+    const title = (window.AppShell && typeof window.AppShell.themeToggleTitle === 'function')
+      ? window.AppShell.themeToggleTitle(theme)
+      : '切换主题';
+    btn.title = title;
+    btn.setAttribute('aria-label', title);
   }
 
   function bindThemeButton() {

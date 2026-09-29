@@ -14,7 +14,7 @@
         if (!mobile && (location.hash || '').startsWith('#/m/')) mobile = true;
         const key = mobile ? 'ice-theme-mobile' : 'ice-theme';
         const stored = localStorage.getItem(key);
-        const theme = (stored === 'light' || stored === 'dark') ? stored : (mobile ? 'light' : 'dark');
+        const theme = ['light', 'dark', 'modern', 'fresh'].indexOf(stored) !== -1 ? stored : (mobile ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) { /* ignore */ }
     })();

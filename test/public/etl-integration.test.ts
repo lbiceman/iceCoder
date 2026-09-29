@@ -607,7 +607,7 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('设置页接收晚到 capability，移动 shell 隐藏 panelWidth', async () => {
+  it('设置页接收晚到 capability，且不再提供面板宽度', async () => {
     const page = await loadObserver({ mobile: true });
     await page.addScriptTag({ content: CONFIG_SOURCE });
     await page.addStyleTag({ content: CONFIG_CSS_SOURCE });
@@ -621,21 +621,21 @@ describe('ETL 真实 Observer 链路', () => {
       return {
         initiallyDisabled,
         enabledAfterConnected: !input.disabled,
-        widthDisplay: getComputedStyle(
-          document.querySelector('#etl-panel-width-row') as HTMLElement,
-        ).display,
+        capabilityBadge: document.querySelector('#settings-etl-capability-badge'),
+        widthRow: document.querySelector('#etl-panel-width-row'),
       };
     });
 
     expect(result).toEqual({
       initiallyDisabled: false,
       enabledAfterConnected: true,
-      widthDisplay: 'none',
+      capabilityBadge: null,
+      widthRow: null,
     });
     await page.close();
   });
 
-  it('设置页能力关闭和主开关关闭都会禁用主项及全部子项', async () => {
+  it('设置页主开关关闭时禁用子项，能力状态不再锁设置', async () => {
     const page = await loadObserver({ showPanel: true });
     await page.addScriptTag({ content: CONFIG_SOURCE });
     const result = await page.evaluate(() => {
@@ -650,32 +650,31 @@ describe('ETL 真实 Observer 链路', () => {
 
       const initial = { mainDisabled: main.disabled, childrenDisabled: allChildrenDisabled() };
       (window as any).ChatExecutionPlanBridge.notifyConnected({
-        features: { executionPlan: true },
-      });
-      const enabled = { mainEnabled: !main.disabled, childrenEnabled: allChildrenEnabled() };
-      (window as any).ChatExecutionPlanBridge.notifyConnected({
         features: { executionPlan: false },
       });
       const capabilityOff = {
+        badge: document.querySelector('#settings-etl-capability-badge'),
         mainDisabled: main.disabled,
         childrenDisabled: allChildrenDisabled(),
       };
-      (window as any).ChatExecutionPlanBridge.notifyConnected({
-        features: { executionPlan: true },
-      });
       (window as any).EtlPrefs.set({ showTransparencyPanel: false });
       const mainOff = {
         mainEnabled: !main.disabled,
         childrenDisabled: allChildrenDisabled(),
       };
-      return { initial, enabled, capabilityOff, mainOff };
+      (window as any).EtlPrefs.set({ showTransparencyPanel: true });
+      const mainOn = {
+        mainEnabled: !main.disabled,
+        childrenEnabled: allChildrenEnabled(),
+      };
+      return { initial, capabilityOff, mainOff, mainOn };
     });
 
     expect(result).toEqual({
       initial: { mainDisabled: false, childrenDisabled: false },
-      enabled: { mainEnabled: true, childrenEnabled: true },
-      capabilityOff: { mainDisabled: true, childrenDisabled: true },
+      capabilityOff: { badge: null, mainDisabled: false, childrenDisabled: false },
       mainOff: { mainEnabled: true, childrenDisabled: true },
+      mainOn: { mainEnabled: true, childrenEnabled: true },
     });
   });
 

@@ -74,16 +74,17 @@
   cursor: pointer;
 }
 
-/* 勿用 data-theme：会与 tokens.css 的 [data-theme] 主题作用域冲突，导致夜间图标不可见 */
+/* 勿用 data-theme：会与 tokens.css 的 [data-theme] 主题作用域冲突，导致夜间图标不可见。
+   深色显示月亮，其余亮色主题显示太阳。 */
 .mobile-top-bar-theme-btn .mobile-top-bar-theme-icon-light {
   display: none;
 }
 
-.mobile-top-bar-theme-btn[data-current-theme="light"] .mobile-top-bar-theme-icon-dark {
+.mobile-top-bar-theme-btn:not([data-current-theme="dark"]) .mobile-top-bar-theme-icon-dark {
   display: none;
 }
 
-.mobile-top-bar-theme-btn[data-current-theme="light"] .mobile-top-bar-theme-icon-light {
+.mobile-top-bar-theme-btn:not([data-current-theme="dark"]) .mobile-top-bar-theme-icon-light {
   display: inline-flex;
 }
 

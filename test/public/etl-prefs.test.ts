@@ -39,11 +39,18 @@ function createFetchMock(initialPrefs: Record<string, unknown>, onPatch?: (body:
   };
 }
 
-function loadEtlPrefs(fetchImpl: FetchHandler) {
+function loadEtlPrefs(fetchImpl: FetchHandler, storage?: Storage) {
   const src = classicWindowSource(readFileSync(ETL_PREFS_PATH, 'utf-8'));
+  const memory = new Map<string, string>();
+  const localStorage = storage || {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => { memory.set(key, String(value)); },
+    removeItem: (key: string) => { memory.delete(key); },
+  };
   const context: Record<string, unknown> = {
     window: {},
     fetch: fetchImpl,
+    localStorage,
     console,
   };
   context.window = context;
@@ -72,18 +79,20 @@ describe('etl-prefs', () => {
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
       panelWidth: 320,
+      sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
+      showDesktopPet: true,
     });
   });
 
-  it('set({ panelWidth: 9999 }) PATCH 后读回被夹到 380', async () => {
+  it('set({ panelWidth: 9999 }) PATCH 后读回被夹到 640', async () => {
     let patched: unknown = null;
     const EtlPrefs = loadEtlPrefs(createFetchMock({}, (body) => { patched = body; }));
     await EtlPrefs.whenReady();
     await EtlPrefs.set({ panelWidth: 9999 });
     expect(patched).toEqual({ iceEtlPrefs: { panelWidth: 9999 } });
-    expect(EtlPrefs.getKey('panelWidth')).toBe(380);
+    expect(EtlPrefs.getKey('panelWidth')).toBe(640);
   });
 
   it('onChange 仅在实际变化时触发', async () => {
@@ -109,9 +118,52 @@ describe('etl-prefs', () => {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
       panelWidth: 320,
+      sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
+      showDesktopPet: true,
     });
+  });
+
+  it('服务端把 panelWidth 收成旧档位时，读回仍是拖拽宽度', async () => {
+    const EtlPrefs = loadEtlPrefs(async (_input, init) => {
+      if (init?.method === 'PATCH') {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            iceEtlPrefs: { panelWidth: 380, showTransparencyPanel: true },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ iceEtlPrefs: { panelWidth: 280 } }) };
+    });
+    await EtlPrefs.whenReady();
+    await EtlPrefs.set({ panelWidth: 395 });
+    expect(EtlPrefs.getKey('panelWidth')).toBe(395);
+  });
+
+  it('服务端拒绝 sidebarWidth 时，读回仍是拖拽宽度', async () => {
+    const memory = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => { memory.set(key, String(value)); },
+      removeItem: (key: string) => { memory.delete(key); },
+    } as Storage;
+    const fetchImpl: FetchHandler = async (_input, init) => {
+      if (init?.method === 'PATCH') {
+        return { ok: false, json: async () => ({ error: 'iceEtlPrefs 含未知字段：sidebarWidth' }) };
+      }
+      return { ok: true, json: async () => ({ iceEtlPrefs: {} }) };
+    };
+    const first = loadEtlPrefs(fetchImpl, storage);
+    await first.whenReady();
+    await expect(first.set({ sidebarWidth: 331 })).rejects.toThrow(/未知字段/);
+    expect(first.getKey('sidebarWidth')).toBe(331);
+
+    const reloaded = loadEtlPrefs(fetchImpl, storage);
+    await reloaded.whenReady();
+    expect(reloaded.getKey('sidebarWidth')).toBe(331);
   });
 });
 

@@ -5,7 +5,9 @@
     "panelWidth": 320,
     "showTransparencyPanel": true,
     "taskDoneNotification": false,
-    "panelAutoCollapse": false
+    "panelAutoCollapse": false,
+    "sidebarWidth": 256,
+    "showDesktopPet": true
   },
   "shellBlacklist": [
     "rm\\s+-rf",

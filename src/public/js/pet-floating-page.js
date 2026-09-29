@@ -3,8 +3,10 @@
  */
 import './session-pet.js';
 
+const PET_THEMES = ['dark', 'light', 'modern', 'fresh'];
+
 function applyTheme(theme) {
-  const t = theme === 'light' ? 'light' : 'dark';
+  const t = PET_THEMES.indexOf(theme) !== -1 ? theme : 'dark';
   document.documentElement.setAttribute('data-theme', t);
 }
 

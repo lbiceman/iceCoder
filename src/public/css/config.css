@@ -819,15 +819,17 @@ body.setup-required .chat-sidebar-settings-btn {
   opacity: 0.55;
 }
 
+.settings-etl-desktop-pet {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
 .settings-etl-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-}
-
-.settings-etl-row--select {
-  align-items: center;
 }
 
 .settings-etl-row-info {
@@ -848,28 +850,6 @@ body.setup-required .chat-sidebar-settings-btn {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.4;
-}
-
-.settings-etl-select {
-  flex-shrink: 0;
-  width: 120px;
-  min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.settings-etl-select:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
-html[data-shell="mobile"] .settings-etl-panel-width-row {
-  display: none;
 }
 
 .settings-data-directory-controls {
@@ -1159,17 +1139,17 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
 
 .settings-theme-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(148px, 240px));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(88px, 132px));
+  gap: 8px;
 }
 
 .settings-theme-option {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
+  gap: 6px;
   width: 100%;
-  padding: 10px;
+  padding: 6px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -1189,62 +1169,127 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
   color: var(--text-primary);
 }
 
+/* ── 主题预览：用色块拼一个缩略的界面（左侧栏 + 顶栏 + 气泡 + 输入框）── */
 .settings-theme-preview {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  height: 72px;
-  padding: 8px;
+  gap: 3px;
+  height: 44px;
+  padding: 4px;
+  border: 1px solid var(--stp-line);
   border-radius: var(--radius);
   overflow: hidden;
 }
 
+/* 各主题只提供这几个色值，布局共用 */
 .settings-theme-preview-dark {
-  background: #121212;
-  border: 1px solid #2a2a2a;
+  --stp-side: #0a0a0b;
+  --stp-bg: #111113;
+  --stp-card: #1a1a1d;
+  --stp-line: #29292e;
+  --stp-accent: #fafafa;
+  --stp-user: #2a2a2e;
+  --stp-input: #141416;
 }
 
 .settings-theme-preview-light {
-  background: #f5f5f5;
-  border: 1px solid #e0e0e0;
+  --stp-side: #f6f6f7;
+  --stp-bg: #ffffff;
+  --stp-card: #f6f6f7;
+  --stp-line: #e4e4e7;
+  --stp-accent: #18181b;
+  --stp-user: #e9e9ec;
+  --stp-input: #f4f4f5;
 }
 
-.settings-theme-preview-bar {
-  display: block;
-  height: 8px;
-  border-radius: 4px;
+.settings-theme-preview-modern {
+  --stp-side: #f6f7f9;
+  --stp-bg: #ffffff;
+  --stp-card: #fafbfc;
+  --stp-line: #ebedf0;
+  --stp-accent: #0066ff;
+  --stp-user: #eaf3ff;
+  --stp-input: #f4f5f7;
 }
 
-.settings-theme-preview-dark .settings-theme-preview-bar {
-  background: #1e1e1e;
+.settings-theme-preview-fresh {
+  --stp-side: #f6f1e7;
+  --stp-bg: #fdf9f2;
+  --stp-card: #fbf7ef;
+  --stp-line: #e9dfcd;
+  --stp-accent: #2e7d4f;
+  --stp-user: #f7ecd6;
+  --stp-input: #faf5ec;
 }
 
-.settings-theme-preview-light .settings-theme-preview-bar {
-  background: #ffffff;
+.stp-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 26%;
+  padding: 3px;
+  background: var(--stp-side);
+  border-radius: 2px;
 }
 
-.settings-theme-preview-body {
-  display: block;
+.stp-side-head {
+  height: 4px;
+  background: var(--stp-accent);
+  border-radius: 1px;
+}
+
+.stp-side-row {
+  height: 3px;
+  background: var(--stp-line);
+  border-radius: 1px;
+}
+
+.stp-main {
+  display: flex;
   flex: 1;
-  border-radius: 6px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px;
+  background: var(--stp-bg);
+  border-radius: 2px;
 }
 
-.settings-theme-preview-dark .settings-theme-preview-body {
-  background: #1e1e1e;
-  border: 1px solid #2a2a2a;
+.stp-topbar {
+  height: 4px;
+  background: var(--stp-card);
+  border: 1px solid var(--stp-line);
+  border-radius: 1px;
 }
 
-.settings-theme-preview-light .settings-theme-preview-body {
-  background: #ffffff;
-  border: 1px solid #e8e8e8;
+.stp-msg {
+  height: 5px;
+  border-radius: 1px;
+}
+
+.stp-msg--user {
+  align-self: flex-end;
+  width: 55%;
+  background: var(--stp-user);
+}
+
+.stp-msg--agent {
+  width: 75%;
+  background: var(--stp-line);
+}
+
+.stp-input {
+  margin-top: auto;
+  height: 7px;
+  background: var(--stp-input);
+  border: 1px solid var(--stp-line);
+  border-radius: 2px;
 }
 
 .settings-theme-option-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 4px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1583,7 +1628,7 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
     max-width: none;
   }
   .settings-theme-options {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .settings-card-row {
     align-items: flex-start;

@@ -239,6 +239,218 @@
   --chart-5: var(--chart-2);
 }
 
+/* ── Modern Theme: 现代蓝，纯白底 + 亮蓝主色，浅灰卡片分层，低阴影 ── */
+[data-theme="modern"] {
+  color-scheme: light;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f7f9;
+  --bg-card: #ffffff;
+  --bg-input: #f4f5f7;
+  --bg-hover: rgba(0, 102, 255, 0.05);
+  --bg-active: rgba(0, 102, 255, 0.09);
+
+  --text-primary: #1a1a1c;
+  --text-secondary: #5c6672;
+  --text-muted: #8590a0;
+  --text-on-accent: #ffffff;
+  --text-on-accent-muted: rgba(255, 255, 255, 0.85);
+
+  /* 分隔：靠浅灰描边与留白分层，不靠重阴影 */
+  --border-color: #ebedf0;
+  --border-light: #f1f3f5;
+  --border-subtle: rgba(26, 26, 28, 0.08);
+  --border-strong: #d5d9de;
+
+  /* 主色：知乎蓝（实心填充 / 强调） */
+  --accent: #0066ff;
+  --accent-hover: #0052cc;
+  --accent-light: rgba(0, 102, 255, 0.08);
+  --accent-glow: rgba(0, 102, 255, 0.12);
+  /* 描边/选中环专用：压深一档，避免边框过淡 */
+  --accent-border: #0066ff;
+  --accent-border-strong: #0052cc;
+  --interactive-hover: rgba(0, 102, 255, 0.05);
+  --interactive-active: rgba(0, 102, 255, 0.10);
+
+  --btn-send-bg: #0066ff;
+  --btn-send-hover: #0052cc;
+  --focus-ring-color: #0066ff;
+  --focus-ring-glow: rgba(0, 102, 255, 0.16);
+  --focus-ring: 0 0 0 3px var(--focus-ring-glow);
+
+  --success: #00b578;
+  --success-light: rgba(0, 181, 120, 0.08);
+  --warning: #e8912a;
+  --warning-light: rgba(232, 145, 42, 0.08);
+  --danger: #e5484d;
+  --danger-light: rgba(229, 72, 77, 0.08);
+
+  /* 输入区 chip：紫=技能，蓝绿=文件，橙=plan，蓝=shell */
+  --chip-skill-fg: #7c5cff;
+  --chip-skill-bg: rgba(124, 92, 255, 0.08);
+  --chip-skill-border: rgba(124, 92, 255, 0.22);
+  --chip-skill-ring: rgba(124, 92, 255, 0.18);
+  --chip-file-fg: #0e9fb0;
+  --chip-file-bg: rgba(14, 159, 176, 0.08);
+  --chip-file-border: rgba(14, 159, 176, 0.22);
+  --chip-file-ring: rgba(14, 159, 176, 0.18);
+  --chip-plan-fg: #d1700c;
+  --chip-plan-bg: rgba(209, 112, 12, 0.10);
+  --chip-plan-border: rgba(209, 112, 12, 0.22);
+  --chip-plan-ring: rgba(209, 112, 12, 0.18);
+  --chip-shell-fg: #0066ff;
+  --chip-shell-bg: rgba(0, 102, 255, 0.08);
+  --chip-shell-border: rgba(0, 102, 255, 0.22);
+  --chip-shell-ring: rgba(0, 102, 255, 0.18);
+
+  /* 阴影极轻，接近扁平卡片 */
+  --shadow-sm: 0 1px 2px rgba(26, 26, 28, 0.04);
+  --shadow: 0 6px 18px -6px rgba(26, 26, 28, 0.08);
+  --shadow-md: 0 18px 44px -14px rgba(26, 26, 28, 0.12);
+
+  /* 用户气泡：淡蓝面 + 深色字 */
+  --msg-user-bg: #eaf3ff;
+  --msg-user-fg: #1a1a1c;
+  --msg-user-note-bg: #dbeaff;
+  --msg-agent-bg: #ffffff;
+  --msg-agent-border: var(--border-subtle);
+
+  --msg-thinking-text: #6b7480;
+  --msg-thinking-label: #9aa3ae;
+  --msg-thinking-border: rgba(26, 26, 28, 0.16);
+
+  /* Diff Viewer */
+  --diff-add-bg: rgba(0, 181, 120, 0.10);
+  --diff-add-text: #00875a;
+  --diff-add-num-bg: rgba(0, 181, 120, 0.16);
+  --diff-add-num-text: #00704b;
+  --diff-del-bg: rgba(229, 72, 77, 0.10);
+  --diff-del-text: #c93a3e;
+  --diff-del-num-bg: rgba(229, 72, 77, 0.16);
+  --diff-del-num-text: #b32e32;
+  --diff-hunk-bg: rgba(0, 102, 255, 0.10);
+  --diff-hunk-text: var(--text-secondary);
+
+  --surface-page: #ffffff;
+  --surface-sidebar: #f6f7f9;
+  --surface-panel: #fafbfc;
+  --surface-raised: #ffffff;
+  --surface-overlay: rgba(255, 255, 255, 0.95);
+  --chat-bg: var(--surface-page);
+
+  --chart-1: oklch(0.55 0.19 258);
+  --chart-2: oklch(0.62 0.17 145);
+  --chart-3: oklch(0.70 0.16 65);
+  --chart-4: oklch(0.60 0.20 300);
+  --chart-5: var(--chart-2);
+}
+
+/* ── Fresh Theme: 暖米色为主体，绿只做点缀（选中 / 主按钮 / 焦点 / 侧栏当前项）── */
+[data-theme="fresh"] {
+  color-scheme: light;
+  /* 底色：低饱和暖米，不偏黄，避免和棕色文字发脏 */
+  --bg-primary: #fdf9f2;
+  --bg-secondary: #f6f1e7;
+  --bg-card: #fffdfa;
+  --bg-input: #faf5ec;
+  --bg-hover: rgba(120, 96, 56, 0.07);
+  --bg-active: rgba(46, 125, 79, 0.12);
+
+  /* 文字：暖棕，比纯黑柔和；不用绿调 */
+  --text-primary: #3b332a;
+  --text-secondary: #6b6156;
+  --text-muted: #8d8377;
+  --text-on-accent: #f6fff8;
+  --text-on-accent-muted: rgba(246, 255, 248, 0.85);
+
+  --border-color: #e9dfcd;
+  --border-light: #f2ead9;
+  --border-subtle: rgba(80, 64, 36, 0.08);
+  --border-strong: #d8c9ae;
+
+  /* 点缀绿：只用于选中态、主操作、焦点环，不铺大面积 */
+  --accent: #2e7d4f;
+  --accent-hover: #25663f;
+  --accent-light: rgba(46, 125, 79, 0.12);
+  --accent-glow: rgba(46, 125, 79, 0.16);
+  --accent-border: #37905c;
+  --accent-border-strong: #25663f;
+  --interactive-hover: rgba(120, 96, 56, 0.09);
+  --interactive-active: rgba(46, 125, 79, 0.16);
+
+  --btn-send-bg: #2e7d4f;
+  --btn-send-hover: #25663f;
+  --btn-send-fg: #f6fff8;
+  --focus-ring-color: #2e7d4f;
+  --focus-ring-glow: rgba(46, 125, 79, 0.22);
+  --focus-ring: 0 0 0 3px var(--focus-ring-glow);
+
+  --success: #2e7d4f;
+  --success-light: rgba(46, 125, 79, 0.12);
+  --warning: #c08a2a;
+  --warning-light: rgba(192, 138, 42, 0.14);
+  --danger: #c05a4a;
+  --danger-light: rgba(192, 90, 74, 0.12);
+
+  /* chip：绿=文件（唯一用绿的一类），其余走暖棕系 */
+  --chip-skill-fg: #7a6248;
+  --chip-skill-bg: rgba(122, 98, 72, 0.10);
+  --chip-skill-border: rgba(122, 98, 72, 0.22);
+  --chip-skill-ring: rgba(122, 98, 72, 0.18);
+  --chip-file-fg: #2e7d4f;
+  --chip-file-bg: rgba(46, 125, 79, 0.10);
+  --chip-file-border: rgba(46, 125, 79, 0.24);
+  --chip-file-ring: rgba(46, 125, 79, 0.18);
+  --chip-plan-fg: #9a6b12;
+  --chip-plan-bg: rgba(232, 184, 74, 0.20);
+  --chip-plan-border: rgba(180, 130, 36, 0.30);
+  --chip-plan-ring: rgba(232, 184, 74, 0.22);
+  --chip-shell-fg: #6b6355;
+  --chip-shell-bg: rgba(107, 99, 85, 0.10);
+  --chip-shell-border: rgba(107, 99, 85, 0.22);
+  --chip-shell-ring: rgba(107, 99, 85, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(80, 60, 30, 0.06);
+  --shadow: 0 6px 18px -6px rgba(80, 60, 30, 0.09);
+  --shadow-md: 0 18px 44px -14px rgba(80, 60, 30, 0.13);
+
+  /* 用户气泡：柔和奶油色，不抢主色 */
+  --msg-user-bg: #f7ecd6;
+  --msg-user-fg: #3b332a;
+  --msg-user-note-bg: #f0e4c6;
+  --msg-agent-bg: #fffdfa;
+  --msg-agent-border: var(--border-subtle);
+
+  --msg-thinking-text: #7c7365;
+  --msg-thinking-label: #a09789;
+  --msg-thinking-border: rgba(80, 64, 36, 0.20);
+
+  /* Diff Viewer */
+  --diff-add-bg: rgba(46, 125, 79, 0.12);
+  --diff-add-text: #256340;
+  --diff-add-num-bg: rgba(46, 125, 79, 0.18);
+  --diff-add-num-text: #1d4f31;
+  --diff-del-bg: rgba(192, 90, 74, 0.12);
+  --diff-del-text: #a34a3c;
+  --diff-del-num-bg: rgba(192, 90, 74, 0.18);
+  --diff-del-num-text: #8a3d31;
+  --diff-hunk-bg: rgba(192, 138, 42, 0.16);
+  --diff-hunk-text: var(--text-secondary);
+
+  --surface-page: #fdf9f2;
+  --surface-sidebar: #f6f1e7;
+  --surface-panel: #fbf7ef;
+  --surface-raised: #fffdfa;
+  --surface-overlay: rgba(253, 249, 242, 0.95);
+  --chat-bg: var(--surface-page);
+
+  --chart-1: oklch(0.58 0.11 150);
+  --chart-2: oklch(0.72 0.12 70);
+  --chart-3: oklch(0.64 0.11 40);
+  --chart-4: oklch(0.60 0.09 20);
+  --chart-5: var(--chart-2);
+}
+
 /* ===== Global ===== */
 html, body {
   height: 100%;

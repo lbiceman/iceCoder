@@ -544,10 +544,6 @@ select:focus-visible,
 
 /* ===== Responsive and motion ===== */
 @media (max-width: 1180px) {
-  :root {
-    --sidebar-width: 232px;
-  }
-
   .chat-messages {
     padding-inline: 28px;
   }

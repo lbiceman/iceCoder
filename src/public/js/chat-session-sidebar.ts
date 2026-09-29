@@ -71,6 +71,7 @@ export const ChatSessionSidebar = (() => {
     }
     bindEvents();
     if (window.AppIcon) window.AppIcon.hydrate(sidebar);
+    bindSidebarResizer();
     Store.fetchSessions(() => { renderList(); });
     return sidebar;
   }
@@ -482,6 +483,109 @@ export const ChatSessionSidebar = (() => {
     Store.setSessionWorkspace(sid, data);
     if (typeof data.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
       Store.setShellCollabActive(sid, data.shellCollabActive);
+    }
+  }
+
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 480;
+  const SIDEBAR_DEFAULT = 256;
+
+  function readStoredSidebarWidth() {
+    try {
+      if (window.EtlPrefs && typeof window.EtlPrefs.getKey === 'function') {
+        const v = window.EtlPrefs.getKey('sidebarWidth');
+        if (typeof v === 'number' && isFinite(v)) return v;
+      }
+    } catch (_e) { /* ignore */ }
+    return SIDEBAR_DEFAULT;
+  }
+
+  function clampSidebarWidth(value) {
+    const w = typeof value === 'number' ? value : parseInt(value, 10);
+    const base = isFinite(w) ? w : SIDEBAR_DEFAULT;
+    const room = Math.max(SIDEBAR_MIN, (window.innerWidth || SIDEBAR_MAX) - 320);
+    const max = Math.min(SIDEBAR_MAX, room);
+    return Math.round(Math.min(max, Math.max(SIDEBAR_MIN, base)));
+  }
+
+  function applySidebarWidth(value) {
+    const w = clampSidebarWidth(value == null ? readStoredSidebarWidth() : value);
+    document.documentElement.style.setProperty('--sidebar-width', `${w}px`);
+    if (sidebar) {
+      const handle = sidebar.querySelector('.chat-sidebar-resizer');
+      if (handle) handle.setAttribute('aria-valuenow', String(w));
+    }
+    return w;
+  }
+
+  function commitSidebarWidth(value) {
+    const next = applySidebarWidth(value);
+    if (!window.EtlPrefs || typeof window.EtlPrefs.set !== 'function') return;
+    if (next === readStoredSidebarWidth()) return;
+    window.EtlPrefs.set({ sidebarWidth: next }).catch(() => {
+      applySidebarWidth(readStoredSidebarWidth());
+    });
+  }
+
+  function bindSidebarResizer() {
+    if (!sidebar) return;
+    let handle = sidebar.querySelector('.chat-sidebar-resizer');
+    if (!handle) {
+      handle = document.createElement('div');
+      handle.className = 'chat-sidebar-resizer';
+      handle.setAttribute('role', 'separator');
+      handle.setAttribute('aria-orientation', 'vertical');
+      handle.tabIndex = 0;
+      handle.setAttribute('aria-label', '拖动调整左侧栏宽度');
+      handle.setAttribute('aria-valuemin', String(SIDEBAR_MIN));
+      handle.setAttribute('aria-valuemax', String(SIDEBAR_MAX));
+      sidebar.appendChild(handle);
+    }
+    if (handle.dataset.bound === '1') return;
+    handle.dataset.bound = '1';
+    applySidebarWidth();
+
+    let dragging = false;
+    const stop = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('pane-resizing');
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width'), 10);
+      commitSidebarWidth(current);
+    };
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      if (document.documentElement.getAttribute('data-shell') === 'mobile') return;
+      dragging = true;
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add('pane-resizing');
+      applySidebarWidth(event.clientX - sidebar.getBoundingClientRect().left);
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!dragging) return;
+      applySidebarWidth(event.clientX - sidebar.getBoundingClientRect().left);
+    });
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+    handle.addEventListener('keydown', (event) => {
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width'), 10) || SIDEBAR_DEFAULT;
+      const step = event.shiftKey ? 32 : 16;
+      if (event.key === 'ArrowRight') commitSidebarWidth(current + step);
+      else if (event.key === 'ArrowLeft') commitSidebarWidth(current - step);
+      else if (event.key === 'Home') commitSidebarWidth(SIDEBAR_DEFAULT);
+      else return;
+      event.preventDefault();
+    });
+  }
+
+  applySidebarWidth();
+  if (window.EtlPrefs) {
+    if (typeof window.EtlPrefs.whenReady === 'function') {
+      window.EtlPrefs.whenReady().then(() => { applySidebarWidth(); });
+    }
+    if (typeof window.EtlPrefs.onChange === 'function') {
+      window.EtlPrefs.onChange(() => { applySidebarWidth(); });
     }
   }
 

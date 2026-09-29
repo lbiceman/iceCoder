@@ -157,14 +157,23 @@
     return 'desktop';
   }
 
+  const THEMES = ['dark', 'light', 'modern', 'fresh'];
+  const THEME_LABELS = { dark: '深色', light: '浅色', modern: '现代蓝', fresh: '暖阳' };
+
   function getStoredTheme(shell) {
     if (!shell) shell = currentShell || detectShellForTheme();
     const stored = localStorage.getItem(getThemeStorageKey(shell));
-    if (stored === 'light' || stored === 'dark') return stored;
+    if (THEMES.indexOf(stored) !== -1) return stored;
     return shell === 'mobile' ? 'light' : 'dark';
   }
 
+  function nextTheme(theme) {
+    const i = THEMES.indexOf(theme);
+    return THEMES[(i < 0 ? 0 : i + 1) % THEMES.length];
+  }
+
   function setTheme(theme, shell) {
+    if (THEMES.indexOf(theme) === -1) return;
     if (!shell) shell = currentShell || detectShellForTheme();
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem(getThemeStorageKey(shell), theme);
@@ -175,7 +184,13 @@
 
   function toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme') || getStoredTheme();
-    setTheme(current === 'dark' ? 'light' : 'dark');
+    setTheme(nextTheme(current));
+  }
+
+  function themeToggleTitle(theme) {
+    const current = THEMES.indexOf(theme) === -1 ? getStoredTheme() : theme;
+    const next = nextTheme(current);
+    return '当前：' + THEME_LABELS[current] + '，点击切换为' + THEME_LABELS[next];
   }
 
   function getTheme() {
@@ -217,6 +232,7 @@
     getTheme,
     setTheme,
     toggleTheme,
+    themeToggleTitle,
     getSupervisorMode,
     getSupervisorLabel,
     cycleSupervisorMode,
