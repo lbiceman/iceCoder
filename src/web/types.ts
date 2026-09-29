@@ -69,12 +69,16 @@ export interface ProviderConfig {
 export interface IceEtlPrefs {
   showTransparencyPanel: boolean;
   panelDefaultExpanded: boolean;
-  /** 面板宽度，仅 280 / 320 / 380 */
+  /** 右侧工作台宽度（px），拖拽后写入，范围 240–640 */
   panelWidth: number;
+  /** 左侧会话栏宽度（px），拖拽后写入，范围 200–480 */
+  sidebarWidth: number;
   /** 任务完成后是否通过桌面系统通知提醒（仅桌面端生效） */
   taskDoneNotification: boolean;
   /** 面板空闲（无执行活动）时自动收起为宠物形态 */
   panelAutoCollapse: boolean;
+  /** 最小化 Electron 窗口时是否在桌面显示悬浮宠物。关闭后窗口正常最小化，桌面不再露出宠物 */
+  showDesktopPet: boolean;
 }
 
 /** `data/config.json` 顶层结构 */

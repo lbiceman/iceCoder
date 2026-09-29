@@ -54,6 +54,44 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   padding-right: 0;
 }
 
+.etl-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.etl-panel-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 6px;
+  margin: auto;
+  width: 1px;
+  background: transparent;
+  transition: background-color 0.12s ease, width 0.12s ease;
+}
+
+.etl-panel-resizer:hover::after,
+.etl-panel-resizer:focus-visible::after {
+  width: 2px;
+  background: var(--accent);
+}
+
+.etl-panel-resizer:focus-visible {
+  outline: none;
+}
+
+html[data-shell="mobile"] .etl-panel-resizer {
+  display: none;
+}
+
 /* ── 头部 ── */
 .etl-header {
   display: flex;

@@ -10,25 +10,21 @@ export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   showTransparencyPanel: true,
   panelDefaultExpanded: true,
   panelWidth: 320,
+  sidebarWidth: 256,
   taskDoneNotification: false,
   panelAutoCollapse: false,
+  showDesktopPet: true,
 };
 
-const ALLOWED_PANEL_WIDTHS = [280, 320, 380] as const;
+const PANEL_WIDTH_MIN = 240;
+const PANEL_WIDTH_MAX = 640;
+const SIDEBAR_WIDTH_MIN = 200;
+const SIDEBAR_WIDTH_MAX = 480;
 
-function clampPanelWidth(value: unknown): number {
+function clampWidth(value: unknown, fallback: number, min: number, max: number): number {
   const w = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
-  if (!Number.isFinite(w)) return DEFAULT_ICE_ETL_PREFS.panelWidth;
-  let best: number = ALLOWED_PANEL_WIDTHS[0];
-  let bestDist = Math.abs(w - best);
-  for (const allowed of ALLOWED_PANEL_WIDTHS) {
-    const d = Math.abs(w - allowed);
-    if (d < bestDist) {
-      best = allowed;
-      bestDist = d;
-    }
-  }
-  return best;
+  if (!Number.isFinite(w)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, w)));
 }
 
 export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {
@@ -48,7 +44,11 @@ export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {
   if (typeof input.panelAutoCollapse === 'boolean') {
     out.panelAutoCollapse = input.panelAutoCollapse;
   }
-  out.panelWidth = clampPanelWidth(input.panelWidth);
+  if (typeof input.showDesktopPet === 'boolean') {
+    out.showDesktopPet = input.showDesktopPet;
+  }
+  out.panelWidth = clampWidth(input.panelWidth, DEFAULT_ICE_ETL_PREFS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
+  out.sidebarWidth = clampWidth(input.sidebarWidth, DEFAULT_ICE_ETL_PREFS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
   return out;
 }
 
@@ -73,11 +73,17 @@ export function validateIceEtlPrefsPatch(patch: Record<string, unknown>): string
   if (patch.panelWidth !== undefined && typeof patch.panelWidth !== 'number') {
     return 'panelWidth 须为 number';
   }
+  if (patch.sidebarWidth !== undefined && typeof patch.sidebarWidth !== 'number') {
+    return 'sidebarWidth 须为 number';
+  }
   if (patch.taskDoneNotification !== undefined && typeof patch.taskDoneNotification !== 'boolean') {
     return 'taskDoneNotification 须为 boolean';
   }
   if (patch.panelAutoCollapse !== undefined && typeof patch.panelAutoCollapse !== 'boolean') {
     return 'panelAutoCollapse 须为 boolean';
+  }
+  if (patch.showDesktopPet !== undefined && typeof patch.showDesktopPet !== 'boolean') {
+    return 'showDesktopPet 须为 boolean';
   }
   return null;
 }

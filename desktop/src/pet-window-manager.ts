@@ -23,6 +23,8 @@ export class PetWindowManager {
   private serverBaseUrl = 'http://127.0.0.1:1024';
   private transitionLock = false;
   private lastSnapshot: unknown = null;
+  /** 与 iceEtlPrefs.showDesktopPet 对齐。关闭后最小化主窗不再浮出冰豆。 */
+  private desktopPetEnabled = true;
 
   setContext(mainWindow: BrowserWindow, serverBaseUrl: string): void {
     this.mainWindow = mainWindow;
@@ -32,6 +34,26 @@ export class PetWindowManager {
 
   getMode(): PetDisplayMode {
     return this.mode;
+  }
+
+  isDesktopPetEnabled(): boolean {
+    return this.desktopPetEnabled;
+  }
+
+  /**
+   * 同步「桌面宠物」开关。
+   * 关闭且当前正在悬浮：收起桌面冰豆，主窗保持最小化。
+   * 打开且主窗已在后台：补一次悬浮。
+   */
+  setDesktopPetEnabled(enabled: boolean): Promise<void> {
+    if (this.desktopPetEnabled === enabled) return Promise.resolve();
+    this.desktopPetEnabled = enabled;
+    if (!enabled) {
+      this.concealFloatingPet();
+      return Promise.resolve();
+    }
+    if (!this.isMainBackgrounded()) return Promise.resolve();
+    return this.enterFloatingMode();
   }
 
   /** 主窗可见且未最小化时：embedded 模式。 */
@@ -53,9 +75,13 @@ export class PetWindowManager {
     }
   }
 
-  /** 主窗最小化/隐藏/收托盘时：floating 模式。 */
+  /** 主窗最小化/隐藏/收托盘时：floating 模式。桌面宠物关闭时只保持窗口最小化。 */
   async enterFloatingMode(mainWindow?: BrowserWindow): Promise<void> {
     if (mainWindow) this.mainWindow = mainWindow;
+    if (!this.desktopPetEnabled) {
+      this.concealFloatingPet();
+      return;
+    }
     if (this.transitionLock) return;
     this.transitionLock = true;
     try {
@@ -74,6 +100,11 @@ export class PetWindowManager {
           this.mainWindow.webContents.send('pet:force-visible', true);
         }
         this.mode = 'embedded';
+        return;
+      }
+
+      if (!this.desktopPetEnabled) {
+        this.concealFloatingPet();
         return;
       }
 
@@ -124,6 +155,23 @@ export class PetWindowManager {
 
   private isMainMinimized(): boolean {
     return !!(this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.isMinimized());
+  }
+
+  /** 主窗最小化或被 hide，此时才允许把冰豆浮到桌面。 */
+  private isMainBackgrounded(): boolean {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
+    if (this.mainWindow.isMinimized()) return true;
+    return !this.mainWindow.isVisible();
+  }
+
+  /** 收起悬浮窗。主窗若已最小化则保持最小化，不主动还原。 */
+  private concealFloatingPet(): void {
+    if (this.floating && !this.floating.isDestroyed()) {
+      this.floating.hide();
+    }
+    if (this.mode === 'floating' || this.isMainBackgrounded()) {
+      this.mode = 'hidden';
+    }
   }
 
   private isMainRestoredVisible(): boolean {

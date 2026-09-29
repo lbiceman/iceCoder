@@ -8,6 +8,7 @@ interface IceDesktopApi {
   petPushState?: (snapshot: unknown) => void;
   onPetForceVisible?: (handler: (visible: boolean) => void) => void;
   petSetMousePassthrough?: (passthrough: boolean) => void;
+  setDesktopPetEnabled?: (enabled: boolean) => void;
   [key: string]: unknown;
 }
 

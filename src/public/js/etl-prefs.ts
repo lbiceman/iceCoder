@@ -12,8 +12,10 @@ export const EtlPrefs = (() => {
     showTransparencyPanel: true,
     panelDefaultExpanded: true,
     panelWidth: 320,
+    sidebarWidth: 256,
     taskDoneNotification: false,
     panelAutoCollapse: false,
+    showDesktopPet: true,
   };
 
   let cached = null;
@@ -22,21 +24,88 @@ export const EtlPrefs = (() => {
   let readyResolved = false;
   let loading = false;
 
-  const ALLOWED_PANEL_WIDTHS = [280, 320, 380];
+  const PANEL_WIDTH_MIN = 240;
+  const PANEL_WIDTH_MAX = 640;
+  const SIDEBAR_WIDTH_MIN = 200;
+  const SIDEBAR_WIDTH_MAX = 480;
 
-  function clampPanelWidth(value) {
+  function clampWidth(value, fallback, min, max) {
     const w = typeof value === 'number' ? value : parseInt(value, 10);
-    if (!isFinite(w)) return DEFAULTS.panelWidth;
-    let best = ALLOWED_PANEL_WIDTHS[0];
-    let bestDist = Math.abs(w - best);
-    for (let i = 1; i < ALLOWED_PANEL_WIDTHS.length; i++) {
-      const d = Math.abs(w - ALLOWED_PANEL_WIDTHS[i]);
-      if (d < bestDist) {
-        best = ALLOWED_PANEL_WIDTHS[i];
-        bestDist = d;
+    if (!isFinite(w)) return fallback;
+    return Math.round(Math.min(max, Math.max(min, w)));
+  }
+
+  /**
+   * 拖拽宽度的本地锁定。
+   * 运行中的配置接口若拒绝 sidebarWidth，或把 panelWidth 收成旧档位，
+   * 仍保留用户松手时的像素，避免界面缩回。服务端原样接受后即去掉锁定。
+   */
+  const WIDTH_LOCK_KEY = 'ice-etl-width-lock';
+
+  function readWidthLock() {
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage || typeof localStorage.getItem !== 'function') {
+        return {};
       }
+      const raw = JSON.parse(localStorage.getItem(WIDTH_LOCK_KEY) || 'null');
+      if (!raw || typeof raw !== 'object') return {};
+      const out = {};
+      if (typeof raw.panelWidth === 'number' && isFinite(raw.panelWidth)) {
+        out.panelWidth = clampWidth(raw.panelWidth, DEFAULTS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
+      }
+      if (typeof raw.sidebarWidth === 'number' && isFinite(raw.sidebarWidth)) {
+        out.sidebarWidth = clampWidth(raw.sidebarWidth, DEFAULTS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
+      }
+      return out;
+    } catch (_e) {
+      return {};
     }
-    return best;
+  }
+
+  function writeWidthLock(lock) {
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage) return;
+      if (!lock || (lock.panelWidth == null && lock.sidebarWidth == null)) {
+        localStorage.removeItem(WIDTH_LOCK_KEY);
+        return;
+      }
+      localStorage.setItem(WIDTH_LOCK_KEY, JSON.stringify(lock));
+    } catch (_e) { /* ignore */ }
+  }
+
+  function overlayWidthLock(prefs) {
+    const lock = readWidthLock();
+    if (lock.panelWidth == null && lock.sidebarWidth == null) return prefs;
+    return { ...prefs, ...lock };
+  }
+
+  function rememberRequestedWidths(next, patch) {
+    if (!patch) return;
+    const lock = readWidthLock();
+    let changed = false;
+    if (typeof patch.panelWidth === 'number') {
+      lock.panelWidth = next.panelWidth;
+      changed = true;
+    }
+    if (typeof patch.sidebarWidth === 'number') {
+      lock.sidebarWidth = next.sidebarWidth;
+      changed = true;
+    }
+    if (changed) writeWidthLock(lock);
+  }
+
+  function clearLockIfServerAgrees(serverPrefs) {
+    const lock = readWidthLock();
+    let changed = false;
+    if (lock.panelWidth != null && serverPrefs.panelWidth === lock.panelWidth) {
+      delete lock.panelWidth;
+      changed = true;
+    }
+    if (lock.sidebarWidth != null && serverPrefs.sidebarWidth === lock.sidebarWidth) {
+      delete lock.sidebarWidth;
+      changed = true;
+    }
+    if (changed) writeWidthLock(lock);
   }
 
   function sanitize(raw) {
@@ -55,7 +124,11 @@ export const EtlPrefs = (() => {
     if (typeof raw.panelAutoCollapse === 'boolean') {
       out.panelAutoCollapse = raw.panelAutoCollapse;
     }
-    out.panelWidth = clampPanelWidth(raw.panelWidth);
+    if (typeof raw.showDesktopPet === 'boolean') {
+      out.showDesktopPet = raw.showDesktopPet;
+    }
+    out.panelWidth = clampWidth(raw.panelWidth, DEFAULTS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
+    out.sidebarWidth = clampWidth(raw.sidebarWidth, DEFAULTS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
     return out;
   }
 
@@ -129,12 +202,13 @@ export const EtlPrefs = (() => {
 
   function get() {
     if (!cached) cached = sanitize(DEFAULTS);
-    return { ...cached };
+    return overlayWidthLock({ ...cached });
   }
 
   function getKey(key) {
     if (!cached) cached = sanitize(DEFAULTS);
-    return cached[key];
+    const locked = overlayWidthLock(cached);
+    return locked[key];
   }
 
   function set(patch) {
@@ -144,9 +218,11 @@ export const EtlPrefs = (() => {
     const before = cached;
     const next = sanitize({ ...cached, ...patch });
     if (!prefsChanged(before, next)) return Promise.resolve(true);
+    rememberRequestedWidths(next, patch);
 
     if (typeof fetch !== 'function') {
       cached = next;
+      clearLockIfServerAgrees(next);
       emit();
       return Promise.resolve(true);
     }
@@ -165,6 +241,7 @@ export const EtlPrefs = (() => {
           return Promise.reject(new Error(message));
         }
         cached = sanitize(result.body.iceEtlPrefs || next);
+        clearLockIfServerAgrees(cached);
         emit();
         return true;
       });

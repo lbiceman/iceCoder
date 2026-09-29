@@ -71,4 +71,19 @@ describe('悬浮窗 Windows 展示约定', () => {
   it('主窗 show 在仍最小化时不切回 embedded', () => {
     expect(mainSrc).toMatch(/on\('show'[\s\S]*isMinimized\(\)/);
   });
+
+  it('桌面宠物开关经 IPC 同步，关闭后最小化不再浮出', () => {
+    const preloadSrc = readFileSync(
+      path.join(__dirname, '../../desktop/src/preload.ts'),
+      'utf-8',
+    );
+    const bridgeSrc = readFileSync(
+      path.join(__dirname, '../../src/public/js/desktop-pet-bridge.ts'),
+      'utf-8',
+    );
+    expect(mainSrc).toContain('PET_SET_DESKTOP_ENABLED');
+    expect(preloadSrc).toContain('setDesktopPetEnabled');
+    expect(bridgeSrc).toContain('showDesktopPet');
+    expect(bridgeSrc).toContain('setDesktopPetEnabled');
+  });
 });

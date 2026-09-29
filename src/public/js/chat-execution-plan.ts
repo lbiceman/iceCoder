@@ -192,24 +192,83 @@ export const ChatExecutionPlan = (() => {
     }
   }
 
-  function applyPanelWidth() {
+  const PANEL_WIDTH_MIN = 240;
+  const PANEL_WIDTH_MAX = 640;
+  const PANEL_WIDTH_DEFAULT = 320;
+  let endPanelDrag = null;
+
+  function clampPanelWidth(value) {
+    const w = typeof value === 'number' ? value : parseInt(value, 10);
+    const base = isFinite(w) ? w : PANEL_WIDTH_DEFAULT;
+    const room = Math.max(PANEL_WIDTH_MIN, (window.innerWidth || PANEL_WIDTH_MAX) - 280);
+    const max = Math.min(PANEL_WIDTH_MAX, room);
+    return Math.round(Math.min(max, Math.max(PANEL_WIDTH_MIN, base)));
+  }
+
+  function applyPanelWidth(value) {
     try {
-      let w = pref('panelWidth', 320);
-      w = typeof w === 'number' ? w : parseInt(w, 10);
-      if (!isFinite(w)) w = 320;
-      const allowed = [280, 320, 380];
-      let best = allowed[0];
-      let bestDist = Math.abs(w - best);
-      for (let i = 1; i < allowed.length; i++) {
-        const d = Math.abs(w - allowed[i]);
-        if (d < bestDist) {
-          best = allowed[i];
-          bestDist = d;
-        }
-      }
-      w = best;
+      let w = value;
+      if (w == null) w = pref('panelWidth', PANEL_WIDTH_DEFAULT);
+      w = clampPanelWidth(w);
       document.documentElement.style.setProperty('--etl-w', `${w}px`);
-    } catch (_e) { /* ignore */ }
+      const handle = hostEl && hostEl.querySelector('.etl-panel-resizer');
+      if (handle) handle.setAttribute('aria-valuenow', String(w));
+      return w;
+    } catch (_e) {
+      return PANEL_WIDTH_DEFAULT;
+    }
+  }
+
+  function commitPanelWidth(value) {
+    const next = applyPanelWidth(value);
+    if (!window.EtlPrefs || typeof window.EtlPrefs.set !== 'function') return;
+    const stored = pref('panelWidth', PANEL_WIDTH_DEFAULT);
+    if (next === stored) return;
+    window.EtlPrefs.set({ panelWidth: next }).catch(() => {
+      applyPanelWidth(pref('panelWidth', PANEL_WIDTH_DEFAULT));
+    });
+  }
+
+  function bindPanelResizer(panel) {
+    if (!panel) return;
+    const handle = panel.querySelector('.etl-panel-resizer');
+    if (!handle || handle.dataset.bound === '1') return;
+    handle.dataset.bound = '1';
+    applyPanelWidth();
+
+    let dragging = false;
+    const stop = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('pane-resizing');
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--etl-w'), 10);
+      commitPanelWidth(current);
+      if (endPanelDrag === stop) endPanelDrag = null;
+    };
+    endPanelDrag = stop;
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add('pane-resizing');
+      applyPanelWidth(panel.getBoundingClientRect().right - event.clientX);
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!dragging) return;
+      applyPanelWidth(panel.getBoundingClientRect().right - event.clientX);
+    });
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+    handle.addEventListener('keydown', (event) => {
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--etl-w'), 10) || PANEL_WIDTH_DEFAULT;
+      const step = event.shiftKey ? 32 : 16;
+      if (event.key === 'ArrowLeft') commitPanelWidth(current + step);
+      else if (event.key === 'ArrowRight') commitPanelWidth(current - step);
+      else if (event.key === 'Home') commitPanelWidth(PANEL_WIDTH_DEFAULT);
+      else return;
+      event.preventDefault();
+    });
   }
 
   // ── 时间格式化 ──
@@ -523,13 +582,16 @@ export const ChatExecutionPlan = (() => {
     if (endSplitterDrag) endSplitterDrag();
     endSplitterDrag = null;
     splitterBound = false;
+    if (endPanelDrag) endPanelDrag();
+    endPanelDrag = null;
     try {
       stopTick();
       if (rootEl && rootEl.parentNode) rootEl.parentNode.removeChild(rootEl);
       if (mobileBarEl && mobileBarEl.parentNode) mobileBarEl.parentNode.removeChild(mobileBarEl);
       if (mobileSheetEl && mobileSheetEl.parentNode) mobileSheetEl.parentNode.removeChild(mobileSheetEl);
       if (mobileBackdropEl && mobileBackdropEl.parentNode) mobileBackdropEl.parentNode.removeChild(mobileBackdropEl);
-      document.body.classList.remove('etl-panel-open', 'etl-msheet-open', 'etl-pet-hidden-by-panel', 'etl-splitter-dragging');
+      document.body.classList.remove('etl-panel-open', 'etl-msheet-open', 'etl-splitter-dragging', 'pane-resizing');
+      syncPetVisibility(false);
     } catch (_e) { /* ignore */ }
     rootEl = null;
     mobileBarEl = null;
@@ -564,13 +626,14 @@ export const ChatExecutionPlan = (() => {
     rootEl.setAttribute('aria-hidden', 'true');
 
     rootEl.innerHTML =
-      `<header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll"><div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
+      `<div class="etl-panel-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整工作台宽度" aria-valuemin="${PANEL_WIDTH_MIN}" aria-valuemax="${PANEL_WIDTH_MAX}"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll"><div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
 
     document.body.appendChild(rootEl);
     hostEl = rootEl;
     mountedMode = 'desktop';
     grabHostRefs(rootEl);
     bindHostControls(rootEl);
+    bindPanelResizer(rootEl);
   }
 
   /** 移动端：顶部一行入口 + 底部 sheet（与桌面同一工作台，无 Tab）。 */
@@ -676,6 +739,14 @@ export const ChatExecutionPlan = (() => {
 
   // ── 显隐控制 ──
 
+  /**
+   * 面板展开时藏起宠物。
+   * panelCoversPet 为真表示面板/抽屉正盖住聊天区。
+   */
+  function syncPetVisibility(panelCoversPet) {
+    document.body.classList.toggle('etl-pet-hidden-by-panel', !!panelCoversPet);
+  }
+
   /** 是否应呈现透明层（桌面面板 / 移动顶部条的共同前置条件）。 */
   function shouldShow() {
     if (isPanelSuppressed()) return false;
@@ -707,7 +778,8 @@ export const ChatExecutionPlan = (() => {
         }
         if (mobileBarEl) mobileBarEl.classList.remove('etl-mbar--open');
         closeSheetDom();
-        document.body.classList.remove('etl-panel-open', 'etl-pet-hidden-by-panel');
+        document.body.classList.remove('etl-panel-open');
+        syncPetVisibility(false);
         stopTick();
         return;
       }
@@ -724,7 +796,7 @@ export const ChatExecutionPlan = (() => {
         rootEl.classList.add('etl-panel--open');
         rootEl.setAttribute('aria-hidden', 'false');
         document.body.classList.add('etl-panel-open');
-        document.body.classList.add('etl-pet-hidden-by-panel');
+        syncPetVisibility(true);
         startTick();
       } else {
         if (rootEl) {
@@ -732,7 +804,7 @@ export const ChatExecutionPlan = (() => {
           rootEl.setAttribute('aria-hidden', 'true');
         }
         document.body.classList.remove('etl-panel-open');
-        document.body.classList.remove('etl-pet-hidden-by-panel');
+        syncPetVisibility(false);
         stopTick();
       }
     } catch (e) {
@@ -768,7 +840,7 @@ export const ChatExecutionPlan = (() => {
     mobileSheetEl.setAttribute('aria-hidden', 'false');
     if (mobileBackdropEl) mobileBackdropEl.classList.add('etl-mbackdrop--open');
     document.body.classList.add('etl-msheet-open');
-    document.body.classList.add('etl-pet-hidden-by-panel');
+    syncPetVisibility(true);
     if (mobileBarEl) mobileBarEl.classList.add('is-expanded');
   }
 
@@ -779,8 +851,8 @@ export const ChatExecutionPlan = (() => {
     }
     if (mobileBackdropEl) mobileBackdropEl.classList.remove('etl-mbackdrop--open');
     document.body.classList.remove('etl-msheet-open');
-    document.body.classList.remove('etl-pet-hidden-by-panel');
     if (mobileBarEl) mobileBarEl.classList.remove('is-expanded');
+    syncPetVisibility(false);
   }
 
   function updateMobileBar() {
@@ -4058,12 +4130,15 @@ export const ChatExecutionPlan = (() => {
    */
   function refreshPreferences() {
     try {
+      applyPanelWidth();
       if (isPanelSuppressed()) {
         applyVisibility();
         return;
       }
+      const panelOpen = !!(rootEl && rootEl.classList.contains('etl-panel--open'))
+        || !!(mobileSheetEl && mobileSheetEl.classList.contains('etl-msheet--open'));
+      syncPetVisibility(panelOpen);
       if (!hostEl) return;
-      applyPanelWidth();
       renderLlmActivity();
     } catch (e) {
       safeWarn('refreshPreferences', e);
@@ -5423,6 +5498,7 @@ export const ChatExecutionPlan = (() => {
   }
 
   bindPreferenceRefresh();
+  applyPanelWidth();
 
   return {
     setPlan,

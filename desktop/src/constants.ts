@@ -41,6 +41,8 @@ export const IPC = {
   PET_DRAG_END: 'pet:drag-end',
   /** 悬浮窗透明区点击穿透（true=穿透，false=可点冰豆） */
   PET_SET_MOUSE_PASSTHROUGH: 'pet:set-mouse-passthrough',
+  /** 渲染层同步「桌面宠物」开关。关闭后最小化主窗不再浮出冰豆。 */
+  PET_SET_DESKTOP_ENABLED: 'pet:set-desktop-enabled',
 
   // 工作区
   WORKSPACE_PICK: 'workspace:pick',

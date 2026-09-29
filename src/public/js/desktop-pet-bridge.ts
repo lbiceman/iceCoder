@@ -7,6 +7,29 @@
 
   if (!window.iceDesktop) return;
 
+  function readDesktopPetEnabled() {
+    try {
+      if (window.EtlPrefs && typeof window.EtlPrefs.getKey === 'function') {
+        return window.EtlPrefs.getKey('showDesktopPet') !== false;
+      }
+    } catch (_e) { /* ignore */ }
+    return true;
+  }
+
+  function pushDesktopPetEnabled() {
+    const api = window.iceDesktop;
+    if (!api || typeof api.setDesktopPetEnabled !== 'function') return;
+    api.setDesktopPetEnabled(readDesktopPetEnabled());
+  }
+
+  pushDesktopPetEnabled();
+  if (window.EtlPrefs && typeof window.EtlPrefs.whenReady === 'function') {
+    window.EtlPrefs.whenReady().then(pushDesktopPetEnabled);
+  }
+  if (window.EtlPrefs && typeof window.EtlPrefs.onChange === 'function') {
+    window.EtlPrefs.onChange(pushDesktopPetEnabled);
+  }
+
   let petRef = null;
   const snapshot = {
     state: 'idle',

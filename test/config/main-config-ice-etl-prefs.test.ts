@@ -13,12 +13,12 @@ describe('main-config-ice-etl-prefs', () => {
   it('sanitizeIceEtlPrefs 夹紧 panelWidth 并补默认', () => {
     expect(sanitizeIceEtlPrefs({ panelWidth: 9999 })).toEqual({
       ...DEFAULT_ICE_ETL_PREFS,
-      panelWidth: 380,
+      panelWidth: 640,
     });
-    expect(sanitizeIceEtlPrefs({ panelWidth: 10 }).panelWidth).toBe(280);
-    expect(sanitizeIceEtlPrefs({ panelWidth: 280 }).panelWidth).toBe(280);
-    expect(sanitizeIceEtlPrefs({ panelWidth: 320 }).panelWidth).toBe(320);
-    expect(sanitizeIceEtlPrefs({ panelWidth: 380 }).panelWidth).toBe(380);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 10 }).panelWidth).toBe(240);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 333 }).panelWidth).toBe(333);
+    expect(sanitizeIceEtlPrefs({ sidebarWidth: 9999 }).sidebarWidth).toBe(480);
+    expect(sanitizeIceEtlPrefs({ sidebarWidth: 10 }).sidebarWidth).toBe(200);
     expect(sanitizeIceEtlPrefs(null)).toEqual(DEFAULT_ICE_ETL_PREFS);
   });
 
@@ -35,8 +35,10 @@ describe('main-config-ice-etl-prefs', () => {
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
       panelWidth: 380,
+      sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
+      showDesktopPet: true,
     });
 
     const raw = JSON.parse(await readFile(configPath, 'utf-8')) as { iceEtlPrefs: unknown };

@@ -28,6 +28,10 @@ const api = {
   petSetMousePassthrough: (passthrough: boolean) =>
     ipcRenderer.send(IPC.PET_SET_MOUSE_PASSTHROUGH, { passthrough }),
 
+  /** 「桌面宠物」开关。关闭后最小化主窗只收到任务栏，不再浮出冰豆。 */
+  setDesktopPetEnabled: (enabled: boolean) =>
+    ipcRenderer.send(IPC.PET_SET_DESKTOP_ENABLED, enabled),
+
   /** 工作区。 */
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_PICK),
   getWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_GET),

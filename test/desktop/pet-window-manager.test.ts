@@ -92,4 +92,38 @@ describe('PetWindowManager 状态机', () => {
     await manager.enterFloatingMode();
     expect(manager.getMode()).toBe('embedded');
   });
+
+  it('关闭桌面宠物后最小化不把冰豆浮到桌面', async () => {
+    await manager.setDesktopPetEnabled(false);
+    await enterFloating(manager, main);
+    expect(manager.isDesktopPetEnabled()).toBe(false);
+    expect(manager.getMode()).toBe('hidden');
+    expect(main.webContents.send).not.toHaveBeenCalledWith('pet:force-visible', false);
+  });
+
+  it('悬浮中关闭桌面宠物会收起冰豆且不还原主窗', async () => {
+    await enterFloating(manager, main);
+    expect(manager.getMode()).toBe('floating');
+    await manager.setDesktopPetEnabled(false);
+    expect(manager.getMode()).toBe('hidden');
+    expect(main.restore).not.toHaveBeenCalled();
+    expect(main.show).not.toHaveBeenCalled();
+  });
+
+  it('主窗已最小化时打开桌面宠物会补上悬浮冰豆', async () => {
+    await manager.setDesktopPetEnabled(false);
+    main.isMinimized.mockReturnValue(true);
+    main.isVisible.mockReturnValue(false);
+    await manager.setDesktopPetEnabled(true);
+    expect(manager.getMode()).toBe('floating');
+  });
+
+  it('主窗仍在前台时打开桌面宠物不会提前浮出', async () => {
+    await manager.enterEmbeddedMode();
+    await manager.setDesktopPetEnabled(false);
+    main.isMinimized.mockReturnValue(false);
+    main.isVisible.mockReturnValue(true);
+    await manager.setDesktopPetEnabled(true);
+    expect(manager.getMode()).toBe('embedded');
+  });
 });
