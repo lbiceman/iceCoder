@@ -245,7 +245,7 @@ select:focus-visible,
 
 .chat-messages {
   gap: var(--space-3);
-  padding: 28px clamp(24px, 4vw, 64px) 24px;
+  padding: 28px clamp(24px, 2vw, 64px) 24px;
   background: var(--surface-page);
 }
 
@@ -323,7 +323,7 @@ select:focus-visible,
 }
 
 .chat-input-area {
-  padding: var(--space-2) clamp(18px, 4vw, 56px) var(--space-5);
+  padding: var(--space-2) clamp(18px, 2vw, 56px) var(--space-5);
   background: var(--surface-page);
 }
 

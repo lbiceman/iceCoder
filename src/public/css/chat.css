@@ -284,6 +284,10 @@
   display: none;
 }
 
+.chat-messages.has-welcome .chat-messages-anchor {
+  height: 0;
+}
+
 .chat-welcome {
   /* 至少占满消息区；内容更高时可撑开 scrollHeight，避免输入框变高后顶部被居中裁剪 */
   flex: 0 0 auto;
@@ -292,7 +296,7 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  padding: 24px 0 16px;
+  padding: 4px 0 0;
   box-sizing: border-box;
   pointer-events: auto;
 }
@@ -566,7 +570,7 @@
   }
 
   .chat-welcome {
-    padding: 36px 0 28px;
+    padding: 16px 0 8px;
   }
 
   .chat-welcome-inner {
