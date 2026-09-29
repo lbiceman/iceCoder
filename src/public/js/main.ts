@@ -19,6 +19,7 @@ import './chat-websocket.ts';
 import './chat-session.ts';
 import './chat-session-store.ts';
 import './chat-session-sidebar.ts';
+import './chat-markdown.ts';
 import './chat-ui.ts';
 import './chat-image-preview.ts';
 import './chat-welcome.ts';

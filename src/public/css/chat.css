@@ -284,6 +284,10 @@
   display: none;
 }
 
+.chat-messages.has-welcome .chat-messages-anchor {
+  height: 0;
+}
+
 .chat-welcome {
   /* 至少占满消息区；内容更高时可撑开 scrollHeight，避免输入框变高后顶部被居中裁剪 */
   flex: 0 0 auto;
@@ -292,7 +296,7 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  padding: 24px 0 16px;
+  padding: 4px 0 0;
   box-sizing: border-box;
   pointer-events: auto;
 }
@@ -566,7 +570,7 @@
   }
 
   .chat-welcome {
-    padding: 36px 0 28px;
+    padding: 16px 0 8px;
   }
 
   .chat-welcome-inner {
@@ -938,6 +942,146 @@
   font-size: 12px;
   white-space: pre-wrap;
   opacity: 0.85;
+}
+
+/* 助手气泡 Markdown。父级 .message 是 pre-wrap，这里改回正常流。 */
+.message.assistant .msg-content--md,
+.message.agent .msg-content--md {
+  white-space: normal;
+  word-break: break-word;
+}
+.msg-content--md > * + * {
+  margin-top: 0.7em;
+}
+.msg-content--md p,
+.msg-content--md ul,
+.msg-content--md ol,
+.msg-content--md blockquote,
+.msg-content--md pre,
+.msg-content--md h1,
+.msg-content--md h2,
+.msg-content--md h3,
+.msg-content--md h4,
+.msg-content--md h5,
+.msg-content--md h6 {
+  margin: 0;
+}
+.msg-content--md h1,
+.msg-content--md h2,
+.msg-content--md h3,
+.msg-content--md h4,
+.msg-content--md h5,
+.msg-content--md h6 {
+  font-weight: 650;
+  line-height: 1.35;
+}
+.msg-content--md h1 { font-size: 1.15em; }
+.msg-content--md h2 { font-size: 1.08em; }
+.msg-content--md h3,
+.msg-content--md h4,
+.msg-content--md h5,
+.msg-content--md h6 { font-size: 1em; }
+.msg-content--md ul,
+.msg-content--md ol {
+  padding-left: 1.3em;
+}
+.msg-content--md li + li {
+  margin-top: 0.2em;
+}
+.msg-content--md li.md-task {
+  list-style: none;
+  margin-left: -1.05em;
+}
+.msg-content--md li.md-task input {
+  margin: 0 0.4em 0 0;
+  vertical-align: -0.15em;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+.msg-content--md li.md-task.is-done {
+  color: var(--text-secondary);
+}
+.msg-content--md del {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.msg-content--md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg-content--md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0.08em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.msg-content--md pre.md-code {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, var(--border-color));
+  background: var(--surface-panel, var(--bg-secondary));
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.msg-content--md pre.md-code code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: inherit;
+  white-space: inherit;
+}
+.msg-content--md .md-code-lang {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font, inherit);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.msg-content--md blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong, var(--accent-border));
+  color: var(--text-secondary);
+}
+.msg-content--md hr {
+  border: 0;
+  border-top: 1px solid var(--border-light, var(--border-color));
+}
+.msg-content--md .md-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border-subtle, var(--border-color));
+  border-radius: 8px;
+}
+.msg-content--md table.md-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.msg-content--md table.md-table th,
+.msg-content--md table.md-table td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-subtle, var(--border-color));
+  white-space: nowrap;
+}
+.msg-content--md table.md-table th {
+  font-weight: 650;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.msg-content--md table.md-table tr:last-child td {
+  border-bottom: 0;
 }
 
 /* ── Chat Input Area (Codex desktop-style composer) ── */

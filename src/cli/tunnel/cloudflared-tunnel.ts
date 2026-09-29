@@ -1,1 +1,1 @@
-export * from '../../dev/tunnel/cloudflared-tunnel.js';
+export * from '../../web/tunnel-stubs/cloudflared-tunnel.js';
