@@ -1327,7 +1327,7 @@
   transition: background 160ms ease, transform 140ms ease, box-shadow 160ms ease;
   border: 1px solid transparent;
   background: var(--btn-send-bg, var(--accent));
-  color: var(--text-on-accent, #fff);
+  color: var(--btn-send-fg, var(--text-on-accent, #fff));
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }

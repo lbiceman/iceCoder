@@ -8,7 +8,9 @@
     (function () {
       var t = 'dark';
       try { t = localStorage.getItem('ice-theme') || 'dark'; } catch (e) { /* ignore */ }
-      document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      var themes = ['dark', 'light', 'modern', 'fresh'];
+      if (themes.indexOf(t) === -1) t = 'dark';
+      document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
   <link rel="stylesheet" href="/css/style.css">

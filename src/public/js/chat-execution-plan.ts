@@ -365,7 +365,7 @@ export const ChatExecutionPlan = (() => {
 
   /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
   function workbenchHtml() {
-    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">检查点</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p></div><div class="etl-chapter-empty etl-empty">等待模型开始执行</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button><ol class="etl-chapter-list"></ol></section><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">执行流</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">等待模型开始执行</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
+    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">检查点</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p></div><div class="etl-chapter-empty etl-empty">等待模型开始执行</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="拖动调整检查点与执行流高度"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">执行流</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">等待模型开始执行</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
   }
 
   function sharedBodyHtml() {
@@ -387,6 +387,7 @@ export const ChatExecutionPlan = (() => {
     bindRoundTimelineEvents();
     bindChapterTimelineEvents();
     bindFilesSheetControls();
+    bindWorkbenchSplitter();
     renderDockSheet();
     if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
       const dockHost = host.querySelector('#etl-shell-dock-host');
@@ -395,6 +396,99 @@ export const ChatExecutionPlan = (() => {
         window.ChatPage.syncShellDockOnMount();
       }
     }
+  }
+
+  // 检查点 / 执行流分隔线。比例只留在内存，整页刷新回到 46/54；面板重建会重新绑定。
+  const WB_TOP_DEFAULT_RATIO = 46;
+  const WB_MIN_PX = 72;
+  let wbTopRatio = WB_TOP_DEFAULT_RATIO;
+  let splitterBound = false;
+  let endSplitterDrag = null;
+
+  function applyWorkbenchRatio() {
+    const top = chapterTimelineEl;
+    const flow = hostEl && hostEl.querySelector('#etl-panel-flow');
+    if (!top || !flow) return;
+    // 按分隔线以外的剩余高度分配，避免固定高度的分隔线把底栏挤出容器
+    top.style.flex = `${wbTopRatio} 1 0px`;
+    flow.style.flex = `${100 - wbTopRatio} 1 0px`;
+  }
+
+  function workbenchBox(bench) {
+    const rect = bench.getBoundingClientRect();
+    const splitter = bench.querySelector('#etl-wb-splitter');
+    const splitterPx = splitter ? splitter.offsetHeight : 0;
+    return {
+      top: rect.top,
+      height: rect.height,
+      splitterPx,
+      available: Math.max(1, rect.height - splitterPx),
+    };
+  }
+
+  function clampWorkbenchRatio(available, ratio) {
+    const min = Math.min(50, (WB_MIN_PX / available) * 100);
+    return Math.min(100 - min, Math.max(min, ratio));
+  }
+
+  function resetWorkbenchRatio() {
+    wbTopRatio = WB_TOP_DEFAULT_RATIO;
+    applyWorkbenchRatio();
+  }
+
+  function bindWorkbenchSplitter() {
+    if (splitterBound || !hostEl) return;
+    const splitter = hostEl.querySelector('#etl-wb-splitter');
+    const bench = hostEl.querySelector('.etl-workbench');
+    if (!splitter || !bench) return;
+    splitterBound = true;
+    applyWorkbenchRatio();
+
+    const ratioFromClientY = (clientY) => {
+      const box = workbenchBox(bench);
+      if (box.height <= 0) return wbTopRatio;
+      const raw = ((clientY - box.top - box.splitterPx / 2) / box.available) * 100;
+      return clampWorkbenchRatio(box.available, raw);
+    };
+
+    let dragging = false;
+    const stop = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', stop);
+      document.removeEventListener('pointercancel', stop);
+      document.body.classList.remove('etl-splitter-dragging');
+    };
+    endSplitterDrag = stop;
+    const onMove = (event) => {
+      if (!dragging) return;
+      wbTopRatio = ratioFromClientY(event.clientY);
+      applyWorkbenchRatio();
+      event.preventDefault();
+    };
+    const start = (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      dragging = true;
+      document.body.classList.add('etl-splitter-dragging');
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', stop);
+      document.addEventListener('pointercancel', stop);
+      event.preventDefault();
+    };
+
+    splitter.addEventListener('pointerdown', start);
+    splitter.addEventListener('dblclick', resetWorkbenchRatio);
+    splitter.addEventListener('keydown', (event) => {
+      const step = event.shiftKey ? 10 : 2;
+      if (event.key === 'ArrowUp') wbTopRatio -= step;
+      else if (event.key === 'ArrowDown') wbTopRatio += step;
+      else if (event.key === 'Home') wbTopRatio = WB_TOP_DEFAULT_RATIO;
+      else return;
+      wbTopRatio = clampWorkbenchRatio(workbenchBox(bench).available, wbTopRatio);
+      applyWorkbenchRatio();
+      event.preventDefault();
+    });
   }
 
   /** 绑定最小化按钮（桌面/移动共用）。 */
@@ -426,13 +520,16 @@ export const ChatExecutionPlan = (() => {
   }
 
   function teardownMounts() {
+    if (endSplitterDrag) endSplitterDrag();
+    endSplitterDrag = null;
+    splitterBound = false;
     try {
       stopTick();
       if (rootEl && rootEl.parentNode) rootEl.parentNode.removeChild(rootEl);
       if (mobileBarEl && mobileBarEl.parentNode) mobileBarEl.parentNode.removeChild(mobileBarEl);
       if (mobileSheetEl && mobileSheetEl.parentNode) mobileSheetEl.parentNode.removeChild(mobileSheetEl);
       if (mobileBackdropEl && mobileBackdropEl.parentNode) mobileBackdropEl.parentNode.removeChild(mobileBackdropEl);
-      document.body.classList.remove('etl-panel-open', 'etl-msheet-open', 'etl-pet-hidden-by-panel');
+      document.body.classList.remove('etl-panel-open', 'etl-msheet-open', 'etl-pet-hidden-by-panel', 'etl-splitter-dragging');
     } catch (_e) { /* ignore */ }
     rootEl = null;
     mobileBarEl = null;

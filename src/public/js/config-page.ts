@@ -56,32 +56,47 @@ export const SettingsPage = (() => {
         '</div>' +
       '</section>';
 
+    // 主题预览：用几个色块示意真实界面（左侧栏 + 顶栏 + 用户气泡 + 回复 + 输入框），
+    // 具体配色由 CSS 里各主题的 --stp-* 变量提供。
+    const themePreview = (variant) =>
+      '<span class="settings-theme-preview settings-theme-preview-' + variant + '" aria-hidden="true">' +
+        '<span class="stp-side">' +
+          '<span class="stp-side-head"></span>' +
+          '<span class="stp-side-row"></span>' +
+          '<span class="stp-side-row"></span>' +
+        '</span>' +
+        '<span class="stp-main">' +
+          '<span class="stp-topbar"></span>' +
+          '<span class="stp-msg stp-msg--user"></span>' +
+          '<span class="stp-msg stp-msg--agent"></span>' +
+          '<span class="stp-input"></span>' +
+        '</span>' +
+      '</span>';
+
+    const themeChoices = [
+      { id: 'dark', label: '深色', icon: 'moon' },
+      { id: 'light', label: '浅色', icon: 'sun' },
+      { id: 'modern', label: '现代蓝', icon: 'work' },
+      { id: 'fresh', label: '暖阳', icon: 'sun' },
+    ];
+    const themeOptionsHtml = themeChoices.map((choice) => {
+      const on = theme === choice.id;
+      const icon = window.AppIcon
+        ? window.AppIcon.html(choice.icon, { width: 14, className: 'settings-theme-option-icon' })
+        : '';
+      return '<button type="button" class="settings-theme-option' + (on ? ' is-active' : '') + '" data-theme="' + choice.id + '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">' +
+        themePreview(choice.id) +
+        '<span class="settings-theme-option-label">' + icon + choice.label + '</span>' +
+      '</button>';
+    }).join('');
+
     parentEl.innerHTML =
       '<div class="settings-general">' +
         '<section class="settings-section">' +
           '<h2 class="settings-section-title">外观</h2>' +
-          '<p class="settings-section-desc">选择界面主题，可随时在此切换深色与浅色模式</p>' +
+          '<p class="settings-section-desc">选择界面主题，可随时在此切换</p>' +
           '<div class="settings-theme-options" role="radiogroup" aria-label="界面主题">' +
-            '<button type="button" class="settings-theme-option' + (theme === 'dark' ? ' is-active' : '') + '" data-theme="dark" role="radio" aria-checked="' + (theme === 'dark' ? 'true' : 'false') + '">' +
-              '<span class="settings-theme-preview settings-theme-preview-dark" aria-hidden="true">' +
-                '<span class="settings-theme-preview-bar"></span>' +
-                '<span class="settings-theme-preview-body"></span>' +
-              '</span>' +
-              '<span class="settings-theme-option-label">' +
-                (window.AppIcon ? window.AppIcon.html('moon', { width: 14, className: 'settings-theme-option-icon' }) : '') +
-                '深色' +
-              '</span>' +
-            '</button>' +
-            '<button type="button" class="settings-theme-option' + (theme === 'light' ? ' is-active' : '') + '" data-theme="light" role="radio" aria-checked="' + (theme === 'light' ? 'true' : 'false') + '">' +
-              '<span class="settings-theme-preview settings-theme-preview-light" aria-hidden="true">' +
-                '<span class="settings-theme-preview-bar"></span>' +
-                '<span class="settings-theme-preview-body"></span>' +
-              '</span>' +
-              '<span class="settings-theme-option-label">' +
-                (window.AppIcon ? window.AppIcon.html('sun', { width: 14, className: 'settings-theme-option-icon' }) : '') +
-                '浅色' +
-              '</span>' +
-            '</button>' +
+            themeOptionsHtml +
           '</div>' +
         '</section>' +
         dataDirectorySection +
