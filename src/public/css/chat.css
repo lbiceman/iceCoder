@@ -2188,6 +2188,49 @@
   color: var(--accent, #6b9cff);
 }
 
+/* 工具参数/结果面板（web_search / fetch_url / read_file 等，点击工具名展开） */
+.tool-action .tool-name.tool-io-toggle {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.tool-action .tool-name.tool-io-toggle:hover,
+.tool-action .tool-name.tool-io-toggle-pending:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tool-action .tool-name.tool-io-toggle-pending {
+  opacity: 0.92;
+}
+.tool-action .tool-name.tool-io-toggle.is-io-open {
+  color: var(--accent, #6b9cff);
+}
+.tool-io-wrap {
+  margin: 2px 0 4px 22px;
+  max-width: 100%;
+}
+.tool-io-wrap.is-hidden {
+  display: none;
+}
+.tool-io-panel {
+  position: relative;
+  border-radius: 8px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.tool-io-pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.82em;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 /* 工具调用折叠组（历史 + 实时） */
 .tool-trace-group {
   display: flex;

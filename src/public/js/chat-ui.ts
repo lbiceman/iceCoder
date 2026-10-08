@@ -165,6 +165,11 @@ export const ChatUI = (() => {
 
   function handleHistoryToolNameClick(block, toolName, e) {
     if (!block || !toolName) return;
+    if (!isDiffCapableToolName(toolName)) {
+      tryEnsureIoPanelForBlock(block, toolName, (ok) => { if (ok) toggleIoPanelForBlock(block); });
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      return;
+    }
     const group = block.closest('.tool-trace-group');
     bindDiffToggleRow(block, toolName, true);
     if (block.getAttribute('data-has-diff') !== '1') {
@@ -202,7 +207,6 @@ export const ChatUI = (() => {
       const block = row.closest('.tool-action-row-block');
       if (!block) return;
       const toolName = row.getAttribute('data-tool') || '';
-      if (!isDiffCapableToolName(toolName)) return;
       handleHistoryToolNameClick(block, toolName, e);
     };
     elHistoryWindow.addEventListener('click', elHistoryWindow._toolDiffClickHandler, true);
@@ -854,11 +858,17 @@ export const ChatUI = (() => {
     diffOutsideCloseBound = true;
     document.addEventListener('click', (e) => {
       if (!elMessages) return;
-      if (!elMessages.querySelector('.tool-diff-wrap.is-open')) return;
       const target = e.target;
-      if (target.closest && target.closest('.tool-diff-wrap.is-open')) return;
-      if (target.closest && target.closest('.tool-name.tool-diff-toggle')) return;
-      closeAllDiffPanels(null);
+      const inOpenDiff = !!(target.closest && target.closest('.tool-diff-wrap.is-open'));
+      const onDiffName = !!(target.closest && target.closest('.tool-name.tool-diff-toggle'));
+      if (!inOpenDiff && !onDiffName && elMessages.querySelector('.tool-diff-wrap.is-open')) {
+        closeAllDiffPanels(null);
+      }
+      const inOpenIo = !!(target.closest && target.closest('.tool-io-wrap.is-open'));
+      const onIoName = !!(target.closest && target.closest('.tool-name.tool-io-toggle'));
+      if (!inOpenIo && !onIoName && elMessages.querySelector('.tool-io-wrap.is-open')) {
+        closeAllIoPanels(null);
+      }
     });
   }
 
@@ -1130,7 +1140,10 @@ export const ChatUI = (() => {
   }
 
   function bindDiffToggleRow(block, toolName, forHistory) {
-    if (!isDiffCapableToolName(toolName)) return;
+    if (!isDiffCapableToolName(toolName)) {
+      bindIoToggleRow(block, toolName, forHistory);
+      return;
+    }
     const nameEl = block.querySelector('.tool-action .tool-name');
     if (!nameEl) return;
 
@@ -1225,6 +1238,177 @@ export const ChatUI = (() => {
     bindDiffToggleRow(block, toolName || '');
     if (isNodeInHistoryRegion(block)) notifyHistoryLayoutChange(block);
     else notifyTailLayoutChange();
+  }
+
+  // ---- 工具参数/结果面板（点击工具名展开，UI 同 diff 面板） ----
+
+  function isToolIoToggleName(toolName) {
+    return !!toolName && !isDiffCapableToolName(toolName);
+  }
+
+  function bindIoToggleRow(block, toolName, forHistory) {
+    if (!isToolIoToggleName(toolName)) return;
+    const nameEl = block.querySelector('.tool-action .tool-name');
+    if (!nameEl) return;
+    nameEl.classList.add('tool-io-toggle');
+    if (block.getAttribute('data-has-io') === '1') {
+      nameEl.classList.remove('tool-io-toggle-pending');
+      nameEl.setAttribute('title', '点击查看/关闭工具参数与结果');
+    } else if (block._ioText) {
+      nameEl.classList.remove('tool-io-toggle-pending');
+      nameEl.setAttribute('title', '点击查看工具参数与结果');
+    } else {
+      nameEl.classList.add('tool-io-toggle-pending');
+      nameEl.setAttribute('title', '点击加载工具参数与结果');
+    }
+
+    if (forHistory || isNodeInHistoryRegion(block)) return;
+    if (nameEl.getAttribute('data-io-toggle-bound') === '1') return;
+    nameEl.setAttribute('data-io-toggle-bound', '1');
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (block.getAttribute('data-has-io') === '1') {
+        toggleIoPanelForBlock(block);
+        return;
+      }
+      tryEnsureIoPanelForBlock(block, toolName, (ok) => {
+        if (ok) toggleIoPanelForBlock(block);
+      });
+    });
+  }
+
+  function seedToolIoArgs(block, toolName, toolArgs) {
+    if (!block || !toolName || isDiffCapableToolName(toolName)) return;
+    if (!toolArgs || !window.ToolDisplayHistory
+        || typeof window.ToolDisplayHistory.stringifyToolArgs !== 'function') return;
+    const argsText = window.ToolDisplayHistory.stringifyToolArgs(toolArgs);
+    if (!argsText) return;
+    block._ioText = argsText;
+    bindIoToggleRow(block, toolName, isNodeInHistoryRegion(block));
+  }
+
+  /** 从 structured 里取该 toolCallId 的参数 + 结果原文（刷新/历史重绘后按 id 还原） */
+  function collectIoTextFromStructured(toolCallId) {
+    if (!toolCallId || !window.ToolDisplayHistory
+        || typeof window.ToolDisplayHistory.buildToolIoTrace !== 'function') {
+      return null;
+    }
+    const structured = getStructuredMessagesLocal();
+    if (!structured.length) return null;
+    let args = null;
+    let output = null;
+    for (let i = 0; i < structured.length; i++) {
+      const msg = structured[i];
+      if (!msg) continue;
+      if (msg.role === 'assistant' && Array.isArray(msg.toolCalls)) {
+        for (let t = 0; t < msg.toolCalls.length; t++) {
+          const tc = msg.toolCalls[t];
+          if (tc && tc.id === toolCallId) args = tc.arguments;
+        }
+      } else if (msg.role === 'tool' && msg.toolCallId === toolCallId
+          && typeof msg.content === 'string') {
+        output = msg.content;
+      }
+    }
+    if (args == null && output == null) return null;
+    const trace = window.ToolDisplayHistory.buildToolIoTrace('', args, output, null);
+    return trace ? trace.text : null;
+  }
+
+  function buildIoPanelDom(text) {
+    const panel = document.createElement('div');
+    panel.className = 'tool-io-panel';
+    const pre = document.createElement('pre');
+    pre.className = 'tool-io-pre';
+    pre.textContent = text;
+    panel.appendChild(pre);
+    return panel;
+  }
+
+  function hideIoWrap(wrap, block) {
+    if (!wrap) return;
+    wrap.classList.add('is-hidden');
+    wrap.classList.remove('is-open');
+    if (block) {
+      const nameEl = block.querySelector('.tool-action .tool-name');
+      if (nameEl) nameEl.classList.remove('is-io-open');
+    }
+  }
+
+  function closeAllIoPanels(exceptBlock) {
+    if (!elMessages) return;
+    const openWraps = elMessages.querySelectorAll('.tool-io-wrap.is-open');
+    for (let i = 0; i < openWraps.length; i++) {
+      const wrap = openWraps[i];
+      const block = wrap.closest('.tool-action-row-block');
+      if (block !== exceptBlock) hideIoWrap(wrap, block);
+    }
+  }
+
+  function showIoWrap(wrap, block) {
+    if (!wrap || !block) return;
+    closeAllDiffPanels(block);
+    closeAllIoPanels(block);
+    wrap.classList.remove('is-hidden');
+    wrap.classList.add('is-open');
+    const nameEl = block.querySelector('.tool-action .tool-name');
+    if (nameEl) nameEl.classList.add('is-io-open');
+  }
+
+  function toggleIoPanelForBlock(block) {
+    if (!block) return;
+    const wrap = block.querySelector('.tool-io-wrap');
+    if (!wrap) return;
+    if (wrap.classList.contains('is-open')) hideIoWrap(wrap, block);
+    else showIoWrap(wrap, block);
+    if (isNodeInHistoryRegion(block)) notifyHistoryLayoutChange(block);
+    else notifyTailLayoutChange();
+  }
+
+  function mountHiddenIoInBlock(block, text) {
+    if (!block || typeof text !== 'string' || !text) return false;
+    block.setAttribute('data-has-io', '1');
+    block._ioText = text;
+    let wrap = block.querySelector('.tool-io-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.className = 'tool-io-wrap is-hidden';
+      block.appendChild(wrap);
+    } else {
+      hideIoWrap(wrap, block);
+      wrap.innerHTML = '';
+    }
+    wrap.appendChild(buildIoPanelDom(text));
+    return true;
+  }
+
+  function tryEnsureIoPanelForBlock(block, toolName, done) {
+    if (!block || block.getAttribute('data-has-io') === '1') {
+      if (done) done(true);
+      return;
+    }
+    const toolCallId = block.getAttribute('data-tool-call-id') || '';
+
+    function finish(text) {
+      if (!text || !mountHiddenIoInBlock(block, text)) return false;
+      bindIoToggleRow(block, toolName, isNodeInHistoryRegion(block));
+      if (isNodeInHistoryRegion(block)) notifyHistoryLayoutChange(block);
+      else notifyTailLayoutChange();
+      if (done) done(true);
+      return true;
+    }
+
+    if (finish(collectIoTextFromStructured(toolCallId))) return;
+    if (block._ioText && finish(block._ioText)) return;
+
+    if (window.ChatSession && typeof window.ChatSession.fetchStructuredMessages === 'function') {
+      window.ChatSession.fetchStructuredMessages(() => {
+        if (finish(collectIoTextFromStructured(toolCallId))) return;
+        if (done) done(false);
+      });
+      return;
+    }
+    if (done) done(false);
   }
 
   function createToolRowBlock(toolName, detail, status, toolCallId, diffSource, forHistory) {
@@ -1383,6 +1567,7 @@ export const ChatUI = (() => {
         diffSource,
         forHistory,
       );
+      seedToolIoArgs(block, tr.toolName || '', disp && disp.toolArgs);
       block.setAttribute('data-trace-idx', String(idx));
       if (forHistory && tr.detail) {
         block.setAttribute('data-diff-rel-path', tr.detail);
@@ -1476,11 +1661,12 @@ export const ChatUI = (() => {
     insertTailBefore(liveToolRoundRoot);
   }
 
-  function appendToolAction(toolName, detail, status, toolCallId, diffSource) {
+  function appendToolAction(toolName, detail, status, toolCallId, diffSource, toolArgs) {
     ensureChatLayout();
     if (!elTailRoot) return null;
     coalesceFlatToolActionsBeforeAnchor();
     const block = createToolRowBlock(toolName, detail, status || 'pending', toolCallId || '', diffSource || null);
+    seedToolIoArgs(block, toolName, toolArgs);
 
     if (liveToolRoundActive) {
       adoptOrCreateLiveToolGroupDom();
@@ -1586,7 +1772,7 @@ export const ChatUI = (() => {
     return true;
   }
 
-  function updateToolActionByCallId(toolCallId, toolName, status) {
+  function updateToolActionByCallId(toolCallId, toolName, status, toolOutput) {
     if (!elMessages) return;
     const block = toolCallId ? findToolRowBlockByCallId(toolCallId) : null;
     const row = block ? block.querySelector('.tool-action') : null;
@@ -1598,6 +1784,13 @@ export const ChatUI = (() => {
     if (iconEl) {
       iconEl.className = `tool-icon ${status}`;
       iconEl.textContent = iconTextForStatus(status);
+    }
+    if (block && toolOutput && isToolIoToggleName(toolName)
+        && block.getAttribute('data-has-diff') !== '1') {
+      const prev = block._ioText || '';
+      if (!prev) block._ioText = toolOutput;
+      else if (prev.indexOf(toolOutput) === -1) block._ioText = prev + '\n\n' + toolOutput;
+      bindIoToggleRow(block, toolName, isNodeInHistoryRegion(block));
     }
     notifyContentLayoutChange();
   }

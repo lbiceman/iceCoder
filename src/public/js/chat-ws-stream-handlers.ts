@@ -229,7 +229,7 @@ export const ChatWsStreamHandlers = (() => {
         const diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
           ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
           : null;
-        UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
+        UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs, step.toolArgs);
         Session.pushToolBatch({
           toolName: step.toolName,
           detail,
@@ -253,7 +253,7 @@ export const ChatWsStreamHandlers = (() => {
           : (step.toolOutcome === 'policy_block'
             ? 'warn'
             : (step.toolSuccess ? 'success' : 'error'));
-        UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
+        UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus, step.toolOutput);
         Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
         if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && ctx.getElMessages()) {
           const checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);

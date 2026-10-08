@@ -336,6 +336,16 @@ export const ChatAgentCards = (() => {
     notifyLayout(card);
   }
 
+  /** 子 Agent 工具行不能展开主会话参数/结果（toolCallId 属子会话），去掉 IO 点击外观与已绑事件 */
+  function stripIoAffordance(block) {
+    if (!block) return;
+    const nameEl = block.querySelector('.tool-action .tool-name');
+    if (!nameEl) return;
+    nameEl.classList.remove('tool-io-toggle', 'tool-io-toggle-pending', 'is-io-open');
+    nameEl.removeAttribute('data-io-toggle-bound');
+    nameEl.removeAttribute('title');
+  }
+
   function syncRows(card, state) {
     const UI = window.ChatUI;
     if (!UI || typeof UI.createAgentToolRowBlock !== 'function') return;
@@ -351,6 +361,7 @@ export const ChatAgentCards = (() => {
       let block = existing[row.toolCallId];
       if (!block) {
         block = UI.createAgentToolRowBlock(row.toolName, row.detail, row.status, row.toolCallId, row.diffSource);
+        stripIoAffordance(block);
         recent.appendChild(block);
       } else {
         setRowStatus(block, row.status);
