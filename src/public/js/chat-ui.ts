@@ -24,6 +24,12 @@ export const ChatUI = (() => {
   let streamReplyBuffer = '';
   let streamReasoningBuffer = '';
 
+  /**
+   * 展开思考块时最多渲染的字数。模型长时间思考时思维链可达数万字，
+   * 一次性铺进 DOM 会严重卡顿，这里只渲染末尾这么多字（折叠逻辑不变）。
+   */
+  const THINKING_EXPAND_MAX_CHARS = 2000;
+
   /** 距底部小于该值时视为「贴底」，新内容会自动跟随滚动 */
   const SCROLL_STICKY_THRESHOLD_PX = 80;
   let autoScrollEnabled = true;
@@ -263,6 +269,23 @@ export const ChatUI = (() => {
     labelIcon.textContent = '▾';
     label.appendChild(labelIcon);
     return label;
+  }
+
+  /**
+   * 把思考正文写入 DOM。超过 THINKING_EXPAND_MAX_CHARS 时只保留末尾一段，
+   * 折叠时由 CSS 隐藏，因此这里的截断只影响展开时的渲染量。
+   */
+  function renderThinkingBody(bodyEl, fullText) {
+    if (!bodyEl) return;
+    const text = fullText || '';
+    if (text.length <= THINKING_EXPAND_MAX_CHARS) {
+      bodyEl.textContent = text;
+      return;
+    }
+    const cut = text.length - THINKING_EXPAND_MAX_CHARS;
+    bodyEl.textContent = '…（前面还有 ' + cut + ' 字已省略，仅显示最近 '
+      + THINKING_EXPAND_MAX_CHARS + ' 字）\n\n'
+      + text.slice(text.length - THINKING_EXPAND_MAX_CHARS);
   }
 
   function setThinkingBlockCollapsed(block, collapsed) {
@@ -2932,9 +2955,8 @@ export const ChatUI = (() => {
       el._streamContentEl = body;
       insertTailBefore(el);
     }
-    if (el._streamContentEl) {
-      el._streamContentEl.textContent = streamReasoningBuffer;
-    }
+    el._fullThinkingText = streamReasoningBuffer;
+    renderThinkingBody(el._streamContentEl, streamReasoningBuffer);
     notifyTailLayoutChange();
   }
 
