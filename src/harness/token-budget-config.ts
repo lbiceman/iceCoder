@@ -25,9 +25,9 @@ export const DEFAULT_LONG_RUNNING_MAX_ROUNDS = 5000;
 
 /**
  * 单次 run 的累计 token 上限（`LoopController` 中 inputTokens+outputTokens 累加）。
- * 50e6 量级：在默认 5000 轮、压缩与中等单轮用量下足够支撑长跑；仍可作为异常刷量保险丝。
+ * 1e9 量级：在默认 5000 轮、压缩与中等单轮用量下足够支撑长跑；仍可作为异常刷量保险丝。
  */
-export const DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL = 50_000_000;
+export const DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL = 1_000_000_000;
 
 /**
  * Harness 单次 `run()` 的墙钟超时。

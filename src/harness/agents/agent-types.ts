@@ -39,7 +39,7 @@ export function findAgentType(name: string): AgentTypeDefinition | undefined {
 // ─── 工具过滤 ───
 
 /** 任何子 Agent 都不能拿到的工具。request_analysis 是已删除的旧只读分析工具名，避免残留定义被交下去。 */
-const EXCLUDED_FOR_ALL_AGENTS = new Set(['task', 'request_analysis']);
+const EXCLUDED_FOR_ALL_AGENTS = new Set(['task', 'check_agent', 'request_analysis']);
 
 /** 记忆写入、向用户提问、会话模式切换类工具（按名称识别，含 MCP 同类工具）。 */
 const EXCLUDED_FOR_ALL_PATTERNS: readonly RegExp[] = [

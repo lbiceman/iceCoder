@@ -71,6 +71,8 @@ export interface AgentView {
   error?: string;
   /** 进程在子 Agent 运行中退出，记录未正常收尾 */
   interrupted?: boolean;
+  /** 后台模式启动（run_in_background），不阻塞主 Agent */
+  background?: boolean;
 }
 
 export const AGENT_REPORT_MAX_CHARS = 12_000;

@@ -4,6 +4,9 @@ import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CompactionDeps } from './harness-compaction.js';
 import { maybeCompact } from './harness-compaction.js';
 import { takeBgStatusForInjection } from './harness-bg-summary.js';
+import { formatBackgroundInjection } from './agents/agent-background-hub.js';
+import { mergeAgentFileChanges } from './agents/agent-merge.js';
+import type { AgentSpawner } from './agents/agent-spawner.js';
 import {
   bigramJaccard,
   getLastAssistantText,
@@ -53,6 +56,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   workspaceRoot?: string;
   /** 当前用户轮次的易变工具/MCP 上下文；仅进入发送视图，不写主历史。 */
   ephemeralSystemContext?: string | null;
+  /** 后台子 Agent：每轮开始时取走已完成报告并注入（与「后台 Agent：N 运行中」状态）。 */
+  agentSpawner?: AgentSpawner;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -197,6 +202,28 @@ export async function prepareHarnessRound(
     const bgStatus = takeBgStatusForInjection(sessionId, deps.workspaceRoot);
     if (bgStatus) {
       ephemeralBlocks.push(bgStatus);
+    }
+  }
+
+  // 后台子 Agent：把已完成、尚未注入的报告发给模型，并把改动并入父状态，避免主 Agent 对后台结果失忆。
+  if (deps.agentSpawner) {
+    const drained = deps.agentSpawner.drainBackgroundResults();
+    if (drained.length > 0) {
+      for (const item of drained) {
+        const outcome = deps.agentSpawner.takeOutcome(item.toolCallId);
+        if (outcome) mergeAgentFileChanges(item.toolCallId, outcome, state);
+      }
+      ephemeralBlocks.push(formatBackgroundInjection(drained));
+    }
+    const live = deps.agentSpawner
+      .listBackgroundViews()
+      .filter(v => v.status === 'running' || v.status === 'queued');
+    if (live.length > 0) {
+      ephemeralBlocks.push(
+        `[Background Agents] ${live.length} sub-agent(s) still running: `
+        + `${live.map(v => `${v.agentId} (${v.type}) ${v.description}`).join('; ')}. `
+        + 'Use check_agent to fetch their results.',
+      );
     }
   }
 

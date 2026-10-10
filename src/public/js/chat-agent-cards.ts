@@ -116,7 +116,9 @@ export const ChatAgentCards = (() => {
   }
 
   function headMetaParts(view) {
-    const parts = [statusText(view)];
+    const parts = [];
+    if (view.background) parts.push('后台');
+    parts.push(statusText(view));
     const elapsed = elapsedOf(view);
     if (elapsed > 0) parts.push(formatElapsed(elapsed));
     parts.push(`${view.toolCalls || 0} 次工具调用`);

@@ -527,17 +527,20 @@ export class Harness {
       const parentToolExecutor = this.toolExecutor;
       const timeout = this.config.loop.timeout;
       const deadline = timeout && timeout > 0 ? Date.now() + timeout : undefined;
-      deps.toolExecutor = new AgentAwareToolExecutor(parentToolExecutor, (toolCall) =>
-        spawner.runTask(toolCall, {
-          config: this.config,
-          toolExecutor: parentToolExecutor,
-          workspaceRoot: this.workspaceRoot,
-          lockedWorkspaceRoot,
-          referenceReads,
-          deadline,
-          signal: this.abortSignal,
-          onStep,
-        }),
+      deps.toolExecutor = new AgentAwareToolExecutor(
+        parentToolExecutor,
+        (toolCall) =>
+          spawner.runTask(toolCall, {
+            config: this.config,
+            toolExecutor: parentToolExecutor,
+            workspaceRoot: this.workspaceRoot,
+            lockedWorkspaceRoot,
+            referenceReads,
+            deadline,
+            signal: this.abortSignal,
+            onStep,
+          }),
+        (toolCall) => spawner.runCheckAgent(toolCall),
       );
       deps.agentSpawner = spawner;
     }

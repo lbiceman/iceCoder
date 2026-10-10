@@ -82,7 +82,7 @@ import {
 } from './chat-ws-broadcast.js';
 import { createShellMandatoryConfirmHandler, createToolConfirmHandler } from './chat-ws-confirm.js';
 import { broadcastAgentStep, createWebAgentSpawner } from './chat-ws-agents.js';
-import { TASK_TOOL_NAME } from '../harness/agents/task-tool.js';
+import { CHECK_AGENT_TOOL_NAME, TASK_TOOL_NAME } from '../harness/agents/task-tool.js';
 import { rebindBgTaskPusher } from './chat-ws-bg-tasks.js';
 import {
   appendMessages,
@@ -477,7 +477,10 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
-    : [...toolDefs.map((tool) => tool.name), ...(agentTaskEnabled ? [TASK_TOOL_NAME] : [])];
+    : [
+        ...toolDefs.map((tool) => tool.name),
+        ...(agentTaskEnabled ? [TASK_TOOL_NAME, CHECK_AGENT_TOOL_NAME] : []),
+      ];
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
 
@@ -567,14 +570,18 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     onConfirm: createToolConfirmHandler(runSessionId),
   };
 
+  // 若上一轮仍有后台子 Agent 在跑，复用同一个 spawner，让它们跨轮存活。
+  const priorSpawner = sessionAgentSpawners.get(runSessionId);
   const agentSpawner = agentTaskEnabled
-    ? createWebAgentSpawner({
-        sessionId: runSessionId,
-        messageId: userMsgId,
-        llmAdapter,
-        reasoningEffort,
-        harnessFactory: (config, executor) => new Harness(config, executor),
-      })
+    ? (priorSpawner && priorSpawner.hasBackgroundWork()
+        ? priorSpawner
+        : createWebAgentSpawner({
+            sessionId: runSessionId,
+            messageId: userMsgId,
+            llmAdapter,
+            reasoningEffort,
+            harnessFactory: (config, executor) => new Harness(config, executor),
+          }))
     : undefined;
   if (agentSpawner) {
     harnessConfig.agentSpawner = agentSpawner;
@@ -852,7 +859,9 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     clearInterval(pulseTimer);
     if (agentSpawner) {
       agentSpawner.stopAll();
-      if (sessionAgentSpawners.get(runSessionId) === agentSpawner) {
+      // 仍然后台子 Agent 在跑（或结果未注入）时保留 spawner，让它们跨轮存活；否则摘掉。
+      if (!agentSpawner.hasBackgroundWork()
+        && sessionAgentSpawners.get(runSessionId) === agentSpawner) {
         sessionAgentSpawners.delete(runSessionId);
       }
     }

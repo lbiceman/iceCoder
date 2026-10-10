@@ -14,6 +14,8 @@ export interface QueuedTask {
   reasoningEffort?: ReasoningEffort;
   enqueuedAt: number;
   source: 'implicit' | 'explicit';
+  /** 后台子 Agent 完成后的自动续跑：不产生用户气泡，只给主 Agent 继续工作。 */
+  continuation?: boolean;
 }
 
 export type TaskEnqueueInput = Omit<QueuedTask, 'id' | 'enqueuedAt'> & { text: string };
