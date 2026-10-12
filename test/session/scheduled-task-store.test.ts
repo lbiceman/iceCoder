@@ -229,6 +229,18 @@ describe('scheduled task store', () => {
     expect(listed[0]?.name).toBe('日报');
   });
 
+  it('replaceNextRunAt 写盘失败时 nextRunAt 保持原值', async () => {
+    const { store } = await fixture();
+    const created = await store.create(baseInput());
+    const originalNextRunAt = created.nextRunAt;
+    const spy = vi.spyOn(atomicWrite, 'writeFileAtomic').mockRejectedValueOnce(new Error('disk full'));
+    await expect(store.replaceNextRunAt(created.id, 999_999)).rejects.toThrow('disk full');
+    spy.mockRestore();
+    const listed = await store.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.nextRunAt).toBe(originalNextRunAt);
+  });
+
   it('replaceNextRunAt 只更新 nextRunAt 与 updatedAt', async () => {
     const { store } = await fixture();
     const created = await store.create(baseInput());

@@ -302,8 +302,9 @@ export class ScheduledTaskStore {
         nextRunAt,
         updatedAt: ts,
       };
-      tasks[index] = updated;
-      await this.persist(tasks);
+      const next = tasks.slice();
+      next[index] = updated;
+      await this.persist(next);
       return cloneTask(updated);
     });
   }
