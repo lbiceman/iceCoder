@@ -208,8 +208,8 @@ export class ScheduledTaskStore {
         lastStatus: 'idle',
         lastError: null,
       };
-      tasks.push(task);
-      await this.persist(tasks);
+      const next = tasks.concat(task);
+      await this.persist(next);
       return cloneTask(task);
     });
   }
@@ -274,8 +274,9 @@ export class ScheduledTaskStore {
         nextRunAt,
         updatedAt: ts,
       };
-      tasks[index] = updated;
-      await this.persist(tasks);
+      const next = tasks.slice();
+      next[index] = updated;
+      await this.persist(next);
       return cloneTask(updated);
     });
   }
@@ -318,10 +319,10 @@ export class ScheduledTaskStore {
         ...(patch.lastRunAt !== undefined ? { lastRunAt: patch.lastRunAt } : {}),
         ...(patch.lastStatus !== undefined ? { lastStatus: patch.lastStatus } : {}),
         ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
-        updatedAt: this.now(),
       };
-      tasks[index] = updated;
-      await this.persist(tasks);
+      const next = tasks.slice();
+      next[index] = updated;
+      await this.persist(next);
       return cloneTask(updated);
     });
   }

@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import * as atomicWrite from '../../src/memory/file-memory/atomic-write.js';
 import {
   ScheduledTaskStore,
   advanceToFuture,
@@ -98,20 +99,20 @@ describe('scheduled task store', () => {
   it('编辑与删除在重新打开同一文件后仍然生效', async () => {
     const { store, filePath } = await fixture();
     const created = await store.create(baseInput({ name: '原始名称' }));
-    await store.update(created.id, { name: '  新名称  ' });
-    await store.remove(created.id);
 
-    const reloaded = new ScheduledTaskStore(filePath, () => 1_000);
-    const second = await reloaded.create(baseInput({ name: '持久化任务', sessionId: 'session-2' }));
-    const reopened = new ScheduledTaskStore(filePath, () => 1_000);
-    const updated = await reopened.update(second.id, { prompt: '更新后的提示词' });
-    expect(updated.name).toBe('持久化任务');
-    expect(updated.prompt).toBe('更新后的提示词');
+    const editor = new ScheduledTaskStore(filePath, () => 1_000);
+    await editor.update(created.id, { name: '  新名称  ', prompt: '新提示词' });
 
-    const afterDeleteStore = new ScheduledTaskStore(filePath, () => 1_000);
-    await afterDeleteStore.remove(second.id);
-    const finalStore = new ScheduledTaskStore(filePath, () => 1_000);
-    expect(await finalStore.list()).toEqual([]);
+    const reader = new ScheduledTaskStore(filePath, () => 1_000);
+    const reloaded = await reader.get(created.id);
+    expect(reloaded?.name).toBe('新名称');
+    expect(reloaded?.prompt).toBe('新提示词');
+
+    const deleter = new ScheduledTaskStore(filePath, () => 1_000);
+    await deleter.remove(created.id);
+
+    const verifier = new ScheduledTaskStore(filePath, () => 1_000);
+    expect(await verifier.list()).toEqual([]);
   });
 
   it('并发 create 不会丢失任务', async () => {
@@ -184,17 +185,48 @@ describe('scheduled task store', () => {
   });
 
   it('updateRunState 只更新 lastRunAt、lastStatus、lastError', async () => {
-    const { store } = await fixture();
+    let now = 1_000;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-scheduled-'));
+    dirs.push(dir);
+    const filePath = path.join(dir, 'scheduled-tasks.json');
+    const store = new ScheduledTaskStore(filePath, () => now);
     const created = await store.create(baseInput());
+    now = 9_999;
     const updated = await store.updateRunState(created.id, {
       lastRunAt: 2_000,
       lastStatus: 'success',
       lastError: null,
-      name: 'ignored' as unknown as string,
     });
     expect(updated.lastRunAt).toBe(2_000);
     expect(updated.lastStatus).toBe('success');
     expect(updated.name).toBe('日报');
+    expect(updated.updatedAt).toBe(created.updatedAt);
+    expect(updated.nextRunAt).toBe(created.nextRunAt);
+    expect(updated.enabled).toBe(created.enabled);
+  });
+
+  it('create 写盘失败时不改变内存中的任务列表', async () => {
+    const { store } = await fixture();
+    const existing = await store.create(baseInput({ name: '已有任务', sessionId: 's0' }));
+    const spy = vi.spyOn(atomicWrite, 'writeFileAtomic').mockRejectedValueOnce(new Error('disk full'));
+    await expect(
+      store.create(baseInput({ name: '新任务', sessionId: 's1' })),
+    ).rejects.toThrow('disk full');
+    spy.mockRestore();
+    const listed = await store.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.id).toBe(existing.id);
+  });
+
+  it('update 写盘失败时不改变内存中的任务列表', async () => {
+    const { store } = await fixture();
+    const created = await store.create(baseInput());
+    const spy = vi.spyOn(atomicWrite, 'writeFileAtomic').mockRejectedValueOnce(new Error('disk full'));
+    await expect(store.update(created.id, { name: '应失败' })).rejects.toThrow('disk full');
+    spy.mockRestore();
+    const listed = await store.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.name).toBe('日报');
   });
 
   it('replaceNextRunAt 只更新 nextRunAt 与 updatedAt', async () => {
