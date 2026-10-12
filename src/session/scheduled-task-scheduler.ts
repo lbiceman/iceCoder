@@ -8,6 +8,9 @@ import {
 /** Node 的 setTimeout 上限约 24.8 天；留出余量。 */
 export const MAX_TIMEOUT_MS = 2_147_000_000;
 
+const RETRY_BASE_MS = 1_000;
+const RETRY_MAX_MS = 60_000;
+
 export interface ScheduledTaskSchedulerOptions {
   store: Pick<ScheduledTaskStore, 'list' | 'get' | 'replaceNextRunAt' | 'updateRunState'>;
   /** 将任务投递到执行链路（入队）；抛错表示投递失败。 */
@@ -21,6 +24,9 @@ export class ScheduledTaskScheduler {
   private readonly now: () => number;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  /** 每次 start / stop 递增；异步工作捕获自己的 generation，过期后不得再产生副作用。 */
+  private generation = 0;
+  private retryDelayMs = RETRY_BASE_MS;
   private tail: Promise<void> = Promise.resolve();
 
   constructor(options: ScheduledTaskSchedulerOptions) {
@@ -30,26 +36,31 @@ export class ScheduledTaskScheduler {
   }
 
   async start(): Promise<void> {
+    const gen = ++this.generation;
     this.running = true;
+    this.retryDelayMs = RETRY_BASE_MS;
     await this.exclusive(async () => {
-      if (!this.running) return;
+      if (!this.isCurrent(gen)) return;
       const now = this.now();
       const tasks = await this.store.list();
       for (const task of tasks) {
+        if (!this.isCurrent(gen)) return;
         if (!task.enabled || task.nextRunAt === null || task.nextRunAt > now) continue;
         await this.store.replaceNextRunAt(task.id, this.advance(task, now));
       }
-      await this.armNearest();
+      await this.armNearest(gen);
     });
   }
 
   stop(): void {
+    this.generation++;
     this.running = false;
     this.clearTimer();
   }
 
   async reschedule(): Promise<void> {
-    await this.exclusive(() => this.armNearest());
+    const gen = this.generation;
+    await this.exclusive(() => this.armNearest(gen));
   }
 
   async runNow(id: string): Promise<void> {
@@ -83,27 +94,69 @@ export class ScheduledTaskScheduler {
     }
   }
 
-  private async wake(): Promise<void> {
-    if (!this.running) return;
-    const now = this.now();
-    const tasks = await this.store.list();
-    if (!this.running) return;
-    const due = tasks.filter(
-      (task) => task.enabled && task.nextRunAt !== null && task.nextRunAt <= now,
-    );
-    for (const task of due) {
-      await this.store.replaceNextRunAt(task.id, this.advance(task, now));
-    }
-    await Promise.allSettled(due.map((task) => this.trigger(task)));
-    await this.armNearest();
+  private isCurrent(gen: number): boolean {
+    return this.running && this.generation === gen;
   }
 
-  private async armNearest(): Promise<void> {
+  private async wake(gen: number): Promise<void> {
+    if (!this.isCurrent(gen)) return;
+    try {
+      const now = this.now();
+      const tasks = await this.store.list();
+      if (!this.isCurrent(gen)) return;
+      const due = tasks.filter(
+        (task) => task.enabled && task.nextRunAt !== null && task.nextRunAt <= now,
+      );
+      // 先逐个持久化下次时间；失败的任务保持到点状态，留给重试，已持久化的照常触发。
+      const persisted: ScheduledTask[] = [];
+      let failure: unknown;
+      let failed = false;
+      for (const task of due) {
+        if (!this.isCurrent(gen)) return;
+        try {
+          await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+          persisted.push(task);
+        } catch (err) {
+          if (!failed) failure = err;
+          failed = true;
+        }
+      }
+      if (!this.isCurrent(gen)) return;
+      await Promise.allSettled(persisted.map((task) => this.trigger(task)));
+      // 有持久化失败时不扫描：到点任务会让 delay 变成 0，改走退避重试。
+      if (failed) throw failure;
+      await this.armNearest(gen);
+      this.retryDelayMs = RETRY_BASE_MS;
+    } catch (err) {
+      if (!this.isCurrent(gen)) return;
+      console.error('[scheduled-tasks] 调度器唤醒失败:', err);
+      this.scheduleRetry(gen);
+    }
+  }
+
+  private scheduleRetry(gen: number): void {
+    if (!this.isCurrent(gen)) return;
     this.clearTimer();
-    if (!this.running) return;
+    const delay = this.retryDelayMs;
+    this.retryDelayMs = Math.min(delay * 2, RETRY_MAX_MS);
+    this.setWakeTimer(gen, delay);
+  }
+
+  private setWakeTimer(gen: number, delay: number): void {
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.exclusive(() => this.wake(gen)).catch((err) => {
+        console.error('[scheduled-tasks] 调度器唤醒失败:', err);
+      });
+    }, delay);
+  }
+
+  private async armNearest(gen: number): Promise<void> {
+    if (!this.isCurrent(gen)) return;
     const tasks = await this.store.list();
-    // stop() 可能发生在 list 期间，此时不能再安排计时器。
-    if (!this.running) return;
+    // stop() / 新一代 start() 可能发生在 list 期间；过期的一代不得碰计时器。
+    if (!this.isCurrent(gen)) return;
+    this.clearTimer();
     const now = this.now();
     let nearest: number | null = null;
     for (const task of tasks) {
@@ -111,13 +164,7 @@ export class ScheduledTaskScheduler {
       if (nearest === null || task.nextRunAt < nearest) nearest = task.nextRunAt;
     }
     if (nearest === null) return;
-    const delay = Math.min(Math.max(0, nearest - now), MAX_TIMEOUT_MS);
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.exclusive(() => this.wake()).catch((err) => {
-        console.error('[scheduled-tasks] 调度器唤醒失败:', err);
-      });
-    }, delay);
+    this.setWakeTimer(gen, Math.min(Math.max(0, nearest - now), MAX_TIMEOUT_MS));
   }
 
   private async trigger(task: ScheduledTask): Promise<void> {

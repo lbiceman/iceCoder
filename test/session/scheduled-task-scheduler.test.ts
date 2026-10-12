@@ -36,24 +36,45 @@ function fakeStore(initial: ScheduledTask[], events: string[] = []) {
     return row;
   };
   let listGate: Promise<void> | null = null;
+  const listFailures: boolean[] = [];
+  const replaceFailures = new Map<string, number>();
   const store = {
     rows,
     events,
     add(t: ScheduledTask) {
       rows.push(structuredClone(t));
     },
+    /** 阻塞后续 list 调用；返回的函数放行，其 `.reject` 让被阻塞的调用失败。 */
     holdList() {
       let release!: () => void;
-      listGate = new Promise<void>((resolve) => {
+      let rejectGate!: (err: Error) => void;
+      listGate = new Promise<void>((resolve, reject) => {
         release = resolve;
+        rejectGate = reject;
       });
-      return () => {
-        listGate = null;
-        release();
-      };
+      return Object.assign(
+        () => {
+          listGate = null;
+          release();
+        },
+        {
+          reject: (err: Error) => {
+            listGate = null;
+            rejectGate(err);
+          },
+        },
+      );
+    },
+    /** 依次决定后续 list 调用是否失败（true = 失败）。 */
+    failLists(...flags: boolean[]) {
+      listFailures.push(...flags);
+    },
+    failReplace(id: string, times: number) {
+      replaceFailures.set(id, times);
     },
     list: vi.fn(async () => {
       if (listGate) await listGate;
+      if (listFailures.length > 0 && listFailures.shift()) throw new Error('list down');
       return rows.map((r) => structuredClone(r));
     }),
     get: vi.fn(async (id: string) => {
@@ -61,6 +82,11 @@ function fakeStore(initial: ScheduledTask[], events: string[] = []) {
       return row ? structuredClone(row) : undefined;
     }),
     replaceNextRunAt: vi.fn(async (id: string, nextRunAt: number) => {
+      const remaining = replaceFailures.get(id) ?? 0;
+      if (remaining > 0) {
+        replaceFailures.set(id, remaining - 1);
+        throw new Error('replace down');
+      }
       const row = find(id);
       row.nextRunAt = nextRunAt;
       events.push(`persist:${id}:${nextRunAt}`);
@@ -94,6 +120,7 @@ describe('ScheduledTaskScheduler', () => {
     vi.setSystemTime(0);
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -243,8 +270,9 @@ describe('ScheduledTaskScheduler', () => {
     const release = store.holdList();
     const rescheduling = scheduler.reschedule();
     await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(1);
     scheduler.stop();
+    expect(vi.getTimerCount()).toBe(0);
     release();
     await rescheduling;
     expect(vi.getTimerCount()).toBe(0);
@@ -356,5 +384,154 @@ describe('ScheduledTaskScheduler', () => {
     await scheduler.reschedule();
     expect(vi.getTimerCount()).toBe(0);
     scheduler.stop();
+  });
+
+  describe('生命周期 generation', () => {
+    it('stop→start 后旧 wake 恢复时不得推进、执行或重排', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      const release = store.holdList();
+      await vi.advanceTimersByTimeAsync(1_000);
+      scheduler.stop();
+      const restarting = scheduler.start();
+      release();
+      await restarting;
+
+      expect(execute).not.toHaveBeenCalled();
+      // 只有新一代 start 的扫描推进过一次；旧 wake 没有重复推进。
+      expect(store.replaceNextRunAt).toHaveBeenCalledTimes(1);
+      expect(store.replaceNextRunAt).toHaveBeenCalledWith('a', 11_000);
+      expect(store.updateRunState).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    });
+  });
+
+  describe('Store 瞬时异常的退避重试', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    const atMostOneTimer = () => expect(vi.getTimerCount()).toBeLessThanOrEqual(1);
+
+    it('wake 的 list 首次失败后 1s 恢复并只执行一次', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      store.failLists(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(execute).not.toHaveBeenCalled();
+      atMostOneTimer();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    });
+
+    it('replaceNextRunAt 首次失败后恢复：已持久化的任务不丢失、失败的任务不重复', async () => {
+      const store = fakeStore([
+        task({ id: 'a', nextRunAt: 1_000 }),
+        task({ id: 'b', nextRunAt: 1_000 }),
+      ]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      store.failReplace('a', 1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute.mock.calls.map(([t]) => t.id)).toEqual(['b']);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute.mock.calls.map(([t]) => t.id)).toEqual(['b', 'a']);
+      atMostOneTimer();
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    });
+
+    it('执行后末次扫描失败时重试，不会重复执行已触发的任务', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      store.failLists(false, true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    });
+
+    it('退避从 1s 指数增长，上限 60s，成功扫描后重置', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      store.failLists(...Array<boolean>(8).fill(true));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const backoff = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000];
+      for (const delay of backoff) {
+        atMostOneTimer();
+        expect(setTimeoutSpy.mock.calls.at(-1)![1]).toBe(delay);
+        expect(execute).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // 恢复后再次失败应重新从 1s 开始。
+      const nextDelay = setTimeoutSpy.mock.calls.at(-1)![1] as number;
+      store.failLists(true);
+      await vi.advanceTimersByTimeAsync(nextDelay);
+      expect(setTimeoutSpy.mock.calls.at(-1)![1]).toBe(1_000);
+      atMostOneTimer();
+      scheduler.stop();
+    });
+
+    it('stop 取消重试计时器', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      store.failLists(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      scheduler.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      const listCalls = store.list.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(store.list.mock.calls.length).toBe(listCalls);
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('generation 过期的旧 wake 失败时不安排重试', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      const release = store.holdList();
+      await vi.advanceTimersByTimeAsync(1_000);
+      scheduler.stop();
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      const restarting = scheduler.start();
+      release.reject(new Error('stale list failure'));
+      await restarting;
+
+      // 新一代 start 把 a 推进到 11_000，应只安排 10s 的计时器；不应出现旧代的 1s 重试。
+      expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([10_000]);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(execute).not.toHaveBeenCalled();
+      scheduler.stop();
+    });
   });
 });
