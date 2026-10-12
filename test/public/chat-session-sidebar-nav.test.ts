@@ -85,7 +85,7 @@ describe('桌面侧栏主导航与会话列表', () => {
   it('主导航包含工作入口', async () => {
     const page = await openSidebarPage();
     const state = await snapshot(page);
-    expect(state.navLabels).toEqual(['工作', '记忆', '技能', '统计']);
+    expect(state.navLabels).toEqual(['工作', '记忆', '技能/任务', '统计']);
     expect(state.chatNavCount).toBe(1);
     expect(state.activeNavPage).toBe('chat');
   });

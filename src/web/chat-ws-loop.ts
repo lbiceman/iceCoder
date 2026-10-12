@@ -13,6 +13,10 @@ import {
   type QueuedTask,
   type TaskEnqueueInput,
 } from '../session/task-queue.js';
+import {
+  describeScheduledTaskStop,
+  notifyScheduledTaskResult,
+} from '../session/scheduled-task-events.js';
 import { applyFirstPromptSessionTitle } from './session-title.js';
 import { buildUserMessageDisplayFields } from './user-message-display.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -63,6 +67,7 @@ export interface PendingChatMessage {
   source: 'implicit' | 'explicit';
   skipUserMessageAppend?: boolean;
   reasoningEffort?: ReasoningEffort;
+  scheduledTaskId?: string;
   ws: WebSocket;
 }
 
@@ -78,6 +83,7 @@ export function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingCha
       || (task.source === 'implicit' && !!task.messageId),
     ws,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
   };
 }
 
@@ -283,6 +289,7 @@ export async function runSessionMessageLoop(
   sessionProcessing.add(runSid);
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
+  let terminalError: string | undefined;
   try {
     publishRunState(runSid, 'running');
     beginSessionBatch(runSid);
@@ -307,7 +314,8 @@ export async function runSessionMessageLoop(
         reasoningEffort: first.reasoningEffort,
       });
     } catch (err) {
-      broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+      terminalError = formatFriendlyError(err);
+      broadcastToSession(runSid, { type: 'error', message: terminalError });
       terminalPhase = 'error';
     } finally {
       endSessionBatch(runSid);
@@ -329,6 +337,13 @@ export async function runSessionMessageLoop(
     }
   } finally {
     sessionProcessing.delete(runSid);
+    if (first.scheduledTaskId && terminalPhase && terminalPhase !== 'running') {
+      await notifyScheduledTaskResult({
+        taskId: first.scheduledTaskId,
+        success: terminalPhase === 'done',
+        error: terminalPhase === 'done' ? null : describeScheduledTaskStop(terminalReason, terminalError),
+      });
+    }
     // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。
     let relayed = false;
     if (shouldRelayQueuedTask(terminalReason)) {

@@ -95,13 +95,13 @@ function normalizeSkillFilenames(filenames: string[]): string[] {
   return out;
 }
 
-function assertIntervalValue(intervalValue: number): void {
+export function assertIntervalValue(intervalValue: number): void {
   if (!Number.isInteger(intervalValue) || intervalValue <= 0) {
     throw new Error('任务间隔必须是正整数');
   }
 }
 
-function assertIntervalUnit(unit: ScheduledTaskIntervalUnit): void {
+export function assertIntervalUnit(unit: ScheduledTaskIntervalUnit): void {
   if (!INTERVAL_UNITS.includes(unit)) {
     throw new Error('任务间隔单位无效');
   }

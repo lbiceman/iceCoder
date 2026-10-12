@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_TIMEOUT_MS,
+  SCHEDULED_TASK_BUSY_MESSAGE,
   ScheduledTaskScheduler,
 } from '../../src/session/scheduled-task-scheduler.js';
 import type {
@@ -185,6 +186,55 @@ describe('ScheduledTaskScheduler', () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: 'manual' }));
     expect(store.replaceNextRunAt).not.toHaveBeenCalled();
     expect(store.rows[0]!.nextRunAt).toBe(9_000);
+  });
+
+  it('上一次执行未结束时定时触发跳过，但仍推进下次时间', async () => {
+    const store = fakeStore([task({ id: 'slow', nextRunAt: 1_000 })]);
+    let busy = true;
+    const exec = vi.fn(async () => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const scheduler = new ScheduledTaskScheduler({
+      store: store as never,
+      execute: exec,
+      isBusy: () => busy,
+      now: () => Date.now(),
+    });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(exec).not.toHaveBeenCalled();
+    expect(store.rows[0]!.nextRunAt).toBe(11_000);
+    expect(store.rows[0]!.lastStatus).toBe('idle');
+    busy = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(exec).toHaveBeenCalledTimes(1);
+    scheduler.stop();
+  });
+
+  it('上一次执行未结束时立即执行报忙，不投递', async () => {
+    const store = fakeStore([task({ id: 'slow', nextRunAt: 9_000 })]);
+    const exec = vi.fn(async () => {});
+    const scheduler = new ScheduledTaskScheduler({
+      store: store as never,
+      execute: exec,
+      isBusy: () => true,
+      now: () => Date.now(),
+    });
+    await expect(scheduler.runNow('slow')).rejects.toThrow(SCHEDULED_TASK_BUSY_MESSAGE);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('投递进行中再次立即执行报忙', async () => {
+    const store = fakeStore([task({ id: 'x', nextRunAt: 9_000 })]);
+    let release: (() => void) | null = null;
+    const { scheduler, execute } = build(store, () =>
+      release ? Promise.resolve() : new Promise<void>((r) => { release = r; }));
+    const first = scheduler.runNow('x');
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(scheduler.runNow('x')).rejects.toThrow(SCHEDULED_TASK_BUSY_MESSAGE);
+    release!();
+    await first;
+    await scheduler.runNow('x');
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it('立即执行未知任务时拒绝并给出不存在错误', async () => {

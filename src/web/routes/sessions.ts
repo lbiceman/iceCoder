@@ -269,6 +269,21 @@ function rejectUnsafeSessionId(res: Response, sessionId: string): boolean {
   return true;
 }
 
+/** 新建空会话并写入 index（REST 与定时任务共用）。 */
+export async function createSessionRecord(title: string): Promise<SessionMeta> {
+  const id = randomUUID().slice(0, 8);
+  const now = Date.now();
+  const meta: SessionMeta = { id, title, createdAt: now, updatedAt: now, messageCount: 0 };
+  await mutateSessionIndex(async (index) => {
+    index.unshift(meta);
+    await ensureDir();
+    await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+    return index;
+  });
+  sessionListLiveSync?.notifyIndexUpdated();
+  return meta;
+}
+
 export function createSessionsRouter(): Router {
   const router = Router();
 
@@ -301,17 +316,7 @@ export function createSessionsRouter(): Router {
    * POST /api/sessions - 创建新会话
    */
   router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const title = (req.body?.title as string) || '新会话';
-    const id = randomUUID().slice(0, 8);
-    const now = Date.now();
-    const meta: SessionMeta = { id, title, createdAt: now, updatedAt: now, messageCount: 0 };
-    await mutateSessionIndex(async (index) => {
-      index.unshift(meta);
-      await ensureDir();
-      await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
-      return index;
-    });
-    sessionListLiveSync?.notifyIndexUpdated();
+    const meta = await createSessionRecord((req.body?.title as string) || '新会话');
     res.json({ success: true, session: meta });
   });
 

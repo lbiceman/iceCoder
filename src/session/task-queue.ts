@@ -16,6 +16,8 @@ export interface QueuedTask {
   source: 'implicit' | 'explicit';
   /** 后台子 Agent 完成后的自动续跑：不产生用户气泡，只给主 Agent 继续工作。 */
   continuation?: boolean;
+  /** 由定时任务投递时的任务 id，用于回写执行结果。 */
+  scheduledTaskId?: string;
 }
 
 export type TaskEnqueueInput = Omit<QueuedTask, 'id' | 'enqueuedAt'> & { text: string };
@@ -36,6 +38,7 @@ function toQueuedTask(task: TaskEnqueueInput, id: string, enqueuedAt: number): Q
     enqueuedAt,
     source: task.source,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
   };
 }
 

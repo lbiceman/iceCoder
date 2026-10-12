@@ -60,6 +60,7 @@ import './chat-ws-restore-handlers.ts';
 import './chat-ws-bg-task-handlers.ts';
 import './chat-page.ts';
 import './memory-page.ts';
+import './scheduled-tasks-page.ts';
 import './skills-page.ts';
 import './stats-page.ts';
 import './app.ts';

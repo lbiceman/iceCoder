@@ -15,12 +15,17 @@ export interface ScheduledTaskSchedulerOptions {
   store: Pick<ScheduledTaskStore, 'list' | 'get' | 'replaceNextRunAt' | 'updateRunState'>;
   /** 将任务投递到执行链路（入队）；抛错表示投递失败。 */
   execute: (task: ScheduledTask) => Promise<void>;
+  /** 上一次执行尚未结束（仍在跑或仍在队列中）时返回 true：定时触发跳过本次，立即执行报错。 */
+  isBusy?: (task: ScheduledTask) => boolean | Promise<boolean>;
   now?: () => number;
 }
+
+export const SCHEDULED_TASK_BUSY_MESSAGE = '上一次执行尚未结束，请稍后再试';
 
 export class ScheduledTaskScheduler {
   private readonly store: ScheduledTaskSchedulerOptions['store'];
   private readonly execute: ScheduledTaskSchedulerOptions['execute'];
+  private readonly isBusy: NonNullable<ScheduledTaskSchedulerOptions['isBusy']>;
   private readonly now: () => number;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -30,10 +35,13 @@ export class ScheduledTaskScheduler {
   /** start 扫描未完成时的快照：重试 wake 对 <= 该时刻的过期任务只推进、不补跑。 */
   private catchUpBefore: number | null = null;
   private tail: Promise<void> = Promise.resolve();
+  /** 正在投递中的任务 id：立即执行与定时唤醒不串行，投递完成前外部 isBusy 还看不到队列项。 */
+  private readonly delivering = new Set<string>();
 
   constructor(options: ScheduledTaskSchedulerOptions) {
     this.store = options.store;
     this.execute = options.execute;
+    this.isBusy = options.isBusy ?? (() => false);
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -80,7 +88,12 @@ export class ScheduledTaskScheduler {
   async runNow(id: string): Promise<void> {
     const task = await this.store.get(id);
     if (!task) throw new Error(`定时任务不存在: ${id}`);
+    if (await this.checkBusy(task)) throw new Error(SCHEDULED_TASK_BUSY_MESSAGE);
     await this.trigger(task);
+  }
+
+  private async checkBusy(task: ScheduledTask): Promise<boolean> {
+    return this.delivering.has(task.id) || (await this.isBusy(task));
   }
 
   /** 串行化 start / wake / reschedule；前一步失败不阻断后一步。 */
@@ -141,7 +154,7 @@ export class ScheduledTaskScheduler {
       const runnable = persisted.filter(
         (task) => skipBefore === null || task.nextRunAt! > skipBefore,
       );
-      await Promise.allSettled(runnable.map((task) => this.trigger(task)));
+      await Promise.allSettled(runnable.map((task) => this.triggerUnlessBusy(task)));
       // 有持久化失败时不扫描：到点任务会让 delay 变成 0，改走退避重试。
       if (failed) throw failure;
       await this.armNearest(gen);
@@ -193,22 +206,35 @@ export class ScheduledTaskScheduler {
     this.setWakeTimer(gen, Math.min(Math.max(0, nearest - now), MAX_TIMEOUT_MS));
   }
 
+  private async triggerUnlessBusy(task: ScheduledTask): Promise<void> {
+    if (await this.checkBusy(task)) {
+      console.log(`[scheduled-tasks] 「${task.name}」上一次执行尚未结束，跳过本次触发`);
+      return;
+    }
+    await this.trigger(task);
+  }
+
   private async trigger(task: ScheduledTask): Promise<void> {
-    await this.store.updateRunState(task.id, {
-      lastRunAt: this.now(),
-      lastStatus: 'queued',
-      lastError: null,
-    });
+    this.delivering.add(task.id);
     try {
-      await this.execute(task);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      await this.store.updateRunState(task.id, {
+        lastRunAt: this.now(),
+        lastStatus: 'queued',
+        lastError: null,
+      });
       try {
-        await this.store.updateRunState(task.id, { lastStatus: 'error', lastError: message });
-      } catch {
-        // 保留原始投递错误，状态写入失败不覆盖它。
+        await this.execute(task);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          await this.store.updateRunState(task.id, { lastStatus: 'error', lastError: message });
+        } catch {
+          // 保留原始投递错误，状态写入失败不覆盖它。
+        }
+        throw error;
       }
-      throw error;
+    } finally {
+      this.delivering.delete(task.id);
     }
   }
 }

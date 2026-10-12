@@ -31,7 +31,7 @@ export const MobileShell = (() => {
   const NAV_ITEMS = [
     { page: 'work', label: '工作', path: '/m/chat' },
     { page: 'mMemory', label: '记忆', path: '/m/memory' },
-    { page: 'mSkills', label: '技能', path: '/m/skills' },
+    { page: 'mSkills', label: '技能/任务', path: '/m/skills' },
     { page: 'mConfig', label: '设置', path: '/m/config' },
   ];
 
@@ -252,7 +252,7 @@ export const MobileShell = (() => {
       center.innerHTML = `<span class="mobile-top-bar-title">记忆</span>${getConnectionDot()}`;
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'skills') {
-      center.innerHTML = `<span class="mobile-top-bar-title">技能</span>${getConnectionDot()}`;
+      center.innerHTML = `<span class="mobile-top-bar-title">技能/任务</span>${getConnectionDot()}`;
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'config') {
       center.innerHTML = `<span class="mobile-top-bar-title">设置</span>${getConnectionDot()}`;

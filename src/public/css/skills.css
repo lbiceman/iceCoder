@@ -12,8 +12,9 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
-  padding: 20px 24px 16px;
+  padding: 20px 24px 0;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
@@ -288,6 +289,10 @@
     overflow-y: auto;
   }
   .skills-header {
+    padding: 8px 12px 0;
+  }
+  .skills-header-text,
+  .skills-header-actions {
     display: none;
   }
 }

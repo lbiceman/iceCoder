@@ -22,7 +22,17 @@ import {
 } from '../../web/chat-ws.js';
 import { registerBootstrapSessionHints } from '../../web/last-active-session.js';
 import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
-import { createSessionsRouter, registerSessionCleanupHook } from '../../web/routes/sessions.js';
+import {
+  createSessionRecord,
+  createSessionsRouter,
+  registerSessionCleanupHook,
+} from '../../web/routes/sessions.js';
+import { createScheduledTasksRouter } from '../../web/routes/scheduled-tasks.js';
+import { createScheduledTaskExecutor, isScheduledTaskBusy } from '../../web/scheduled-task-runtime.js';
+import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
+import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
+import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
+import path from 'node:path';
 
 registerSessionCleanupHook(purgeSessionRuntimeCaches);
 registerBootstrapSessionHints({
@@ -59,6 +69,19 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const { orchestrator, toolRegistry, toolExecutor, llmAdapter, paths, mcpManager } = ctx;
   const setupState = { required: ctx.needsSetup };
 
+  const scheduledTaskStore = new ScheduledTaskStore(path.join(paths.dataDir, 'scheduled-tasks.json'));
+  const executeScheduledTask = createScheduledTaskExecutor({
+    chatDeps: { orchestrator, toolRegistry, toolExecutor, mcpManager },
+  });
+  const scheduledTaskScheduler = new ScheduledTaskScheduler({
+    store: scheduledTaskStore,
+    execute: async (task) => {
+      if (setupState.required) throw new Error('请先完成模型配置');
+      await executeScheduledTask(task);
+    },
+    isBusy: isScheduledTaskBusy,
+  });
+
   const app = await createServer({
     setupGate: () => setupState.required,
     routes: [
@@ -82,6 +105,11 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/token-usage', router: createTokenUsageRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/scheduled-tasks', router: createScheduledTasksRouter({
+        store: scheduledTaskStore,
+        scheduler: scheduledTaskScheduler,
+        createSession: createSessionRecord,
+      }) },
       { path: '/api/mcp', router: createMcpStatusRouter({
         mcpManager,
         registry: toolRegistry,
@@ -109,12 +137,23 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     isSetupRequired: () => setupState.required,
   });
 
+  registerScheduledTaskResultHandler(async ({ taskId, success, error }) => {
+    if (!(await scheduledTaskStore.get(taskId))) return;
+    await scheduledTaskStore.updateRunState(taskId, {
+      lastStatus: success ? 'success' : 'error',
+      lastError: error,
+    });
+  });
+  await scheduledTaskScheduler.start();
+
   const stopTunnelWatcher = startTunnelReadyWatcher({
     onReady: (url) => broadcastTunnelReady({ url }),
   });
   const stopConfigWatch = watchConfigChanges(llmAdapter, paths.configPath);
 
   const cleanup = () => {
+    scheduledTaskScheduler.stop();
+    registerScheduledTaskResultHandler(null);
     stopConfigWatch();
     stopTunnelWatcher();
     cleanupChatResources();

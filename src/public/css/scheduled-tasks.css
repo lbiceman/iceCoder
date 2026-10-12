@@ -1,0 +1,279 @@
+/* 技能/任务页：标签切换 + 定时任务面板 */
+.skills-tabs {
+  display: flex;
+  gap: 4px;
+  flex-basis: 100%;
+  margin-top: -4px;
+}
+
+.skills-tab {
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.skills-tab:hover { color: var(--text-primary); }
+.skills-tab.is-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.skills-tasks-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.skills-main[hidden],
+.skills-tasks-panel[hidden] { display: none; }
+
+.sched-root {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 24px 32px;
+}
+
+.sched-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sched-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+.sched-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.sched-card.is-disabled { opacity: 0.7; }
+
+.sched-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sched-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sched-status,
+.sched-badge {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+.sched-badge.is-on {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.sched-status-queued {
+  color: var(--warning);
+  background: var(--warning-light);
+  border-color: transparent;
+}
+.sched-status-success {
+  color: var(--success);
+  background: var(--success-light);
+  border-color: transparent;
+}
+.sched-status-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: transparent;
+}
+
+.sched-card-prompt {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sched-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sched-chip {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sched-meta {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+}
+.sched-meta > div { display: flex; gap: 10px; }
+.sched-meta dt {
+  width: 56px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.sched-meta dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.sched-countdown { color: var(--accent); margin-left: 6px; }
+
+.sched-error {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  word-break: break-word;
+}
+
+.sched-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.sched-actions .skills-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* 新建 / 编辑表单（Modal.panel 内） */
+.modal-panel-box:has(.sched-form) { width: 560px; }
+.modal-panel-box:has(.sched-form) .modal-panel-body { min-height: 0; }
+
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sched-form .sched-input { box-sizing: border-box; width: 100%; }
+.sched-form .sched-interval-value,
+.sched-form .sched-interval-unit { width: 96px; }
+
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sched-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.sched-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.sched-input {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+.sched-input:focus {
+  outline: none;
+  border-color: var(--accent-border-strong, var(--accent));
+}
+.sched-textarea {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.5;
+}
+
+.sched-interval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.sched-skill-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.sched-skill-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sched-skill-option + .sched-skill-option { border-top: 1px solid var(--border-color); }
+.sched-skill-option:hover { background: var(--bg-hover); }
+.sched-skill-name { flex: 1; min-width: 0; }
+.sched-skill-file {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.sched-skill-option.is-missing .sched-skill-file { color: var(--warning); font-family: inherit; }
+
+.sched-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sched-form-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+.sched-form-error[hidden] { display: none; }
+
+.sched-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .sched-root { padding: 12px; }
+  .sched-list { grid-template-columns: 1fr; }
+}
