@@ -186,8 +186,6 @@
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
-.sched-countdown { color: var(--accent); margin-left: 6px; }
-
 .sched-error {
   padding: 6px 10px;
   border-radius: var(--radius);
@@ -241,6 +239,7 @@
   background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px;
+  line-height: 18px;
   font-family: inherit;
 }
 .sched-input:focus {
@@ -263,6 +262,8 @@
   justify-content: space-between;
   gap: 8px;
   width: 96px;
+  /* 中文标签（周一）回退字体的行高比数字大，不定高会让每天/每周切换时整行跳动 */
+  height: 34px;
   text-align: left;
   cursor: pointer;
 }

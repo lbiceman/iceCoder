@@ -36,7 +36,7 @@ describe('任务页「打开会话」', () => {
         (window as any).__calls = calls;
         (window as any).fetch = async (url: string, init?: { method?: string }) => {
           if (url === '/api/scheduled-tasks' && (!init || !init.method)) {
-            return { ok: true, json: async () => ({ success: true, tasks: [task], now: Date.now() }) };
+            return { ok: true, json: async () => ({ success: true, tasks: [task] }) };
           }
           if (url === '/api/scheduled-tasks/task-a/session' && init?.method === 'POST') {
             return { ok: true, json: async () => ({ success: true, task, sessionReady: true }) };
@@ -72,7 +72,7 @@ describe('任务页「打开会话」', () => {
       (window as any).__calls = calls;
       (window as any).fetch = async (url: string, init?: { method?: string }) => {
         if (url === '/api/scheduled-tasks' && (!init || !init.method)) {
-          return { ok: true, json: async () => ({ success: true, tasks: [task], now: Date.now() }) };
+          return { ok: true, json: async () => ({ success: true, tasks: [task] }) };
         }
         if (url === '/api/scheduled-tasks/task-a/session' && init?.method === 'POST') {
           calls.push(['session-api']);

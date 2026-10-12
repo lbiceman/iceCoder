@@ -67,7 +67,7 @@ export function createScheduledTasksRouter(deps: ScheduledTasksRouterDeps): Rout
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     try {
       const tasks = await service.list();
-      res.json({ success: true, tasks, now: Date.now() });
+      res.json({ success: true, tasks });
     } catch (err) {
       sendError(res, err);
     }

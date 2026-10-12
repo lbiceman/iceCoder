@@ -82,7 +82,6 @@ describe('scheduled tasks router', () => {
 
     const list = await call('GET', '/api/scheduled-tasks');
     expect(list.body.tasks).toHaveLength(1);
-    expect(typeof list.body.now).toBe('number');
   });
 
   it('rejects invalid input with 400 and creates nothing', async () => {

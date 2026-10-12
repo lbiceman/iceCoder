@@ -20,8 +20,6 @@ export const ScheduledTasksPage = (() => {
 
   let containerEl = null;
   let tasks = [];
-  let clockOffset = 0;
-  let tickTimer = null;
   let pollTimer = null;
   let fetchAbort = null;
   let busyIds = new Set();
@@ -30,10 +28,6 @@ export const ScheduledTasksPage = (() => {
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(str == null ? '' : String(str)));
     return div.innerHTML;
-  }
-
-  function serverNow() {
-    return Date.now() + clockOffset;
   }
 
   function formatTime(ms) {
@@ -47,21 +41,6 @@ export const ScheduledTasksPage = (() => {
       minute: '2-digit',
       second: '2-digit',
     });
-  }
-
-  function formatCountdown(ms) {
-    if (ms <= 0) return '即将执行';
-    const total = Math.ceil(ms / 1000);
-    const d = Math.floor(total / 86400);
-    const h = Math.floor((total % 86400) / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    const parts = [];
-    if (d) parts.push(`${d}天`);
-    if (d || h) parts.push(`${h}时`);
-    if (d || h || m) parts.push(`${m}分`);
-    parts.push(`${s}秒`);
-    return parts.join('') + '后';
   }
 
   function isClockKind(kind) {
@@ -103,12 +82,6 @@ export const ScheduledTasksPage = (() => {
     if (window.Notification) Notification.error(`${prefix}：${(err && err.message) || '未知错误'}`);
   }
 
-  function countdownText(task) {
-    if (!task.enabled) return '已停用';
-    if (!task.nextRunAt) return '—';
-    return formatCountdown(task.nextRunAt - serverNow());
-  }
-
   function renderTaskCard(task) {
     const status = task.lastStatus || 'idle';
     const imageCount = (task.images || []).length;
@@ -131,8 +104,7 @@ export const ScheduledTasksPage = (() => {
         (skills ? `<div class="sched-chips">${skills}</div>` : '') +
         '<dl class="sched-meta">' +
           `<div><dt>${scheduleLabel(task)}</dt><dd>${escapeHtml(formatSchedule(task))}</dd></div>` +
-          `<div><dt>下次执行</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}` +
-            ` <span class="sched-countdown" data-countdown="${escapeHtml(task.id)}">${escapeHtml(countdownText(task))}</span></dd></div>` +
+          `<div><dt>下次执行</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}</dd></div>` +
           `<div><dt>上次执行</dt><dd>${escapeHtml(formatTime(task.lastRunAt))}</dd></div>` +
         '</dl>' +
         (status === 'error' && task.lastError
@@ -168,15 +140,6 @@ export const ScheduledTasksPage = (() => {
     listEl.innerHTML = tasks.map(renderTaskCard).join('');
   }
 
-  function tickCountdowns() {
-    if (!containerEl) return;
-    const nodes = containerEl.querySelectorAll('[data-countdown]');
-    for (let i = 0; i < nodes.length; i++) {
-      const task = tasks.find((t) => t.id === nodes[i].getAttribute('data-countdown'));
-      if (task) nodes[i].textContent = countdownText(task);
-    }
-  }
-
   function reload() {
     if (!containerEl) return Promise.resolve();
     if (fetchAbort) fetchAbort.abort();
@@ -186,7 +149,6 @@ export const ScheduledTasksPage = (() => {
       .then((body) => {
         if (!body.success) throw new Error(body.error || '加载失败');
         tasks = body.tasks || [];
-        if (typeof body.now === 'number') clockOffset = body.now - Date.now();
         renderList();
       })
       .catch((err) => {
@@ -333,7 +295,7 @@ export const ScheduledTasksPage = (() => {
       '<ul>' +
         '<li>定时执行无人值守：所有工具确认（包括删除文件、高危命令）都会<b>自动通过</b>，请只给任务写你放心让它自动执行的提示词。</li>' +
         '<li>任务会话记录超过 20 MB 时，下次执行前会自动新建一个会话继续执行（新会话不带旧对话历史）；旧会话保留不删除，可在会话列表中自行清理。</li>' +
-        '<li>专属会话只在执行时创建：新建任务不会产生会话，首次执行时才创建；删除专属会话也不影响任务本身，倒计时照常进行，下次执行时会自动新建一个会话。</li>' +
+        '<li>专属会话只在执行时创建：新建任务不会产生会话，首次执行时才创建；删除专属会话也不影响任务本身，仍按计划执行，下次执行时会自动新建一个会话。</li>' +
       '</ul>' +
     '</div>';
 
@@ -594,11 +556,11 @@ export const ScheduledTasksPage = (() => {
   const MODE_TEXT = {
     repeat: {
       label: '执行间隔',
-      hint: '新建、修改间隔或重新启用后，满一个间隔首次执行；只改其他内容不影响倒计时。服务停机期间错过的执行会直接跳过。',
+      hint: '新建、修改间隔或重新启用后，满一个间隔首次执行；只改其他内容不影响下次执行时间。服务停机期间错过的执行会直接跳过。',
     },
     once: {
       label: '执行时间',
-      hint: '新建、修改时长或重新启用后，等满设定时长执行一次，执行后自动停用；只改其他内容不影响倒计时。服务停机错过执行时间会直接停用。',
+      hint: '新建、修改时长或重新启用后，等满设定时长执行一次，执行后自动停用；只改其他内容不影响执行时间。服务停机错过执行时间会直接停用。',
     },
   };
 
@@ -858,16 +820,13 @@ export const ScheduledTasksPage = (() => {
 
   function startTimers() {
     stopTimers();
-    tickTimer = setInterval(tickCountdowns, 1000);
     pollTimer = setInterval(() => {
       if (!document.hidden) reload();
     }, POLL_MS);
   }
 
   function stopTimers() {
-    if (tickTimer) clearInterval(tickTimer);
     if (pollTimer) clearInterval(pollTimer);
-    tickTimer = null;
     pollTimer = null;
   }
 

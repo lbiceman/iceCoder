@@ -4,7 +4,7 @@
  * 定时任务轮次无人值守：确认一律自动通过（见 chat-ws-confirm 的 setSessionUnattended）。
  *
  * 专属会话只在执行时创建：新建任务时没有会话（sessionId 为空），首次执行前才新建；
- * 用户删除专属会话后任务不受影响、继续倒计时，下次执行时再新建。
+ * 用户删除专属会话后任务不受影响、照常调度，下次执行时再新建。
  */
 
 import { randomUUID } from 'node:crypto';
