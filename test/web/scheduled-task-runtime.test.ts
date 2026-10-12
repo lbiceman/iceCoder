@@ -143,8 +143,6 @@ describe('rotateScheduledTaskSessionIfOversized', () => {
     const deps: ScheduledTaskSessionRotationDeps = {
       store: { rebindSession },
       createSession: vi.fn(async () => ({ id: 'sess-new' })),
-      deleteSession: vi.fn(async () => true),
-      isSessionInUse: () => false,
       sessionBytes: async () => 100,
       copyImage: async (url) => url.replace('sess-1', 'sess-new'),
       maxBytes: 100,
@@ -160,7 +158,7 @@ describe('rotateScheduledTaskSessionIfOversized', () => {
     expect(deps.createSession).not.toHaveBeenCalled();
   });
 
-  it('creates a new session, migrates images, rebinds and deletes the old session', async () => {
+  it('creates a new session, migrates images and rebinds the task', async () => {
     const { deps, rebindSession } = makeDeps();
     const rotated = await rotateScheduledTaskSessionIfOversized(
       makeTask({ images: ['/api/sessions/sess-1/images/a.png'] }),
@@ -169,18 +167,12 @@ describe('rotateScheduledTaskSessionIfOversized', () => {
     expect(deps.createSession).toHaveBeenCalledWith('定时任务：巡检');
     expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new', ['/api/sessions/sess-new/images/a.png']);
     expect(rotated.sessionId).toBe('sess-new');
-    expect(deps.deleteSession).toHaveBeenCalledWith('sess-1');
   });
 
-  it('keeps the old session when it is open or an image could not be migrated', async () => {
-    const open = makeDeps({ isSessionInUse: () => true });
-    await rotateScheduledTaskSessionIfOversized(makeTask(), open.deps);
-    expect(open.deps.deleteSession).not.toHaveBeenCalled();
-
-    const broken = makeDeps({ copyImage: async () => null });
-    await rotateScheduledTaskSessionIfOversized(makeTask({ images: ['/api/sessions/sess-1/images/a.png'] }), broken.deps);
-    expect(broken.rebindSession).toHaveBeenCalledWith('task-1', 'sess-new', ['/api/sessions/sess-1/images/a.png']);
-    expect(broken.deps.deleteSession).not.toHaveBeenCalled();
+  it('falls back to the old image url when an image could not be migrated', async () => {
+    const { deps, rebindSession } = makeDeps({ copyImage: async () => { throw new Error('io'); } });
+    await rotateScheduledTaskSessionIfOversized(makeTask({ images: ['/api/sessions/sess-1/images/a.png'] }), deps);
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new', ['/api/sessions/sess-1/images/a.png']);
   });
 
   it('copies task images into the new session image cache by default', async () => {
@@ -197,21 +189,10 @@ describe('rotateScheduledTaskSessionIfOversized', () => {
       expect(images[0]).toMatch(new RegExp(`^/api/sessions/${to}/images/`));
       const copied = path.join(getImagesCacheSessionDir(to), decodeURIComponent(images[0]!.split('/').pop()!));
       await expect(fs.readFile(copied)).resolves.toBeTruthy();
-      expect(deps.deleteSession).toHaveBeenCalledWith(from);
+      await expect(fs.readFile(saved!.absolutePath)).resolves.toBeTruthy();
     } finally {
       await deleteSessionImagesCache(from);
       await deleteSessionImagesCache(to);
-    }
-  });
-
-  it('still returns the rebound task when deleting the old session fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const { deps } = makeDeps({ deleteSession: async () => { throw new Error('busy'); } });
-      expect((await rotateScheduledTaskSessionIfOversized(makeTask(), deps)).sessionId).toBe('sess-new');
-      expect(warn).toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
     }
   });
 });

@@ -25,7 +25,6 @@ import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
 import {
   createSessionRecord,
   createSessionsRouter,
-  deleteSessionRecord,
   registerSessionCleanupHook,
 } from '../../web/routes/sessions.js';
 import { createScheduledTasksRouter } from '../../web/routes/scheduled-tasks.js';
@@ -82,7 +81,6 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     rotateSession: (task) => rotateScheduledTaskSessionIfOversized(task, {
       store: scheduledTaskStore,
       createSession: createSessionRecord,
-      deleteSession: deleteSessionRecord,
     }),
   });
   const scheduledTaskScheduler = new ScheduledTaskScheduler({

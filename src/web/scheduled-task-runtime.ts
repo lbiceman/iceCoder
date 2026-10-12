@@ -11,13 +11,13 @@ import { WebSocket } from 'ws';
 import { getSkillRegistry } from '../core/skill-registry.js';
 import type { ScheduledTask, ScheduledTaskStore } from '../session/scheduled-task-store.js';
 import { getTaskQueueManager, type TaskEnqueueInput } from '../session/task-queue.js';
-import { hasSessionSubscribers, pickSessionWs } from './chat-ws-broadcast.js';
+import { pickSessionWs } from './chat-ws-broadcast.js';
 import {
   enqueueAndMaybeKickoff,
   persistImplicitQueuedUserMessage,
   type ChatRunDeps,
 } from './chat-ws-loop.js';
-import { SESSIONS_DIR, getActiveSessionId, sessionProcessing } from './chat-ws-runtime.js';
+import { SESSIONS_DIR, sessionProcessing } from './chat-ws-runtime.js';
 import { buildSessionImageApiUrl, persistUploadedImageFiles, resolveSessionImageFile } from './images-cache.js';
 
 const headlessWs = {
@@ -41,9 +41,6 @@ export const SCHEDULED_TASK_SESSION_MAX_BYTES = 20 * 1024 * 1024;
 export interface ScheduledTaskSessionRotationDeps {
   store: Pick<ScheduledTaskStore, 'rebindSession'>;
   createSession: (title: string) => Promise<{ id: string }>;
-  deleteSession: (sessionId: string) => Promise<unknown>;
-  /** 会话正被浏览器打开时保留旧会话，避免删掉用户眼前的页面。 */
-  isSessionInUse?: (sessionId: string) => boolean;
   sessionBytes?: (sessionId: string) => Promise<number>;
   /** 把旧会话里的任务图片复制到新会话，返回新 URL；失败返回 null。 */
   copyImage?: (url: string, fromSessionId: string, toSessionId: string) => Promise<string | null>;
@@ -62,10 +59,6 @@ async function defaultSessionBytes(sessionId: string): Promise<number> {
   return total;
 }
 
-function defaultIsSessionInUse(sessionId: string): boolean {
-  return hasSessionSubscribers(sessionId) || getActiveSessionId() === sessionId || sessionProcessing.has(sessionId);
-}
-
 const SESSION_IMAGE_URL_RE = /^\/api\/sessions\/[^/]+\/images\/([^/?#]+)$/;
 
 async function defaultCopyImage(url: string, fromSessionId: string, toSessionId: string): Promise<string | null> {
@@ -78,8 +71,8 @@ async function defaultCopyImage(url: string, fromSessionId: string, toSessionId:
 }
 
 /**
- * 会话过大时新建专属会话、迁移任务图片并换绑；旧会话在无人打开且图片全部迁移成功时删除。
- * 新会话不继承旧会话的对话历史。
+ * 会话过大时新建专属会话、把任务图片复制过去并换绑。旧会话原样保留（由用户自行处理），
+ * 图片复制失败时沿用旧 URL。新会话不继承旧会话的对话历史。
  */
 export async function rotateScheduledTaskSessionIfOversized(
   task: ScheduledTask,
@@ -88,30 +81,14 @@ export async function rotateScheduledTaskSessionIfOversized(
   const sessionBytes = deps.sessionBytes ?? defaultSessionBytes;
   const copyImage = deps.copyImage ?? defaultCopyImage;
   const maxBytes = deps.maxBytes ?? SCHEDULED_TASK_SESSION_MAX_BYTES;
-  const isSessionInUse = deps.isSessionInUse ?? defaultIsSessionInUse;
   if ((await sessionBytes(task.sessionId)) < maxBytes) return task;
 
-  const oldSessionId = task.sessionId;
   const session = await deps.createSession(`定时任务：${task.name}`);
   const images: string[] = [];
-  let allImagesCopied = true;
   for (const url of task.images) {
-    const copied = await copyImage(url, oldSessionId, session.id).catch(() => null);
-    if (copied) images.push(copied);
-    else {
-      allImagesCopied = false;
-      images.push(url);
-    }
+    images.push((await copyImage(url, task.sessionId, session.id).catch(() => null)) ?? url);
   }
-  const rebound = await deps.store.rebindSession(task.id, session.id, images);
-  if (allImagesCopied && !isSessionInUse(oldSessionId)) {
-    try {
-      await deps.deleteSession(oldSessionId);
-    } catch (err) {
-      console.warn('[scheduled-tasks] 删除旧任务会话失败:', oldSessionId, err);
-    }
-  }
-  return rebound;
+  return deps.store.rebindSession(task.id, session.id, images);
 }
 
 async function defaultListSkillFilenames(): Promise<Set<string>> {
