@@ -10,6 +10,8 @@ import {
   SCHEDULED_TASK_CREATE_IN_TASK_SESSION_MESSAGE,
   createScheduledTaskTool,
   normalizeIntervalUnit,
+  normalizeScheduleKind,
+  normalizeWeekdays,
 } from '../../src/web/scheduled-task-tool.js';
 import type { RegisteredTool } from '../../src/tools/types.js';
 
@@ -62,6 +64,9 @@ describe('scheduled_task tool', () => {
     expect(description).toMatch(/do NOT read iceCoder source code/);
     expect(description).toMatch(/schtasks/);
     expect(description).toMatch(/cron expressions are NOT supported/);
+    expect(description).toMatch(/- daily: runs every day at timeOfDay/);
+    expect(description).toMatch(/weekdays \[5\], timeOfDay "10:00"/);
+    expect(description).not.toMatch(/Clock times .* are NOT supported/);
     expect(description).toMatch(/cannot see this chat/);
     expect(description).toMatch(/auto-approved/);
     expect(description).toMatch(/restarts the countdown/);
@@ -122,6 +127,53 @@ describe('scheduled_task tool', () => {
     ['min', 'minute'], ['Hours', 'hour'], ['小时', 'hour'], ['天', 'day'], ['sec', 'second'], ['weekly', 'weekly'],
   ])('normalizeIntervalUnit(%s) = %s', (raw, expected) => {
     expect(normalizeIntervalUnit(raw)).toBe(expected);
+  });
+
+  it('creates daily and weekly clock tasks', async () => {
+    now = new Date(2026, 9, 12, 16, 36).getTime();
+    const tool = makeTool();
+    const daily = await tool.handler({ action: 'create', name: '日结', prompt: '汇总当天', scheduleKind: 'daily', timeOfDay: '24:00' });
+    expect(daily.success).toBe(true);
+    expect(daily.output).toContain('每天 00:00 执行一次');
+    expect(daily.output).toContain(`下次执行：T${new Date(2026, 9, 13).getTime()}`);
+
+    const weekly = await tool.handler({ action: 'create', name: '周报', prompt: '写周报', scheduleKind: 'weekly', weekdays: ['周五'], timeOfDay: '10:00' });
+    expect(weekly.success).toBe(true);
+    expect(weekly.output).toContain('每周五 10:00 执行一次');
+    expect((await store.list()).find((t) => t.name === '周报')).toMatchObject({
+      scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00', nextRunAt: new Date(2026, 9, 16, 10).getTime(),
+    });
+  });
+
+  it('infers scheduleKind from timeOfDay / weekdays on create', async () => {
+    const tool = makeTool();
+    await tool.handler({ action: 'create', name: 'a', prompt: 'p', timeOfDay: '08:00' });
+    await tool.handler({ action: 'create', name: 'b', prompt: 'p', timeOfDay: '08:00', weekdays: '1,3,5' });
+    const tasks = await store.list();
+    expect(tasks.find((t) => t.name === 'a')).toMatchObject({ scheduleKind: 'daily' });
+    expect(tasks.find((t) => t.name === 'b')).toMatchObject({ scheduleKind: 'weekly', weekdays: [1, 3, 5] });
+  });
+
+  it('describes one-shot clock tasks and rejects bad clock input', async () => {
+    const tool = makeTool();
+    const once = await tool.handler({ action: 'create', name: '提醒', prompt: 'p', scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00', once: true });
+    expect(once.output).toContain('一次性，在下一个周五 10:00 执行');
+    expect(await tool.handler({ action: 'create', name: 'x', prompt: 'p', scheduleKind: 'daily', timeOfDay: '25:00' }))
+      .toMatchObject({ success: false, error: '执行时刻格式应为 HH:mm' });
+    expect(await tool.handler({ action: 'create', name: 'x', prompt: 'p', scheduleKind: 'weekly', timeOfDay: '10:00' }))
+      .toMatchObject({ success: false, error: '每周执行至少选择一天' });
+  });
+
+  it.each([
+    ['Daily', 'daily'], ['每周', 'weekly'], ['interval', 'interval'], ['monthly', 'monthly'],
+  ])('normalizeScheduleKind(%s) = %s', (raw, expected) => {
+    expect(normalizeScheduleKind(raw)).toBe(expected);
+  });
+
+  it.each<[unknown, unknown]>([
+    [[5], [5]], [['5'], [5]], ['fri', [5]], ['周一,周三、星期五', [1, 3, 5]], [7, [0]], [['Sunday'], [0]], [['周八'], ['周八']],
+  ])('normalizeWeekdays(%j) = %j', (raw, expected) => {
+    expect(normalizeWeekdays(raw)).toEqual(expected);
   });
 
   it('describes one-shot tasks and honours enabled:false', async () => {

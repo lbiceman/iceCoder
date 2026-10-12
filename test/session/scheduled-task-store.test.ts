@@ -5,10 +5,79 @@ import os from 'node:os';
 import * as atomicWrite from '../../src/memory/file-memory/atomic-write.js';
 import {
   ScheduledTaskStore,
+  advanceSchedule,
   advanceToFuture,
   intervalToMs,
+  nextClockRunAt,
+  normalizeSchedule,
+  normalizeTimeOfDay,
   type ScheduledTaskIntervalUnit,
+  type ScheduledTaskSchedule,
 } from '../../src/session/scheduled-task-store.js';
+
+const at = (...parts: [number, number, number, number?, number?]) =>
+  new Date(parts[0], parts[1] - 1, parts[2], parts[3] ?? 0, parts[4] ?? 0).getTime();
+
+function clock(overrides: Partial<ScheduledTaskSchedule>): ScheduledTaskSchedule {
+  return { scheduleKind: 'daily', intervalValue: 1, intervalUnit: 'day', timeOfDay: '00:00', weekdays: [], ...overrides };
+}
+
+describe('钟点调度计算（本地时区）', () => {
+  it('每天 00:00：23:59 之后是次日零点，正好零点时取下一天', () => {
+    const daily = clock({ timeOfDay: '00:00' });
+    expect(nextClockRunAt(daily, at(2026, 10, 12, 23, 59))).toBe(at(2026, 10, 13));
+    expect(nextClockRunAt(daily, at(2026, 10, 13))).toBe(at(2026, 10, 14));
+    expect(nextClockRunAt(daily, at(2026, 10, 31, 12))).toBe(at(2026, 11, 1));
+    expect(nextClockRunAt(daily, at(2026, 12, 31, 23, 30))).toBe(at(2027, 1, 1));
+  });
+
+  it('每周五 10:00：周五 9:59 当天执行，10:00 及之后到下周五', () => {
+    const friday = clock({ scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
+    // 2026-10-16 是周五。
+    expect(nextClockRunAt(friday, at(2026, 10, 12, 16, 36))).toBe(at(2026, 10, 16, 10));
+    expect(nextClockRunAt(friday, at(2026, 10, 16, 9, 59))).toBe(at(2026, 10, 16, 10));
+    expect(nextClockRunAt(friday, at(2026, 10, 16, 10))).toBe(at(2026, 10, 23, 10));
+    expect(nextClockRunAt(friday, at(2026, 10, 16, 10, 1))).toBe(at(2026, 10, 23, 10));
+  });
+
+  it('多个星期取最近的一天，周日为 0', () => {
+    const monWedSun = clock({ scheduleKind: 'weekly', weekdays: [0, 1, 3], timeOfDay: '08:30' });
+    expect(nextClockRunAt(monWedSun, at(2026, 10, 12, 9))).toBe(at(2026, 10, 14, 8, 30));
+    expect(nextClockRunAt(monWedSun, at(2026, 10, 17, 9))).toBe(at(2026, 10, 18, 8, 30));
+  });
+
+  it('advanceSchedule：钟点任务取 now 之后最近时刻，间隔任务按原节拍推进', () => {
+    const daily = clock({ timeOfDay: '00:00' });
+    expect(advanceSchedule(daily, at(2026, 10, 13), at(2026, 10, 13, 0, 0) + 5)).toBe(at(2026, 10, 14));
+    expect(advanceSchedule(daily, at(2026, 10, 10), at(2026, 10, 13, 8))).toBe(at(2026, 10, 14));
+    const interval = clock({ scheduleKind: 'interval', intervalValue: 1, intervalUnit: 'second' });
+    expect(advanceSchedule(interval, 1_000, 4_500)).toBe(5_000);
+  });
+
+  it('normalizeTimeOfDay：补零、24:00 记为 00:00、拒绝非法值', () => {
+    expect(normalizeTimeOfDay('9:05')).toBe('09:05');
+    expect(normalizeTimeOfDay(' 10:00 ')).toBe('10:00');
+    expect(normalizeTimeOfDay('24:00')).toBe('00:00');
+    for (const bad of ['24:30', '23:60', '10', '10:0', 'ab:cd', '', 1000, undefined]) {
+      expect(() => normalizeTimeOfDay(bad), String(bad)).toThrow('执行时刻格式应为 HH:mm');
+    }
+  });
+
+  it('normalizeSchedule：只校验当前方式用到的字段，其余清空', () => {
+    expect(normalizeSchedule({ scheduleKind: 'weekly', weekdays: [5, 1, 5], timeOfDay: '10:00' })).toEqual({
+      scheduleKind: 'weekly', intervalValue: 1, intervalUnit: 'day', timeOfDay: '10:00', weekdays: [1, 5],
+    });
+    expect(normalizeSchedule({ scheduleKind: 'daily', timeOfDay: '00:00', weekdays: [3], intervalValue: 2, intervalUnit: 'hour' }))
+      .toEqual({ scheduleKind: 'daily', intervalValue: 2, intervalUnit: 'hour', timeOfDay: '00:00', weekdays: [] });
+    expect(normalizeSchedule({ intervalValue: 5, intervalUnit: 'minute', timeOfDay: '10:00' }))
+      .toMatchObject({ scheduleKind: 'interval', timeOfDay: '', weekdays: [] });
+    expect(() => normalizeSchedule({ scheduleKind: 'monthly' as never, timeOfDay: '10:00' })).toThrow('调度方式无效');
+    expect(() => normalizeSchedule({ scheduleKind: 'daily' })).toThrow('执行时刻格式应为 HH:mm');
+    expect(() => normalizeSchedule({ scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [] })).toThrow('每周执行至少选择一天');
+    expect(() => normalizeSchedule({ scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [7] })).toThrow('星期取值应为 0-6');
+    expect(() => normalizeSchedule({ scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [1.5] })).toThrow('星期取值应为 0-6');
+  });
+});
 
 describe('scheduled task store', () => {
   const dirs: string[] = [];
@@ -212,7 +281,44 @@ describe('scheduled task store', () => {
     };
     await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
     const [task] = await store.list();
-    expect(task).toMatchObject({ id: 'old', images: [], files: [], once: false });
+    expect(task).toMatchObject({
+      id: 'old', images: [], files: [], once: false, scheduleKind: 'interval', timeOfDay: '', weekdays: [],
+    });
+  });
+
+  it('创建每天 / 每周任务：首次执行在下一个匹配时刻，重开文件后字段保留', async () => {
+    const { store, filePath } = await fixture(at(2026, 10, 12, 16, 36));
+    const daily = await store.create(baseInput({ scheduleKind: 'daily', timeOfDay: '24:00', intervalValue: undefined, intervalUnit: undefined }));
+    expect(daily).toMatchObject({ scheduleKind: 'daily', timeOfDay: '00:00', weekdays: [], intervalValue: 1, intervalUnit: 'day' });
+    expect(daily.nextRunAt).toBe(at(2026, 10, 13));
+
+    const weekly = await store.create(baseInput({ name: '周报', scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' }));
+    expect(weekly.nextRunAt).toBe(at(2026, 10, 16, 10));
+
+    const reloaded = await new ScheduledTaskStore(filePath).get(weekly.id);
+    expect(reloaded).toMatchObject({ scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
+  });
+
+  it('修改钟点计划或切换调度方式时重算 nextRunAt，只改名称不影响', async () => {
+    let now = at(2026, 10, 12, 16, 36);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-scheduled-'));
+    dirs.push(dir);
+    const store = new ScheduledTaskStore(path.join(dir, 'scheduled-tasks.json'), () => now);
+    const task = await store.create(baseInput({ scheduleKind: 'daily', timeOfDay: '00:00' }));
+    expect(task.nextRunAt).toBe(at(2026, 10, 13));
+
+    now = at(2026, 10, 12, 17);
+    expect((await store.update(task.id, { name: '改名', intervalValue: 3 })).nextRunAt).toBe(at(2026, 10, 13));
+    expect((await store.update(task.id, { timeOfDay: '18:00' })).nextRunAt).toBe(at(2026, 10, 12, 18));
+
+    const weekly = await store.update(task.id, { scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
+    expect(weekly.nextRunAt).toBe(at(2026, 10, 16, 10));
+
+    const backToInterval = await store.update(task.id, { scheduleKind: 'interval' });
+    expect(backToInterval).toMatchObject({ scheduleKind: 'interval', intervalValue: 3, intervalUnit: 'minute', timeOfDay: '', weekdays: [] });
+    expect(backToInterval.nextRunAt).toBe(now + 3 * 60_000);
+
+    await expect(store.update(task.id, { scheduleKind: 'daily' })).rejects.toThrow('执行时刻格式应为 HH:mm');
   });
 
   it('once：创建缺省为 false，update 仅在传入时修改并持久化', async () => {

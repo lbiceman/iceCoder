@@ -16,6 +16,12 @@
 import { Router, type Request, type Response } from 'express';
 import { SCHEDULED_TASK_BUSY_MESSAGE } from '../../session/scheduled-task-scheduler.js';
 import {
+  SCHEDULE_KIND_INVALID_MESSAGE,
+  TIME_OF_DAY_INVALID_MESSAGE,
+  WEEKDAYS_EMPTY_MESSAGE,
+  WEEKDAYS_INVALID_MESSAGE,
+} from '../../session/scheduled-task-store.js';
+import {
   ATTACHMENT_EXPIRED_MESSAGE,
   ATTACHMENT_INVALID_MESSAGE,
 } from '../scheduled-task-attachments.js';
@@ -34,6 +40,10 @@ const VALIDATION_MESSAGES = [
   '任务提示词不能为空',
   '任务间隔必须是正整数',
   '任务间隔单位无效',
+  SCHEDULE_KIND_INVALID_MESSAGE,
+  TIME_OF_DAY_INVALID_MESSAGE,
+  WEEKDAYS_EMPTY_MESSAGE,
+  WEEKDAYS_INVALID_MESSAGE,
   ATTACHMENT_EXPIRED_MESSAGE,
   ATTACHMENT_INVALID_MESSAGE,
 ];

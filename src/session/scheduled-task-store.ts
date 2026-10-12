@@ -4,6 +4,20 @@ import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 
 export type ScheduledTaskIntervalUnit = 'second' | 'minute' | 'hour' | 'day';
 
+/** interval：按固定间隔；daily：每天 timeOfDay；weekly：weekdays 中每一天的 timeOfDay。钟点按服务所在机器的本地时区。 */
+export type ScheduledTaskScheduleKind = 'interval' | 'daily' | 'weekly';
+
+export interface ScheduledTaskSchedule {
+  scheduleKind: ScheduledTaskScheduleKind;
+  /** 钟点任务不使用间隔，但仍保留一组合法值，切回 interval 时沿用。 */
+  intervalValue: number;
+  intervalUnit: ScheduledTaskIntervalUnit;
+  /** 'HH:mm'（24 小时制）；interval 任务为空串。 */
+  timeOfDay: string;
+  /** 0=周日 … 6=周六，升序去重；只有 weekly 任务非空。 */
+  weekdays: number[];
+}
+
 /** 任务附带的图片或文件（已转存到任务附件目录的长期副本，不随会话删除）。 */
 export interface ScheduledTaskFile {
   id: string;
@@ -22,9 +36,12 @@ export interface ScheduledTask {
   /** 旧版本存的会话图片 URL（会随会话删除丢失），启动时迁移进 images；写入新 images 后清除。 */
   legacyImageUrls?: string[];
   files: ScheduledTaskFile[];
+  scheduleKind: ScheduledTaskScheduleKind;
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
-  /** 一次性任务：到点执行一次后自动停用，间隔作为启用后的等待时长。 */
+  timeOfDay: string;
+  weekdays: number[];
+  /** 一次性任务：到点执行一次后自动停用。interval 时间隔作为启用后的等待时长，钟点任务在下一个匹配时刻执行。 */
   once: boolean;
   /** 专属会话；空串表示还没有会话——会话只在执行时创建（见 scheduled-task-runtime）。 */
   sessionId: string;
@@ -45,8 +62,13 @@ export type ScheduledTaskCreateInput = {
   skillFilenames: string[];
   images?: ScheduledTaskFile[];
   files?: ScheduledTaskFile[];
-  intervalValue: number;
-  intervalUnit: ScheduledTaskIntervalUnit;
+  /** 缺省为 interval。 */
+  scheduleKind?: ScheduledTaskScheduleKind;
+  /** interval 必填；钟点任务可省略。 */
+  intervalValue?: number;
+  intervalUnit?: ScheduledTaskIntervalUnit;
+  timeOfDay?: string;
+  weekdays?: number[];
   once?: boolean;
   sessionId: string;
   enabled: boolean;
@@ -60,8 +82,11 @@ export type ScheduledTaskUpdatePatch = Partial<
     | 'skillFilenames'
     | 'images'
     | 'files'
+    | 'scheduleKind'
     | 'intervalValue'
     | 'intervalUnit'
+    | 'timeOfDay'
+    | 'weekdays'
     | 'once'
     | 'enabled'
   >
@@ -103,6 +128,38 @@ export function advanceToFuture(nextRunAt: number, intervalMs: number, now: numb
   return nextRunAt + (Math.floor((now - nextRunAt) / intervalMs) + 1) * intervalMs;
 }
 
+/** 严格晚于 after 的下一个匹配钟点（本地时区）。 */
+export function nextClockRunAt(schedule: ScheduledTaskSchedule, after: number): number {
+  const [hour, minute] = schedule.timeOfDay.split(':').map(Number) as [number, number];
+  const day = new Date(after);
+  // 今天 + 之后 7 天必然覆盖任意星期组合。
+  for (let i = 0; i < 8; i++) {
+    const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate() + i, hour, minute, 0, 0);
+    if (candidate.getTime() <= after) continue;
+    if (schedule.scheduleKind === 'weekly' && !schedule.weekdays.includes(candidate.getDay())) continue;
+    return candidate.getTime();
+  }
+  throw new Error('无法计算下次执行时间');
+}
+
+function isClockSchedule(schedule: ScheduledTaskSchedule): boolean {
+  return schedule.scheduleKind === 'daily' || schedule.scheduleKind === 'weekly';
+}
+
+/** 新建、修改调度或重新启用时的首次执行时间。 */
+export function firstRunAt(schedule: ScheduledTaskSchedule, now: number): number {
+  return isClockSchedule(schedule)
+    ? nextClockRunAt(schedule, now)
+    : now + intervalToMs(schedule.intervalValue, schedule.intervalUnit);
+}
+
+/** 到点后的下一次：间隔任务按原节拍推进（不漂移），钟点任务取 now 之后最近的匹配时刻。 */
+export function advanceSchedule(schedule: ScheduledTaskSchedule, nextRunAt: number, now: number): number {
+  return isClockSchedule(schedule)
+    ? nextClockRunAt(schedule, Math.max(nextRunAt, now))
+    : advanceToFuture(nextRunAt, intervalToMs(schedule.intervalValue, schedule.intervalUnit), now);
+}
+
 function cloneTask(task: ScheduledTask): ScheduledTask {
   return structuredClone(task);
 }
@@ -131,7 +188,61 @@ export function assertIntervalUnit(unit: ScheduledTaskIntervalUnit): void {
   }
 }
 
-/** 旧版本持久化的任务没有附件字段与 once，图片存的是会话图片 URL 字符串。 */
+export const SCHEDULE_KIND_INVALID_MESSAGE = '调度方式无效';
+export const TIME_OF_DAY_INVALID_MESSAGE = '执行时刻格式应为 HH:mm';
+export const WEEKDAYS_EMPTY_MESSAGE = '每周执行至少选择一天';
+export const WEEKDAYS_INVALID_MESSAGE = '星期取值应为 0-6 的整数（0 为周日）';
+
+/** 接受 H:mm / HH:mm；「24 点」按次日零点记为 00:00。 */
+export function normalizeTimeOfDay(raw: unknown): string {
+  const m = typeof raw === 'string' ? /^\s*(\d{1,2}):(\d{2})\s*$/.exec(raw) : null;
+  if (!m) throw new Error(TIME_OF_DAY_INVALID_MESSAGE);
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour === 24 && minute === 0) return '00:00';
+  if (hour > 23 || minute > 59) throw new Error(TIME_OF_DAY_INVALID_MESSAGE);
+  return `${String(hour).padStart(2, '0')}:${m[2]}`;
+}
+
+function normalizeWeekdays(raw: unknown): number[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error(WEEKDAYS_EMPTY_MESSAGE);
+  if (!raw.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) throw new Error(WEEKDAYS_INVALID_MESSAGE);
+  return [...new Set(raw as number[])].sort((a, b) => a - b);
+}
+
+/** 校验并规整调度字段：只校验当前方式用到的字段，用不到的清空（间隔字段对钟点任务缺省为 1 天）。 */
+export function normalizeSchedule(raw: Partial<ScheduledTaskSchedule>): ScheduledTaskSchedule {
+  const scheduleKind = raw.scheduleKind ?? 'interval';
+  if (scheduleKind === 'interval') {
+    assertIntervalValue(raw.intervalValue as number);
+    assertIntervalUnit(raw.intervalUnit as ScheduledTaskIntervalUnit);
+    return {
+      scheduleKind,
+      intervalValue: raw.intervalValue as number,
+      intervalUnit: raw.intervalUnit as ScheduledTaskIntervalUnit,
+      timeOfDay: '',
+      weekdays: [],
+    };
+  }
+  if (scheduleKind !== 'daily' && scheduleKind !== 'weekly') throw new Error(SCHEDULE_KIND_INVALID_MESSAGE);
+  const intervalValid = Number.isInteger(raw.intervalValue) && (raw.intervalValue as number) > 0
+    && INTERVAL_UNITS.includes(raw.intervalUnit as ScheduledTaskIntervalUnit);
+  return {
+    scheduleKind,
+    intervalValue: intervalValid ? raw.intervalValue as number : 1,
+    intervalUnit: intervalValid ? raw.intervalUnit as ScheduledTaskIntervalUnit : 'day',
+    timeOfDay: normalizeTimeOfDay(raw.timeOfDay),
+    weekdays: scheduleKind === 'weekly' ? normalizeWeekdays(raw.weekdays) : [],
+  };
+}
+
+function sameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedule): boolean {
+  if (a.scheduleKind !== b.scheduleKind) return false;
+  if (a.scheduleKind === 'interval') return a.intervalValue === b.intervalValue && a.intervalUnit === b.intervalUnit;
+  return a.timeOfDay === b.timeOfDay && a.weekdays.join(',') === b.weekdays.join(',');
+}
+
+/** 旧版本持久化的任务没有附件字段、once 与钟点调度字段，图片存的是会话图片 URL 字符串。 */
 function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
   const rawImages: unknown[] = Array.isArray(task.images) ? task.images : [];
   const legacyImageUrls = (task.legacyImageUrls ?? []).concat(
@@ -141,6 +252,9 @@ function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
     ...task,
     images: rawImages.filter((img): img is ScheduledTaskFile => typeof img === 'object' && img !== null),
     files: Array.isArray(task.files) ? task.files : [],
+    scheduleKind: task.scheduleKind ?? 'interval',
+    timeOfDay: typeof task.timeOfDay === 'string' ? task.timeOfDay : '',
+    weekdays: Array.isArray(task.weekdays) ? task.weekdays : [],
     once: task.once === true,
   };
   if (legacyImageUrls.length > 0) normalized.legacyImageUrls = legacyImageUrls;
@@ -148,14 +262,12 @@ function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
   return normalized;
 }
 
-function validateCreateInput(input: ScheduledTaskCreateInput): {
+function validateCreateInput(input: ScheduledTaskCreateInput): ScheduledTaskSchedule & {
   name: string;
   prompt: string;
   skillFilenames: string[];
   images: ScheduledTaskFile[];
   files: ScheduledTaskFile[];
-  intervalValue: number;
-  intervalUnit: ScheduledTaskIntervalUnit;
   once: boolean;
   sessionId: string;
   enabled: boolean;
@@ -164,8 +276,7 @@ function validateCreateInput(input: ScheduledTaskCreateInput): {
   if (!name) throw new Error('任务名称不能为空');
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error('任务提示词不能为空');
-  assertIntervalValue(input.intervalValue);
-  assertIntervalUnit(input.intervalUnit);
+  const schedule = normalizeSchedule(input);
   const sessionId = input.sessionId.trim();
   return {
     name,
@@ -173,8 +284,7 @@ function validateCreateInput(input: ScheduledTaskCreateInput): {
     skillFilenames: normalizeSkillFilenames(input.skillFilenames),
     images: input.images ?? [],
     files: input.files ?? [],
-    intervalValue: input.intervalValue,
-    intervalUnit: input.intervalUnit,
+    ...schedule,
     once: input.once === true,
     sessionId,
     enabled: input.enabled,
@@ -275,7 +385,6 @@ export class ScheduledTaskStore {
       const tasks = await this.ensureLoaded();
       const normalized = validateCreateInput(input);
       const ts = this.now();
-      const intervalMs = intervalToMs(normalized.intervalValue, normalized.intervalUnit);
       const id = input.id?.trim() || randomUUID();
       if (tasks.some((t) => t.id === id)) throw new Error(`定时任务 id 已存在: ${id}`);
       const task: ScheduledTask = {
@@ -284,7 +393,7 @@ export class ScheduledTaskStore {
         createdAt: ts,
         updatedAt: ts,
         lastRunAt: null,
-        nextRunAt: normalized.enabled ? ts + intervalMs : null,
+        nextRunAt: normalized.enabled ? firstRunAt(normalized, ts) : null,
         lastStatus: 'idle',
         lastError: null,
       };
@@ -305,8 +414,6 @@ export class ScheduledTaskStore {
       let name = current.name;
       let prompt = current.prompt;
       let skillFilenames = current.skillFilenames;
-      let intervalValue = current.intervalValue;
-      let intervalUnit = current.intervalUnit;
       let enabled = current.enabled;
 
       if (patch.name !== undefined) {
@@ -323,27 +430,25 @@ export class ScheduledTaskStore {
       const images = patch.images ?? current.images;
       const files = patch.files ?? current.files;
       const once = patch.once ?? current.once;
-      if (patch.intervalValue !== undefined) {
-        assertIntervalValue(patch.intervalValue);
-        intervalValue = patch.intervalValue;
-      }
-      if (patch.intervalUnit !== undefined) {
-        assertIntervalUnit(patch.intervalUnit);
-        intervalUnit = patch.intervalUnit;
-      }
+      const schedule = normalizeSchedule({
+        scheduleKind: patch.scheduleKind ?? current.scheduleKind,
+        intervalValue: patch.intervalValue ?? current.intervalValue,
+        intervalUnit: patch.intervalUnit ?? current.intervalUnit,
+        timeOfDay: patch.timeOfDay ?? current.timeOfDay,
+        weekdays: patch.weekdays ?? current.weekdays,
+      });
       if (patch.enabled !== undefined) {
         enabled = patch.enabled;
       }
 
-      const intervalChanged =
-        intervalValue !== current.intervalValue || intervalUnit !== current.intervalUnit;
+      const scheduleChanged = !sameSchedule(schedule, current);
       const reenabled = !current.enabled && enabled;
 
       let nextRunAt = current.nextRunAt;
       if (!enabled) {
         nextRunAt = null;
-      } else if (intervalChanged || reenabled) {
-        nextRunAt = ts + intervalToMs(intervalValue, intervalUnit);
+      } else if (scheduleChanged || reenabled) {
+        nextRunAt = firstRunAt(schedule, ts);
       }
 
       const updated: ScheduledTask = {
@@ -353,8 +458,7 @@ export class ScheduledTaskStore {
         skillFilenames,
         images,
         files,
-        intervalValue,
-        intervalUnit,
+        ...schedule,
         once,
         enabled,
         nextRunAt,

@@ -92,6 +92,10 @@ describe('scheduled tasks router', () => {
       { ...validInput, intervalValue: 0 },
       { ...validInput, intervalValue: 1.5 },
       { ...validInput, intervalUnit: 'week' },
+      { ...validInput, scheduleKind: 'monthly', timeOfDay: '10:00' },
+      { ...validInput, scheduleKind: 'daily', timeOfDay: '7点' },
+      { ...validInput, scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [] },
+      { ...validInput, scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [8] },
     ]) {
       const res = await call('POST', '/api/scheduled-tasks', bad);
       expect(res.status).toBe(400);
@@ -108,6 +112,13 @@ describe('scheduled tasks router', () => {
     const edited = await call('PUT', `/api/scheduled-tasks/${id}`, { intervalValue: 2, intervalUnit: 'hour' });
     expect(edited.body.task).toMatchObject({ intervalValue: 2, intervalUnit: 'hour', nextRunAt: now + 2 * 3_600_000 });
 
+    const weekly = await call('PUT', `/api/scheduled-tasks/${id}`, { scheduleKind: 'weekly', weekdays: ['5'], timeOfDay: '10:00' });
+    expect(weekly.status).toBe(200);
+    expect(weekly.body.task).toMatchObject({ scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
+    expect(new Date(weekly.body.task.nextRunAt).getDay()).toBe(5);
+    expect(weekly.body.task.nextRunAt).toBeGreaterThan(now);
+    await call('PUT', `/api/scheduled-tasks/${id}`, { scheduleKind: 'interval', intervalValue: 2, intervalUnit: 'hour' });
+
     const off = await call('POST', `/api/scheduled-tasks/${id}/toggle`);
     expect(off.body.task).toMatchObject({ enabled: false, nextRunAt: null });
     const on = await call('POST', `/api/scheduled-tasks/${id}/toggle`, { enabled: true });
@@ -120,7 +131,7 @@ describe('scheduled tasks router', () => {
     const del = await call('DELETE', `/api/scheduled-tasks/${id}`);
     expect(del.body.success).toBe(true);
     expect(await store.list()).toHaveLength(0);
-    expect(scheduler.reschedule).toHaveBeenCalledTimes(5);
+    expect(scheduler.reschedule).toHaveBeenCalledTimes(7);
   });
 
   it('creates and edits one-time tasks; edits without once keep it', async () => {

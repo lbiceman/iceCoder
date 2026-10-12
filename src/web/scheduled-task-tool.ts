@@ -7,7 +7,11 @@
  */
 
 import { getSkillRegistry } from '../core/skill-registry.js';
-import type { ScheduledTask, ScheduledTaskIntervalUnit } from '../session/scheduled-task-store.js';
+import type {
+  ScheduledTask,
+  ScheduledTaskIntervalUnit,
+  ScheduledTaskScheduleKind,
+} from '../session/scheduled-task-store.js';
 import type { RegisteredTool, ToolResult } from '../tools/types.js';
 import type { ScheduledTaskInput, ScheduledTaskService } from './scheduled-task-service.js';
 
@@ -57,7 +61,34 @@ const UNIT_ALIASES: Record<string, ScheduledTaskIntervalUnit> = {
   d: 'day', day: 'day', days: 'day', 天: 'day', 日: 'day',
 };
 
-const INPUT_FIELDS = ['name', 'prompt', 'intervalValue', 'intervalUnit', 'once', 'enabled', 'skillFilenames'] as const;
+const SCHEDULE_KIND_ALIASES: Record<string, ScheduledTaskScheduleKind> = {
+  interval: 'interval', every: 'interval', 间隔: 'interval',
+  daily: 'daily', day: 'daily', everyday: 'daily', 每天: 'daily', 每日: 'daily',
+  weekly: 'weekly', week: 'weekly', 每周: 'weekly',
+};
+
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+const WEEKDAY_ALIASES: Record<string, number> = {};
+[
+  ['sun', 'sunday', '日', '天'],
+  ['mon', 'monday', '一'],
+  ['tue', 'tuesday', '二'],
+  ['wed', 'wednesday', '三'],
+  ['thu', 'thursday', '四'],
+  ['fri', 'friday', '五'],
+  ['sat', 'saturday', '六'],
+].forEach(([short, long, ...zh], day) => {
+  WEEKDAY_ALIASES[short!] = day;
+  WEEKDAY_ALIASES[long!] = day;
+  for (const c of zh) {
+    for (const prefix of ['周', '星期', '礼拜']) WEEKDAY_ALIASES[prefix + c] = day;
+  }
+});
+
+const INPUT_FIELDS = [
+  'name', 'prompt', 'scheduleKind', 'intervalValue', 'intervalUnit', 'timeOfDay', 'weekdays', 'once', 'enabled', 'skillFilenames',
+] as const;
 
 const LIST_PROMPT_PREVIEW_CHARS = 80;
 
@@ -76,12 +107,35 @@ export function normalizeIntervalUnit(raw: unknown): unknown {
   return UNIT_ALIASES[raw.trim().toLowerCase()] ?? raw;
 }
 
+export function normalizeScheduleKind(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw;
+  return SCHEDULE_KIND_ALIASES[raw.trim().toLowerCase()] ?? raw;
+}
+
+/** 接受 [5] / ["5"] / "fri" / "周一,周三"；7 按周日处理（cron 与 ISO 习惯）。无法识别的原样交给服务校验报错。 */
+export function normalizeWeekdays(raw: unknown): unknown {
+  const items = typeof raw === 'string' ? raw.split(/[,，、\s]+/).filter(Boolean)
+    : typeof raw === 'number' ? [raw]
+    : Array.isArray(raw) ? raw
+    : null;
+  if (!items) return raw;
+  return items.map((item: unknown) => {
+    const text = typeof item === 'string' ? item.trim().toLowerCase() : item;
+    const day = typeof text === 'string' && /^\d+$/.test(text) ? Number(text)
+      : typeof text === 'string' ? WEEKDAY_ALIASES[text] ?? item
+      : text;
+    return day === 7 ? 0 : day;
+  });
+}
+
 function pickInput(args: Record<string, unknown>): ScheduledTaskInput {
   const input: ScheduledTaskInput = {};
   for (const key of INPUT_FIELDS) {
     if (args[key] !== undefined && args[key] !== null) input[key] = args[key];
   }
+  if (input.scheduleKind !== undefined) input.scheduleKind = normalizeScheduleKind(input.scheduleKind);
   if (input.intervalUnit !== undefined) input.intervalUnit = normalizeIntervalUnit(input.intervalUnit);
+  if (input.weekdays !== undefined) input.weekdays = normalizeWeekdays(input.weekdays);
   if (typeof input.once === 'string') input.once = input.once === 'true';
   if (typeof input.enabled === 'string') input.enabled = input.enabled === 'true';
   return input;
@@ -110,16 +164,18 @@ export function buildScheduledTaskDescription(
     '- Results only go to the task session (sidebar group "任务会话") and the task status on the 定时任务 page. Nothing is posted back to this chat and the user is not notified; if the user wants a deliverable, the prompt must write a file.',
     '- skillFilenames attaches skills (file names such as "review.md") to every run; unknown names are ignored with a warning. This tool cannot set image/file attachments: reference files by absolute path in the prompt, or ask the user to attach them on the 定时任务 page.',
     '',
-    'Scheduling rules:',
-    '- Recurring (default): runs every intervalValue x intervalUnit (second | minute | hour | day). The first run is one interval after the task is created or enabled.',
-    '- once:true: runs one interval after enabling, then disables itself. Use for "remind me in 10 minutes" / "check again in 2 hours".',
-    '- Clock times ("every day at 00:30", "Mondays at 9:00") and cron expressions are NOT supported. Say so plainly, create the nearest interval (e.g. 1 day for "every day at ..."), and report the real next run time from the tool result. The only way to align with a clock time is to enable (or re-enable) the task at that moment; offer that, do not pretend the clock time is set.',
-    '- Changing intervalValue/intervalUnit or re-enabling restarts the countdown from now. Editing name/prompt/skillFilenames keeps the schedule.',
+    'Scheduling rules (scheduleKind):',
+    '- interval (default): runs every intervalValue x intervalUnit (second | minute | hour | day). The first run is one interval after the task is created or enabled.',
+    '- daily: runs every day at timeOfDay ("HH:mm", 24-hour, local time of the machine running iceCoder). "Every day at midnight / 24:00" is timeOfDay "00:00".',
+    '- weekly: runs at timeOfDay on every day in weekdays (0=Sunday, 1=Monday, ... 5=Friday, 6=Saturday). "Every Friday at 10:00" = scheduleKind "weekly", weekdays [5], timeOfDay "10:00"; "workdays at 9:00" = weekdays [1,2,3,4,5].',
+    '- once:true: interval runs once one interval after enabling; daily/weekly run once at the next matching time. Then the task disables itself. Use for "remind me in 10 minutes" / "tomorrow at 8:00".',
+    '- One task has exactly one schedule. Different times (e.g. "every day at 00:00" and "every Friday at 10:00") need separate tasks with distinct names. Monthly or date-based rules and cron expressions are NOT supported: translate cron into the kinds above when possible, otherwise say plainly what cannot be expressed and offer the nearest schedule.',
+    '- Changing schedule fields (scheduleKind, intervalValue/intervalUnit, timeOfDay, weekdays) or re-enabling restarts the countdown from now (clock schedules: the next matching time after now). Editing name/prompt/skillFilenames keeps the schedule.',
     '- If the previous run of the task is still going, a recurring trigger is skipped and action:"run" fails as busy. Runs missed while the service was stopped are not caught up; a missed once-task is disabled.',
     '',
     'Actions:',
     '- list: every task with id, schedule, enabled state, next/last run, last status and a prompt preview.',
-    '- create: name, prompt, intervalValue, intervalUnit are required; optional once (default false), enabled (default true), skillFilenames. Refused when the name already exists (use update) and inside a task\'s own session.',
+    '- create: name, prompt and a schedule are required (interval: intervalValue + intervalUnit; daily: timeOfDay; weekly: weekdays + timeOfDay); optional scheduleKind (default interval, inferred from timeOfDay/weekdays when omitted), once (default false), enabled (default true), skillFilenames. Refused when the name already exists (use update) and inside a task\'s own session.',
     '- update: id plus only the fields to change.',
     '- toggle: id; enabled:true/false, or omit enabled to flip.',
     '- run: id; runs once now in the task session, schedule unchanged.',
@@ -152,6 +208,10 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
   const formatTime = deps.formatTime ?? defaultFormatTime;
 
   function scheduleText(task: ScheduledTask): string {
+    if (task.scheduleKind === 'daily' || task.scheduleKind === 'weekly') {
+      const days = task.scheduleKind === 'daily' ? '天' : task.weekdays.map((d) => WEEKDAY_LABELS[d]).join('、');
+      return task.once ? `一次性，在下一个${task.scheduleKind === 'daily' ? '' : days} ${task.timeOfDay} 执行` : `每${days} ${task.timeOfDay} 执行一次`;
+    }
     const every = `${task.intervalValue} ${UNIT_LABELS[task.intervalUnit]}`;
     return task.once ? `一次性，启用 ${every}后执行` : `每 ${every}执行一次`;
   }
@@ -210,9 +270,20 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
             type: 'string',
             description: 'Self-contained instructions sent to the AI on every run, in the user\'s language. The run cannot see this chat: include absolute paths, steps, output location and limits.',
           },
-          intervalValue: { type: 'integer', minimum: 1, description: 'Positive integer; with intervalUnit gives the repeat interval (or the delay when once:true).' },
+          scheduleKind: {
+            type: 'string',
+            enum: ['interval', 'daily', 'weekly'],
+            description: 'interval (default): every intervalValue x intervalUnit. daily: every day at timeOfDay. weekly: at timeOfDay on each of weekdays.',
+          },
+          intervalValue: { type: 'integer', minimum: 1, description: 'interval only. Positive integer; with intervalUnit gives the repeat interval (or the delay when once:true).' },
           intervalUnit: { type: 'string', enum: ['second', 'minute', 'hour', 'day'] },
-          once: { type: 'boolean', description: 'true = run once after one interval, then disable. Default false.' },
+          timeOfDay: { type: 'string', description: 'daily/weekly only. "HH:mm", 24-hour local time; midnight is "00:00".' },
+          weekdays: {
+            type: 'array',
+            items: { type: 'integer', minimum: 0, maximum: 6 },
+            description: 'weekly only. 0=Sunday, 1=Monday, ... 5=Friday, 6=Saturday.',
+          },
+          once: { type: 'boolean', description: 'true = run once (after one interval, or at the next matching clock time), then disable. Default false.' },
           enabled: { type: 'boolean', description: 'create/update: default true. toggle: target state; omit to flip.' },
           skillFilenames: { type: 'array', items: { type: 'string' }, description: 'Skill file names (e.g. "review.md") loaded on every run.' },
         },
@@ -231,6 +302,9 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
           case 'create': {
             if (inTaskSession) return fail(SCHEDULED_TASK_CREATE_IN_TASK_SESSION_MESSAGE);
             const input = pickInput(args);
+            if (input.scheduleKind === undefined && input.timeOfDay !== undefined) {
+              input.scheduleKind = input.weekdays !== undefined ? 'weekly' : 'daily';
+            }
             const name = typeof input.name === 'string' ? input.name.trim() : '';
             const existing = name ? (await service.list()).find((t) => t.name === name) : undefined;
             if (existing) {

@@ -21,8 +21,11 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     skillFilenames: [],
     images: [],
     files: [],
+    scheduleKind: 'interval',
     intervalValue: 10,
     intervalUnit: 'second',
+    timeOfDay: '',
+    weekdays: [],
     once: false,
     sessionId: 's1',
     enabled: true,
@@ -191,6 +194,34 @@ describe('ScheduledTaskScheduler', () => {
       'exec:b',
     ]);
     expect(store.update).not.toHaveBeenCalled();
+    scheduler.stop();
+  });
+
+  it('每天 00:00 的任务到点执行后推进到次日零点', async () => {
+    vi.setSystemTime(new Date(2026, 9, 12, 23, 59, 0));
+    const midnight = new Date(2026, 9, 13, 0, 0).getTime();
+    const store = fakeStore([task({ id: 'd', scheduleKind: 'daily', timeOfDay: '00:00', nextRunAt: midnight })]);
+    const { scheduler, execute } = build(store);
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(execute).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(store.rows[0]!.nextRunAt).toBe(new Date(2026, 9, 14, 0, 0).getTime());
+    scheduler.stop();
+  });
+
+  it('每周五 10:00 的任务执行后推进到下周五，停机错过的不补跑', async () => {
+    // 2026-10-16 是周五；服务在 10:30 才启动。
+    vi.setSystemTime(new Date(2026, 9, 16, 10, 30));
+    const store = fakeStore([task({
+      id: 'w', scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00',
+      nextRunAt: new Date(2026, 9, 16, 10, 0).getTime(),
+    })]);
+    const { scheduler, execute } = build(store);
+    await scheduler.start();
+    expect(execute).not.toHaveBeenCalled();
+    expect(store.rows[0]!.nextRunAt).toBe(new Date(2026, 9, 23, 10, 0).getTime());
     scheduler.stop();
   });
 

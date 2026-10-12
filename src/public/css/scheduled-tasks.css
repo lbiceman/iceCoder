@@ -254,7 +254,37 @@
   font-size: 13px;
   color: var(--text-secondary);
 }
-.sched-interval [hidden] { display: none; }
+.sched-interval [hidden],
+.sched-interval[hidden] { display: none; }
+/* 下拉按钮：外观同输入框，浮层用 ChatDropdown（与模型选择一致） */
+.sched-form .sched-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 96px;
+  text-align: left;
+  cursor: pointer;
+}
+.sched-form .sched-select[hidden] { display: none; }
+.sched-form .sched-time-select { width: 68px; }
+.sched-form .sched-select.active { border-color: var(--accent-border-strong, var(--accent)); }
+.sched-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sched-select .chip-caret {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform var(--transition);
+}
+.sched-select.active .chip-caret {
+  transform: rotate(180deg);
+  opacity: 1;
+}
 .sched-mode {
   display: flex;
   flex-wrap: wrap;

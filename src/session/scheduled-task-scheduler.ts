@@ -1,6 +1,5 @@
 import {
-  advanceToFuture,
-  intervalToMs,
+  advanceSchedule,
   type ScheduledTask,
   type ScheduledTaskStore,
 } from './scheduled-task-store.js';
@@ -113,11 +112,7 @@ export class ScheduledTaskScheduler {
   }
 
   private advance(task: ScheduledTask, now: number): number {
-    return advanceToFuture(
-      task.nextRunAt!,
-      intervalToMs(task.intervalValue, task.intervalUnit),
-      now,
-    );
+    return advanceSchedule(task, task.nextRunAt!, now);
   }
 
   /** 到点后先落盘：重复任务推进到下一个未来时间，一次性任务停用。 */

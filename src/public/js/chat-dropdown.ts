@@ -9,7 +9,7 @@
  *     items: [{ key, name, description, isCurrent }],   // 也可只传 {name, ...}
  *     onSelect: function (item, idx, ev) { ... },       // 点击 item 触发
  *     onClose: function () { ... },                     // 关闭后回调
- *     placement: 'top' | 'bottom' | 'auto',             // 默认 'top'（悬浮在 anchor 上方）
+ *     placement: 'top' | 'bottom' | 'auto',             // 默认 'top'（悬浮在 anchor 上方）；bottom 下方放不下时翻到上方
  *     minWidth: 220,                                    // 浮层最小宽
  *     maxWidth: 300,                                    // 浮层最大宽
  *     align: 'end' | 'start' | 'center',                // 默认 'end'；center 相对 anchor 水平居中
@@ -200,6 +200,7 @@ export const ChatDropdown = (() => {
     let top;
     if (current.placement === 'bottom') {
       top = rect.bottom + margin;
+      if (top + h > window.innerHeight - 8 && topRef - h - margin >= 8) top = topRef - h - margin;
     } else if (current.placement === 'top') {
       top = topRef - h - margin;
       if (top < 8) top = 8;
@@ -281,6 +282,15 @@ export const ChatDropdown = (() => {
       current.anchor.setAttribute && current.anchor.setAttribute('aria-expanded', 'true');
     }
     position();
+    scrollActiveIntoView();
+  }
+
+  /** 可滚动列表打开时让当前项居中；浮层复用，没有当前项时回到顶部。 */
+  function scrollActiveIntoView() {
+    elContainer.scrollTop = 0;
+    if (!elContainer.classList.contains('is-scrollable')) return;
+    const active = elContainer.querySelector('.cmd-item.active');
+    if (active) elContainer.scrollTop = active.offsetTop - (elContainer.clientHeight - active.offsetHeight) / 2;
   }
 
   function toggle(opts) {

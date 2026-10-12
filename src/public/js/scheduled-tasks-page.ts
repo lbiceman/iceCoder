@@ -10,6 +10,10 @@ export const ScheduledTasksPage = (() => {
 
   const UNIT_LABELS = { second: '秒', minute: '分钟', hour: '小时', day: '天' };
   const UNITS = ['second', 'minute', 'hour', 'day'];
+  const SCHEDULE_KINDS = [['interval', '按间隔'], ['daily', '每天'], ['weekly', '每周']];
+  const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  /** 表单里周一在前。 */
+  const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
   const STATUS_LABELS = { idle: '未执行', queued: '执行中', success: '成功', error: '失败' };
   const NO_SESSION_HINT = '该任务还没有会话，执行时会自动创建';
   const POLL_MS = 5000;
@@ -60,9 +64,25 @@ export const ScheduledTasksPage = (() => {
     return parts.join('') + '后';
   }
 
-  function formatInterval(task) {
+  function isClockKind(kind) {
+    return kind === 'daily' || kind === 'weekly';
+  }
+
+  function formatSchedule(task) {
+    if (isClockKind(task.scheduleKind)) {
+      const days = task.scheduleKind === 'daily'
+        ? '天'
+        : (task.weekdays || []).map((d) => WEEKDAY_LABELS[d]).join('、');
+      if (task.once) return `下一个${task.scheduleKind === 'daily' ? '' : days} ${task.timeOfDay} 执行一次`;
+      return `每${days} ${task.timeOfDay}`;
+    }
     const span = `${task.intervalValue} ${UNIT_LABELS[task.intervalUnit] || task.intervalUnit}`;
     return task.once ? `${span}后执行一次` : `每 ${span}`;
+  }
+
+  function scheduleLabel(task) {
+    if (task.once) return '执行';
+    return isClockKind(task.scheduleKind) ? '计划' : '间隔';
   }
 
   async function api(method, url, body) {
@@ -110,7 +130,7 @@ export const ScheduledTasksPage = (() => {
         `<p class="sched-card-prompt">${escapeHtml(task.prompt)}</p>` +
         (skills ? `<div class="sched-chips">${skills}</div>` : '') +
         '<dl class="sched-meta">' +
-          `<div><dt>${task.once ? '执行' : '间隔'}</dt><dd>${escapeHtml(formatInterval(task))}</dd></div>` +
+          `<div><dt>${scheduleLabel(task)}</dt><dd>${escapeHtml(formatSchedule(task))}</dd></div>` +
           `<div><dt>下次执行</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}` +
             ` <span class="sched-countdown" data-countdown="${escapeHtml(task.id)}">${escapeHtml(countdownText(task))}</span></dd></div>` +
           `<div><dt>上次执行</dt><dd>${escapeHtml(formatTime(task.lastRunAt))}</dd></div>` +
@@ -142,7 +162,7 @@ export const ScheduledTasksPage = (() => {
     if (!listEl) return;
     if (!tasks.length) {
       listEl.innerHTML =
-        '<div class="skills-empty">暂无定时任务。点击「新建任务」，设定提示词与执行间隔（秒 / 分钟 / 小时 / 天）。</div>';
+        '<div class="skills-empty">暂无定时任务。点击「新建任务」，设定提示词与执行计划（按间隔，或每天 / 每周的固定时刻）。</div>';
       return;
     }
     listEl.innerHTML = tasks.map(renderTaskCard).join('');
@@ -582,21 +602,111 @@ export const ScheduledTasksPage = (() => {
     },
   };
 
-  function applyModeText(form) {
+  const CLOCK_MODE_TEXT = {
+    repeat: {
+      label: '执行时刻',
+      hint: '按运行 iceCoder 的这台机器的本地时间执行；新建、修改计划或重新启用后，从下一个匹配时刻开始。服务停机期间错过的执行会直接跳过。',
+    },
+    once: {
+      label: '执行时刻',
+      hint: '在下一个匹配时刻执行一次，执行后自动停用；只改其他内容不影响计划。服务停机错过执行时间会直接停用。',
+    },
+  };
+
+  function applyScheduleUi(form) {
     const once = form.elements.mode.value === 'once';
-    const text = once ? MODE_TEXT.once : MODE_TEXT.repeat;
+    const kind = form.elements.scheduleKind.value;
+    const clock = isClockKind(kind);
+    const text = (clock ? CLOCK_MODE_TEXT : MODE_TEXT)[once ? 'once' : 'repeat'];
     form.querySelector('.sched-interval-label').textContent = text.label;
     form.querySelector('.sched-interval-hint').textContent = text.hint;
+    form.querySelector('.sched-interval-every').hidden = clock;
+    form.querySelector('.sched-clock').hidden = !clock;
+    form.querySelector('.sched-weekday-select').hidden = kind !== 'weekly';
     form.querySelector('.sched-interval-prefix').hidden = once;
     form.querySelector('.sched-interval-suffix').hidden = !once;
   }
 
+  /** 表单下拉的选项与当前值；weekdays 的值是逗号分隔的星期。 */
+  function scheduleSelects(task) {
+    const weekdays = (task && task.weekdays && task.weekdays.length) ? task.weekdays : [1];
+    // AI 可以建多天的每周任务；下拉只能单选，多天组合单独列一项，保存时不丢。
+    const multiDay = weekdays.length > 1
+      ? [{ value: weekdays.join(','), label: weekdays.map((d) => WEEKDAY_LABELS[d]).join('、') }]
+      : [];
+    const [hour, minute] = ((task && task.timeOfDay) || '09:00').split(':');
+    const pad = (n) => String(n).padStart(2, '0');
+    const range = (count) => Array.from({ length: count }, (_, i) => ({ value: pad(i), label: pad(i) }));
+    return {
+      hour: { value: hour, options: range(24) },
+      minute: { value: minute, options: range(60) },
+      intervalUnit: {
+        value: (task && task.intervalUnit) || 'hour',
+        options: UNITS.map((u) => ({ value: u, label: UNIT_LABELS[u] })),
+      },
+      weekdays: {
+        value: weekdays.join(','),
+        options: multiDay.concat(WEEKDAY_ORDER.map((d) => ({ value: String(d), label: WEEKDAY_LABELS[d] }))),
+      },
+    };
+  }
+
+  /** 按钮 + 隐藏 input（表单照常按 name 取值）；点击后由 bindSelects 用 ChatDropdown 弹出选项，与模型选择一致。 */
+  function selectHtml(name, select, className, ariaLabel) {
+    const current = select.options.find((o) => o.value === select.value) || select.options[0];
+    const caret = window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '▾';
+    return (
+      `<button type="button" class="sched-input sched-select ${className}" data-select="${name}" aria-label="${ariaLabel}" aria-haspopup="menu" aria-expanded="false">` +
+        `<span class="sched-select-label">${escapeHtml(current.label)}</span>${caret}` +
+      '</button>' +
+      `<input type="hidden" name="${name}" value="${escapeHtml(current.value)}">`
+    );
+  }
+
+  function bindSelects(form, selects) {
+    const Dropdown = window.ChatDropdown;
+    form.querySelectorAll('[data-select]').forEach((btn) => {
+      const name = btn.getAttribute('data-select');
+      const input = form.elements[name];
+      const { options } = selects[name];
+      btn.addEventListener('click', () => {
+        if (!Dropdown) return;
+        if (Dropdown.isOpen() && btn.classList.contains('active')) {
+          Dropdown.close();
+          return;
+        }
+        Dropdown.open({
+          anchor: btn,
+          variant: 'model',
+          placement: 'bottom',
+          align: 'start',
+          fitContent: true,
+          minWidth: Math.ceil(btn.getBoundingClientRect().width),
+          maxWidth: 240,
+          items: options.map((o) => ({ key: o.value, name: o.label, isCurrent: o.value === input.value })),
+          onSelect(item) {
+            input.value = item.key;
+            btn.querySelector('.sched-select-label').textContent = item.name;
+          },
+        });
+      });
+      // 弹层在 document 上监听 Esc；下拉打开时只关下拉。
+      btn.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !btn.classList.contains('active')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        Dropdown.close();
+      });
+    });
+  }
+
   function buildFormHtml(task) {
-    const unit = (task && task.intervalUnit) || 'hour';
     const once = !!(task && task.once);
-    const modeText = once ? MODE_TEXT.once : MODE_TEXT.repeat;
-    const unitOptions = UNITS
-      .map((u) => `<option value="${u}"${u === unit ? ' selected' : ''}>${UNIT_LABELS[u]}</option>`)
+    const kind = (task && task.scheduleKind) || 'interval';
+    const selects = scheduleSelects(task);
+    const kindOptions = SCHEDULE_KINDS
+      .map(([value, label]) =>
+        `<label class="sched-mode-option"><input type="radio" name="scheduleKind" value="${value}"${value === kind ? ' checked' : ''}><span>${label}</span></label>`)
       .join('');
     const plusIcon = window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+';
     return (
@@ -624,14 +734,24 @@ export const ScheduledTasksPage = (() => {
             `<label class="sched-mode-option"><input type="radio" name="mode" value="once"${once ? ' checked' : ''}><span>一次性</span></label>` +
           '</div>' +
         '</div>' +
-        `<div class="sched-field"><span class="sched-label sched-interval-label">${modeText.label}</span>` +
-          '<div class="sched-interval">' +
-            `<span class="sched-interval-prefix"${once ? ' hidden' : ''}>每</span>` +
-            `<input class="sched-input sched-interval-value" name="intervalValue" type="number" min="1" step="1" required value="${escapeHtml((task && task.intervalValue) || 1)}">` +
-            `<select class="sched-input sched-interval-unit" name="intervalUnit">${unitOptions}</select>` +
-            `<span class="sched-interval-suffix"${once ? '' : ' hidden'}>后执行</span>` +
+        '<div class="sched-field"><span class="sched-label">执行计划</span>' +
+          `<div class="sched-mode" role="radiogroup" aria-label="执行计划">${kindOptions}</div>` +
+        '</div>' +
+        '<div class="sched-field"><span class="sched-label sched-interval-label"></span>' +
+          '<div class="sched-interval sched-interval-every">' +
+            '<span class="sched-interval-prefix">每</span>' +
+            `<input class="sched-input sched-interval-value" name="intervalValue" type="number" min="1" step="1" value="${escapeHtml((task && task.intervalValue) || 1)}">` +
+            selectHtml('intervalUnit', selects.intervalUnit, 'sched-interval-unit', '间隔单位') +
+            '<span class="sched-interval-suffix">后执行</span>' +
           '</div>' +
-          `<span class="sched-hint sched-interval-hint">${modeText.hint}</span>` +
+          '<div class="sched-interval sched-clock">' +
+            selectHtml('weekdays', selects.weekdays, 'sched-weekday-select', '星期') +
+            selectHtml('hour', selects.hour, 'sched-time-select', '时') +
+            '<span>:</span>' +
+            selectHtml('minute', selects.minute, 'sched-time-select', '分') +
+            '<span class="sched-hint">24 点请选 00:00</span>' +
+          '</div>' +
+          '<span class="sched-hint sched-interval-hint"></span>' +
         '</div>' +
         (task ? '' :
           '<label class="sched-check"><input type="checkbox" name="enabled" checked><span>创建后立即启用</span></label>') +
@@ -647,15 +767,24 @@ export const ScheduledTasksPage = (() => {
   function readForm(form, isEdit, composer) {
     const name = form.elements.name.value.trim();
     const prompt = form.elements.prompt.value.trim();
-    const intervalValue = Number(form.elements.intervalValue.value);
-    const intervalUnit = form.elements.intervalUnit.value;
+    const scheduleKind = form.elements.scheduleKind.value;
     if (!name) return { error: '请填写任务名称' };
     if (!prompt) return { error: '请填写提示词' };
-    if (!Number.isInteger(intervalValue) || intervalValue <= 0) return { error: '执行间隔必须是正整数' };
+    const schedule = { scheduleKind };
+    if (isClockKind(scheduleKind)) {
+      schedule.timeOfDay = `${form.elements.hour.value}:${form.elements.minute.value}`;
+      if (scheduleKind === 'weekly') {
+        schedule.weekdays = form.elements.weekdays.value.split(',').map(Number);
+      }
+    } else {
+      schedule.intervalValue = Number(form.elements.intervalValue.value);
+      schedule.intervalUnit = form.elements.intervalUnit.value;
+      if (!Number.isInteger(schedule.intervalValue) || schedule.intervalValue <= 0) return { error: '执行间隔必须是正整数' };
+    }
     const attachError = composer.validate();
     if (attachError) return { error: attachError };
     const once = form.elements.mode.value === 'once';
-    const payload = { name, prompt, intervalValue, intervalUnit, once, ...composer.getPayload() };
+    const payload = { name, prompt, ...schedule, once, ...composer.getPayload() };
     if (!isEdit) payload.enabled = !!form.elements.enabled.checked;
     return { payload };
   }
@@ -680,8 +809,10 @@ export const ScheduledTasksPage = (() => {
     const errorEl = form.querySelector('.sched-form-error');
     const submitBtn = form.querySelector('button[type="submit"]');
     form.querySelector('[data-form-action="cancel"]').addEventListener('click', () => panel.close());
+    bindSelects(form, scheduleSelects(task));
+    applyScheduleUi(form);
     form.addEventListener('change', (e) => {
-      if (e.target && e.target.name === 'mode') applyModeText(form);
+      if (e.target && (e.target.name === 'mode' || e.target.name === 'scheduleKind')) applyScheduleUi(form);
     });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
