@@ -188,6 +188,7 @@ export class ScheduledTaskScheduler {
         console.error('[scheduled-tasks] 调度器唤醒失败:', err);
       });
     }, delay);
+    this.timer.unref?.();
   }
 
   private async armNearest(gen: number): Promise<void> {

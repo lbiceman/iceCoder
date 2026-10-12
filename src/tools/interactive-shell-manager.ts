@@ -25,6 +25,20 @@ import {
   type PromptPattern,
 } from './interactive-shell-prompt-detect.js';
 
+/**
+ * Windows ConPTY 的 `kill()` 会 fork `conpty_console_list_agent` 枚举控制台进程；我们随后用
+ * taskkill /T 杀整棵树，agent 启动时 shell 往往已退出 → `AttachConsole failed` 崩溃刷屏，
+ * 且 5s 超时后会对可能已被复用的 PID 调 process.kill。进程树由 killWindowsProcessTree 负责，这里关掉枚举。
+ * 依赖 node-pty 私有字段，字段不存在时不做任何事。
+ */
+export function disableConptyConsoleListAgent(proc: IPty, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32') return false;
+  const agent = (proc as unknown as { _agent?: { _getConsoleProcessList?: unknown } })._agent;
+  if (!agent || typeof agent._getConsoleProcessList !== 'function') return false;
+  agent._getConsoleProcessList = () => Promise.resolve([]);
+  return true;
+}
+
 /** 协管 PTY 生命周期：copilot 随 session 删除 / shutdown 终止，Stop Agent 不杀 */
 export type InteractiveShellLifespan = 'copilot';
 
@@ -537,6 +551,7 @@ export class InteractiveShellManager {
         cwd,
         env: buildShellChildEnv(this.sessionId),
       });
+      disableConptyConsoleListAgent(proc);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {

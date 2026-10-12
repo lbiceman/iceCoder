@@ -186,6 +186,40 @@ describe('workspace-command-touch', () => {
     }
   });
 
+  it('does not retain pre-command inventories when the round is aborted mid-command', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-abort-'));
+    const abort = new AbortController();
+    try {
+      const before = getWorkspaceInventoryDiagnostics().preCommandInventorySize;
+      const executeTool = vi.fn(async () => {
+        abort.abort();
+        return { success: false, output: '', error: 'aborted' };
+      });
+      const messages: Array<{ role: string; toolCallId?: string }> = [];
+      await executeToolCallsStreaming(
+        {
+          toolExecutor: { executeTool } as never,
+          loopController: new LoopController({ maxRounds: 1, signal: abort.signal }),
+          permissionRules: [],
+          workspaceRoot: root,
+          sessionId: 'abort-session',
+        },
+        {
+          toolCalls: [
+            { id: 'cmd-a', name: 'run_command', arguments: { command: 'node a.js' } },
+            { id: 'cmd-b', name: 'run_command', arguments: { command: 'node b.js' } },
+          ],
+          messages: messages as never,
+          logger: { toolCall: () => {}, toolResult: () => {} } as never,
+        },
+      );
+      expect(messages.filter((m) => m.role === 'tool')).toHaveLength(2);
+      expect(getWorkspaceInventoryDiagnostics().preCommandInventorySize).toBe(before);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('records one task mutation for all inventory changes from one successful command', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-mutation-'));
     const taskState = new TaskState('generate files');

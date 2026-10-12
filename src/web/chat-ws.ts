@@ -29,6 +29,8 @@ import { getTaskQueueManager } from '../session/task-queue.js';
 import { clearPendingNotesForSession } from '../session/pending-note.js';
 import { clearHarnessRuntimeState } from '../harness/harness-runtime-registry.js';
 import { clearIntentCheckpointTurnsForSession } from '../harness/intent-checkpoint-turn-snapshot.js';
+import { releaseProjectCheckpointWriteState } from '../harness/project-checkpoint-store.js';
+import { resetSessionLongTermMemoryWriteCaps } from '../memory/file-memory/memory-write-pipeline.js';
 import {
   addChatClient,
   broadcastMcpReady,
@@ -112,6 +114,8 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   void clearSessionBgTasks(SESSIONS_DIR, sessionId).catch(() => {});
   try { void getTaskQueueManager(SESSIONS_DIR).clearSession(sessionId); } catch { /* ignore */ }
   clearPendingNotesForSession(sessionId);
+  releaseProjectCheckpointWriteState(SESSIONS_DIR, sessionId);
+  resetSessionLongTermMemoryWriteCaps(sessionId);
   void deleteSessionImagesCache(sessionId).catch(() => {});
 }
 

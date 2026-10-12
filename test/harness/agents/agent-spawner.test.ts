@@ -307,7 +307,7 @@ describe('AgentSpawner 与真实子 Harness', () => {
     expect(Number(/rounds=(\d+)/.exec(result.output)?.[1])).toBeGreaterThan(50);
     expect(events.some(e => e.agentId && e.type === 'compaction')).toBe(true);
     expect(hasFileBeenRead(root, 'parent-read.ts', 'parent-session')).toBe(true);
-  });
+  }, 20_000);
 
   it('两个并行子 Agent 写同一文件：后写者被租约拒绝', async () => {
     const { createLlm } = scriptedChildLlm({

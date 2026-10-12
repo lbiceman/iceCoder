@@ -48,6 +48,7 @@ import {
   isShellWorkspaceTouchTool,
   listWorkspaceFileInventory,
   rememberBackgroundCommandInventory,
+  discardPreCommandInventories,
   rememberPreCommandInventory,
   takeBackgroundCommandInventory,
   takePreCommandInventory,
@@ -847,6 +848,12 @@ export async function executeToolCallsStreaming(
   // 如果中断发生，为未处理的工具补齐 tool_result
   if (deps.loopController.isAborted()) {
     yieldMissingToolResults(toolCalls, processedIds, messages);
+    if (commandInventoryScope) {
+      discardPreCommandInventories(
+        commandInventoryScope,
+        [...submittedIds].filter((id) => !processedIds.has(id)),
+      );
+    }
   }
 
   return {
