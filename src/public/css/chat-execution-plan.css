@@ -382,7 +382,7 @@ html[data-shell="mobile"] .etl-panel-resizer {
 /* ── 检查点 / 执行流 可拖拽分隔线 ── */
 .etl-wb-splitter {
   flex: 0 0 auto;
-  height: 9px;
+  height: 6px;
   cursor: row-resize;
   touch-action: none;
   background: transparent;

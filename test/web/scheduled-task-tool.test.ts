@@ -52,9 +52,43 @@ describe('scheduled_task tool', () => {
     const def = makeTool().definition;
     expect(def.name).toBe('scheduled_task');
     expect(def.parameters.required).toEqual(['action']);
-    expect(def.description).toMatch(/schtasks/);
-    expect(def.description).toMatch(/cron are unsupported/);
-    expect(def.description.length).toBeLessThan(600);
+    for (const [key, schema] of Object.entries(def.parameters.properties as Record<string, { description?: string }>)) {
+      if (key !== 'intervalUnit') expect(schema.description, key).toBeTruthy();
+    }
+  });
+
+  it('describes the full usage so the model need not read source code', () => {
+    const description = makeTool().definition.description;
+    expect(description).toMatch(/do NOT read iceCoder source code/);
+    expect(description).toMatch(/schtasks/);
+    expect(description).toMatch(/cron expressions are NOT supported/);
+    expect(description).toMatch(/cannot see this chat/);
+    expect(description).toMatch(/auto-approved/);
+    expect(description).toMatch(/restarts the countdown/);
+    for (const action of ['list', 'create', 'update', 'toggle', 'run', 'delete']) {
+      expect(description).toContain(`- ${action}:`);
+    }
+  });
+
+  it('includes data locations and working directory only when provided', () => {
+    const service = createScheduledTaskService({
+      store,
+      scheduler,
+      attachments: createScheduledTaskAttachments({ filesRoot: path.join(dir, 'task-files'), lookupUpload: () => undefined }),
+    });
+    const bare = createScheduledTaskTool({ service, inTaskSession: false }).definition.description;
+    expect(bare).not.toContain('iceCoder data locations');
+
+    const full = createScheduledTaskTool({
+      service,
+      inTaskSession: false,
+      dataPaths: { dataDir: 'D:/ice-data', sessionsDir: 'D:/ice-data/sessions', outputDir: 'D:/ice-data/output' },
+      defaultWorkDir: 'D:/work',
+    }).definition.description;
+    expect(full).toContain('Data dir: D:/ice-data');
+    expect(full).toContain('Sessions: D:/ice-data/sessions. index.json');
+    expect(full).toContain('none: D:/ice-data/output');
+    expect(full).toContain('(currently D:/work)');
   });
 
   it('creates a task through the app without a session (created on first run) and reschedules', async () => {

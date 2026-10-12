@@ -16,12 +16,22 @@ export const SCHEDULED_TASK_TOOL_NAME = 'scheduled_task';
 export const SCHEDULED_TASK_CREATE_IN_TASK_SESSION_MESSAGE =
   '定时任务会话中不能创建新任务（避免任务无限增殖）。如需新任务，请让用户在普通会话中提出。';
 
+export interface ScheduledTaskDataPaths {
+  dataDir: string;
+  sessionsDir: string;
+  outputDir: string;
+}
+
 export interface ScheduledTaskToolDeps {
   service: ScheduledTaskService;
   /** 当前会话是某个定时任务的专属会话。 */
   inTaskSession: boolean;
   listSkillFilenames?: () => Promise<Set<string>>;
   formatTime?: (ts: number) => string;
+  /** 写进工具说明，让模型写任务提示词时不必翻目录 / 源码找数据位置。 */
+  dataPaths?: ScheduledTaskDataPaths;
+  /** 任务执行时的起始工作目录。 */
+  defaultWorkDir?: string;
 }
 
 const ACTIONS = ['list', 'create', 'update', 'toggle', 'delete', 'run'] as const;
@@ -75,6 +85,57 @@ function pickInput(args: Record<string, unknown>): ScheduledTaskInput {
   if (typeof input.once === 'string') input.once = input.once === 'true';
   if (typeof input.enabled === 'string') input.enabled = input.enabled === 'true';
   return input;
+}
+
+/**
+ * 工具说明即完整用法：只在按意图携带本工具的轮次发送，不必压缩篇幅。
+ * 说明不全时模型会去读本软件源码或 scheduled-tasks.json 自行摸索。
+ */
+export function buildScheduledTaskDescription(
+  deps: Pick<ScheduledTaskToolDeps, 'dataPaths' | 'defaultWorkDir'> = {},
+): string {
+  const { dataPaths, defaultWorkDir } = deps;
+  const lines = [
+    'iceCoder\'s built-in scheduled tasks. This description is the complete, authoritative usage guide: do NOT read iceCoder source code, scheduled-tasks.json or other config files to learn how scheduling works. Use action:"list" to see existing tasks.',
+    '',
+    'When to use: anything the user wants run periodically or after a delay (reminders, polling, monitoring, daily reports/summaries). Never create OS schedulers (schtasks/crontab/launchctl/systemd timers) or sleep-loop scripts.',
+    '',
+    'How a run works:',
+    '- At each due time the task prompt is sent as a new user message to the task\'s own session. That session is created on the first run and reused by later runs (earlier runs\' replies stay visible there); it is replaced by a fresh session once it grows past ~20 MB.',
+    '- The task session cannot see this chat. Write the prompt as a complete brief for a stranger: goal, absolute paths, data sources/URLs, steps, output format and absolute output path, and what to do when there is nothing to report. Look up any paths or facts the prompt needs before calling create; do not leave them for the run to guess.',
+    '- Runs are unattended: every confirmation is auto-approved. State hard limits in the prompt (read-only sources, which files may be written, never delete).',
+    defaultWorkDir
+      ? `- Runs start in iceCoder's default working directory (currently ${defaultWorkDir}); always use absolute paths in the prompt.`
+      : '- Runs start in iceCoder\'s default working directory, not this chat\'s workspace; always use absolute paths in the prompt.',
+    '- Results only go to the task session (sidebar group "任务会话") and the task status on the 定时任务 page. Nothing is posted back to this chat and the user is not notified; if the user wants a deliverable, the prompt must write a file.',
+    '- skillFilenames attaches skills (file names such as "review.md") to every run; unknown names are ignored with a warning. This tool cannot set image/file attachments: reference files by absolute path in the prompt, or ask the user to attach them on the 定时任务 page.',
+    '',
+    'Scheduling rules:',
+    '- Recurring (default): runs every intervalValue x intervalUnit (second | minute | hour | day). The first run is one interval after the task is created or enabled.',
+    '- once:true: runs one interval after enabling, then disables itself. Use for "remind me in 10 minutes" / "check again in 2 hours".',
+    '- Clock times ("every day at 00:30", "Mondays at 9:00") and cron expressions are NOT supported. Say so plainly, create the nearest interval (e.g. 1 day for "every day at ..."), and report the real next run time from the tool result. The only way to align with a clock time is to enable (or re-enable) the task at that moment; offer that, do not pretend the clock time is set.',
+    '- Changing intervalValue/intervalUnit or re-enabling restarts the countdown from now. Editing name/prompt/skillFilenames keeps the schedule.',
+    '- If the previous run of the task is still going, a recurring trigger is skipped and action:"run" fails as busy. Runs missed while the service was stopped are not caught up; a missed once-task is disabled.',
+    '',
+    'Actions:',
+    '- list: every task with id, schedule, enabled state, next/last run, last status and a prompt preview.',
+    '- create: name, prompt, intervalValue, intervalUnit are required; optional once (default false), enabled (default true), skillFilenames. Refused when the name already exists (use update) and inside a task\'s own session.',
+    '- update: id plus only the fields to change.',
+    '- toggle: id; enabled:true/false, or omit enabled to flip.',
+    '- run: id; runs once now in the task session, schedule unchanged.',
+    '- delete: id; the user is asked to confirm; the task session is kept.',
+    'Get ids from list. After create/update, tell the user the task name, the schedule and the next run time exactly as returned.',
+  ];
+  if (dataPaths) {
+    lines.push(
+      '',
+      'iceCoder data locations (for prompts that work on iceCoder\'s own data, e.g. "summarize today\'s sessions"):',
+      `- Data dir: ${dataPaths.dataDir}`,
+      `- Sessions: ${dataPaths.sessionsDir}. index.json lists sessions as [{id, title, createdAt, updatedAt, messageCount, scheduledTaskId?}] (ms timestamps; scheduledTaskId marks scheduled-task sessions). <id>.json is the visible transcript: [{role: "user" | "agent" | "tool_trace" | "system", content, sentAt | completedAt, ...}]; tool_trace items carry toolName/detail. <id>.session-notes.md, when present, is a short running note. Other <id>.* files, *.tmp/*.bak files and per-session subfolders are internal; skip them.`,
+      `- Default place for generated files when the user names none: ${dataPaths.outputDir}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 function ok(output: string): ToolResult {
@@ -138,26 +199,22 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
   return {
     definition: {
       name: SCHEDULED_TASK_TOOL_NAME,
-      // 管理本软件内置的定时任务；周期/延时执行一律用它，不要建系统计划任务或常驻循环脚本。
-      description: [
-        'iceCoder\'s built-in scheduled tasks. Use for anything to run periodically or after a delay; never create OS schedulers (schtasks/crontab) or sleep-loop scripts.',
-        'Each run sends prompt to the AI in the task\'s own session, which cannot see this chat: make it self-contained.',
-        'Schedule is a fixed interval (first run one interval after enabling) or once:true (run once, then disable).',
-        'Clock times and cron are unsupported: say so and offer an interval.',
-        'id is required except for list/create. create is refused in a task\'s own session and for an existing name.',
-      ].join(' '),
+      description: buildScheduledTaskDescription(deps),
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: [...ACTIONS] },
-          id: { type: 'string' },
-          name: { type: 'string' },
-          prompt: { type: 'string' },
-          intervalValue: { type: 'integer', minimum: 1 },
+          action: { type: 'string', enum: [...ACTIONS], description: 'list | create | update | toggle | delete | run.' },
+          id: { type: 'string', description: 'Task id from action:"list". Required for update/toggle/delete/run.' },
+          name: { type: 'string', description: 'Short unique task name shown on the 定时任务 page.' },
+          prompt: {
+            type: 'string',
+            description: 'Self-contained instructions sent to the AI on every run, in the user\'s language. The run cannot see this chat: include absolute paths, steps, output location and limits.',
+          },
+          intervalValue: { type: 'integer', minimum: 1, description: 'Positive integer; with intervalUnit gives the repeat interval (or the delay when once:true).' },
           intervalUnit: { type: 'string', enum: ['second', 'minute', 'hour', 'day'] },
-          once: { type: 'boolean' },
-          enabled: { type: 'boolean' },
-          skillFilenames: { type: 'array', items: { type: 'string' } },
+          once: { type: 'boolean', description: 'true = run once after one interval, then disable. Default false.' },
+          enabled: { type: 'boolean', description: 'create/update: default true. toggle: target state; omit to flip.' },
+          skillFilenames: { type: 'array', items: { type: 'string' }, description: 'Skill file names (e.g. "review.md") loaded on every run.' },
         },
         required: ['action'],
       },

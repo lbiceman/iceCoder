@@ -6,6 +6,7 @@
 import type { BootstrapResult } from '../bootstrap.js';
 import { reloadLLMAdapter, watchConfigChanges } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
+import { getDefaultWorkDir } from '../paths.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { createServer, startServer } from '../../web/server.js';
 import { createConfigRouter } from '../../web/routes/config.js';
@@ -117,6 +118,8 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     return [createScheduledTaskTool({
       service: scheduledTaskService,
       inTaskSession: tasks.some((t) => t.sessionId === sessionId),
+      dataPaths: paths,
+      defaultWorkDir: getDefaultWorkDir(),
     })];
   });
   const disableOsSchedulerGuard = enableOsSchedulerGuard({
