@@ -41,6 +41,7 @@ import {
   type SessionRunPhase,
 } from './chat-ws-runtime.js';
 import { handleChatMessage } from './chat-ws-turn.js';
+import { setSessionUnattended } from './chat-ws-confirm.js';
 
 /** 后台子 Agent 完成后的唤醒轮询间隔。 */
 const BACKGROUND_WAKE_INTERVAL_MS = 3_000;
@@ -68,6 +69,7 @@ export interface PendingChatMessage {
   skipUserMessageAppend?: boolean;
   reasoningEffort?: ReasoningEffort;
   scheduledTaskId?: string;
+  continuation?: boolean;
   ws: WebSocket;
 }
 
@@ -84,7 +86,17 @@ export function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingCha
     ws,
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
+    ...(task.continuation ? { continuation: true } : {}),
   };
+}
+
+/**
+ * 定时任务触发的轮次进入无人值守（确认自动通过）；用户亲自发的消息退出无人值守。
+ * 后台子 Agent 的续跑沿用上一轮的状态，让定时任务派生的子 Agent 也不被确认卡住。
+ */
+function applyUnattendedMode(runSid: string, pending: PendingChatMessage): void {
+  if (pending.scheduledTaskId) setSessionUnattended(runSid, true);
+  else if (!pending.continuation) setSessionUnattended(runSid, false);
 }
 
 export async function publishTaskQueueState(sessionId: string): Promise<void> {
@@ -287,6 +299,7 @@ export async function runSessionMessageLoop(
   first: PendingChatMessage,
 ): Promise<void> {
   sessionProcessing.add(runSid);
+  applyUnattendedMode(runSid, first);
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
   let terminalError: string | undefined;

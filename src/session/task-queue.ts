@@ -38,6 +38,7 @@ function toQueuedTask(task: TaskEnqueueInput, id: string, enqueuedAt: number): Q
     enqueuedAt,
     source: task.source,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(task.continuation ? { continuation: true } : {}),
     ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
   };
 }
@@ -60,8 +61,17 @@ export class TaskQueueManager {
   private runExclusive<T>(sessionId: string, op: () => Promise<T>): Promise<T> {
     const prev = this.opTails.get(sessionId) ?? Promise.resolve();
     const run = prev.then(op, op);
-    this.opTails.set(sessionId, run.then(() => undefined, () => undefined));
+    const tail = run.then(() => undefined, () => undefined);
+    this.opTails.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.opTails.get(sessionId) === tail) this.opTails.delete(sessionId);
+    });
     return run;
+  }
+
+  /** 测试用：当前仍挂着串行链的会话数。 */
+  pendingOpCount(): number {
+    return this.opTails.size;
   }
 
   private async ensureLoaded(sessionId: string): Promise<QueuedTask[]> {

@@ -313,6 +313,20 @@ export class ScheduledTaskStore {
     });
   }
 
+  /** 会话轮换：换绑专属会话（图片 URL 随会话迁移），不影响调度时间。 */
+  async rebindSession(id: string, sessionId: string, images: string[]): Promise<ScheduledTask> {
+    return this.runExclusive(async () => {
+      const tasks = await this.ensureLoaded();
+      const index = tasks.findIndex((t) => t.id === id);
+      if (index < 0) throw new Error(`定时任务不存在: ${id}`);
+      const updated: ScheduledTask = { ...tasks[index]!, sessionId, images: images.slice(), updatedAt: this.now() };
+      const next = tasks.slice();
+      next[index] = updated;
+      await this.persist(next);
+      return cloneTask(updated);
+    });
+  }
+
   async remove(id: string): Promise<void> {
     return this.runExclusive(async () => {
       const tasks = await this.ensureLoaded();

@@ -13,6 +13,7 @@ import { ensureRunningTurn, clearRunningTurn } from '../../src/web/chat-ws-runni
 import { getSessionsDir, sessionProcessing } from '../../src/web/chat-ws-runtime.js';
 import { getTaskQueueManager } from '../../src/session/task-queue.js';
 import { subscribeWsToSession, clearBroadcastState, addChatClient } from '../../src/web/chat-ws-broadcast.js';
+import { isSessionUnattended, setSessionUnattended } from '../../src/web/chat-ws-confirm.js';
 
 vi.mock('../../src/web/chat-ws-turn.js', () => ({
   handleChatMessage: vi.fn(async () => 'model_done'),
@@ -79,6 +80,33 @@ describe('chat-ws-loop', () => {
       enqueuedAt: Date.now(),
       reasoningEffort: 'high',
     }, ws).reasoningEffort).toBe('high');
+  });
+
+  it('queuedTaskToPending：continuation 续跑不产生用户气泡', () => {
+    const pending = queuedTaskToPending({
+      id: 'c1', text: '[System] wake', source: 'implicit', continuation: true, enqueuedAt: Date.now(),
+    }, fakeWs());
+    expect(pending).toMatchObject({ continuation: true, skipUserMessageAppend: true });
+  });
+
+  it('定时任务轮次无人值守，续跑沿用，用户亲自发消息后退出', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    const seen: boolean[] = [];
+    vi.mocked(handleChatMessage).mockImplementation(async () => {
+      seen.push(isSessionUnattended(sid));
+      return 'user_abort';
+    });
+    const base = { images: [], referencePaths: [], source: 'implicit' as const, ws };
+    try {
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', scheduledTaskId: 'task-x' });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'wake', continuation: true });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'hi', source: 'explicit' });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'wake', continuation: true });
+      expect(seen).toEqual([true, true, false, false]);
+    } finally {
+      setSessionUnattended(sid, false);
+    }
   });
 
   it('会话 busy 时 enqueue 只入队不 kickoff', async () => {

@@ -284,6 +284,23 @@ export async function createSessionRecord(title: string): Promise<SessionMeta> {
   return meta;
 }
 
+/** 删除会话（index + 文件族 + 进程内缓存）；会话不存在时返回 false。 */
+export async function deleteSessionRecord(sessionId: string): Promise<boolean> {
+  if (!isSafeSessionId(sessionId)) return false;
+  let found = false;
+  await mutateSessionIndex(async (index) => {
+    found = index.some(s => s.id === sessionId);
+    if (!found) return index;
+    // 先摘掉消息文件，避免并发 GET 对账时把已删会话补回 index
+    await fs.unlink(path.join(SESSIONS_DIR, `${sessionId}.json`)).catch(() => {});
+    return index.filter(s => s.id !== sessionId);
+  });
+  if (!found) return false;
+  await purgeSessionFiles(sessionId);
+  sessionListLiveSync?.notifyIndexUpdated();
+  return true;
+}
+
 export function createSessionsRouter(): Router {
   const router = Router();
 
@@ -363,17 +380,7 @@ export function createSessionsRouter(): Router {
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
     if (rejectUnsafeSessionId(res, sessionId)) return;
-    let found = false;
-    await mutateSessionIndex(async (index) => {
-      found = index.some(s => s.id === sessionId);
-      if (!found) return index;
-      // 先摘掉消息文件，避免并发 GET 对账时把已删会话补回 index
-      await fs.unlink(path.join(SESSIONS_DIR, `${sessionId}.json`)).catch(() => {});
-      return index.filter(s => s.id !== sessionId);
-    });
-    if (!found) { res.status(404).json({ error: 'not found' }); return; }
-    await purgeSessionFiles(sessionId);
-    sessionListLiveSync?.notifyIndexUpdated();
+    if (!(await deleteSessionRecord(sessionId))) { res.status(404).json({ error: 'not found' }); return; }
     res.json({ success: true });
   });
 

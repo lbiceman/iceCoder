@@ -45,6 +45,30 @@
   margin-bottom: 14px;
 }
 
+.sched-notice {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  background: var(--warning-light);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.sched-notice strong {
+  color: var(--warning);
+}
+
+.sched-notice ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.sched-notice b {
+  color: var(--text-primary, inherit);
+}
+
 .sched-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));

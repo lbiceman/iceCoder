@@ -279,6 +279,16 @@ export const ScheduledTasksPage = (() => {
       });
   }
 
+  /** 与后端行为对应：chat-ws-confirm 无人值守自动通过、SCHEDULED_TASK_SESSION_MAX_BYTES 会话轮换。 */
+  const UNATTENDED_NOTICE_HTML =
+    '<div class="sched-notice" role="note">' +
+      '<strong>请注意</strong>' +
+      '<ul>' +
+        '<li>定时执行无人值守：所有工具确认（包括删除文件、高危命令）都会<b>自动通过</b>，请只给任务写你放心让它自动执行的提示词。</li>' +
+        '<li>任务会话记录超过 20 MB 时，下次执行前会自动新建会话并删除旧会话（旧对话历史不保留；旧会话正打开时保留，需手动删除）。</li>' +
+      '</ul>' +
+    '</div>';
+
   /** 光标前的 @ 或 #（与主输入框的技能触发一致）打开技能下拉。 */
   const SKILL_TRIGGER_RE = /[@#]([^\s@#]*)$/;
 
@@ -558,6 +568,7 @@ export const ScheduledTasksPage = (() => {
         '</div>' +
         (task ? '' :
           '<label class="sched-check"><input type="checkbox" name="enabled" checked><span>创建后立即启用</span></label>') +
+        UNATTENDED_NOTICE_HTML +
         '<div class="sched-form-error" hidden></div>' +
         '<div class="sched-form-actions">' +
           '<button type="button" class="skills-btn" data-form-action="cancel">取消</button>' +
@@ -668,6 +679,7 @@ export const ScheduledTasksPage = (() => {
           '<span class="sched-count skills-count">载入中…</span>' +
           '<button type="button" class="skills-btn skills-btn-primary" data-sched-create>新建任务</button>' +
         '</div>' +
+        UNATTENDED_NOTICE_HTML +
         '<div class="sched-list"></div>' +
       '</div>';
     parentEl.querySelector('[data-sched-create]').addEventListener('click', () => openForm(null));
