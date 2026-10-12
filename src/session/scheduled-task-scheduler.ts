@@ -27,6 +27,8 @@ export class ScheduledTaskScheduler {
   /** 每次 start / stop 递增；异步工作捕获自己的 generation，过期后不得再产生副作用。 */
   private generation = 0;
   private retryDelayMs = RETRY_BASE_MS;
+  /** start 扫描未完成时的快照：重试 wake 对 <= 该时刻的过期任务只推进、不补跑。 */
+  private catchUpBefore: number | null = null;
   private tail: Promise<void> = Promise.resolve();
 
   constructor(options: ScheduledTaskSchedulerOptions) {
@@ -41,14 +43,20 @@ export class ScheduledTaskScheduler {
     this.retryDelayMs = RETRY_BASE_MS;
     await this.exclusive(async () => {
       if (!this.isCurrent(gen)) return;
-      const now = this.now();
-      const tasks = await this.store.list();
-      for (const task of tasks) {
-        if (!this.isCurrent(gen)) return;
-        if (!task.enabled || task.nextRunAt === null || task.nextRunAt > now) continue;
-        await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+      try {
+        const now = this.now();
+        this.catchUpBefore = now;
+        const tasks = await this.store.list();
+        for (const task of tasks) {
+          if (!this.isCurrent(gen)) return;
+          if (!task.enabled || task.nextRunAt === null || task.nextRunAt > now) continue;
+          await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+        }
+        await this.armNearest(gen);
+        if (this.isCurrent(gen)) this.catchUpBefore = null;
+      } catch (err) {
+        this.handleScanFailure(gen, err);
       }
-      await this.armNearest(gen);
     });
   }
 
@@ -60,7 +68,13 @@ export class ScheduledTaskScheduler {
 
   async reschedule(): Promise<void> {
     const gen = this.generation;
-    await this.exclusive(() => this.armNearest(gen));
+    await this.exclusive(async () => {
+      try {
+        await this.armNearest(gen);
+      } catch (err) {
+        this.handleScanFailure(gen, err);
+      }
+    });
   }
 
   async runNow(id: string): Promise<void> {
@@ -122,16 +136,28 @@ export class ScheduledTaskScheduler {
         }
       }
       if (!this.isCurrent(gen)) return;
-      await Promise.allSettled(persisted.map((task) => this.trigger(task)));
+      // start 扫描未完成时遗留的过期任务只推进、不补跑。
+      const skipBefore = this.catchUpBefore;
+      const runnable = persisted.filter(
+        (task) => skipBefore === null || task.nextRunAt! > skipBefore,
+      );
+      await Promise.allSettled(runnable.map((task) => this.trigger(task)));
       // 有持久化失败时不扫描：到点任务会让 delay 变成 0，改走退避重试。
       if (failed) throw failure;
       await this.armNearest(gen);
+      if (!this.isCurrent(gen)) return;
+      this.catchUpBefore = null;
       this.retryDelayMs = RETRY_BASE_MS;
     } catch (err) {
-      if (!this.isCurrent(gen)) return;
-      console.error('[scheduled-tasks] 调度器唤醒失败:', err);
-      this.scheduleRetry(gen);
+      this.handleScanFailure(gen, err);
     }
+  }
+
+  /** start / reschedule / wake 的 Store 异常统一走这里：记录错误，当前代仍有效则退避重试。 */
+  private handleScanFailure(gen: number, err: unknown): void {
+    if (!this.isCurrent(gen)) return;
+    console.error('[scheduled-tasks] 调度器扫描失败，将退避重试:', err);
+    this.scheduleRetry(gen);
   }
 
   private scheduleRetry(gen: number): void {

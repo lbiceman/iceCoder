@@ -498,6 +498,86 @@ describe('ScheduledTaskScheduler', () => {
       scheduler.stop();
     });
 
+    it('start 的首次 list 失败后 1s 恢复，且 start 不拒绝', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 3_000 })]);
+      const { scheduler, execute } = build(store);
+      store.failLists(true);
+
+      await expect(scheduler.start()).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(1);
+      const listCalls = store.list.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(store.list.mock.calls.length).toBe(listCalls);
+      atMostOneTimer();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(store.list.mock.calls.length).toBeGreaterThan(listCalls);
+      expect(execute).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    });
+
+    it('start 的 replaceNextRunAt 失败后重试只推进过期任务，不补跑', async () => {
+      vi.setSystemTime(35_000);
+      const store = fakeStore([task({ id: 'stale', nextRunAt: 1_000 })]);
+      const { scheduler, execute } = build(store);
+      store.failReplace('stale', 1);
+
+      await expect(scheduler.start()).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute).not.toHaveBeenCalled();
+      expect(store.rows[0]!.nextRunAt).toBe(41_000);
+      expect(store.updateRunState).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      scheduler.stop();
+    });
+
+    it('reschedule 的首次 list 失败后 1s 恢复，且 reschedule 不拒绝', async () => {
+      const store = fakeStore([task({ id: 'far', nextRunAt: 10_000 })]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      store.add(task({ id: 'near', nextRunAt: 5_000 }));
+      store.failLists(true);
+
+      await expect(scheduler.reschedule()).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      atMostOneTimer();
+      expect(execute).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(execute.mock.calls.map(([t]) => t.id)).toEqual(['near']);
+      atMostOneTimer();
+      scheduler.stop();
+    });
+
+    it('stop 之后失败的 reschedule 不安排重试且不拒绝', async () => {
+      const store = fakeStore([task({ id: 'a', nextRunAt: 5_000 })]);
+      const { scheduler } = build(store);
+      await scheduler.start();
+      const release = store.holdList();
+      const rescheduling = scheduler.reschedule();
+      await vi.advanceTimersByTimeAsync(0);
+      scheduler.stop();
+      release.reject(new Error('stale list failure'));
+      await expect(rescheduling).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it('stop 取消重试计时器', async () => {
       const store = fakeStore([task({ id: 'a', nextRunAt: 1_000 })]);
       const { scheduler, execute } = build(store);
