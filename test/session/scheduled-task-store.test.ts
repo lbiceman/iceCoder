@@ -150,6 +150,34 @@ describe('scheduled task store', () => {
     expect(task.skillFilenames).toEqual(['a.md', 'b.md']);
   });
 
+  it('附件字段：创建默认为空，update 仅在传入时替换', async () => {
+    const { store } = await fixture();
+    const created = await store.create(baseInput());
+    expect(created.images).toEqual([]);
+    expect(created.files).toEqual([]);
+
+    const file = { id: 'f1', name: 'a.txt', path: '/data/f1/a.txt', size: 3 };
+    const withAttachments = await store.update(created.id, { images: ['/api/sessions/s/images/x.png'], files: [file] });
+    expect(withAttachments.images).toEqual(['/api/sessions/s/images/x.png']);
+    expect(withAttachments.files).toEqual([file]);
+
+    const renamed = await store.update(created.id, { name: '改名' });
+    expect(renamed.images).toEqual(['/api/sessions/s/images/x.png']);
+    expect(renamed.files).toEqual([file]);
+  });
+
+  it('读取旧版本无附件字段的任务时补齐为空数组', async () => {
+    const { store, filePath } = await fixture();
+    const legacy = {
+      id: 'old', name: '旧任务', prompt: 'p', skillFilenames: [], intervalValue: 1, intervalUnit: 'hour',
+      sessionId: 's', enabled: false, createdAt: 0, updatedAt: 0, lastRunAt: null, nextRunAt: null,
+      lastStatus: 'idle', lastError: null,
+    };
+    await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
+    const [task] = await store.list();
+    expect(task).toMatchObject({ id: 'old', images: [], files: [] });
+  });
+
   it('update 保留 id、sessionId、createdAt', async () => {
     const { store } = await fixture();
     const created = await store.create(baseInput());

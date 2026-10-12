@@ -4,11 +4,22 @@ import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 
 export type ScheduledTaskIntervalUnit = 'second' | 'minute' | 'hour' | 'day';
 
+/** 任务附带的非图片文件（已转存到任务附件目录的长期副本）。 */
+export interface ScheduledTaskFile {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+}
+
 export interface ScheduledTask {
   id: string;
   name: string;
   prompt: string;
   skillFilenames: string[];
+  /** 任务会话 imagesCache 内图片的 API URL，执行时随消息发送。 */
+  images: string[];
+  files: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
   sessionId: string;
@@ -25,6 +36,8 @@ export type ScheduledTaskCreateInput = {
   name: string;
   prompt: string;
   skillFilenames: string[];
+  images?: string[];
+  files?: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
   sessionId: string;
@@ -37,6 +50,8 @@ export type ScheduledTaskUpdatePatch = Partial<
     | 'name'
     | 'prompt'
     | 'skillFilenames'
+    | 'images'
+    | 'files'
     | 'intervalValue'
     | 'intervalUnit'
     | 'enabled'
@@ -107,10 +122,21 @@ export function assertIntervalUnit(unit: ScheduledTaskIntervalUnit): void {
   }
 }
 
+/** 旧版本持久化的任务没有附件字段。 */
+function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
+  return {
+    ...task,
+    images: Array.isArray(task.images) ? task.images : [],
+    files: Array.isArray(task.files) ? task.files : [],
+  };
+}
+
 function validateCreateInput(input: ScheduledTaskCreateInput): {
   name: string;
   prompt: string;
   skillFilenames: string[];
+  images: string[];
+  files: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
   sessionId: string;
@@ -127,6 +153,8 @@ function validateCreateInput(input: ScheduledTaskCreateInput): {
     name,
     prompt,
     skillFilenames: normalizeSkillFilenames(input.skillFilenames),
+    images: input.images ?? [],
+    files: input.files ?? [],
     intervalValue: input.intervalValue,
     intervalUnit: input.intervalUnit,
     sessionId,
@@ -163,7 +191,7 @@ export class ScheduledTaskStore {
       const raw = await fs.readFile(this.filePath, 'utf-8');
       const parsed = JSON.parse(raw) as PersistedScheduledTasks;
       if (parsed?.version !== 1 || !Array.isArray(parsed.tasks)) return [];
-      return parsed.tasks;
+      return parsed.tasks.map(normalizeLoadedTask);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return [];
@@ -240,6 +268,8 @@ export class ScheduledTaskStore {
       if (patch.skillFilenames !== undefined) {
         skillFilenames = normalizeSkillFilenames(patch.skillFilenames);
       }
+      const images = patch.images ?? current.images;
+      const files = patch.files ?? current.files;
       if (patch.intervalValue !== undefined) {
         assertIntervalValue(patch.intervalValue);
         intervalValue = patch.intervalValue;
@@ -268,6 +298,8 @@ export class ScheduledTaskStore {
         name,
         prompt,
         skillFilenames,
+        images,
+        files,
         intervalValue,
         intervalUnit,
         enabled,

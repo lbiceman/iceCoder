@@ -61,7 +61,7 @@ export const ChatSessionSidebar = (() => {
     sidebar = document.createElement('aside');
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
-      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="memory" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('memory')}</span><span class="chat-sidebar-nav-btn-label">记忆</span></button><button class="chat-sidebar-nav-btn" data-page="skills" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('skills')}</span><span class="chat-sidebar-nav-btn-label">技能/任务</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button><button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('clock')}</span><span class="chat-sidebar-control-label">自适应</span></button><div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('wifi')}</span></div></div>`;
+      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">任务</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">知识库</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button><button class="chat-sidebar-control chat-sidebar-stats-btn" type="button" title="统计" aria-label="统计"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('stats')}</span></button><button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('clock')}</span><span class="chat-sidebar-control-label">自适应</span></button><div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('wifi')}</span></div></div>`;
 
     const mainEl = host.querySelector('.app-main');
     if (mainEl) {
@@ -78,16 +78,22 @@ export const ChatSessionSidebar = (() => {
 
   function getRouteFromHash() {
     const h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'stats' || h === 'settings' || h === 'config') {
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'tasks' || h === 'stats' || h === 'settings' || h === 'config') {
       return h === 'config' ? 'settings' : h;
     }
+    if (h === 'knowledge') return 'skills';
     return 'chat';
   }
 
-  /** 记忆 / 技能 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
+  /** 技能、记忆两个路由同属「知识库」导航项 */
+  function navPageForRoute(route) {
+    return route === 'skills' || route === 'memory' ? 'knowledge' : route;
+  }
+
+  /** 任务 / 知识库 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
   function isAuxiliaryNavPage() {
     const route = getRouteFromHash();
-    return route === 'memory' || route === 'skills' || route === 'stats' || route === 'settings';
+    return route === 'memory' || route === 'skills' || route === 'tasks' || route === 'stats' || route === 'settings';
   }
 
   function navigateToChatPage() {
@@ -98,16 +104,20 @@ export const ChatSessionSidebar = (() => {
 
   function syncSidebarSettingsActive() {
     if (!sidebar) return;
-    const btn = sidebar.querySelector('.chat-sidebar-settings-btn');
-    if (!btn) return;
-    const onSettings = getRouteFromHash() === 'settings';
-    btn.classList.toggle('is-active', onSettings);
-    btn.setAttribute('aria-current', onSettings ? 'page' : 'false');
+    const route = getRouteFromHash();
+    const footerPages = [['.chat-sidebar-settings-btn', 'settings'], ['.chat-sidebar-stats-btn', 'stats']];
+    for (let i = 0; i < footerPages.length; i++) {
+      const btn = sidebar.querySelector(footerPages[i][0]);
+      if (!btn) continue;
+      const on = route === footerPages[i][1];
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-current', on ? 'page' : 'false');
+    }
   }
 
   function syncSidebarNavActive() {
     if (!sidebar) return;
-    const current = getRouteFromHash();
+    const current = navPageForRoute(getRouteFromHash());
     const btns = sidebar.querySelectorAll('.chat-sidebar-nav-btn');
     for (let i = 0; i < btns.length; i++) {
       const btn = btns[i];
@@ -135,6 +145,10 @@ export const ChatSessionSidebar = (() => {
         btn.addEventListener('click', () => {
           const page = btn.getAttribute('data-page');
           if (!page) return;
+          if (page === 'knowledge' && window.KnowledgeTabs) {
+            window.KnowledgeTabs.open();
+            return;
+          }
           if (window.location.hash !== `#/${page}`) {
             window.location.hash = `#/${page}`;
           } else {
@@ -216,11 +230,14 @@ export const ChatSessionSidebar = (() => {
       });
     }
 
-    const settingsBtn = sidebar.querySelector('.chat-sidebar-settings-btn');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', () => {
-        if (window.location.hash !== '#/settings') {
-          window.location.hash = '#/settings';
+    const footerRoutes = [['.chat-sidebar-settings-btn', '#/settings'], ['.chat-sidebar-stats-btn', '#/stats']];
+    for (let i = 0; i < footerRoutes.length; i++) {
+      const btn = sidebar.querySelector(footerRoutes[i][0]);
+      const hash = footerRoutes[i][1];
+      if (!btn) continue;
+      btn.addEventListener('click', () => {
+        if (window.location.hash !== hash) {
+          window.location.hash = hash;
         } else {
           window.dispatchEvent(new HashChangeEvent('hashchange'));
         }

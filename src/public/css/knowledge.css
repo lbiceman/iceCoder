@@ -1,0 +1,78 @@
+/* 知识库：技能 / 记忆两个页面共用的页头与页签 */
+.knowledge-header {
+  flex-wrap: wrap;
+  padding: 20px 24px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.knowledge-header h1 {
+  font-weight: 600;
+}
+
+.knowledge-header .knowledge-tabs {
+  flex-basis: 100%;
+  margin-top: -4px;
+}
+
+.knowledge-header + .memory-main {
+  padding-top: 12px;
+}
+
+.memory-header-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.knowledge-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.knowledge-tab {
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.knowledge-tab:hover {
+  color: var(--text-primary);
+}
+
+.knowledge-tab.is-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+  cursor: default;
+}
+
+/* 移动端顶栏：分段控件 */
+.knowledge-tabs.is-segmented {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-active);
+}
+
+.knowledge-tabs.is-segmented .knowledge-tab {
+  padding: 4px 16px;
+  border-bottom: none;
+  border-radius: 6px;
+}
+
+.knowledge-tabs.is-segmented .knowledge-tab.is-active {
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 720px) {
+  .knowledge-header {
+    display: none;
+  }
+}

@@ -8,6 +8,10 @@ import path from 'node:path';
 import { ScheduledTaskStore } from '../../../src/session/scheduled-task-store.js';
 import { createScheduledTasksRouter } from '../../../src/web/routes/scheduled-tasks.js';
 import { SCHEDULED_TASK_BUSY_MESSAGE } from '../../../src/session/scheduled-task-scheduler.js';
+import {
+  ATTACHMENT_EXPIRED_MESSAGE,
+  createScheduledTaskAttachments,
+} from '../../../src/web/scheduled-task-attachments.js';
 
 describe('scheduled tasks router', () => {
   let dir: string;
@@ -15,8 +19,16 @@ describe('scheduled tasks router', () => {
   let base: string;
   let store: ScheduledTaskStore;
   let now: number;
+  let uploads: Map<string, { originalName: string; filePath: string; size: number }>;
   const scheduler = { reschedule: vi.fn(async () => {}), runNow: vi.fn(async (_id: string) => {}) };
   const createSession = vi.fn(async (_title: string) => ({ id: 'sess-1' }));
+
+  async function fakeUpload(id: string, name: string, content = 'x') {
+    const filePath = path.join(dir, 'tmp-uploads', `${id}${path.extname(name)}`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content);
+    uploads.set(id, { originalName: name, filePath, size: content.length });
+  }
 
   async function call(method: string, url: string, body?: unknown) {
     const res = await fetch(base + url, {
@@ -36,9 +48,15 @@ describe('scheduled tasks router', () => {
     scheduler.reschedule.mockClear();
     scheduler.runNow.mockClear();
     createSession.mockClear();
+    uploads = new Map();
+    const attachments = createScheduledTaskAttachments({
+      filesRoot: path.join(dir, 'task-files'),
+      lookupUpload: (id) => uploads.get(id),
+      persistImage: async (src, sid) => `/api/sessions/${sid}/images/${path.basename(src)}`,
+    });
     const app = express();
     app.use(express.json());
-    app.use('/api/scheduled-tasks', createScheduledTasksRouter({ store, scheduler, createSession }));
+    app.use('/api/scheduled-tasks', createScheduledTasksRouter({ store, scheduler, createSession, attachments }));
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, () => resolve(s));
     });
@@ -119,6 +137,85 @@ describe('scheduled tasks router', () => {
     const res = await call('POST', `/api/scheduled-tasks/${created.task.id}/run`);
     expect(res.status).toBe(409);
     expect(res.body.error).toBe(SCHEDULED_TASK_BUSY_MESSAGE);
+  });
+
+  it('persists uploaded images and files on create', async () => {
+    await fakeUpload('up-img', 'shot.png');
+    await fakeUpload('up-doc', '需求 说明.docx', 'hello');
+    const res = await call('POST', '/api/scheduled-tasks', {
+      ...validInput,
+      images: [{ uploadId: 'up-img' }],
+      files: [{ uploadId: 'up-doc' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.task.images).toEqual(['/api/sessions/sess-1/images/up-img.png']);
+    const [file] = res.body.task.files;
+    expect(file).toMatchObject({ name: '需求 说明.docx', size: 5 });
+    expect(file.path.startsWith(path.join(dir, 'task-files', 'sess-1'))).toBe(true);
+    expect(path.basename(file.path)).toBe('需求 说明.docx');
+    expect(await fs.readFile(file.path, 'utf-8')).toBe('hello');
+  });
+
+  it('rejects expired uploads with 400 before creating a session', async () => {
+    const res = await call('POST', '/api/scheduled-tasks', { ...validInput, files: [{ uploadId: 'gone' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(ATTACHMENT_EXPIRED_MESSAGE);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed attachment refs with 400', async () => {
+    const res = await call('POST', '/api/scheduled-tasks', { ...validInput, images: ['data:image/png;base64,xx'] });
+    expect(res.status).toBe(400);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('edit keeps referenced attachments, deletes dropped files, ignores foreign urls', async () => {
+    await fakeUpload('a', 'a.txt');
+    await fakeUpload('b', 'b.txt');
+    await fakeUpload('img', 'p.png');
+    const { body: created } = await call('POST', '/api/scheduled-tasks', {
+      ...validInput,
+      images: [{ uploadId: 'img' }],
+      files: [{ uploadId: 'a' }, { uploadId: 'b' }],
+    });
+    const [fileA, fileB] = created.task.files;
+    const imageUrl = created.task.images[0];
+
+    const edited = await call('PUT', `/api/scheduled-tasks/${created.task.id}`, {
+      images: [{ url: imageUrl }, { url: '/api/sessions/other/images/evil.png' }],
+      files: [{ id: fileB.id }, { id: 'unknown' }],
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.body.task.images).toEqual([imageUrl]);
+    expect(edited.body.task.files).toEqual([fileB]);
+    await expect(fs.access(fileA.path)).rejects.toThrow();
+    await expect(fs.access(fileB.path)).resolves.toBeUndefined();
+
+    const untouched = await call('PUT', `/api/scheduled-tasks/${created.task.id}`, { name: '改名' });
+    expect(untouched.body.task.files).toEqual([fileB]);
+    expect(untouched.body.task.images).toEqual([imageUrl]);
+  });
+
+  it('edit rolls back newly copied files when validation fails', async () => {
+    const { body: created } = await call('POST', '/api/scheduled-tasks', validInput);
+    await fakeUpload('n', 'n.txt');
+    const res = await call('PUT', `/api/scheduled-tasks/${created.task.id}`, {
+      name: ' ',
+      files: [{ uploadId: 'n' }],
+    });
+    expect(res.status).toBe(400);
+    const sessionDir = path.join(dir, 'task-files', 'sess-1');
+    const left = await fs.readdir(sessionDir).catch(() => []);
+    expect(left).toEqual([]);
+  });
+
+  it('delete removes the task file attachments', async () => {
+    await fakeUpload('d', 'd.txt');
+    const { body: created } = await call('POST', '/api/scheduled-tasks', { ...validInput, files: [{ uploadId: 'd' }] });
+    const filePath = created.task.files[0].path as string;
+    await call('DELETE', `/api/scheduled-tasks/${created.task.id}`);
+    await expect(fs.access(filePath)).rejects.toThrow();
+    await expect(fs.access(path.join(dir, 'task-files', 'sess-1'))).rejects.toThrow();
   });
 
   it('returns 500 when session creation fails', async () => {

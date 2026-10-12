@@ -1,39 +1,39 @@
-/* 技能/任务页：标签切换 + 定时任务面板 */
-.skills-tabs {
+/* 任务页：页头 + 定时任务面板 */
+.tasks-root {
   display: flex;
-  gap: 4px;
-  flex-basis: 100%;
-  margin-top: -4px;
-}
-
-.skills-tab {
-  padding: 8px 14px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--text-muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition: color var(--transition), border-color var(--transition);
-}
-.skills-tab:hover { color: var(--text-primary); }
-.skills-tab.is-active {
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-page);
   color: var(--text-primary);
-  border-bottom-color: var(--accent);
-  font-weight: 500;
 }
 
-.skills-tasks-panel {
+.tasks-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.tasks-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.tasks-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.tasks-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
-.skills-main[hidden],
-.skills-tasks-panel[hidden] { display: none; }
 
 .sched-root {
-  max-width: 960px;
-  margin: 0 auto;
   padding: 16px 24px 32px;
 }
 
@@ -49,6 +49,10 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 12px;
+}
+.sched-list > .skills-empty {
+  grid-column: 1 / -1;
+  padding: 48px 12px;
 }
 
 .sched-card {
@@ -214,12 +218,6 @@
   outline: none;
   border-color: var(--accent-border-strong, var(--accent));
 }
-.sched-textarea {
-  resize: vertical;
-  min-height: 96px;
-  line-height: 1.5;
-}
-
 .sched-interval {
   display: flex;
   align-items: center;
@@ -227,31 +225,58 @@
   font-size: 13px;
   color: var(--text-secondary);
 }
-.sched-skill-list {
+/* 提示词编辑器：仿主输入框（技能 chip + textarea + 工具栏，附件预览在顶部） */
+.sched-composer {
   display: flex;
   flex-direction: column;
-  max-height: 180px;
-  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
+  background: var(--bg-input);
+  transition: border-color var(--transition);
 }
-.sched-skill-option {
+.sched-composer:focus-within,
+.sched-composer.is-drag-over {
+  border-color: var(--accent-border-strong, var(--accent));
+}
+.sched-composer .pending-images-preview { padding: 10px 10px 0; }
+.sched-composer .file-upload-status { padding: 10px 10px 0; }
+.sched-composer .skill-chips-bar { padding: 10px 10px 0; }
+.sched-composer .pending-image-thumb { width: 64px; height: 64px; }
+.sched-composer .pending-image-item.is-uploading .pending-image-thumb { opacity: 0.5; }
+.sched-composer .pending-image-item.is-failed .pending-image-thumb { outline: 2px solid var(--danger); }
+.sched-composer .skill-chip.is-missing { opacity: 0.6; text-decoration: line-through; }
+.sched-composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.sched-composer-input:focus { outline: none; }
+.sched-composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  font-size: 13px;
-  cursor: pointer;
+  gap: 6px;
+  padding: 4px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
 }
-.sched-skill-option + .sched-skill-option { border-top: 1px solid var(--border-color); }
-.sched-skill-option:hover { background: var(--bg-hover); }
-.sched-skill-name { flex: 1; min-width: 0; }
-.sched-skill-file {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+/* 技能下拉默认 z-index 低于弹层遮罩 */
+body:has(.sched-form) .cmd-dropdown { z-index: 10001; }
+.sched-chip.is-attachment {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
 }
-.sched-skill-option.is-missing .sched-skill-file { color: var(--warning); font-family: inherit; }
 
 .sched-check {
   display: flex;
@@ -274,6 +299,7 @@
 }
 
 @media (max-width: 720px) {
+  .tasks-header { display: none; }
   .sched-root { padding: 12px; }
   .sched-list { grid-template-columns: 1fr; }
 }

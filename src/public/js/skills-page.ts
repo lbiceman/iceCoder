@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 技能/任务页面：「技能」标签列表、查看、删除技能 Markdown 文件；「定时任务」标签见 scheduled-tasks-page。
+ * 知识库 ·「技能」页签：列表、查看、删除技能 Markdown 文件（「记忆」页签见 memory-page）。
  */
 
 /* exported SkillsPage */
@@ -49,7 +49,6 @@ export const SkillsPage = (() => {
   }
 
   function destroy() {
-    if (window.ScheduledTasksPage) window.ScheduledTasksPage.destroy();
     if (listFetchAbort) {
       listFetchAbort.abort();
       listFetchAbort = null;
@@ -272,69 +271,28 @@ export const SkillsPage = (() => {
       });
   }
 
-  const TAB_STORAGE_KEY = 'ice-skills-page-tab';
-  const TAB_HINTS = {
-    skills: '技能以 Markdown 文件存储，与 <code>user-memory</code> 同级。在聊天输入框输入 <code>#</code> 可快速选用技能。',
-    tasks: '定时任务按间隔自动把提示词发送到各自的专属会话，可绑定任意技能，也可只用提示词。',
-  };
-
-  function readSavedTab() {
-    try {
-      return sessionStorage.getItem(TAB_STORAGE_KEY) === 'tasks' ? 'tasks' : 'skills';
-    } catch (_e) {
-      return 'skills';
-    }
-  }
-
-  function switchTab(tab) {
-    if (!containerEl) return;
-    try { sessionStorage.setItem(TAB_STORAGE_KEY, tab); } catch (_e) { /* 隐私模式 */ }
-    const tabs = containerEl.querySelectorAll('[data-skills-tab]');
-    for (let i = 0; i < tabs.length; i++) {
-      const on = tabs[i].getAttribute('data-skills-tab') === tab;
-      tabs[i].classList.toggle('is-active', on);
-      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
-    }
-    const hintEl = containerEl.querySelector('.skills-hint');
-    if (hintEl) hintEl.innerHTML = TAB_HINTS[tab];
-    const countEl = containerEl.querySelector('#skills-total-count');
-    if (countEl) countEl.hidden = tab !== 'skills';
-    const skillsMain = containerEl.querySelector('.skills-main');
-    const tasksPanel = containerEl.querySelector('.skills-tasks-panel');
-    if (skillsMain) skillsMain.hidden = tab !== 'skills';
-    if (tasksPanel) tasksPanel.hidden = tab !== 'tasks';
-    const Tasks = window.ScheduledTasksPage;
-    if (!Tasks) return;
-    if (tab === 'tasks' && tasksPanel) Tasks.render(tasksPanel);
-    else Tasks.destroy();
-  }
-
   function render(parentEl) {
     destroy();
     containerEl = parentEl;
     parentEl.innerHTML = '';
+    const Tabs = window.KnowledgeTabs;
+    if (Tabs) Tabs.remember('skills');
 
     const root = document.createElement('div');
     root.className = 'skills-root';
 
     const header = document.createElement('header');
-    header.className = 'skills-header';
+    header.className = 'skills-header knowledge-header';
     header.innerHTML =
       '<div class="skills-header-text">' +
-        '<h1 class="skills-title">技能/任务</h1>' +
-        '<p class="skills-hint"></p>' +
+        '<h1 class="skills-title">知识库</h1>' +
+        '<p class="skills-hint">技能以 Markdown 文件存储，与 <code>user-memory</code> 同级。在聊天输入框输入 <code>#</code> 可快速选用技能。</p>' +
       '</div>' +
       '<div class="skills-header-actions">' +
         '<span class="skills-count" id="skills-total-count">载入中…</span>' +
       '</div>' +
-      '<div class="skills-tabs" role="tablist">' +
-        '<button type="button" class="skills-tab" role="tab" data-skills-tab="skills">技能</button>' +
-        '<button type="button" class="skills-tab" role="tab" data-skills-tab="tasks">定时任务</button>' +
-      '</div>';
-    header.querySelector('.skills-tabs').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-skills-tab]');
-      if (btn) switchTab(btn.getAttribute('data-skills-tab'));
-    });
+      (Tabs ? Tabs.html('skills') : '');
+    if (Tabs) Tabs.bind(header);
 
     const main = document.createElement('main');
     main.className = 'skills-main';
@@ -346,20 +304,14 @@ export const SkillsPage = (() => {
         '<div class="skills-detail-placeholder">选择左侧技能查看详情，或在输入框输入 <code>#</code> 快速选用。</div>' +
       '</section>';
 
-    const tasksPanel = document.createElement('section');
-    tasksPanel.className = 'skills-tasks-panel';
-    tasksPanel.hidden = true;
-
     root.appendChild(header);
     root.appendChild(main);
-    root.appendChild(tasksPanel);
     parentEl.appendChild(root);
 
     skillsChangedHandler = function () { reloadSkills(); };
     window.addEventListener('ice-skills-changed', skillsChangedHandler);
 
     reloadSkills();
-    switchTab(readSavedTab());
   }
 
   return {

@@ -2814,9 +2814,24 @@ body.pane-resizing * {
 
 /* 设置按钮 */
 .chat-sidebar-settings-btn {
+  flex: 0 0 auto;
   border: 1px solid var(--border-color);
 }
 .chat-sidebar-settings-btn.is-active {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+  background: var(--accent-light);
+}
+
+.chat-sidebar-stats-btn {
+  flex: 0 0 30px;
+  justify-content: center;
+  padding: 0;
+}
+.chat-sidebar-stats-btn .chat-sidebar-control-icon {
+  align-items: center;
+}
+.chat-sidebar-stats-btn.is-active {
   border-color: var(--accent-border);
   color: var(--text-primary);
   background: var(--accent-light);

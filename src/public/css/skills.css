@@ -289,10 +289,6 @@
     overflow-y: auto;
   }
   .skills-header {
-    padding: 8px 12px 0;
-  }
-  .skills-header-text,
-  .skills-header-actions {
     display: none;
   }
 }

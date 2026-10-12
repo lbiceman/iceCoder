@@ -21,7 +21,7 @@ export const MobileSkillsPage = (() => {
       if (window.SkillsPage && typeof window.SkillsPage.render === 'function') {
         window.SkillsPage.render(parentEl);
       } else {
-        parentEl.innerHTML = '<div class="mobile-page-placeholder">技能/任务页加载失败</div>';
+        parentEl.innerHTML = '<div class="mobile-page-placeholder">技能页加载失败</div>';
       }
     } else if (window.SkillsPage && typeof window.SkillsPage.render === 'function') {
       window.SkillsPage.render(parentEl);

@@ -15,6 +15,8 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     name: 'task',
     prompt: 'do it',
     skillFilenames: [],
+    images: [],
+    files: [],
     intervalValue: 10,
     intervalUnit: 'second',
     sessionId: 's1',

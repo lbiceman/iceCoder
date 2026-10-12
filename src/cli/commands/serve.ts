@@ -28,7 +28,12 @@ import {
   registerSessionCleanupHook,
 } from '../../web/routes/sessions.js';
 import { createScheduledTasksRouter } from '../../web/routes/scheduled-tasks.js';
-import { createScheduledTaskExecutor, isScheduledTaskBusy } from '../../web/scheduled-task-runtime.js';
+import {
+  createScheduledTaskExecutor,
+  disableScheduledTasksForSession,
+  isScheduledTaskBusy,
+} from '../../web/scheduled-task-runtime.js';
+import { createScheduledTaskAttachments } from '../../web/scheduled-task-attachments.js';
 import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
 import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
 import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
@@ -109,6 +114,9 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
         store: scheduledTaskStore,
         scheduler: scheduledTaskScheduler,
         createSession: createSessionRecord,
+        attachments: createScheduledTaskAttachments({
+          filesRoot: path.join(paths.dataDir, 'scheduled-task-files'),
+        }),
       }) },
       { path: '/api/mcp', router: createMcpStatusRouter({
         mcpManager,
@@ -145,6 +153,16 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     });
   });
   await scheduledTaskScheduler.start();
+  registerSessionCleanupHook(async (sessionId) => {
+    await purgeSessionRuntimeCaches(sessionId);
+    try {
+      if (await disableScheduledTasksForSession(scheduledTaskStore, sessionId)) {
+        await scheduledTaskScheduler.reschedule();
+      }
+    } catch (err) {
+      console.warn('[scheduled-tasks] 停用已删除会话的任务失败:', err);
+    }
+  });
 
   const stopTunnelWatcher = startTunnelReadyWatcher({
     onReady: (url) => broadcastTunnelReady({ url }),
@@ -154,6 +172,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const cleanup = () => {
     scheduledTaskScheduler.stop();
     registerScheduledTaskResultHandler(null);
+    registerSessionCleanupHook(purgeSessionRuntimeCaches);
     stopConfigWatch();
     stopTunnelWatcher();
     cleanupChatResources();

@@ -11,6 +11,10 @@ const SIDEBAR_SOURCE = classicWindowSource(readFileSync(
   path.join(__dirname, '../../src/public/js/chat-session-sidebar.ts'),
   'utf-8',
 ));
+const KNOWLEDGE_TABS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/knowledge-tabs.ts'),
+  'utf-8',
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -38,6 +42,15 @@ async function openSidebarPage(): Promise<Page> {
   openPages.add(page);
   await page.setContent('<!DOCTYPE html><html><body><div class="app-shell"><div class="app-main"></div></div></body></html>');
   await page.evaluate(() => {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k) : null),
+        setItem: (k: string, v: string) => { store.set(k, String(v)); },
+        removeItem: (k: string) => { store.delete(k); },
+      },
+    });
     (window as any).ChatSessionStore = {
       sessions: [
         { id: 's1', title: '当前会话', updatedAt: Date.now() },
@@ -57,6 +70,7 @@ async function openSidebarPage(): Promise<Page> {
       },
     };
   });
+  await page.addScriptTag({ content: KNOWLEDGE_TABS_SOURCE });
   await page.addScriptTag({ content: SIDEBAR_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatSessionSidebar.create(document.querySelector('.app-shell'));
@@ -69,6 +83,7 @@ async function snapshot(page: Page) {
     const activeItem = document.querySelector('.chat-sidebar-item.active');
     const activeNav = document.querySelector('.chat-sidebar-nav-btn.is-active');
     const settingsBtn = document.querySelector('.chat-sidebar-settings-btn');
+    const statsBtn = document.querySelector('.chat-sidebar-stats-btn');
     return {
       hash: window.location.hash,
       navLabels: Array.from(document.querySelectorAll('.chat-sidebar-nav-btn-label')).map((el) => el.textContent),
@@ -76,6 +91,7 @@ async function snapshot(page: Page) {
       activeSessionId: activeItem ? activeItem.getAttribute('data-id') : null,
       activeNavPage: activeNav ? activeNav.getAttribute('data-page') : null,
       settingsActive: !!(settingsBtn && settingsBtn.classList.contains('is-active')),
+      statsActive: !!(statsBtn && statsBtn.classList.contains('is-active')),
       storeActive: (window as any).ChatSessionStore.getActiveSessionId(),
     };
   });
@@ -85,22 +101,55 @@ describe('桌面侧栏主导航与会话列表', () => {
   it('主导航包含工作入口', async () => {
     const page = await openSidebarPage();
     const state = await snapshot(page);
-    expect(state.navLabels).toEqual(['工作', '记忆', '技能/任务', '统计']);
+    expect(state.navLabels).toEqual(['工作', '任务', '知识库']);
     expect(state.chatNavCount).toBe(1);
     expect(state.activeNavPage).toBe('chat');
   });
 
-  it('记忆/技能/统计/设置页取消会话高亮，点击会话回到聊天页', async () => {
+  it('知识库入口覆盖技能/记忆两个路由，并打开上次停留的页签', async () => {
+    const page = await openSidebarPage();
+
+    await page.locator('.chat-sidebar-nav-btn[data-page="knowledge"]').click();
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/skills',
+      activeNavPage: 'knowledge',
+      activeSessionId: null,
+    });
+
+    await page.evaluate(() => {
+      (window as any).KnowledgeTabs.remember('memory');
+      window.location.hash = '#/memory';
+    });
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/memory',
+      activeNavPage: 'knowledge',
+    });
+
+    await page.locator('.chat-sidebar-nav-btn[data-page="tasks"]').click();
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/tasks',
+      activeNavPage: 'tasks',
+      activeSessionId: null,
+    });
+
+    await page.locator('.chat-sidebar-nav-btn[data-page="knowledge"]').click();
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/memory',
+      activeNavPage: 'knowledge',
+    });
+  });
+
+  it('任务/知识库/统计/设置页取消会话高亮，点击会话回到聊天页', async () => {
     const page = await openSidebarPage();
     expect(await snapshot(page)).toMatchObject({
       activeSessionId: 's1',
       activeNavPage: 'chat',
     });
 
-    await page.locator('.chat-sidebar-nav-btn[data-page="memory"]').click();
+    await page.locator('.chat-sidebar-nav-btn[data-page="tasks"]').click();
     await expect.poll(async () => snapshot(page)).toMatchObject({
-      hash: '#/memory',
-      activeNavPage: 'memory',
+      hash: '#/tasks',
+      activeNavPage: 'tasks',
       activeSessionId: null,
       storeActive: 's1',
     });
@@ -112,10 +161,11 @@ describe('桌面侧栏主导航与会话列表', () => {
       activeNavPage: 'chat',
     });
 
-    await page.locator('.chat-sidebar-nav-btn[data-page="stats"]').click();
+    await page.locator('.chat-sidebar-stats-btn').click();
     await expect.poll(async () => snapshot(page)).toMatchObject({
       hash: '#/stats',
-      activeNavPage: 'stats',
+      statsActive: true,
+      activeNavPage: null,
       activeSessionId: null,
     });
 
