@@ -305,6 +305,15 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 10000,
     tags: ['file_write'],
   },
+  // 破坏性按 action 判断（delete），见 isDestructiveToolCall()
+  scheduled_task: {
+    name: 'scheduled_task',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 20_000,
+    tags: [],
+  },
 };
 
 /**

@@ -23,6 +23,8 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  /** 定时任务专属会话（含任务已换绑 / 已删除后留下的旧会话）所属任务 id */
+  scheduledTaskId?: string;
 }
 
 interface ChatMessageLike {

@@ -83,7 +83,6 @@ async function snapshot(page: Page) {
     const activeItem = document.querySelector('.chat-sidebar-item.active');
     const activeNav = document.querySelector('.chat-sidebar-nav-btn.is-active');
     const settingsBtn = document.querySelector('.chat-sidebar-settings-btn');
-    const statsBtn = document.querySelector('.chat-sidebar-stats-btn');
     return {
       hash: window.location.hash,
       navLabels: Array.from(document.querySelectorAll('.chat-sidebar-nav-btn-label')).map((el) => el.textContent),
@@ -91,7 +90,6 @@ async function snapshot(page: Page) {
       activeSessionId: activeItem ? activeItem.getAttribute('data-id') : null,
       activeNavPage: activeNav ? activeNav.getAttribute('data-page') : null,
       settingsActive: !!(settingsBtn && settingsBtn.classList.contains('is-active')),
-      statsActive: !!(statsBtn && statsBtn.classList.contains('is-active')),
       storeActive: (window as any).ChatSessionStore.getActiveSessionId(),
     };
   });
@@ -101,7 +99,7 @@ describe('桌面侧栏主导航与会话列表', () => {
   it('主导航包含工作入口', async () => {
     const page = await openSidebarPage();
     const state = await snapshot(page);
-    expect(state.navLabels).toEqual(['工作', '任务', '知识库']);
+    expect(state.navLabels).toEqual(['工作', '任务', '知识库', '统计']);
     expect(state.chatNavCount).toBe(1);
     expect(state.activeNavPage).toBe('chat');
   });
@@ -161,11 +159,10 @@ describe('桌面侧栏主导航与会话列表', () => {
       activeNavPage: 'chat',
     });
 
-    await page.locator('.chat-sidebar-stats-btn').click();
+    await page.locator('.chat-sidebar-nav-btn[data-page="stats"]').click();
     await expect.poll(async () => snapshot(page)).toMatchObject({
       hash: '#/stats',
-      statsActive: true,
-      activeNavPage: null,
+      activeNavPage: 'stats',
       activeSessionId: null,
     });
 

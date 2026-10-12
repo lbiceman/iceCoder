@@ -73,6 +73,7 @@ import {
   getSessionAgentSpawner,
   isSessionTombstoned,
   purgeSessionMaps,
+  recordSessionDeferredToolCall,
   resolveSessionWorkspacePayload,
 } from './chat-ws-runtime.js';
 
@@ -90,6 +91,7 @@ export {
   getSessionAgentSpawner,
   getSessionsDir,
   isSessionTombstoned,
+  recordSessionDeferredToolCall,
 };
 export { getProcessingSessionIds };
 export { broadcastMcpReady, broadcastTunnelReady };

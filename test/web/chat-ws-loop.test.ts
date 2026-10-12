@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { WebSocket } from 'ws';
 import {
@@ -14,6 +14,10 @@ import { getSessionsDir, sessionProcessing } from '../../src/web/chat-ws-runtime
 import { getTaskQueueManager } from '../../src/session/task-queue.js';
 import { subscribeWsToSession, clearBroadcastState, addChatClient } from '../../src/web/chat-ws-broadcast.js';
 import { isSessionUnattended, setSessionUnattended } from '../../src/web/chat-ws-confirm.js';
+import {
+  registerScheduledTaskResultHandler,
+  type ScheduledTaskResult,
+} from '../../src/session/scheduled-task-events.js';
 
 vi.mock('../../src/web/chat-ws-turn.js', () => ({
   handleChatMessage: vi.fn(async () => 'model_done'),
@@ -405,6 +409,52 @@ describe('chat-ws-loop', () => {
     });
     await vi.waitFor(() => {
       expect(sessionProcessing.has(sid)).toBe(false);
+    });
+  });
+
+  describe('定时任务执行结果回写', () => {
+    const results: ScheduledTaskResult[] = [];
+    const base = { images: [], referencePaths: [], source: 'implicit' as const, scheduledTaskId: 'task-r' };
+
+    beforeEach(() => {
+      results.length = 0;
+      registerScheduledTaskResultHandler((r) => { results.push(r); });
+    });
+    afterEach(() => {
+      registerScheduledTaskResultHandler(null);
+    });
+
+    it('model_done 回写成功', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: true, error: null }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('LLM 出错时把本轮的错误文本写进失败原因', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        input.onFinalContent?.('LLM 调用错误: OpenAI API Error [401]: invalid api key');
+        return 'error';
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{
+        taskId: 'task-r',
+        success: false,
+        error: '执行出错：LLM 调用错误: OpenAI API Error [401]: invalid api key',
+      }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('等待人工接管（user_checkpoint）也回写为失败，不会一直显示执行中', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockResolvedValue('user_checkpoint');
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: false, error: '等待人工确认（详情见任务会话）' }]);
+      setSessionUnattended(sid, false);
     });
   });
 

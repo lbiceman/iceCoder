@@ -19,22 +19,31 @@ import {
   getActiveSessionId,
   getProcessingSessionIds,
   purgeSessionRuntimeCaches,
+  recordSessionDeferredToolCall,
 } from '../../web/chat-ws.js';
 import { registerBootstrapSessionHints } from '../../web/last-active-session.js';
 import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
 import {
+  backfillScheduledTaskSessions,
   createSessionRecord,
   createSessionsRouter,
+  markScheduledTaskSession,
+  notifySessionListChanged,
   registerSessionCleanupHook,
 } from '../../web/routes/sessions.js';
 import { createScheduledTasksRouter } from '../../web/routes/scheduled-tasks.js';
 import {
   createScheduledTaskExecutor,
-  disableScheduledTasksForSession,
+  ensureScheduledTaskSession,
   isScheduledTaskBusy,
-  rotateScheduledTaskSessionIfOversized,
+  migrateLegacyScheduledTaskImages,
+  scheduledTaskSessionExists,
 } from '../../web/scheduled-task-runtime.js';
 import { createScheduledTaskAttachments } from '../../web/scheduled-task-attachments.js';
+import { createScheduledTaskService } from '../../web/scheduled-task-service.js';
+import { SCHEDULED_TASK_TOOL_NAME, createScheduledTaskTool } from '../../web/scheduled-task-tool.js';
+import { registerSessionToolProvider } from '../../tools/session-tool-providers.js';
+import { enableOsSchedulerGuard } from '../../tools/shell-os-scheduler-guard.js';
 import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
 import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
 import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
@@ -76,12 +85,18 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const setupState = { required: ctx.needsSetup };
 
   const scheduledTaskStore = new ScheduledTaskStore(path.join(paths.dataDir, 'scheduled-tasks.json'));
+  scheduledTaskStore.onChange(notifySessionListChanged);
+  const scheduledTaskSessionDeps = {
+    store: scheduledTaskStore,
+    createSession: createSessionRecord,
+    markSession: markScheduledTaskSession,
+  };
+  const scheduledTaskAttachments = createScheduledTaskAttachments({
+    filesRoot: path.join(paths.dataDir, 'scheduled-task-files'),
+  });
   const executeScheduledTask = createScheduledTaskExecutor({
     chatDeps: { orchestrator, toolRegistry, toolExecutor, mcpManager },
-    rotateSession: (task) => rotateScheduledTaskSessionIfOversized(task, {
-      store: scheduledTaskStore,
-      createSession: createSessionRecord,
-    }),
+    prepareSession: (task) => ensureScheduledTaskSession(task, scheduledTaskSessionDeps),
   });
   const scheduledTaskScheduler = new ScheduledTaskScheduler({
     store: scheduledTaskStore,
@@ -90,6 +105,22 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       await executeScheduledTask(task);
     },
     isBusy: isScheduledTaskBusy,
+  });
+  const scheduledTaskServiceDeps = {
+    store: scheduledTaskStore,
+    scheduler: scheduledTaskScheduler,
+    attachments: scheduledTaskAttachments,
+  };
+  const scheduledTaskService = createScheduledTaskService(scheduledTaskServiceDeps);
+  const unregisterScheduledTaskTool = registerSessionToolProvider(async ({ sessionId }) => {
+    const tasks = await scheduledTaskStore.list();
+    return [createScheduledTaskTool({
+      service: scheduledTaskService,
+      inTaskSession: tasks.some((t) => t.sessionId === sessionId),
+    })];
+  });
+  const disableOsSchedulerGuard = enableOsSchedulerGuard({
+    onBlocked: (sessionId) => recordSessionDeferredToolCall(sessionId, SCHEDULED_TASK_TOOL_NAME),
   });
 
   const app = await createServer({
@@ -108,7 +139,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
-      { path: '/api/sessions', router: createSessionsRouter() },
+      { path: '/api/sessions', router: createSessionsRouter({ listScheduledTasks: () => scheduledTaskStore.list() }) },
       { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
@@ -116,12 +147,8 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
       { path: '/api/scheduled-tasks', router: createScheduledTasksRouter({
-        store: scheduledTaskStore,
-        scheduler: scheduledTaskScheduler,
-        createSession: createSessionRecord,
-        attachments: createScheduledTaskAttachments({
-          filesRoot: path.join(paths.dataDir, 'scheduled-task-files'),
-        }),
+        ...scheduledTaskServiceDeps,
+        sessionExists: scheduledTaskSessionExists,
       }) },
       { path: '/api/mcp', router: createMcpStatusRouter({
         mcpManager,
@@ -157,17 +184,17 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       lastError: error,
     });
   });
+  try {
+    await migrateLegacyScheduledTaskImages(scheduledTaskStore, scheduledTaskAttachments);
+  } catch (err) {
+    console.warn('[scheduled-tasks] 旧版本任务图片迁移失败，下次启动重试:', err);
+  }
+  try {
+    await backfillScheduledTaskSessions(await scheduledTaskStore.list());
+  } catch (err) {
+    console.warn('[scheduled-tasks] 任务会话标记回填失败，下次启动重试:', err);
+  }
   await scheduledTaskScheduler.start();
-  registerSessionCleanupHook(async (sessionId) => {
-    await purgeSessionRuntimeCaches(sessionId);
-    try {
-      if (await disableScheduledTasksForSession(scheduledTaskStore, sessionId)) {
-        await scheduledTaskScheduler.reschedule();
-      }
-    } catch (err) {
-      console.warn('[scheduled-tasks] 停用已删除会话的任务失败:', err);
-    }
-  });
 
   const stopTunnelWatcher = startTunnelReadyWatcher({
     onReady: (url) => broadcastTunnelReady({ url }),
@@ -176,8 +203,9 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
 
   const cleanup = () => {
     scheduledTaskScheduler.stop();
+    unregisterScheduledTaskTool();
+    disableOsSchedulerGuard();
     registerScheduledTaskResultHandler(null);
-    registerSessionCleanupHook(purgeSessionRuntimeCaches);
     stopConfigWatch();
     stopTunnelWatcher();
     cleanupChatResources();

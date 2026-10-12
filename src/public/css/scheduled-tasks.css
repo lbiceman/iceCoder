@@ -121,6 +121,11 @@
   border-color: var(--accent-border);
   color: var(--accent);
 }
+.sched-badge.is-once {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
 .sched-status-queued {
   color: var(--warning);
   background: var(--warning-light);
@@ -249,6 +254,21 @@
   font-size: 13px;
   color: var(--text-secondary);
 }
+.sched-interval [hidden] { display: none; }
+.sched-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.sched-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.sched-mode-option input { margin: 0; accent-color: var(--accent); }
 /* 提示词编辑器：仿主输入框（技能 chip + textarea + 工具栏，附件预览在顶部） */
 .sched-composer {
   display: flex;

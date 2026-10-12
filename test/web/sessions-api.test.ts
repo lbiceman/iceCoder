@@ -335,6 +335,83 @@ describe('Sessions API (multi-session)', () => {
     expect(ids).toContain('c18e59a8');
   });
 
+  async function writeIndex(rows: Array<Record<string, unknown>>): Promise<void> {
+    await fs.mkdir(tempDir, { recursive: true });
+    for (const row of rows) {
+      await fs.writeFile(path.join(tempDir, `${row.id as string}.json`), '[]', 'utf-8');
+    }
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify(rows.map((r) => ({ createdAt: 1, updatedAt: 1, messageCount: 0, ...r }))),
+      'utf-8',
+    );
+  }
+
+  async function readIndexFile(): Promise<Array<{ id: string; scheduledTaskId?: string }>> {
+    return JSON.parse(await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8'));
+  }
+
+  async function listWithTasks(listScheduledTasks: () => Promise<unknown[]>) {
+    const { createSessionsRouter } = await import('../../src/web/routes/sessions.js');
+    const app = express();
+    app.use('/api/sessions', createSessionsRouter({ listScheduledTasks } as never));
+    const s = createServer(app);
+    await new Promise<void>((resolve) => s.listen(0, resolve));
+    try {
+      const res = await fetch(`http://127.0.0.1:${getPort(s)}/api/sessions/`);
+      return { status: res.status, body: await res.json() as Record<string, any> };
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  }
+
+  const boundTask = { id: 't1', name: '巡检', sessionId: 'cur00001', enabled: true, nextRunAt: 9000, lastStatus: 'error' };
+
+  it('GET / 返回任务会话状态：当前绑定 / 历史 / 任务已删除', async () => {
+    await writeIndex([
+      { id: 'cur00001', title: '定时任务：巡检', scheduledTaskId: 't1' },
+      { id: 'old00001', title: '定时任务：巡检', scheduledTaskId: 't1' },
+      { id: 'gone0001', title: '定时任务：旧任务', scheduledTaskId: 't-removed' },
+      { id: 'plain001', title: '普通会话' },
+    ]);
+    const { status, body } = await listWithTasks(async () => [boundTask]);
+    expect(status).toBe(200);
+    expect(body.scheduledTasks).toEqual({
+      cur00001: { taskId: 't1', state: 'current', enabled: true, nextRunAt: 9000, lastStatus: 'error' },
+      old00001: { taskId: 't1', state: 'history' },
+      gone0001: { taskId: 't-removed', state: 'deleted' },
+    });
+  });
+
+  it('GET / 读任务列表失败时仍返回会话列表（带标记、不带任务状态）', async () => {
+    await writeIndex([{ id: 'cur00001', title: 'x', scheduledTaskId: 't1' }]);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { status, body } = await listWithTasks(async () => { throw new Error('disk'); });
+    expect(status).toBe(200);
+    expect(body.sessions.find((s: { id: string }) => s.id === 'cur00001')?.scheduledTaskId).toBe('t1');
+    expect(body.scheduledTasks).toEqual({});
+  });
+
+  it('markScheduledTaskSession 把任务 id 写进会话 index', async () => {
+    const { createSessionRecord, markScheduledTaskSession } = await import('../../src/web/routes/sessions.js');
+    const created = await createSessionRecord('定时任务：巡检');
+    await markScheduledTaskSession(created.id, 't1');
+    const entry = (await readIndexFile()).find((s) => s.id === created.id);
+    expect(entry?.scheduledTaskId).toBe('t1');
+  });
+
+  it('backfillScheduledTaskSessions 给标记功能之前的任务会话补标记', async () => {
+    await writeIndex([
+      { id: 'cur00001', title: '改过名' },
+      { id: 'old00001', title: '定时任务：巡检' },
+      { id: 'plain001', title: '普通会话' },
+    ]);
+    const { backfillScheduledTaskSessions } = await import('../../src/web/routes/sessions.js');
+    await backfillScheduledTaskSessions([boundTask]);
+    const marks = Object.fromEntries((await readIndexFile()).map((s) => [s.id, s.scheduledTaskId]));
+    expect(marks).toEqual({ cur00001: 't1', old00001: 't1', plain001: undefined });
+  });
+
   it('POST /:id/open-file 拒绝不安全会话 id 与工作区外路径', async () => {
     const unsafe = await fetch(`${baseUrl}/foo..bar/open-file`, {
       method: 'POST',

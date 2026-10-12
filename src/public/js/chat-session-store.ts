@@ -24,6 +24,8 @@ export const ChatSessionStore = (() => {
   let shellCollabActiveBySession = {};
   /** sessionId → 规划模式是否 active */
   let planModeActiveBySession = {};
+  /** sessionId → 定时任务会话状态 { taskId, state: current|history|deleted, enabled?, nextRunAt?, lastStatus? } */
+  let scheduledTasksBySession = {};
   let runPhaseBySession = {};
   const composerDrafts = {};
   let lastApiActiveSessionId = '';
@@ -61,6 +63,8 @@ export const ChatSessionStore = (() => {
         && !Array.isArray(data.planModeActive)) {
       planModeActiveBySession = data.planModeActive;
     }
+    scheduledTasksBySession = (data.scheduledTasks && typeof data.scheduledTasks === 'object'
+      && !Array.isArray(data.scheduledTasks)) ? data.scheduledTasks : {};
     if (typeof data.activeSessionId === 'string' && data.activeSessionId) {
       lastApiActiveSessionId = data.activeSessionId;
     }
@@ -100,6 +104,17 @@ export const ChatSessionStore = (() => {
   function removeSessionWorkspace(sessionId) {
     if (!sessionId || !workspacesBySession[sessionId]) return;
     delete workspacesBySession[sessionId];
+  }
+
+  /**
+   * 定时任务会话状态；普通会话返回 null。
+   * 列表接口没带状态（读任务失败）但会话带标记时返回 { taskId, state: 'unknown' }。
+   */
+  function getScheduledTaskSession(sessionId) {
+    const st = scheduledTasksBySession[sessionId];
+    if (st) return st;
+    const s = sessions.find((x) => x.id === sessionId);
+    return s && s.scheduledTaskId ? { taskId: s.scheduledTaskId, state: 'unknown' } : null;
   }
 
   function getShellCollabActive(sessionId) {
@@ -581,6 +596,7 @@ export const ChatSessionStore = (() => {
     getSessionWorkspace,
     isDefaultWorkspace,
     setSessionWorkspace,
+    getScheduledTaskSession,
     getShellCollabActive,
     setShellCollabActive,
     applyShellCollabActiveMap,

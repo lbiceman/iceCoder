@@ -12,7 +12,7 @@ const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 60_000;
 
 export interface ScheduledTaskSchedulerOptions {
-  store: Pick<ScheduledTaskStore, 'list' | 'get' | 'replaceNextRunAt' | 'updateRunState'>;
+  store: Pick<ScheduledTaskStore, 'list' | 'get' | 'replaceNextRunAt' | 'updateRunState' | 'update'>;
   /** 将任务投递到执行链路（入队）；抛错表示投递失败。 */
   execute: (task: ScheduledTask) => Promise<void>;
   /** 上一次执行尚未结束（仍在跑或仍在队列中）时返回 true：定时触发跳过本次，立即执行报错。 */
@@ -21,6 +21,10 @@ export interface ScheduledTaskSchedulerOptions {
 }
 
 export const SCHEDULED_TASK_BUSY_MESSAGE = '上一次执行尚未结束，请稍后再试';
+export const SCHEDULED_TASK_ONCE_MISSED_MESSAGE = '服务停机错过执行时间，任务已停用';
+export const SCHEDULED_TASK_INTERRUPTED_MESSAGE = '服务重启，上次执行已中断';
+/** 一次性任务到点时上一次执行仍未结束：保持启用，按该间隔重试直到能执行。 */
+export const ONCE_BUSY_RETRY_MS = 10_000;
 
 export class ScheduledTaskScheduler {
   private readonly store: ScheduledTaskSchedulerOptions['store'];
@@ -57,8 +61,10 @@ export class ScheduledTaskScheduler {
         const tasks = await this.store.list();
         for (const task of tasks) {
           if (!this.isCurrent(gen)) return;
+          await this.markInterruptedIfStale(task);
           if (!task.enabled || task.nextRunAt === null || task.nextRunAt > now) continue;
-          await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+          await this.consumeDue(task, now);
+          await this.markMissedIfOnce(task);
         }
         await this.armNearest(gen);
         if (this.isCurrent(gen)) this.catchUpBefore = null;
@@ -114,6 +120,30 @@ export class ScheduledTaskScheduler {
     );
   }
 
+  /** 到点后先落盘：重复任务推进到下一个未来时间，一次性任务停用。 */
+  private async consumeDue(task: ScheduledTask, now: number): Promise<void> {
+    if (task.once) await this.store.update(task.id, { enabled: false });
+    else await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+  }
+
+  /** 进程在执行中途退出时状态停在 queued，启动后改记为中断，否则卡片会一直显示执行中。 */
+  private async markInterruptedIfStale(task: ScheduledTask): Promise<void> {
+    if (task.lastStatus !== 'queued' || (await this.checkBusy(task))) return;
+    await this.store.updateRunState(task.id, {
+      lastStatus: 'error',
+      lastError: SCHEDULED_TASK_INTERRUPTED_MESSAGE,
+    });
+  }
+
+  /** 停机补扫只推进不补跑；一次性任务因此不会再执行，记录原因供卡片展示。 */
+  private async markMissedIfOnce(task: ScheduledTask): Promise<void> {
+    if (!task.once) return;
+    await this.store.updateRunState(task.id, {
+      lastStatus: 'error',
+      lastError: SCHEDULED_TASK_ONCE_MISSED_MESSAGE,
+    });
+  }
+
   private clearTimer(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -134,6 +164,9 @@ export class ScheduledTaskScheduler {
       const due = tasks.filter(
         (task) => task.enabled && task.nextRunAt !== null && task.nextRunAt <= now,
       );
+      // start 扫描未完成时遗留的过期任务只推进、不补跑。
+      const skipBefore = this.catchUpBefore;
+      const missed = (task: ScheduledTask) => skipBefore !== null && task.nextRunAt! <= skipBefore;
       // 先逐个持久化下次时间；失败的任务保持到点状态，留给重试，已持久化的照常触发。
       const persisted: ScheduledTask[] = [];
       let failure: unknown;
@@ -141,7 +174,12 @@ export class ScheduledTaskScheduler {
       for (const task of due) {
         if (!this.isCurrent(gen)) return;
         try {
-          await this.store.replaceNextRunAt(task.id, this.advance(task, now));
+          if (task.once && !missed(task) && (await this.checkBusy(task))) {
+            await this.store.replaceNextRunAt(task.id, now + ONCE_BUSY_RETRY_MS);
+            console.log(`[scheduled-tasks] 「${task.name}」上一次执行尚未结束，${ONCE_BUSY_RETRY_MS / 1000} 秒后重试`);
+            continue;
+          }
+          await this.consumeDue(task, now);
           persisted.push(task);
         } catch (err) {
           if (!failed) failure = err;
@@ -149,12 +187,12 @@ export class ScheduledTaskScheduler {
         }
       }
       if (!this.isCurrent(gen)) return;
-      // start 扫描未完成时遗留的过期任务只推进、不补跑。
-      const skipBefore = this.catchUpBefore;
-      const runnable = persisted.filter(
-        (task) => skipBefore === null || task.nextRunAt! > skipBefore,
-      );
-      await Promise.allSettled(runnable.map((task) => this.triggerUnlessBusy(task)));
+      const runnable = persisted.filter((task) => !missed(task));
+      for (const task of persisted) {
+        if (missed(task)) await this.markMissedIfOnce(task);
+      }
+      // 一次性任务已在上面确认空闲，不再走「忙碌即跳过」，否则停用后这一次就丢了。
+      await Promise.allSettled(runnable.map((task) => (task.once ? this.trigger(task) : this.triggerUnlessBusy(task))));
       // 有持久化失败时不扫描：到点任务会让 delay 变成 0，改走退避重试。
       if (failed) throw failure;
       await this.armNearest(gen);

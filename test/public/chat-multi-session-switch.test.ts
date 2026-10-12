@@ -43,7 +43,7 @@ describe('多会话并发切换 · 前端源码约定', () => {
     expect(sidebar).toMatch(/chat-sidebar-nav-btn-label">工作</);
     expect(sidebar).toContain('data-page="tasks"');
     expect(sidebar).toContain('data-page="knowledge"');
-    expect(sidebar).toContain('chat-sidebar-stats-btn');
+    expect(sidebar).toContain('data-page="stats"');
     expect(sidebar).toContain('function isAuxiliaryNavPage');
     expect(sidebar).toMatch(/route === 'settings'/);
     expect(sidebar).toContain('highlightActive && s.id === activeId');

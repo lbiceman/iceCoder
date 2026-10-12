@@ -21,6 +21,7 @@ import {
   lazyToolOfferingLogEnabled,
   DEFERRED_TOOLS,
   buildAvailableDocToolsContext,
+  isLazyOfferedTool,
 } from '../tools/tool-offering-selector.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
@@ -167,6 +168,8 @@ export interface HandleChatMessageInput {
   skipUserMessageAppend?: boolean;
   source?: 'implicit' | 'explicit';
   reasoningEffort?: ReasoningEffort;
+  /** Harness 本轮的最终文本（出错时即错误描述），供定时任务回写失败原因。 */
+  onFinalContent?: (content: string) => void;
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -734,7 +737,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
           const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
           console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
 
-          if (event.toolSuccess && DEFERRED_TOOLS.has(String(event.toolName))) {
+          if (event.toolSuccess && isLazyOfferedTool(String(event.toolName))) {
             recordSessionDeferredToolCall(runSessionId, String(event.toolName));
           }
         }
@@ -855,6 +858,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       ...(usedModel ? { usedModel } : {}),
     });
     stopReason = result.loopState.stopReason;
+    input.onFinalContent?.(result.content);
   } finally {
     clearInterval(pulseTimer);
     if (agentSpawner) {

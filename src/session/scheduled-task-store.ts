@@ -4,7 +4,7 @@ import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 
 export type ScheduledTaskIntervalUnit = 'second' | 'minute' | 'hour' | 'day';
 
-/** 任务附带的非图片文件（已转存到任务附件目录的长期副本）。 */
+/** 任务附带的图片或文件（已转存到任务附件目录的长期副本，不随会话删除）。 */
 export interface ScheduledTaskFile {
   id: string;
   name: string;
@@ -17,11 +17,16 @@ export interface ScheduledTask {
   name: string;
   prompt: string;
   skillFilenames: string[];
-  /** 任务会话 imagesCache 内图片的 API URL，执行时随消息发送。 */
-  images: string[];
+  /** 执行时复制进当时专属会话的 imagesCache，随消息发送。 */
+  images: ScheduledTaskFile[];
+  /** 旧版本存的会话图片 URL（会随会话删除丢失），启动时迁移进 images；写入新 images 后清除。 */
+  legacyImageUrls?: string[];
   files: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
+  /** 一次性任务：到点执行一次后自动停用，间隔作为启用后的等待时长。 */
+  once: boolean;
+  /** 专属会话；空串表示还没有会话——会话只在执行时创建（见 scheduled-task-runtime）。 */
   sessionId: string;
   enabled: boolean;
   createdAt: number;
@@ -33,13 +38,16 @@ export interface ScheduledTask {
 }
 
 export type ScheduledTaskCreateInput = {
+  /** 调用方预先生成（附件目录要在建任务前按任务 id 落盘）；缺省时随机生成。 */
+  id?: string;
   name: string;
   prompt: string;
   skillFilenames: string[];
-  images?: string[];
+  images?: ScheduledTaskFile[];
   files?: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
+  once?: boolean;
   sessionId: string;
   enabled: boolean;
 };
@@ -54,6 +62,7 @@ export type ScheduledTaskUpdatePatch = Partial<
     | 'files'
     | 'intervalValue'
     | 'intervalUnit'
+    | 'once'
     | 'enabled'
   >
 >;
@@ -122,23 +131,32 @@ export function assertIntervalUnit(unit: ScheduledTaskIntervalUnit): void {
   }
 }
 
-/** 旧版本持久化的任务没有附件字段。 */
+/** 旧版本持久化的任务没有附件字段与 once，图片存的是会话图片 URL 字符串。 */
 function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
-  return {
+  const rawImages: unknown[] = Array.isArray(task.images) ? task.images : [];
+  const legacyImageUrls = (task.legacyImageUrls ?? []).concat(
+    rawImages.filter((img): img is string => typeof img === 'string'),
+  );
+  const normalized: ScheduledTask = {
     ...task,
-    images: Array.isArray(task.images) ? task.images : [],
+    images: rawImages.filter((img): img is ScheduledTaskFile => typeof img === 'object' && img !== null),
     files: Array.isArray(task.files) ? task.files : [],
+    once: task.once === true,
   };
+  if (legacyImageUrls.length > 0) normalized.legacyImageUrls = legacyImageUrls;
+  else delete normalized.legacyImageUrls;
+  return normalized;
 }
 
 function validateCreateInput(input: ScheduledTaskCreateInput): {
   name: string;
   prompt: string;
   skillFilenames: string[];
-  images: string[];
+  images: ScheduledTaskFile[];
   files: ScheduledTaskFile[];
   intervalValue: number;
   intervalUnit: ScheduledTaskIntervalUnit;
+  once: boolean;
   sessionId: string;
   enabled: boolean;
 } {
@@ -157,6 +175,7 @@ function validateCreateInput(input: ScheduledTaskCreateInput): {
     files: input.files ?? [],
     intervalValue: input.intervalValue,
     intervalUnit: input.intervalUnit,
+    once: input.once === true,
     sessionId,
     enabled: input.enabled,
   };
@@ -165,6 +184,7 @@ function validateCreateInput(input: ScheduledTaskCreateInput): {
 export class ScheduledTaskStore {
   private tasks: ScheduledTask[] | null = null;
   private opTail: Promise<void> = Promise.resolve();
+  private readonly changeListeners: Array<() => void> = [];
 
   constructor(
     private readonly filePath: string,
@@ -186,16 +206,34 @@ export class ScheduledTaskStore {
     return this.tasks;
   }
 
+  /** IO 错误直接抛出且不缓存，留给调用方重试；只有内容无法识别时才按空列表继续。 */
   private async readFromDisk(): Promise<ScheduledTask[]> {
+    let raw: string;
     try {
-      const raw = await fs.readFile(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as PersistedScheduledTasks;
-      if (parsed?.version !== 1 || !Array.isArray(parsed.tasks)) return [];
-      return parsed.tasks.map(normalizeLoadedTask);
+      raw = await fs.readFile(this.filePath, 'utf-8');
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return [];
-      return [];
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    let parsed: PersistedScheduledTasks | null = null;
+    try {
+      parsed = JSON.parse(raw) as PersistedScheduledTasks;
+    } catch {
+      /* 交给下方备份 */
+    }
+    if (parsed?.version === 1 && Array.isArray(parsed.tasks)) return parsed.tasks.map(normalizeLoadedTask);
+    await this.backupUnreadable();
+    return [];
+  }
+
+  /** 下一次写入会覆盖整个文件，先把认不出的内容另存一份。 */
+  private async backupUnreadable(): Promise<void> {
+    const backup = `${this.filePath}.broken-${this.now()}`;
+    try {
+      await fs.copyFile(this.filePath, backup);
+      console.warn(`[scheduled-tasks] 任务文件无法识别，已按空列表加载，原文件备份到 ${backup}`);
+    } catch (err) {
+      console.warn('[scheduled-tasks] 任务文件无法识别且备份失败:', err);
     }
   }
 
@@ -203,6 +241,18 @@ export class ScheduledTaskStore {
     const payload: PersistedScheduledTasks = { version: 1, tasks };
     await writeFileAtomic(this.filePath, JSON.stringify(payload, null, 2), 'utf-8');
     this.tasks = tasks;
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.warn('[scheduled-tasks] 变更监听器出错:', err);
+      }
+    }
+  }
+
+  /** 每次成功写盘后同步回调（任务增删改、执行状态、下次执行时间）。 */
+  onChange(listener: () => void): void {
+    this.changeListeners.push(listener);
   }
 
   async list(): Promise<ScheduledTask[]> {
@@ -226,8 +276,10 @@ export class ScheduledTaskStore {
       const normalized = validateCreateInput(input);
       const ts = this.now();
       const intervalMs = intervalToMs(normalized.intervalValue, normalized.intervalUnit);
+      const id = input.id?.trim() || randomUUID();
+      if (tasks.some((t) => t.id === id)) throw new Error(`定时任务 id 已存在: ${id}`);
       const task: ScheduledTask = {
-        id: randomUUID(),
+        id,
         ...normalized,
         createdAt: ts,
         updatedAt: ts,
@@ -270,6 +322,7 @@ export class ScheduledTaskStore {
       }
       const images = patch.images ?? current.images;
       const files = patch.files ?? current.files;
+      const once = patch.once ?? current.once;
       if (patch.intervalValue !== undefined) {
         assertIntervalValue(patch.intervalValue);
         intervalValue = patch.intervalValue;
@@ -302,10 +355,12 @@ export class ScheduledTaskStore {
         files,
         intervalValue,
         intervalUnit,
+        once,
         enabled,
         nextRunAt,
         updatedAt: ts,
       };
+      if (patch.images !== undefined) delete updated.legacyImageUrls;
       const next = tasks.slice();
       next[index] = updated;
       await this.persist(next);
@@ -313,13 +368,13 @@ export class ScheduledTaskStore {
     });
   }
 
-  /** 会话轮换：换绑专属会话（图片 URL 随会话迁移），不影响调度时间。 */
-  async rebindSession(id: string, sessionId: string, images: string[]): Promise<ScheduledTask> {
+  /** 换绑专属会话（会话轮换或原会话已删除），不影响调度时间。 */
+  async rebindSession(id: string, sessionId: string): Promise<ScheduledTask> {
     return this.runExclusive(async () => {
       const tasks = await this.ensureLoaded();
       const index = tasks.findIndex((t) => t.id === id);
       if (index < 0) throw new Error(`定时任务不存在: ${id}`);
-      const updated: ScheduledTask = { ...tasks[index]!, sessionId, images: images.slice(), updatedAt: this.now() };
+      const updated: ScheduledTask = { ...tasks[index]!, sessionId, updatedAt: this.now() };
       const next = tasks.slice();
       next[index] = updated;
       await this.persist(next);

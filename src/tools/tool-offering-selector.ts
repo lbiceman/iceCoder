@@ -28,6 +28,47 @@ export const DEFERRED_TOOLS = new Set([
   'image_read',
 ]);
 
+/**
+ * 按用户意图携带的工具：消息像在要周期/延时执行或管理任务时激活，会话内成功用过后粘性保留。
+ * 不算文档工具（不进 available-doc-tools、不计入 doc 分类）。宁可多激活，漏激活时模型会退回写脚本。
+ */
+export const INTENT_GATED_TOOLS = new Set(['scheduled_task']);
+
+const CN_NUM = '(?:\\d+|[一二两三四五六七八九十百半几]+)';
+const CN_UNIT = '(?:秒钟?|分钟?|个?小时|个?钟头|天|日|周|星期|礼拜|个?月)';
+/** 延时类不含秒：「超时 30 秒后重试」这类是代码逻辑，不是要排任务。 */
+const CN_LONG_UNIT = '(?:分钟?|个?小时|个?钟头|天|周|星期|个?月)';
+const CN_DAY_PART = '(?:明天|明早|明晚|今晚|今天|每天|早上|上午|中午|下午|晚上|凌晨|[周星期礼拜]+[一二三四五六日天])';
+/** 「删除任务相关的代码」「任务卡片的颜色」是在改代码，不是管理任务。 */
+const NOT_TASK_CODE = '(?![^。！？\\n]{0,4}(?:相关|卡片|页面|样式|组件|代码|颜色|报错|日志|模块|接口|队列|表|管理|进度|类|状态))';
+const TASK_VERB = '(?:启用|停用|暂停|恢复|删除|删掉|删了|关掉|关了|关闭|停掉|停一下|打开|开启|别再|不要再|立即执行|跑一[次下]|执行一[次下]|列一下|列出来|间隔|改成|改为)';
+const SCHEDULE_INTENT_PATTERNS: RegExp[] = [
+  /(?<!生命)周期(?!表)|定时(?!器)|定个时|定期|定点|每隔|每逢|轮询|计划任务|任务计划|提醒我|到点|准时|闹钟/,
+  new RegExp(`每(?:个|一)?${CN_UNIT}(?!的)|每\\s*${CN_NUM}\\s*${CN_UNIT}(?!的)|每[晚早年](?!的)|工作日`),
+  new RegExp(`(?<!间)隔\\s*(?:${CN_NUM}\\s*)?${CN_UNIT}|隔天|${CN_NUM}\\s*${CN_LONG_UNIT}[^，。！？\\n\\d]{0,6}一[次回]`),
+  new RegExp(`${CN_NUM}\\s*${CN_LONG_UNIT}(?:后|之后|以后)(?!过期|失效|超时)|(?:过|等)\\s*(?:一会儿?|${CN_NUM}\\s*${CN_LONG_UNIT})`),
+  new RegExp(`${CN_DAY_PART}\\s*的?\\s*(?:\\d{1,2}|[一二两三四五六七八九十]{1,3})\\s*(?:点|[:：]\\d{2})|[周星期礼拜]+[一二三四五六日天](?:早上|上午|中午|下午|晚上|凌晨)`),
+  /(?:持续|一直)(?:监控|关注|检查|观察|跟踪|盯)|帮我盯|盯着/,
+  new RegExp(`(?:启用|停用|暂停|恢复|删除|删掉|修改|编辑|查看|列出|立即执行)[^。！？\\n]{0,8}任务${NOT_TASK_CODE}|任务列表${NOT_TASK_CODE}`),
+  new RegExp(`任务${NOT_TASK_CODE}[^。！？\\n]{0,8}${TASK_VERB}`),
+  /\b(?:cron(?!\s*(?:表达式|解析|expression|syntax|parser))|crontab|schtasks|schedul(?:e|es|ed|ing)|hourly|daily(?![-_])|weekly(?![-_])|monthly(?![-_])|nightly|recurring|periodic(?:ally)?)\b/i,
+  /\b(?:remind|ping|notify)\s+me\b|\btell\s+me\s+when\b|\bset\s+an?\s+(?:reminder|alarm|timer)\b/i,
+  /\bevery\s+(?:other\s+)?(?:\d+\s*)?(?:sec|second|min|minute|hour|day|week|month|morning|night|evening|weekday)s?\b/i,
+  /\bonce\s+(?:an?|per|every)\s+(?:min|minute|hour|day|week|month)\b/i,
+  /\b(?:in|after)\s+\d+\s*(?:min|minute|hour|day)s?\b/i,
+  /\b(?:keep|continuously)\s+(?:checking|polling|monitoring|watching)\b|\bpoll\s+(?:the|this|that|it)\b/i,
+  /\b(?:enable|disable|pause|resume|delete|remove|list|stop)\s+(?:the\s+|my\s+|all\s+)?(?:\w+\s+){0,2}tasks?\b(?!\s+(?:component|class|module|file|queue|code|type))/i,
+];
+
+export function looksLikeScheduleIntent(text: string): boolean {
+  return SCHEDULE_INTENT_PATTERNS.some((re) => re.test(text));
+}
+
+/** 需要记录会话粘性的工具（文档类 + 意图类）。 */
+export function isLazyOfferedTool(name: string): boolean {
+  return DEFERRED_TOOLS.has(name) || INTENT_GATED_TOOLS.has(name);
+}
+
 /** Lazy Tool Offering 恒定开启（不读取环境变量，无关闭开关） */
 export function lazyToolOfferingEnabled(): boolean {
   return true;
@@ -249,10 +290,14 @@ export function selectToolsForOffering(
     }
   }
 
+  if (looksLikeScheduleIntent(input.userMessage)) {
+    for (const name of INTENT_GATED_TOOLS) add(name, 'schedule-intent');
+  }
+
   // 4. 会话粘性
   if (lazyToolOfferingStickyEnabled()) {
     for (const name of input.sessionRecentToolCalls) {
-      if (DEFERRED_TOOLS.has(name)) add(name, 'sticky');
+      if (isLazyOfferedTool(name)) add(name, 'sticky');
     }
   }
 
@@ -261,8 +306,8 @@ export function selectToolsForOffering(
     activated.delete('image_read');
   }
 
-  // 组装：Core（非 deferred）恒在，deferred 仅保留激活项
-  const tools = allDefs.filter((d) => !DEFERRED_TOOLS.has(d.name) || activated.has(d.name));
+  // 组装：Core（非 deferred）恒在，deferred / 意图类仅保留激活项
+  const tools = allDefs.filter((d) => !isLazyOfferedTool(d.name) || activated.has(d.name));
 
   return { tools, activated, reasons };
 }

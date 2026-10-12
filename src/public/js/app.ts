@@ -660,6 +660,17 @@
     }
   }
 
+  /**
+   * 会话 WS（含侧栏会话列表的实时推送）由 ChatPage 建立；首屏不是聊天页时在隐藏的
+   * 页面根里先挂载，等同于「进过聊天页再切走」的 keep-alive 状态。
+   */
+  function ensureChatPageMounted() {
+    const entry = pages.chat;
+    if (entry.mounted || !window.ChatPage) return;
+    window.ChatPage.render(ensurePageRoot('chat'));
+    entry.mounted = true;
+  }
+
   // ---- 系统状态 ----
 
   function fetchSystemStatus() {
@@ -745,6 +756,7 @@
         }
       } else {
         handleRouteChange(resolveEntryRoute());
+        if (currentShell === 'desktop') ensureChatPageMounted();
       }
     });
     window.addEventListener('visibilitychange', function onVis () {

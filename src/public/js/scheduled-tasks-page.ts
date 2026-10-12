@@ -11,6 +11,7 @@ export const ScheduledTasksPage = (() => {
   const UNIT_LABELS = { second: '秒', minute: '分钟', hour: '小时', day: '天' };
   const UNITS = ['second', 'minute', 'hour', 'day'];
   const STATUS_LABELS = { idle: '未执行', queued: '执行中', success: '成功', error: '失败' };
+  const NO_SESSION_HINT = '该任务还没有会话，执行时会自动创建';
   const POLL_MS = 5000;
 
   let containerEl = null;
@@ -60,7 +61,8 @@ export const ScheduledTasksPage = (() => {
   }
 
   function formatInterval(task) {
-    return `每 ${task.intervalValue} ${UNIT_LABELS[task.intervalUnit] || task.intervalUnit}`;
+    const span = `${task.intervalValue} ${UNIT_LABELS[task.intervalUnit] || task.intervalUnit}`;
+    return task.once ? `${span}后执行一次` : `每 ${span}`;
   }
 
   async function api(method, url, body) {
@@ -101,13 +103,14 @@ export const ScheduledTasksPage = (() => {
       `<article class="sched-card${task.enabled ? '' : ' is-disabled'}" data-task-id="${escapeHtml(task.id)}">` +
         '<div class="sched-card-head">' +
           `<span class="sched-card-name">${escapeHtml(task.name)}</span>` +
+          (task.once ? '<span class="sched-badge is-once">一次性</span>' : '') +
           `<span class="sched-status sched-status-${escapeHtml(status)}">${escapeHtml(STATUS_LABELS[status] || status)}</span>` +
           `<span class="sched-badge${task.enabled ? ' is-on' : ''}">${task.enabled ? '已启用' : '已停用'}</span>` +
         '</div>' +
         `<p class="sched-card-prompt">${escapeHtml(task.prompt)}</p>` +
         (skills ? `<div class="sched-chips">${skills}</div>` : '') +
         '<dl class="sched-meta">' +
-          `<div><dt>间隔</dt><dd>${escapeHtml(formatInterval(task))}</dd></div>` +
+          `<div><dt>${task.once ? '执行' : '间隔'}</dt><dd>${escapeHtml(formatInterval(task))}</dd></div>` +
           `<div><dt>下次执行</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}` +
             ` <span class="sched-countdown" data-countdown="${escapeHtml(task.id)}">${escapeHtml(countdownText(task))}</span></dd></div>` +
           `<div><dt>上次执行</dt><dd>${escapeHtml(formatTime(task.lastRunAt))}</dd></div>` +
@@ -119,7 +122,9 @@ export const ScheduledTasksPage = (() => {
           `<button type="button" class="skills-btn skills-btn-primary" data-action="run"${busy ? ' disabled' : ''}>立即执行</button>` +
           `<button type="button" class="skills-btn" data-action="toggle"${busy ? ' disabled' : ''}>${task.enabled ? '停用' : '启用'}</button>` +
           '<button type="button" class="skills-btn" data-action="edit">编辑</button>' +
-          '<button type="button" class="skills-btn" data-action="open-session">打开会话</button>' +
+          (task.sessionId
+            ? '<button type="button" class="skills-btn" data-action="open-session">打开会话</button>'
+            : `<button type="button" class="skills-btn" data-action="open-session" disabled title="${NO_SESSION_HINT}">打开会话</button>`) +
           `<button type="button" class="skills-btn skills-btn-danger" data-action="delete"${busy ? ' disabled' : ''}>删除</button>` +
         '</div>' +
       '</article>'
@@ -239,14 +244,36 @@ export const ScheduledTasksPage = (() => {
     });
   }
 
-  function openSession(task) {
+  async function openSession(task) {
     const router = window.AppRouter;
     if (!router || typeof router.navigateWorkChat !== 'function') return;
-    const go = () => router.navigateWorkChat(task.sessionId);
-    // 新建任务的专属会话可能还不在前端会话列表里；未知会话会被列表同步回退到默认会话。
+    // 会话只在执行时创建：还没执行过或专属会话已被删除时不新建，提示等下次执行。
+    let sessionId = task.sessionId;
+    try {
+      const data = await api('POST', `/api/scheduled-tasks/${encodeURIComponent(task.id)}/session`);
+      replaceTask(data.task);
+      if (!data.sessionReady) {
+        if (window.Notification) Notification.info(NO_SESSION_HINT);
+        return;
+      }
+      sessionId = data.task.sessionId;
+    } catch (err) {
+      notifyError('打开会话失败', err);
+      return;
+    }
+    const go = () => {
+      const sidebar = window.ChatSessionSidebar;
+      if (sidebar && typeof sidebar.revealSession === 'function') sidebar.revealSession(sessionId);
+      router.navigateWorkChat(sessionId);
+    };
+    // 刚执行时新建的专属会话可能还不在前端会话列表里；未知会话会被列表同步回退到默认会话。
     const Store = window.ChatSessionStore;
     if (Store && typeof Store.fetchSessions === 'function') Store.fetchSessions(go);
     else go();
+  }
+
+  function taskImageUrl(task, image) {
+    return `/api/scheduled-tasks/${encodeURIComponent(task.id)}/images/${encodeURIComponent(image.id)}`;
   }
 
   function fetchSkillOptions() {
@@ -286,6 +313,7 @@ export const ScheduledTasksPage = (() => {
       '<ul>' +
         '<li>定时执行无人值守：所有工具确认（包括删除文件、高危命令）都会<b>自动通过</b>，请只给任务写你放心让它自动执行的提示词。</li>' +
         '<li>任务会话记录超过 20 MB 时，下次执行前会自动新建一个会话继续执行（新会话不带旧对话历史）；旧会话保留不删除，可在会话列表中自行清理。</li>' +
+        '<li>专属会话只在执行时创建：新建任务不会产生会话，首次执行时才创建；删除专属会话也不影响任务本身，倒计时照常进行，下次执行时会自动新建一个会话。</li>' +
       '</ul>' +
     '</div>';
 
@@ -305,7 +333,7 @@ export const ScheduledTasksPage = (() => {
     const known = new Set(skills.map((s) => s.filename));
 
     let selectedSkills = ((task && task.skillFilenames) || []).slice();
-    let images = ((task && task.images) || []).map((url) => ({ url, preview: url, status: 'ready' }));
+    let images = ((task && task.images) || []).map((img) => ({ id: img.id, preview: taskImageUrl(task, img), status: 'ready' }));
     let files = ((task && task.files) || []).map((f) => ({ id: f.id, name: f.name, size: f.size, status: 'ready' }));
     let dropdownOpen = false;
     let filtered = [];
@@ -324,7 +352,8 @@ export const ScheduledTasksPage = (() => {
 
     function renderImages() {
       imageBar.innerHTML = images.map((img, i) =>
-        `<div class="pending-image-item${img.status === 'failed' ? ' is-failed' : ''}${img.status === 'uploading' ? ' is-uploading' : ''}" data-index="${i}">` +
+        `<div class="pending-image-item${img.status === 'failed' || img.status === 'missing' ? ' is-failed' : ''}${img.status === 'uploading' ? ' is-uploading' : ''}" data-index="${i}"` +
+          `${img.status === 'missing' ? ' title="图片文件已不存在，执行时不会发送，请移除后重新上传"' : ''}>` +
           `<img class="pending-image-thumb" src="${escapeHtml(img.preview)}" alt="任务图片">` +
           `<button type="button" class="pending-image-remove" title="移除图片">×</button>` +
         '</div>').join('');
@@ -495,6 +524,14 @@ export const ScheduledTasksPage = (() => {
       renderSkills();
       input.focus();
     });
+    // img 的 error 事件不冒泡，只能在捕获阶段统一监听。
+    imageBar.addEventListener('error', (e) => {
+      const item = e.target && e.target.closest && e.target.closest('.pending-image-item');
+      const img = item && images[Number(item.dataset.index)];
+      if (!img || img.status !== 'ready' || !img.id) return;
+      img.status = 'missing';
+      renderImages();
+    }, true);
     imageBar.addEventListener('click', (e) => {
       const btn = e.target.closest('.pending-image-remove');
       if (!btn) return;
@@ -523,7 +560,7 @@ export const ScheduledTasksPage = (() => {
       getPayload() {
         return {
           skillFilenames: selectedSkills.slice(),
-          images: images.map((img) => (img.uploadId ? { uploadId: img.uploadId } : { url: img.url })),
+          images: images.map((img) => (img.uploadId ? { uploadId: img.uploadId } : { id: img.id })),
           files: files.map((f) => (f.uploadId ? { uploadId: f.uploadId } : { id: f.id })),
         };
       },
@@ -534,8 +571,30 @@ export const ScheduledTasksPage = (() => {
     };
   }
 
+  const MODE_TEXT = {
+    repeat: {
+      label: '执行间隔',
+      hint: '新建、修改间隔或重新启用后，满一个间隔首次执行；只改其他内容不影响倒计时。服务停机期间错过的执行会直接跳过。',
+    },
+    once: {
+      label: '执行时间',
+      hint: '新建、修改时长或重新启用后，等满设定时长执行一次，执行后自动停用；只改其他内容不影响倒计时。服务停机错过执行时间会直接停用。',
+    },
+  };
+
+  function applyModeText(form) {
+    const once = form.elements.mode.value === 'once';
+    const text = once ? MODE_TEXT.once : MODE_TEXT.repeat;
+    form.querySelector('.sched-interval-label').textContent = text.label;
+    form.querySelector('.sched-interval-hint').textContent = text.hint;
+    form.querySelector('.sched-interval-prefix').hidden = once;
+    form.querySelector('.sched-interval-suffix').hidden = !once;
+  }
+
   function buildFormHtml(task) {
     const unit = (task && task.intervalUnit) || 'hour';
+    const once = !!(task && task.once);
+    const modeText = once ? MODE_TEXT.once : MODE_TEXT.repeat;
     const unitOptions = UNITS
       .map((u) => `<option value="${u}"${u === unit ? ' selected' : ''}>${UNIT_LABELS[u]}</option>`)
       .join('');
@@ -559,16 +618,23 @@ export const ScheduledTasksPage = (() => {
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="sched-field"><span class="sched-label">执行间隔</span>' +
-          '<div class="sched-interval">' +
-            `<span>每</span><input class="sched-input sched-interval-value" name="intervalValue" type="number" min="1" step="1" required value="${escapeHtml((task && task.intervalValue) || 1)}">` +
-            `<select class="sched-input sched-interval-unit" name="intervalUnit">${unitOptions}</select>` +
+        '<div class="sched-field"><span class="sched-label">执行方式</span>' +
+          '<div class="sched-mode" role="radiogroup" aria-label="执行方式">' +
+            `<label class="sched-mode-option"><input type="radio" name="mode" value="repeat"${once ? '' : ' checked'}><span>重复执行</span></label>` +
+            `<label class="sched-mode-option"><input type="radio" name="mode" value="once"${once ? ' checked' : ''}><span>一次性</span></label>` +
           '</div>' +
-          '<span class="sched-hint">首次执行在保存后满一个间隔；服务停机期间错过的执行会直接跳过。</span>' +
+        '</div>' +
+        `<div class="sched-field"><span class="sched-label sched-interval-label">${modeText.label}</span>` +
+          '<div class="sched-interval">' +
+            `<span class="sched-interval-prefix"${once ? ' hidden' : ''}>每</span>` +
+            `<input class="sched-input sched-interval-value" name="intervalValue" type="number" min="1" step="1" required value="${escapeHtml((task && task.intervalValue) || 1)}">` +
+            `<select class="sched-input sched-interval-unit" name="intervalUnit">${unitOptions}</select>` +
+            `<span class="sched-interval-suffix"${once ? '' : ' hidden'}>后执行</span>` +
+          '</div>' +
+          `<span class="sched-hint sched-interval-hint">${modeText.hint}</span>` +
         '</div>' +
         (task ? '' :
           '<label class="sched-check"><input type="checkbox" name="enabled" checked><span>创建后立即启用</span></label>') +
-        UNATTENDED_NOTICE_HTML +
         '<div class="sched-form-error" hidden></div>' +
         '<div class="sched-form-actions">' +
           '<button type="button" class="skills-btn" data-form-action="cancel">取消</button>' +
@@ -588,7 +654,8 @@ export const ScheduledTasksPage = (() => {
     if (!Number.isInteger(intervalValue) || intervalValue <= 0) return { error: '执行间隔必须是正整数' };
     const attachError = composer.validate();
     if (attachError) return { error: attachError };
-    const payload = { name, prompt, intervalValue, intervalUnit, ...composer.getPayload() };
+    const once = form.elements.mode.value === 'once';
+    const payload = { name, prompt, intervalValue, intervalUnit, once, ...composer.getPayload() };
     if (!isEdit) payload.enabled = !!form.elements.enabled.checked;
     return { payload };
   }
@@ -613,6 +680,9 @@ export const ScheduledTasksPage = (() => {
     const errorEl = form.querySelector('.sched-form-error');
     const submitBtn = form.querySelector('button[type="submit"]');
     form.querySelector('[data-form-action="cancel"]').addEventListener('click', () => panel.close());
+    form.addEventListener('change', (e) => {
+      if (e.target && e.target.name === 'mode') applyModeText(form);
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const { payload, error } = readForm(form, !!task, composer);

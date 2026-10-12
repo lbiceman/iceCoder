@@ -12,14 +12,23 @@ import {
   deleteSessionImagesCache,
   persistInlineImages,
 } from '../../src/web/images-cache.js';
+import { createScheduledTaskAttachments } from '../../src/web/scheduled-task-attachments.js';
 import {
   buildScheduledTaskInput,
+  clearStaleScheduledQueueItems,
   createScheduledTaskExecutor,
-  disableScheduledTasksForSession,
+  ensureScheduledTaskSession,
+  isScheduledTaskBusy,
+  migrateLegacyScheduledTaskImages,
+  recreateScheduledTaskSessionIfMissing,
+  scheduledTaskSessionExists,
   rotateScheduledTaskSessionIfOversized,
-  SCHEDULED_TASK_SESSION_DELETED,
-  type ScheduledTaskSessionRotationDeps,
+  stageScheduledTaskImages,
+  type ScheduledTaskSessionDeps,
 } from '../../src/web/scheduled-task-runtime.js';
+import { getSessionsDir, sessionProcessing } from '../../src/web/chat-ws-runtime.js';
+import { clearRunningTurn, ensureRunningTurn } from '../../src/web/chat-ws-running-turn.js';
+import { getTaskQueueManager } from '../../src/session/task-queue.js';
 
 function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -31,6 +40,7 @@ function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     files: [],
     intervalValue: 1,
     intervalUnit: 'hour',
+    once: false,
     sessionId: 'sess-1',
     enabled: true,
     createdAt: 0,
@@ -60,15 +70,15 @@ describe('buildScheduledTaskInput', () => {
     expect(input.skills).toEqual(['a.md', 'b.md']);
   });
 
-  it('sends images and file reference paths with the prompt', () => {
+  it('sends staged image urls and file reference paths with the prompt', () => {
     const filePath = path.join(os.tmpdir(), 'files', 'f1', '需求.docx');
     const input = buildScheduledTaskInput(
       makeTask({
         skillFilenames: ['a.md'],
-        images: ['/api/sessions/sess-1/images/x.png'],
         files: [{ id: 'f1', name: '需求.docx', path: filePath, size: 10 }],
       }),
       new Set(['a.md']),
+      ['/api/sessions/sess-1/images/x.png'],
     );
     expect(input.text).toBe(`#a.md\n${filePath}\n检查依赖更新`);
     expect(input.referencePaths).toEqual([filePath]);
@@ -92,9 +102,9 @@ describe('createScheduledTaskExecutor', () => {
     const execute = createScheduledTaskExecutor({
       chatDeps,
       listSkillFilenames: async () => new Set(['a.md']),
-      sessionExists: async () => true,
       persistUserMessage: persistUserMessage as never,
       enqueue: enqueue as never,
+      stageImages: async () => [],
     });
 
     await execute(makeTask({ skillFilenames: ['a.md'] }));
@@ -108,48 +118,191 @@ describe('createScheduledTaskExecutor', () => {
     expect(persistUserMessage).toHaveBeenCalledWith('sess-1', ws, input);
   });
 
-  it('fails without enqueueing when the task session is gone', async () => {
+  it('stages images into and enqueues on the session returned by prepareSession', async () => {
     const enqueue = vi.fn();
+    const persistUserMessage = vi.fn();
+    const clearStaleQueued = vi.fn(async () => {});
+    const stageImages = vi.fn(async (task: ScheduledTask) => [`/api/sessions/${task.sessionId}/images/sched-i1.png`]);
     const execute = createScheduledTaskExecutor({
       chatDeps,
       listSkillFilenames: async () => new Set(),
-      sessionExists: async () => false,
-      persistUserMessage: vi.fn() as never,
+      persistUserMessage: persistUserMessage as never,
       enqueue: enqueue as never,
-    });
-    await expect(execute(makeTask())).rejects.toThrow('任务会话不存在');
-    expect(enqueue).not.toHaveBeenCalled();
-  });
-
-  it('enqueues on the rotated session when rotation rebinds the task', async () => {
-    const enqueue = vi.fn();
-    const execute = createScheduledTaskExecutor({
-      chatDeps,
-      listSkillFilenames: async () => new Set(),
-      sessionExists: async () => true,
-      persistUserMessage: vi.fn() as never,
-      enqueue: enqueue as never,
-      rotateSession: async (task) => ({ ...task, sessionId: 'sess-new' }),
+      prepareSession: async (task) => ({ ...task, sessionId: 'sess-new' }),
+      clearStaleQueued,
+      stageImages,
     });
     await execute(makeTask());
+    expect(clearStaleQueued.mock.calls[0]![0]).toMatchObject({ sessionId: 'sess-new' });
+    expect(stageImages.mock.calls[0]![0]).toMatchObject({ sessionId: 'sess-new' });
+    expect(persistUserMessage.mock.calls[0]![0]).toBe('sess-new');
     expect(enqueue.mock.calls[0]![1]).toBe('sess-new');
+    expect(enqueue.mock.calls[0]![3]).toMatchObject({ images: ['/api/sessions/sess-new/images/sched-i1.png'] });
+  });
+});
+
+describe('stageScheduledTaskImages', () => {
+  it('copies task images into the session image cache once and skips missing files', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-sched-stage-'));
+    const sessionId = `stage-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      const src = path.join(dir, 'i1', 'shot.png');
+      await fs.mkdir(path.dirname(src), { recursive: true });
+      await fs.writeFile(src, 'png');
+      const task = makeTask({
+        sessionId,
+        images: [
+          { id: 'i1', name: 'shot.png', path: src, size: 3 },
+          { id: 'i2', name: 'gone.png', path: path.join(dir, 'i2', 'gone.png'), size: 3 },
+        ],
+      });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const first = await stageScheduledTaskImages(task);
+      const again = await stageScheduledTaskImages(task);
+
+      expect(first).toHaveLength(1);
+      expect(again).toEqual(first);
+      expect(first[0]).toMatch(new RegExp(`^/api/sessions/${sessionId}/images/`));
+      const cached = await fs.readdir(getImagesCacheSessionDir(sessionId));
+      expect(cached).toHaveLength(1);
+      expect(await fs.readFile(path.join(getImagesCacheSessionDir(sessionId), cached[0]!), 'utf-8')).toBe('png');
+    } finally {
+      vi.restoreAllMocks();
+      await deleteSessionImagesCache(sessionId);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('scheduled task busy detection and stale queue items', () => {
+  const queue = () => getTaskQueueManager(getSessionsDir());
+  const sid = () => `sched-busy-${Math.random().toString(36).slice(2, 8)}`;
+
+  it('treats the task as busy only while its session is running', async () => {
+    const s = sid();
+    const task = makeTask({ sessionId: s });
+    try {
+      await queue().enqueue(s, { text: 'old', source: 'implicit', scheduledTaskId: task.id });
+      expect(await isScheduledTaskBusy(task)).toBe(false);
+      sessionProcessing.add(s);
+      expect(await isScheduledTaskBusy(task)).toBe(true);
+      sessionProcessing.delete(s);
+      ensureRunningTurn(s);
+      expect(await isScheduledTaskBusy(task)).toBe(true);
+    } finally {
+      sessionProcessing.delete(s);
+      clearRunningTurn(s);
+      await queue().clearSession(s);
+    }
+  });
+
+  it('drops leftover items of the same task while the session is idle, keeping others', async () => {
+    const s = sid();
+    const task = makeTask({ sessionId: s });
+    try {
+      await queue().enqueue(s, { text: 'stale', source: 'implicit', scheduledTaskId: task.id });
+      await queue().enqueue(s, { text: 'user', source: 'implicit' });
+      await queue().enqueue(s, { text: 'other task', source: 'implicit', scheduledTaskId: 'task-2' });
+      await clearStaleScheduledQueueItems(task);
+      expect((await queue().list(s)).map((i) => i.text)).toEqual(['user', 'other task']);
+    } finally {
+      await queue().clearSession(s);
+    }
+  });
+
+  it('keeps queued items while the session is running', async () => {
+    const s = sid();
+    const task = makeTask({ sessionId: s });
+    try {
+      await queue().enqueue(s, { text: 'waiting', source: 'implicit', scheduledTaskId: task.id });
+      ensureRunningTurn(s);
+      await clearStaleScheduledQueueItems(task);
+      expect(await queue().list(s)).toHaveLength(1);
+    } finally {
+      clearRunningTurn(s);
+      await queue().clearSession(s);
+    }
+  });
+});
+
+function makeSessionDeps(overrides: Partial<ScheduledTaskSessionDeps> = {}) {
+  const rebindSession = vi.fn(async (id: string, sessionId: string) => makeTask({ id, sessionId }));
+  const deps: ScheduledTaskSessionDeps = {
+    store: { rebindSession },
+    createSession: vi.fn(async () => ({ id: 'sess-new' })),
+    markSession: vi.fn(async () => {}),
+    sessionExists: async () => true,
+    sessionBytes: async () => 100,
+    maxBytes: 100,
+    ...overrides,
+  };
+  return { deps, rebindSession };
+}
+
+describe('recreateScheduledTaskSessionIfMissing', () => {
+  it('keeps the task while its session exists, even when oversized', async () => {
+    const { deps } = makeSessionDeps({ sessionBytes: async () => 1_000 });
+    const task = makeTask();
+    expect(await recreateScheduledTaskSessionIfMissing(task, deps)).toBe(task);
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('creates a new session for a deleted one, keeping images and schedule', async () => {
+    const { deps, rebindSession } = makeSessionDeps({ sessionExists: async () => false });
+    const image = { id: 'i1', name: 'a.png', path: '/task-files/i1/a.png', size: 1 };
+    const rebound = await recreateScheduledTaskSessionIfMissing(makeTask({ images: [image] }), deps);
+    expect(deps.createSession).toHaveBeenCalledWith('定时任务：巡检');
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new');
+    expect(deps.markSession).toHaveBeenCalledWith('sess-new', 'task-1');
+    expect(rebound.sessionId).toBe('sess-new');
+  });
+
+  it('creates the first session for a task that has never run', async () => {
+    const sessionExists = vi.fn(async () => true);
+    const { deps, rebindSession } = makeSessionDeps({ sessionExists });
+    const rebound = await recreateScheduledTaskSessionIfMissing(makeTask({ sessionId: '' }), deps);
+    expect(sessionExists).not.toHaveBeenCalled();
+    expect(deps.createSession).toHaveBeenCalledWith('定时任务：巡检');
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new');
+    expect(deps.markSession).toHaveBeenCalledWith('sess-new', 'task-1');
+    expect(rebound.sessionId).toBe('sess-new');
+  });
+});
+
+describe('scheduledTaskSessionExists', () => {
+  it('treats an empty session id as missing', async () => {
+    expect(await scheduledTaskSessionExists('')).toBe(false);
+  });
+});
+
+describe('ensureScheduledTaskSession', () => {
+  it('keeps the task when its session exists and is under the limit', async () => {
+    const { deps } = makeSessionDeps({ sessionBytes: async () => 99 });
+    const task = makeTask();
+    expect(await ensureScheduledTaskSession(task, deps)).toBe(task);
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('recreates a deleted session without checking its size', async () => {
+    const sessionBytes = vi.fn(async () => 1_000);
+    const { deps, rebindSession } = makeSessionDeps({ sessionExists: async () => false, sessionBytes });
+    const rebound = await ensureScheduledTaskSession(makeTask(), deps);
+    expect(rebindSession).toHaveBeenCalledTimes(1);
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new');
+    expect(sessionBytes).not.toHaveBeenCalled();
+    expect(rebound.sessionId).toBe('sess-new');
+  });
+
+  it('rotates an existing oversized session', async () => {
+    const { deps, rebindSession } = makeSessionDeps({ sessionBytes: async () => 100 });
+    await ensureScheduledTaskSession(makeTask(), deps);
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new');
   });
 });
 
 describe('rotateScheduledTaskSessionIfOversized', () => {
-  function makeDeps(overrides: Partial<ScheduledTaskSessionRotationDeps> = {}) {
-    const rebindSession = vi.fn(async (id: string, sessionId: string, images: string[]) =>
-      makeTask({ id, sessionId, images }));
-    const deps: ScheduledTaskSessionRotationDeps = {
-      store: { rebindSession },
-      createSession: vi.fn(async () => ({ id: 'sess-new' })),
-      sessionBytes: async () => 100,
-      copyImage: async (url) => url.replace('sess-1', 'sess-new'),
-      maxBytes: 100,
-      ...overrides,
-    };
-    return { deps, rebindSession };
-  }
+  const makeDeps = makeSessionDeps;
 
   it('keeps the task untouched while the session is under the limit', async () => {
     const { deps } = makeDeps({ sessionBytes: async () => 99 });
@@ -158,60 +311,39 @@ describe('rotateScheduledTaskSessionIfOversized', () => {
     expect(deps.createSession).not.toHaveBeenCalled();
   });
 
-  it('creates a new session, migrates images and rebinds the task', async () => {
+  it('creates a new session and rebinds the task', async () => {
     const { deps, rebindSession } = makeDeps();
-    const rotated = await rotateScheduledTaskSessionIfOversized(
-      makeTask({ images: ['/api/sessions/sess-1/images/a.png'] }),
-      deps,
-    );
+    const rotated = await rotateScheduledTaskSessionIfOversized(makeTask(), deps);
     expect(deps.createSession).toHaveBeenCalledWith('定时任务：巡检');
-    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new', ['/api/sessions/sess-new/images/a.png']);
+    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new');
+    expect(deps.markSession).toHaveBeenCalledWith('sess-new', 'task-1');
     expect(rotated.sessionId).toBe('sess-new');
   });
 
-  it('falls back to the old image url when an image could not be migrated', async () => {
-    const { deps, rebindSession } = makeDeps({ copyImage: async () => { throw new Error('io'); } });
-    await rotateScheduledTaskSessionIfOversized(makeTask({ images: ['/api/sessions/sess-1/images/a.png'] }), deps);
-    expect(rebindSession).toHaveBeenCalledWith('task-1', 'sess-new', ['/api/sessions/sess-1/images/a.png']);
-  });
-
-  it('copies task images into the new session image cache by default', async () => {
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const from = `rot-old-${suffix}`;
-    const to = `rot-new-${suffix}`;
-    try {
-      const [saved] = await persistInlineImages(['data:image/png;base64,iVBORw0KGgo='], from);
-      const url = buildSessionImageApiUrl(from, saved!.absolutePath);
-      const { deps, rebindSession } = makeDeps({ createSession: async () => ({ id: to }), copyImage: undefined });
-      await rotateScheduledTaskSessionIfOversized(makeTask({ sessionId: from, images: [url] }), deps);
-      const [, , images] = rebindSession.mock.calls[0]!;
-      expect(images).toHaveLength(1);
-      expect(images[0]).toMatch(new RegExp(`^/api/sessions/${to}/images/`));
-      const copied = path.join(getImagesCacheSessionDir(to), decodeURIComponent(images[0]!.split('/').pop()!));
-      await expect(fs.readFile(copied)).resolves.toBeTruthy();
-      await expect(fs.readFile(saved!.absolutePath)).resolves.toBeTruthy();
-    } finally {
-      await deleteSessionImagesCache(from);
-      await deleteSessionImagesCache(to);
-    }
+  it('keeps the rebound task when marking the new session fails', async () => {
+    const { deps } = makeDeps({ markSession: vi.fn(async () => { throw new Error('index busy'); }) });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const rotated = await rotateScheduledTaskSessionIfOversized(makeTask(), deps);
+    expect(rotated.sessionId).toBe('sess-new');
   });
 });
 
 describe('ScheduledTaskStore.rebindSession', () => {
-  it('rebinds the session and images without touching the schedule', async () => {
+  it('rebinds the session without touching images or the schedule', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-sched-rebind-'));
     try {
       let now = 1_000;
       const store = new ScheduledTaskStore(path.join(dir, 'tasks.json'), () => now);
+      const image = { id: 'i1', name: 'a.png', path: path.join(dir, 'i1', 'a.png'), size: 1 };
       const created = await store.create({
         name: 'n', prompt: 'p', skillFilenames: [], intervalValue: 1, intervalUnit: 'hour', enabled: true,
-        sessionId: 's-old', images: ['/api/sessions/s-old/images/a.png'],
+        sessionId: 's-old', images: [image],
       });
       now = 5_000;
-      const rebound = await store.rebindSession(created.id, 's-new', ['/api/sessions/s-new/images/b.png']);
+      const rebound = await store.rebindSession(created.id, 's-new');
       expect(rebound).toMatchObject({
         sessionId: 's-new',
-        images: ['/api/sessions/s-new/images/b.png'],
+        images: [image],
         nextRunAt: created.nextRunAt,
         enabled: true,
         updatedAt: 5_000,
@@ -224,26 +356,37 @@ describe('ScheduledTaskStore.rebindSession', () => {
   });
 });
 
-describe('disableScheduledTasksForSession', () => {
-  it('disables only tasks bound to the deleted session and records why', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-sched-del-'));
+describe('migrateLegacyScheduledTaskImages', () => {
+  it('moves legacy session image urls into task-owned files and drops missing ones', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-sched-migrate-'));
+    const sessionId = `mig-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      const store = new ScheduledTaskStore(path.join(dir, 'tasks.json'), () => 1_000);
-      const base = { prompt: 'p', skillFilenames: [], intervalValue: 1, intervalUnit: 'hour' as const, enabled: true };
-      const gone = await store.create({ ...base, name: 'gone', sessionId: 's-gone' });
-      const kept = await store.create({ ...base, name: 'kept', sessionId: 's-kept' });
+      const [saved] = await persistInlineImages(['data:image/png;base64,iVBORw0KGgo='], sessionId);
+      const url = buildSessionImageApiUrl(sessionId, saved!.absolutePath);
+      const filePath = path.join(dir, 'tasks.json');
+      const legacy = {
+        id: 'old', name: '旧任务', prompt: 'p', skillFilenames: [], intervalValue: 1, intervalUnit: 'hour',
+        sessionId, enabled: true, createdAt: 0, updatedAt: 0, lastRunAt: null, nextRunAt: 3_600_000,
+        lastStatus: 'idle', lastError: null, files: [],
+        images: [url, `/api/sessions/${sessionId}/images/gone.png`],
+      };
+      await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
+      const store = new ScheduledTaskStore(filePath);
+      const attachments = createScheduledTaskAttachments({ filesRoot: path.join(dir, 'task-files') });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      expect(await disableScheduledTasksForSession(store, 's-gone')).toBe(1);
+      await migrateLegacyScheduledTaskImages(store, attachments);
+      await deleteSessionImagesCache(sessionId);
 
-      expect(await store.get(gone.id)).toMatchObject({
-        enabled: false,
-        nextRunAt: null,
-        lastStatus: 'error',
-        lastError: SCHEDULED_TASK_SESSION_DELETED,
-      });
-      expect(await store.get(kept.id)).toMatchObject({ enabled: true, lastStatus: 'idle' });
-      expect(await disableScheduledTasksForSession(store, 's-none')).toBe(0);
+      const task = await store.get('old');
+      expect(task?.legacyImageUrls).toBeUndefined();
+      expect(task?.images).toHaveLength(1);
+      expect(task!.images[0]!.path.startsWith(path.join(dir, 'task-files'))).toBe(true);
+      await expect(fs.readFile(task!.images[0]!.path)).resolves.toBeTruthy();
+      expect(task?.nextRunAt).toBe(3_600_000);
     } finally {
+      vi.restoreAllMocks();
+      await deleteSessionImagesCache(sessionId);
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

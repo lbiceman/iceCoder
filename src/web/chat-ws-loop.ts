@@ -310,6 +310,7 @@ export async function runSessionMessageLoop(
     ensureRunningTurn(runSid);
     broadcastToSession(runSid, { type: 'status', status: 'processing' });
     let stopReason: StopReason | undefined;
+    let finalContent: string | undefined;
     try {
       stopReason = await handleChatMessage({
         ws: first.ws,
@@ -325,6 +326,7 @@ export async function runSessionMessageLoop(
         skipUserMessageAppend: first.skipUserMessageAppend,
         source: first.source,
         reasoningEffort: first.reasoningEffort,
+        ...(first.scheduledTaskId ? { onFinalContent: (content: string) => { finalContent = content; } } : {}),
       });
     } catch (err) {
       terminalError = formatFriendlyError(err);
@@ -344,13 +346,15 @@ export async function runSessionMessageLoop(
     } else if (stopReason !== 'model_done') {
       terminalPhase = resolveTerminalPhase(stopReason);
       terminalReason = stopReason;
+      if (stopReason === 'error' && finalContent?.trim()) terminalError = finalContent.trim();
     } else {
       terminalPhase = 'done';
       terminalReason = 'model_done';
     }
   } finally {
     sessionProcessing.delete(runSid);
-    if (first.scheduledTaskId && terminalPhase && terminalPhase !== 'running') {
+    // user_checkpoint 的会话仍是 running（等人接管），但定时任务这一次已经结束，同样要回写。
+    if (first.scheduledTaskId && terminalPhase) {
       await notifyScheduledTaskResult({
         taskId: first.scheduledTaskId,
         success: terminalPhase === 'done',

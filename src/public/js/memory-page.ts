@@ -1148,7 +1148,7 @@ export const MemoryPage = (() => {
       '<div class="memory-header-text">' +
       '<h1 class="memory-title">知识库</h1>' +
       '<p class="memory-header-hint" title="左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。">' +
-      '记忆图谱：圆点是一条记忆，<strong>共用标签</strong>的会连线；点标签筛选，滚轮缩放，拖动平移。' +
+      '记忆图谱：点标签筛选，滚轮缩放，拖动平移。' +
       '</p>' +
       '</div>' +
       '<div class="memory-header-actions">' +

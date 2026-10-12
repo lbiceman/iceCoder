@@ -14,6 +14,7 @@ describe('scheduled task store', () => {
   const dirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   });
 
@@ -61,6 +62,21 @@ describe('scheduled task store', () => {
     const task = await store.create(baseInput());
     expect(task.nextRunAt).toBe(301_000);
     expect((await store.list()).map((t) => t.id)).toEqual([task.id]);
+  });
+
+  it('新建任务可以没有会话（首次执行时再创建），重开文件后仍为空', async () => {
+    const { store, filePath } = await fixture();
+    const task = await store.create(baseInput({ sessionId: '' }));
+    expect(task.sessionId).toBe('');
+    expect((await new ScheduledTaskStore(filePath).get(task.id))?.sessionId).toBe('');
+  });
+
+  it('使用调用方预先生成的 id，重复 id 拒绝', async () => {
+    const { store } = await fixture();
+    const task = await store.create(baseInput({ id: 'pre-made' }));
+    expect(task.id).toBe('pre-made');
+    await expect(store.create(baseInput({ id: 'pre-made' }))).rejects.toThrow('定时任务 id 已存在');
+    expect(await store.list()).toHaveLength(1);
   });
 
   it('拒绝空名称', async () => {
@@ -157,13 +173,34 @@ describe('scheduled task store', () => {
     expect(created.files).toEqual([]);
 
     const file = { id: 'f1', name: 'a.txt', path: '/data/f1/a.txt', size: 3 };
-    const withAttachments = await store.update(created.id, { images: ['/api/sessions/s/images/x.png'], files: [file] });
-    expect(withAttachments.images).toEqual(['/api/sessions/s/images/x.png']);
+    const image = { id: 'i1', name: 'x.png', path: '/data/i1/x.png', size: 4 };
+    const withAttachments = await store.update(created.id, { images: [image], files: [file] });
+    expect(withAttachments.images).toEqual([image]);
     expect(withAttachments.files).toEqual([file]);
 
     const renamed = await store.update(created.id, { name: '改名' });
-    expect(renamed.images).toEqual(['/api/sessions/s/images/x.png']);
+    expect(renamed.images).toEqual([image]);
     expect(renamed.files).toEqual([file]);
+  });
+
+  it('旧版本的会话图片 URL 读入 legacyImageUrls，写入新图片列表后清除', async () => {
+    const { store, filePath } = await fixture();
+    const image = { id: 'i1', name: 'x.png', path: '/data/i1/x.png', size: 4 };
+    const legacy = {
+      id: 'old', name: '旧任务', prompt: 'p', skillFilenames: [], intervalValue: 1, intervalUnit: 'hour',
+      sessionId: 's', enabled: true, createdAt: 0, updatedAt: 0, lastRunAt: null, nextRunAt: 3_600_000,
+      lastStatus: 'idle', lastError: null, files: [], images: ['/api/sessions/s/images/a.png', image],
+    };
+    await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
+
+    const [loaded] = await store.list();
+    expect(loaded).toMatchObject({ images: [image], legacyImageUrls: ['/api/sessions/s/images/a.png'] });
+    expect((await store.update('old', { name: '改名' })).legacyImageUrls).toEqual(['/api/sessions/s/images/a.png']);
+
+    const migrated = await store.update('old', { images: [image] });
+    expect(migrated.legacyImageUrls).toBeUndefined();
+    const reloaded = new ScheduledTaskStore(filePath, () => 1_000);
+    expect((await reloaded.get('old'))?.legacyImageUrls).toBeUndefined();
   });
 
   it('读取旧版本无附件字段的任务时补齐为空数组', async () => {
@@ -175,7 +212,20 @@ describe('scheduled task store', () => {
     };
     await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
     const [task] = await store.list();
-    expect(task).toMatchObject({ id: 'old', images: [], files: [] });
+    expect(task).toMatchObject({ id: 'old', images: [], files: [], once: false });
+  });
+
+  it('once：创建缺省为 false，update 仅在传入时修改并持久化', async () => {
+    const { store, filePath } = await fixture();
+    expect((await store.create(baseInput())).once).toBe(false);
+
+    const created = await store.create(baseInput({ once: true, sessionId: 's-once' }));
+    expect(created.once).toBe(true);
+    expect((await store.update(created.id, { name: '改名' })).once).toBe(true);
+    expect((await store.update(created.id, { once: false })).once).toBe(false);
+
+    const reloaded = new ScheduledTaskStore(filePath, () => 1_000);
+    expect((await reloaded.get(created.id))?.once).toBe(false);
   });
 
   it('update 保留 id、sessionId、createdAt', async () => {
@@ -279,6 +329,7 @@ describe('scheduled task store', () => {
   });
 
   it('损坏或非数组的持久化数据加载为空列表', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { store, filePath } = await fixture();
     await store.create(baseInput());
     await fs.writeFile(filePath, '{ "version": 1, "tasks": "bad" }', 'utf-8');
@@ -288,5 +339,52 @@ describe('scheduled task store', () => {
     await fs.writeFile(filePath, 'not json', 'utf-8');
     const corrupt = new ScheduledTaskStore(filePath, () => 1_000);
     expect(await corrupt.list()).toEqual([]);
+  });
+
+  it('无法解析的任务文件先备份，之后的写入不会覆盖掉原内容', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { filePath } = await fixture();
+    await fs.writeFile(filePath, '{"version":1,"tasks":[{"id":"keep"', 'utf-8');
+    const store = new ScheduledTaskStore(filePath, () => 2_000);
+    expect(await store.list()).toEqual([]);
+    await store.create(baseInput());
+    const backups = (await fs.readdir(path.dirname(filePath))).filter((f) => f.includes('.broken-'));
+    expect(backups).toHaveLength(1);
+    expect(await fs.readFile(path.join(path.dirname(filePath), backups[0]!), 'utf-8'))
+      .toBe('{"version":1,"tasks":[{"id":"keep"');
+  });
+
+  it('onChange 在每次写盘后通知，写盘失败与只读操作不通知', async () => {
+    const { store } = await fixture();
+    const listener = vi.fn();
+    store.onChange(listener);
+    const task = await store.create(baseInput());
+    await store.update(task.id, { enabled: false });
+    await store.rebindSession(task.id, 'session-2');
+    await store.list();
+    await store.get(task.id);
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    vi.spyOn(atomicWrite, 'writeFileAtomic').mockRejectedValueOnce(new Error('disk full'));
+    await expect(store.remove(task.id)).rejects.toThrow('disk full');
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it('onChange 监听器抛错不影响写入结果', async () => {
+    const { store } = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    store.onChange(() => { throw new Error('listener boom'); });
+    const task = await store.create(baseInput());
+    expect(await store.get(task.id)).toBeTruthy();
+  });
+
+  it('读文件出现非 ENOENT 的 IO 错误时报错且不缓存空列表', async () => {
+    const { store, filePath } = await fixture();
+    await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [] }), 'utf-8');
+    const busy = Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(busy);
+    await expect(store.list()).rejects.toThrow('EBUSY');
+    await store.create(baseInput());
+    expect(await store.list()).toHaveLength(1);
   });
 });

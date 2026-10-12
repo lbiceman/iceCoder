@@ -32,6 +32,13 @@ import {
   mutateSessionIndex,
   type SessionMeta,
 } from '../session-index-store.js';
+import {
+  backfillScheduledTaskSessionMarks,
+  buildScheduledTaskSessionStates,
+  type ScheduledTaskSessionLink,
+  type ScheduledTaskSessionSource,
+  type ScheduledTaskSessionState,
+} from '../scheduled-task-session-index.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
 import {
   readSessionBgTasks,
@@ -284,6 +291,48 @@ export async function createSessionRecord(title: string): Promise<SessionMeta> {
   return meta;
 }
 
+/** 侧栏会话列表需要刷新（如定时任务启停、下次执行时间变化）。 */
+export function notifySessionListChanged(): void {
+  sessionListLiveSync?.notifyIndexUpdated();
+}
+
+/** 把会话标记为定时任务专属会话（侧栏归入「任务会话」分组）。 */
+export async function markScheduledTaskSession(sessionId: string, taskId: string): Promise<void> {
+  let changed = false;
+  await mutateSessionIndex((index) => {
+    const entry = index.find((s) => s.id === sessionId);
+    if (entry && entry.scheduledTaskId !== taskId) {
+      entry.scheduledTaskId = taskId;
+      changed = true;
+    }
+    return index;
+  });
+  if (changed) notifySessionListChanged();
+}
+
+/** 启动时给标记功能之前创建的任务会话补标记。 */
+export async function backfillScheduledTaskSessions(tasks: ScheduledTaskSessionLink[]): Promise<void> {
+  let changed = false;
+  await mutateSessionIndex((index) => {
+    changed = backfillScheduledTaskSessionMarks(index, tasks);
+    return index;
+  });
+  if (changed) notifySessionListChanged();
+}
+
+async function buildScheduledTaskIndex(
+  index: SessionMeta[],
+  listScheduledTasks: (() => Promise<ScheduledTaskSessionSource[]>) | undefined,
+): Promise<Record<string, ScheduledTaskSessionState>> {
+  if (!listScheduledTasks) return buildScheduledTaskSessionStates(index, []);
+  try {
+    return buildScheduledTaskSessionStates(index, await listScheduledTasks());
+  } catch (err) {
+    console.warn('[sessions] 读取定时任务失败，本次列表不带任务状态:', err);
+    return {};
+  }
+}
+
 /** 删除会话（index + 文件族 + 进程内缓存）；会话不存在时返回 false。 */
 export async function deleteSessionRecord(sessionId: string): Promise<boolean> {
   if (!isSafeSessionId(sessionId)) return false;
@@ -301,7 +350,11 @@ export async function deleteSessionRecord(sessionId: string): Promise<boolean> {
   return true;
 }
 
-export function createSessionsRouter(): Router {
+export interface SessionsRouterDeps {
+  listScheduledTasks?: () => Promise<ScheduledTaskSessionSource[]>;
+}
+
+export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
   const router = Router();
 
   /**
@@ -312,11 +365,12 @@ export function createSessionsRouter(): Router {
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
     const sessionIds = index.map((s) => s.id);
-    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId] = await Promise.all([
+    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId, scheduledTasks] = await Promise.all([
       buildWorkspaceIndex(sessionIds),
       buildShellCollabActiveIndex(sessionIds, SESSIONS_DIR),
       buildPlanModeActiveIndex(sessionIds, SESSIONS_DIR),
       bootstrapActiveSessionIdFromIndex(),
+      buildScheduledTaskIndex(index, deps.listScheduledTasks),
     ]);
     res.json({
       sessions: index,
@@ -324,6 +378,7 @@ export function createSessionsRouter(): Router {
       workspaces,
       shellCollabActive,
       planModeActive,
+      scheduledTasks,
       activeSessionId,
       sessionRunStates: sessionListLiveSync ? sessionListLiveSync.getRunStates() : [],
     });

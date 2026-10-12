@@ -154,6 +154,9 @@ export function isDestructiveToolCall(tc: ToolCall): boolean {
     const cmd = (tc.arguments as Record<string, any>)?.command as string | undefined;
     return cmd ? isDestructiveCommand(cmd) : false;
   }
+  if (tc.name === 'scheduled_task') {
+    return (tc.arguments as Record<string, any>)?.action === 'delete';
+  }
   return getToolMetadata(tc.name).isDestructive;
 }
 

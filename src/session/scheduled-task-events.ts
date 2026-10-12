@@ -26,9 +26,13 @@ const STOP_REASON_LABELS: Partial<Record<StopReason, string>> = {
   error: '执行出错',
 };
 
+const MAX_DETAIL_CHARS = 300;
+
 export function describeScheduledTaskStop(reason: StopReason | undefined, detail?: string): string {
   const label = (reason && STOP_REASON_LABELS[reason]) || '执行失败';
-  return detail ? `${label}：${detail}` : `${label}（详情见任务会话）`;
+  if (!detail) return `${label}（详情见任务会话）`;
+  const clipped = detail.length > MAX_DETAIL_CHARS ? `${detail.slice(0, MAX_DETAIL_CHARS)}…` : detail;
+  return `${label}：${clipped}`;
 }
 
 let handler: ScheduledTaskResultHandler | null = null;

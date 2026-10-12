@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_TIMEOUT_MS,
+  ONCE_BUSY_RETRY_MS,
   SCHEDULED_TASK_BUSY_MESSAGE,
+  SCHEDULED_TASK_INTERRUPTED_MESSAGE,
+  SCHEDULED_TASK_ONCE_MISSED_MESSAGE,
   ScheduledTaskScheduler,
 } from '../../src/session/scheduled-task-scheduler.js';
 import type {
   ScheduledTask,
   ScheduledTaskRunStatePatch,
+  ScheduledTaskUpdatePatch,
 } from '../../src/session/scheduled-task-store.js';
 
 function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
@@ -19,6 +23,7 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     files: [],
     intervalValue: 10,
     intervalUnit: 'second',
+    once: false,
     sessionId: 's1',
     enabled: true,
     createdAt: 0,
@@ -100,6 +105,13 @@ function fakeStore(initial: ScheduledTask[], events: string[] = []) {
       Object.assign(row, patch);
       return structuredClone(row);
     }),
+    update: vi.fn(async (id: string, patch: ScheduledTaskUpdatePatch) => {
+      const row = find(id);
+      Object.assign(row, patch);
+      if (!row.enabled) row.nextRunAt = null;
+      events.push(`update:${id}:${JSON.stringify(patch)}`);
+      return structuredClone(row);
+    }),
   };
   return store;
 }
@@ -178,7 +190,139 @@ describe('ScheduledTaskScheduler', () => {
       'exec:a',
       'exec:b',
     ]);
+    expect(store.update).not.toHaveBeenCalled();
     scheduler.stop();
+  });
+
+  describe('一次性任务', () => {
+    it('到点先停用再投递一次，之后不再安排计时器', async () => {
+      const events: string[] = [];
+      const store = fakeStore([task({ id: 'once', once: true, nextRunAt: 1_000 })], events);
+      const { scheduler } = build(store, async (t) => {
+        events.push(`exec:${t.id}`);
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(events).toEqual(['update:once:{"enabled":false}', 'exec:once']);
+      expect(store.rows[0]).toMatchObject({ enabled: false, nextRunAt: null, lastStatus: 'queued' });
+      expect(store.replaceNextRunAt).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(events.filter((e) => e.startsWith('exec:'))).toHaveLength(1);
+      scheduler.stop();
+    });
+
+    it('到点时上一次仍在执行：保持启用并顺延重试，空闲后执行一次再停用', async () => {
+      const store = fakeStore([task({ id: 'once', once: true, nextRunAt: 1_000 })]);
+      const exec = vi.fn(async () => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      let busy = true;
+      const scheduler = new ScheduledTaskScheduler({
+        store: store as never,
+        execute: exec,
+        isBusy: () => busy,
+        now: () => Date.now(),
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(exec).not.toHaveBeenCalled();
+      expect(store.rows[0]).toMatchObject({ enabled: true, nextRunAt: 1_000 + ONCE_BUSY_RETRY_MS });
+      expect(store.update).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(ONCE_BUSY_RETRY_MS);
+      expect(exec).not.toHaveBeenCalled();
+      expect(store.rows[0]!.enabled).toBe(true);
+
+      busy = false;
+      await vi.advanceTimersByTimeAsync(ONCE_BUSY_RETRY_MS);
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(store.rows[0]).toMatchObject({ enabled: false, nextRunAt: null, lastStatus: 'queued' });
+      expect(vi.getTimerCount()).toBe(0);
+      scheduler.stop();
+    });
+
+    it('停机错过且仍在忙碌的一次性任务按错过处理，不顺延', async () => {
+      vi.setSystemTime(35_000);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const store = fakeStore([
+        task({ id: 'stale', nextRunAt: 1_000 }),
+        task({ id: 'once', once: true, nextRunAt: 2_000 }),
+      ]);
+      store.failReplace('stale', 1);
+      const exec = vi.fn(async () => {});
+      const scheduler = new ScheduledTaskScheduler({
+        store: store as never,
+        execute: exec,
+        isBusy: () => true,
+        now: () => Date.now(),
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(exec).not.toHaveBeenCalled();
+      expect(store.rows.find((r) => r.id === 'once')).toMatchObject({
+        enabled: false,
+        lastError: SCHEDULED_TASK_ONCE_MISSED_MESSAGE,
+      });
+      scheduler.stop();
+    });
+
+    it('投递失败保持停用并记录错误', async () => {
+      const store = fakeStore([task({ id: 'once', once: true, nextRunAt: 1_000 })]);
+      const { scheduler } = build(store, async () => {
+        throw new Error('queue down');
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(store.rows[0]).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        lastStatus: 'error',
+        lastError: 'queue down',
+      });
+      scheduler.stop();
+    });
+
+    it('start 时已过期：停用、不补跑并记录错过原因', async () => {
+      vi.setSystemTime(35_000);
+      const store = fakeStore([
+        task({ id: 'once', once: true, nextRunAt: 1_000 }),
+        task({ id: 'stale', nextRunAt: 1_000 }),
+      ]);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      expect(execute).not.toHaveBeenCalled();
+      expect(store.rows.find((r) => r.id === 'once')).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        lastStatus: 'error',
+        lastError: SCHEDULED_TASK_ONCE_MISSED_MESSAGE,
+      });
+      expect(store.replaceNextRunAt).toHaveBeenCalledTimes(1);
+      expect(store.replaceNextRunAt).toHaveBeenCalledWith('stale', 41_000);
+      scheduler.stop();
+    });
+
+    it('start 补扫失败后的重试同样停用过期的一次性任务且不补跑', async () => {
+      vi.setSystemTime(35_000);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const store = fakeStore([
+        task({ id: 'stale', nextRunAt: 1_000 }),
+        task({ id: 'once', once: true, nextRunAt: 2_000 }),
+      ]);
+      store.failReplace('stale', 1);
+      const { scheduler, execute } = build(store);
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(execute).not.toHaveBeenCalled();
+      expect(store.rows.find((r) => r.id === 'once')).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        lastStatus: 'error',
+        lastError: SCHEDULED_TASK_ONCE_MISSED_MESSAGE,
+      });
+      scheduler.stop();
+    });
   });
 
   it('立即执行不修改周期时间', async () => {
@@ -259,6 +403,28 @@ describe('ScheduledTaskScheduler', () => {
     expect(store.replaceNextRunAt).toHaveBeenCalledWith('stale', 41_000);
     expect(store.rows.find((r) => r.id === 'stale')!.nextRunAt).toBe(41_000);
     expect(vi.getTimerCount()).toBe(1);
+    scheduler.stop();
+  });
+
+  it('start 时仍为 queued 但已不在执行的任务标记为中断；仍在执行的保持不变', async () => {
+    const store = fakeStore([
+      task({ id: 'gone', lastStatus: 'queued', nextRunAt: 50_000 }),
+      task({ id: 'alive', sessionId: 's-alive', lastStatus: 'queued', nextRunAt: 50_000 }),
+      task({ id: 'done', lastStatus: 'success', nextRunAt: 50_000 }),
+    ]);
+    const scheduler = new ScheduledTaskScheduler({
+      store: store as never,
+      execute: vi.fn(async () => {}),
+      isBusy: (t) => t.sessionId === 's-alive',
+      now: () => Date.now(),
+    });
+    await scheduler.start();
+    expect(store.rows.find((r) => r.id === 'gone')).toMatchObject({
+      lastStatus: 'error',
+      lastError: SCHEDULED_TASK_INTERRUPTED_MESSAGE,
+    });
+    expect(store.rows.find((r) => r.id === 'alive')!.lastStatus).toBe('queued');
+    expect(store.rows.find((r) => r.id === 'done')!.lastStatus).toBe('success');
     scheduler.stop();
   });
 

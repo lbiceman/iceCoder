@@ -211,15 +211,9 @@ select:focus-visible,
   border-color: transparent;
 }
 
-.chat-sidebar-settings-btn.is-active,
-.chat-sidebar-stats-btn.is-active {
+.chat-sidebar-settings-btn.is-active {
   border-color: transparent;
   background: var(--interactive-active);
-}
-
-.chat-sidebar-stats-btn {
-  flex-basis: 34px;
-  padding: 0;
 }
 
 .chat-sidebar-mode-btn[data-mode="off"] {
