@@ -49,10 +49,10 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
-import { buildHarnessToolGateContext } from './harness-tool-gate-context.js';
+import { buildHarnessToolGateContext } from './supervisor/tool-gate.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
-import { extractRunCommand } from './branch-budget-tool-path.js';
+import { extractRunCommand } from './branch-budget-path.js';
 import { classifyToolRoundProgress } from './tool-round-progress.js';
 import {
   buildVerificationDigest,
@@ -203,7 +203,7 @@ export async function runHarnessToolRound(
   deps.branchBudget = state.branchBudget;
   deps.missingFileAttempts = state.missingFileAttempts;
   deps.harnessPolicyStats = state.harnessPolicyStats;
-  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+  state.branchBudget.bindWorkspaceRoot(deps.workspaceRoot);
 
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
   const gateContext = buildHarnessToolGateContext(
@@ -218,9 +218,8 @@ export async function runHarnessToolRound(
   });
   const executableToolCalls = gateResult.executableToolCalls;
   const blockedToolSignatures = gateResult.skippedSignatures;
-  // W5: gate 决策已用 buildGateContext (track:false) 完成；这里只对真正会执行的
-  //     工具补一次 track:true 的 checkToolCall（推 currentRoundToolNames），
-  //     blocked 的工具不入 DeviationDetector，避免同名计数翻倍 / 误升级。
+  // gate 决策已经用 track:false 完成。这里只对真正会执行的工具再记一次 track:true，
+  // 被拦住的工具不进入偏离检测，避免同名计数翻倍。
   if (gateContext.executionMode === 'forced' && deps.graphExecutor?.hasGraph()) {
     for (const tc of executableToolCalls) {
       deps.graphExecutor.checkToolCall(tc.name, { track: true });
@@ -276,9 +275,6 @@ export async function runHarnessToolRound(
   for (const outcome of recordedOutcomes) {
     if (!workspaceMutatedRunCommandIds.has(outcome.toolCallId)) continue;
     state.operationOutcomes?.record({ ...outcome, effect: 'local_change' });
-  }
-  if (executableToolCalls.length > 0) {
-    state.consecutiveNoToolRounds = 0;
   }
   // 普通模型工具轮直接更新当前 VerificationPlan 的逐命令证据。
   // 后台 start/running 不计入；只有真实 terminal 分类才能改变进度。
@@ -370,7 +366,7 @@ export async function runHarnessToolRound(
     deps.workspaceRoot,
   );
 
-  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+  state.branchBudget.bindWorkspaceRoot(deps.workspaceRoot);
 
   // cleanup/删除命令执行后，从 filesChanged 剔除已不存在的路径，避免下轮 Gate 要求重读
   state.taskState.reconcileMissingChangedFiles(deps.workspaceRoot);
@@ -492,7 +488,7 @@ export async function runHarnessToolRound(
 
   if (roundProgress === 'all_failed_or_blocked') {
     state.consecutiveToolFailures++;
-    // W1: 本轮全失败 → 重置 stable 计数；evaluate 才能正确判定"连续 N 轮稳定"。
+    // 本轮全失败时清零稳定轮次，模式评估才能判断连续稳定。
     state.stableRoundsSinceLastFailure = 0;
     const failureCount = state.consecutiveToolFailures;
 
@@ -573,7 +569,7 @@ export async function runHarnessToolRound(
   } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;
     state.stopHookContinuationCount = 0;
-    state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+    state.stableRoundsSinceLastFailure += 1;
     // recovery_pending 表示“当前路径尚未恢复”，不是永久历史标记。
     // 一旦出现有效工具进展即视为恢复完成；若本轮随后再次发生图硬偏离，
     // evaluateRound 会重新提交 recovery_pending。

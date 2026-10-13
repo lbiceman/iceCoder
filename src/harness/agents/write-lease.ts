@@ -15,7 +15,7 @@ export interface WriteLeaseHolder {
 }
 
 export type WriteLeaseAcquireResult =
-  | { ok: true }
+  | { ok: true; refreshed: boolean }
   | { ok: false; holder: WriteLeaseHolder };
 
 function leaseAbsPath(workspaceRoot: string, filePath: string): string {
@@ -48,7 +48,14 @@ export class WriteLeaseRegistry {
       lastWriteAt: now,
       absPath: leaseAbsPath(workspaceRoot, filePath),
     });
-    return { ok: true };
+    return { ok: true, refreshed: !!existing };
+  }
+
+  /** 撤回本轮新取得的租约。已经持有的不删。 */
+  release(workspaceRoot: string, filePath: string, agentId: string): void {
+    const key = leaseKey(workspaceRoot, filePath);
+    const existing = this.leases.get(key);
+    if (existing?.agentId === agentId) this.leases.delete(key);
   }
 
   holderOf(workspaceRoot: string, filePath: string): WriteLeaseHolder | undefined {

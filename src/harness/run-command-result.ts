@@ -259,11 +259,6 @@ function isRejectedArtifactPath(value: string): boolean {
     .test(value);
 }
 
-function firstCommandToken(text: string): string {
-  const match = text.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-  return (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
-}
-
 function safeParseJson(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;

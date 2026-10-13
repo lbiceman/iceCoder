@@ -50,7 +50,7 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
   globalPolicy?: GlobalModePolicy;
-  /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
+  /** 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
   workspaceRoot?: string;
@@ -115,8 +115,7 @@ export async function prepareHarnessRound(
 
   deps.loopController.advanceRound();
   state.turnCount++;
-  // W1: 在轮次开始时锚定 filesChanged 基线 + 重置本轮 branchSwitched 标记，
-  // 供 evaluateExecutionModeBeforeLlm 派生 accumulatedDiffLines / branchSwitchedThisRound。
+  // 轮次开始时记下 filesChanged 基线，并清掉上一轮的分支切换标记。
   state.filesChangedAtRoundStart = state.repoContext.snapshot().filesChanged.length;
   state.branchSwitchedThisRound = false;
   const round = deps.loopController.getState().currentRound;

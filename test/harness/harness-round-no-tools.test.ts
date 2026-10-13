@@ -256,7 +256,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('仅 md 变更未跑测 → 不 inject verification gate', async () => {
@@ -282,7 +281,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('没有显式硬验证时不因变更类型追加验证轮', async () => {
@@ -313,7 +311,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
     logSpy.mockRestore();
   });
 
@@ -344,7 +341,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('软验证只来自提示词而不强制 continue', async () => {
@@ -371,7 +367,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('没有显式条件时不因缺少某种工具而阻塞', async () => {
@@ -494,7 +489,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('npm test 失败加强提示后再次收尾 → model_done', async () => {
@@ -620,7 +614,6 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
       expect(result.result.completionStatus).toBe('completed_unverified');
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('后台操作未结束时暂停且不报告完成', async () => {

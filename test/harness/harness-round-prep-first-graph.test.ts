@@ -74,7 +74,6 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
         stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),
-        resilienceV2Enabled: false,
         checkpointEngine: undefined,
         toolExecutor: new ToolExecutor(new ToolRegistry(), {
           maxRetries: 0,
@@ -118,7 +117,6 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
         stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),
-        resilienceV2Enabled: false,
         checkpointEngine: undefined,
         toolExecutor: new ToolExecutor(new ToolRegistry(), {
           maxRetries: 0,

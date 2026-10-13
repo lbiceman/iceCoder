@@ -5,6 +5,7 @@ import {
 } from '../../src/harness/harness-verification-tool-adapter.js';
 import { executeStopVerificationPlan } from '../../src/harness/harness-stop-verification.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
+import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
@@ -29,6 +30,7 @@ function adapterState(messages: UnifiedMessage[] = []): HarnessRunState {
     shellMandatoryConfirmDenials: new Set(),
     verificationOutputBuffer: new VerificationOutputBuffer(),
     executionMode: 'free',
+    branchBudget: new BranchBudgetTracker(),
   } as HarnessRunState;
 }
 

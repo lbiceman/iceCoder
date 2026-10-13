@@ -59,9 +59,8 @@ export class TokenBudgetTracker {
   }
 
   /**
-   * L2-6 — RecoveryBudgetManager 需要任务级 token 总预算；返回当前 tracker 的 total 上限。
-   * 缺省 tracker（未注入 LoopConfig.tokenBudget）时，TokenBudgetTracker 仍按 DEFAULT_CONFIG.totalBudget
-   * 给出非零值，便于 V1 启发式 `recoveryTokenRatio` 落地（V2 可结合用户级配额扩展）。
+   * 返回当前 tracker 的任务级 token 总上限。
+   * 未注入 LoopConfig.tokenBudget 时仍按默认 totalBudget 给出非零值。
    */
   getTotalBudget(): number {
     return this.config.totalBudget;

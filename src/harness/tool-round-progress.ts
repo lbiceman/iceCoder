@@ -1,6 +1,6 @@
 import type { ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
-import { extractToolTargetPath, isFileWriteTool } from './branch-budget-tool-path.js';
+import { extractToolTargetPath, isFileWriteTool } from './branch-budget-path.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
 

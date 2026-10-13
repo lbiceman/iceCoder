@@ -27,7 +27,7 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import {
   extractRunCommand,
   extractToolTargetPath,
-} from './branch-budget-tool-path.js';
+} from './branch-budget-path.js';
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
@@ -834,8 +834,11 @@ export async function executeToolCallsStreaming(
         // 命令里写明的删除/改写路径已由 collectSessionTouchedPaths 覆盖。
       }
       if (touchedPaths.length) {
-        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch(() => {
-          /* ignore */
+        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch((err) => {
+          console.debug(
+            '[harness] touch session paths failed:',
+            err instanceof Error ? err.message : err,
+          );
         });
       }
     }
@@ -895,9 +898,6 @@ export async function executeToolCallsStreaming(
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);
-    if (taskState && repoContext) {
-      // currentPlanTracker.onToolResult removed (Phase 11)
-    }
 
     processedIds.add(tc.id);
     deps.loopController.recordToolCalls(1);

@@ -1,7 +1,7 @@
 /**
  * TaskGraph — 任务图核心数据结构与操作。
  *
- * 提供图 CRUD、游标推进、分支切换、快照持久化、图压缩、会话管理等。
+ * 提供图 CRUD、游标推进、分支切换、快照持久化、图压缩等。
  * 纯函数/纯数据结构，不依赖 LLM、不依赖 Harness 内部状态。
  *
  * 设计文档：docs/任务图规划-设计文档.md §5, §8, §9, §25, §28
@@ -21,8 +21,6 @@ import type {
   BranchHistoryEntry,
   TaskGraphSnapshot,
   GraphRecoverySignal,
-  GraphSession,
-  GraphSessionStatus,
 } from '../types/task-graph.js';
 import { TASK_GRAPH_SCHEMA_VERSION } from '../types/task-graph.js';
 import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
@@ -580,57 +578,6 @@ export function compactGraph(
   }
 
   graph.updatedAt = Date.now();
-}
-
-// ═══════════════════════════════════════════════
-// Graph Session Management
-// ═══════════════════════════════════════════════
-
-const graphSessions = new Map<string, GraphSession>();
-
-export function createGraphSession(
-  graphId: string,
-  taskId: string,
-  goal: string,
-  sessionIndex: number,
-): GraphSession {
-  const session: GraphSession = {
-    graphId,
-    taskId,
-    status: 'active',
-    goal,
-    createdAt: Date.now(),
-    lastActiveAt: Date.now(),
-    sessionIndex,
-  };
-  graphSessions.set(graphId, session);
-  return session;
-}
-
-export function transitionSession(
-  graphId: string,
-  status: GraphSessionStatus,
-): GraphSession | undefined {
-  const session = graphSessions.get(graphId);
-  if (!session) return undefined;
-  session.status = status;
-  session.lastActiveAt = Date.now();
-  return session;
-}
-
-export function findActiveSession(): GraphSession | undefined {
-  for (const session of graphSessions.values()) {
-    if (session.status === 'active') return session;
-  }
-  return undefined;
-}
-
-export function getSession(graphId: string): GraphSession | undefined {
-  return graphSessions.get(graphId);
-}
-
-export function clearSession(graphId: string): void {
-  graphSessions.delete(graphId);
 }
 
 // ═══════════════════════════════════════════════

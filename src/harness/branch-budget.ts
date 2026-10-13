@@ -27,7 +27,7 @@ import type {
   RecoverySignal,
 } from '../types/runtime-checkpoint.js';
 import { emptyBranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
-import { workspaceFileExists } from './workspace-path-guard.js';
+import { workspaceFileExists } from '../shared/path-scope.js';
 import {
   canonicalBudgetPath,
   mergeBudgetPathMap,
@@ -418,7 +418,7 @@ export class BranchBudgetTracker {
   }
 
   /**
-   * §2.8 / T12 — 由 ExecutionMode 控制启停：forced 才记录 / 触发；
+   * 由 ExecutionMode 控制启停：forced 才记录 / 触发；
    * free 段不消耗预算也不产出 recovery 文案。disabled 不清空已有计数，
    * 重新启用后保留累积（避免短暂切换后丢失上下文）。
    */

@@ -6,7 +6,6 @@
  *   2. DeviationDetector — 偏离检测器
  *   3. FailureClassifier — 失败分类器（11 种）
  *   4. EscalationPolicy — 硬升级（block / force_switch）
- *   5. NodeCostTracker — 节点成本预算追踪
  *
  * v1：纯规则驱动，不调用 LLM。
  * 依赖：Phase 1 (types)
@@ -28,8 +27,6 @@ import type {
   EscalationPolicy,
   EscalationLevel,
   EscalationEntry,
-  NodeCostBudget,
-  NodeCostTracker,
   FallbackReason,
 } from '../types/task-graph.js';
 import type { TaskPhase } from '../types/runtime-snapshot.js';
@@ -427,60 +424,5 @@ export class EscalationManager {
     const from = this.policy.currentLevel;
     this.policy.currentLevel = level;
     this.policy.history.push({ fromLevel: from, toLevel: level, reason, at: Date.now(), nodeId });
-  }
-}
-
-// ═══════════════════════════════════════════════
-// NodeCostTracker
-// ═══════════════════════════════════════════════
-
-export class NodeCostTrackerImpl implements NodeCostTracker {
-  tokensUsed = 0;
-  roundsUsed = 0;
-  toolCallsUsed = 0;
-  startedAt = 0;
-  exhaustedBy: 'tokens' | 'rounds' | 'tool_calls' | 'duration' | undefined;
-  utilizationRate = 0;
-
-  private budget: NodeCostBudget;
-
-  constructor(budget: NodeCostBudget) {
-    this.budget = budget;
-    this.startedAt = Date.now();
-  }
-
-  addTokens(tokens: number): boolean {
-    this.tokensUsed += tokens;
-    return this.checkBudget();
-  }
-
-  addRound(toolCount: number): boolean {
-    this.roundsUsed++;
-    this.toolCallsUsed += toolCount;
-    return this.checkBudget();
-  }
-
-  isExhausted(): boolean {
-    return !!this.exhaustedBy;
-  }
-
-  getBudget(): NodeCostBudget {
-    return this.budget;
-  }
-
-  private checkBudget(): boolean {
-    if (this.tokensUsed > this.budget.maxTokens) { this.exhaustedBy = 'tokens'; }
-    else if (this.roundsUsed > this.budget.maxRounds) { this.exhaustedBy = 'rounds'; }
-    else if (this.toolCallsUsed > this.budget.maxToolCalls) { this.exhaustedBy = 'tool_calls'; }
-    else if (Date.now() - this.startedAt > this.budget.maxDurationMs) { this.exhaustedBy = 'duration'; }
-
-    // utilization: max across all dimensions
-    this.utilizationRate = Math.max(
-      this.tokensUsed / this.budget.maxTokens,
-      this.roundsUsed / this.budget.maxRounds,
-      this.toolCallsUsed / this.budget.maxToolCalls,
-      (Date.now() - this.startedAt) / this.budget.maxDurationMs,
-    );
-    return !!this.exhaustedBy;
   }
 }

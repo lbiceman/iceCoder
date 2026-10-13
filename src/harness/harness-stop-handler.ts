@@ -19,7 +19,7 @@ import {
   sanitizeAssistantContentForUser,
   AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
-import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
+import { dispatchStreamChunkToStep } from './harness-llm-call.js';
 import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
 import type {
   CompletionReason,
@@ -65,7 +65,6 @@ export async function handleHarnessStop(
     runtimeState.completionStatus = completionStatus;
     runtimeState.completionReason = completionReason;
   }
-  // currentPlanTracker.onFinal removed (Phase 11)
   await saveTaskCheckpoint(
     deps,
     checkpointStatusForCompletion(completionStatus),

@@ -147,11 +147,11 @@ export interface LoopState {
   nodeIndex?: number;
   reason?: string;
   message?: string;
-  /** Execution Free/Forced 执行边界；Batch 1 仅提供后续任务承载位，不改变运行逻辑。 */
+  /** Execution Free/Forced 执行边界。 */
   executionMode?: ExecutionMode;
   /** Forced enter 后的防抖锁剩余轮数。 */
   executionModeLockRemaining?: number;
-  /** 上次进入 forced 的触发信号，按 §2.8.8 排序。 */
+  /** 上次进入 forced 的触发信号，按优先级排序。 */
   executionModeEnteredBy?: ModeSignal[];
   /** 上次进入 forced 的主触发信号。 */
   executionModeEnteredByPrimary?: ModeSignal;
@@ -219,9 +219,9 @@ export interface HarnessConfig {
   verificationExemptDirs?: string[];
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
-  /** Batch 1：可选注入的全局策略，只读承载位；本批不接入 Harness 主循环。 */
+  /** 可选注入的全局模式策略。 */
   globalPolicy?: GlobalModePolicy;
-  /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
+  /** 可选 supervisor 配置。未传入时按 off 处理。 */
   supervisorConfig?: ResolvedSupervisorConfig;
   /**
    * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；

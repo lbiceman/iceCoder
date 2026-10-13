@@ -9,13 +9,14 @@ import { shouldSkipResilienceCheckpoint } from './casual-mode.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
+import { ensureExecutionModeFields } from './supervisor/execution-mode-constraints.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
 import type { StopReason } from './types.js';
 import type { VerificationOutputTailEntry } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
-  resilienceV2Enabled: boolean;
+  /** 没有会话目录时不创建引擎，相关落盘路径直接跳过。 */
   checkpointEngine?: CheckpointEngine;
   enqueueCheckpointPersist: <T>(task: () => Promise<T>) => Promise<T>;
   workspaceRoot?: string;
@@ -27,7 +28,7 @@ function checkpointVerificationOutputTail(state: HarnessRunState): VerificationO
 
 /**
  * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
- * 关 flag 时 no-op。
+ * 没有 checkpoint 引擎（无会话目录）时跳过。
  *
  * 磁盘写入必须经 enqueueCheckpointPersist，与 TaskCheckpointManager 串行，避免绕过队列与 v1 save 交叉 rename。
  */
@@ -49,7 +50,7 @@ export async function resilienceRecordToolCalls(
   state: HarnessRunState,
   workspaceRoot?: string,
 ): Promise<void> {
-  if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
+  if (!deps.checkpointEngine) return;
 
   state.branchBudget.bindWorkspaceRoot(workspaceRoot);
   const engine = deps.checkpointEngine;
@@ -122,25 +123,7 @@ export async function resilienceRecordToolCalls(
       },
     });
   }
-
-  if (engine.shouldPersistOnTrigger('step_completed')) {
-    await deps.enqueueCheckpointPersist(async () => {
-      try {
-        await engine.save({
-          trigger: 'step_completed',
-          branchBudget: state.branchBudget,
-          executionModeState: buildExecutionModeCheckpointState(state),
-          verificationOutputTail: checkpointVerificationOutputTail(state),
-          ...checkpointHarnessEscalationFields(state),
-        });
-      } catch (err) {
-        console.warn(
-          '[harness] resilience v2 save (tool batch) failed:',
-          err instanceof Error ? err.message : err,
-        );
-      }
-    });
-  }
+  // step_completed 由本轮收尾的 saveTaskCheckpoint 一次落盘，这里只 stage。
 }
 
 /**
@@ -152,7 +135,7 @@ export function resilienceMaybeBranchRecover(
   state: HarnessRunState,
   msgs: UnifiedMessage[],
 ): void {
-  if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
+  if (!deps.checkpointEngine) return;
   if (state.branchBudgetWarnedThisRound) return;
 
   const decision = state.branchBudget.shouldBranchRecover();
@@ -194,18 +177,15 @@ export async function resilienceMaybeReviewStep(
   state: HarnessRunState,
   trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
 ): Promise<void> {
-  if (!deps.resilienceV2Enabled) return;
   if (state.stepReviewedThisRound) return;
   state.stepReviewedThisRound = true;
 
   try {
     const recentTools = collectRecentToolTraces(state.messages, 5);
     const lastErrors = collectRecentErrors(state.messages, 3);
-    // planActive/activeStep removed (Phase 11 — currentPlanTracker deleted)
-
     const result = await reviewStep({
       goal: state.taskState.snapshot().goal,
-      currentStep: undefined, // activeStep removed (Phase 11)
+      currentStep: undefined,
       recentTools,
       lastErrors,
       trigger,
@@ -246,13 +226,13 @@ export async function resilienceSaveCheckpoint(
   state: HarnessRunState | undefined,
   stopReason?: StopReason,
 ): Promise<void> {
-  if (!deps.resilienceV2Enabled || !deps.checkpointEngine) return;
+  if (!deps.checkpointEngine) return;
   if (!state) return;
   if (shouldSkipResilienceCheckpoint(state.taskState.snapshot().intent)) return;
 
   const engine = deps.checkpointEngine;
-  // W6: free 段不落 step_completed / verification_started；forced 段才覆盖。
-  //     该 gating 仅作用于资源相对昂贵的"过程型"快照；tool_failed / final_draft 等仍按原行为。
+  // free 段不落 step_completed / verification_started；forced 段才覆盖。
+  // 这个限制只作用于过程型快照；tool_failed / final_draft 仍照常落盘。
   if (!engine.shouldPersistOnTrigger(trigger)) return;
 
   await deps.enqueueCheckpointPersist(async () => {
@@ -277,15 +257,16 @@ export async function resilienceSaveCheckpoint(
 export function buildExecutionModeCheckpointState(
   state: HarnessRunState,
 ): RuntimeExecutionModeCheckpointState {
+  ensureExecutionModeFields(state);
   return {
-    executionMode: state.executionMode ?? 'free',
-    executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
-    executionModeEnteredBy: [...(state.executionModeEnteredBy ?? [])],
+    executionMode: state.executionMode,
+    executionModeLockRemaining: state.executionModeLockRemaining,
+    executionModeEnteredBy: [...state.executionModeEnteredBy],
     executionModeEnteredByPrimary: state.executionModeEnteredByPrimary,
     executionModeEnteredAtRound: state.executionModeEnteredAtRound ?? null,
     forcedDegradedTier: state.forcedDegradedTier,
     lastModeDecision: state.lastModeDecision,
-    pendingModeSignals: [...(state.pendingModeSignals ?? [])],
-    forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
+    pendingModeSignals: [...state.pendingModeSignals],
+    forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry,
   };
 }

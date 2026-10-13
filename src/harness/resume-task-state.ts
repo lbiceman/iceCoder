@@ -112,13 +112,3 @@ export function syncHydratedTaskState(
 
   return anchor;
 }
-
-/** @deprecated use syncHydratedTaskState */
-export function applyResumeTaskStateFixups(
-  userMessage: string,
-  messages: readonly UnifiedMessage[],
-  taskState: TaskState,
-  repoContext: RepoContext,
-): void {
-  syncHydratedTaskState(userMessage, messages, taskState, repoContext);
-}

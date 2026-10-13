@@ -20,7 +20,7 @@ import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { HarnessStepEvent } from './types.js';
 import type { VerificationToolCallResult } from './harness-stop-verification.js';
 import type { GraphExecutor } from './task-graph-executor.js';
-import { buildHarnessToolGateContext } from './harness-tool-gate-context.js';
+import { buildHarnessToolGateContext } from './supervisor/tool-gate.js';
 
 export interface HarnessVerificationToolAdapterOptions {
   deps: ToolExecutorDeps;
@@ -44,7 +44,7 @@ export function createHarnessVerificationToolAdapter(
     deps.branchBudget = state.branchBudget;
     deps.missingFileAttempts = state.missingFileAttempts;
     deps.harnessPolicyStats = state.harnessPolicyStats;
-    state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+    state.branchBudget.bindWorkspaceRoot(deps.workspaceRoot);
     state.messages.push({
       role: 'assistant',
       content: '',
@@ -58,7 +58,7 @@ export function createHarnessVerificationToolAdapter(
     });
     const gateBlocked = gateResult.executableToolCalls.length === 0;
     const graphExecutor = options.graphExecutor;
-    const forcedGraphActive = (state.executionMode ?? 'free') === 'forced'
+    const forcedGraphActive = state.executionMode === 'forced'
       && graphExecutor?.hasGraph() === true;
     const tracksGraphDeviation = forcedGraphActive && isInitialVerificationRun(toolCall);
 

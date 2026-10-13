@@ -23,7 +23,6 @@ import {
   createVerificationRuntimeState,
   type VerificationRuntimeState,
 } from './verification-state.js';
-// ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -48,7 +47,6 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
-  // plan field removed (Phase 11)
 }
 
 export interface TaskCheckpointUpdate {
@@ -74,7 +72,6 @@ export interface TaskCheckpointUpdate {
     branchBudget?: BranchBudgetSnapshot;
     failedToolCallSignatures?: Record<string, number>;
   };
-  // plan field removed (Phase 11)
 }
 
 export class TaskCheckpointManager {
@@ -136,8 +133,6 @@ export class TaskCheckpointManager {
     }
     return view;
   }
-
-  // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
     return {

@@ -7,11 +7,11 @@ import {
   canonicalizeMemoryToolPath,
   resolveMemoryRootForPath,
 } from '../memory/file-memory/memory-write-pipeline.js';
-import { extractRunCommand } from './branch-budget-tool-path.js';
+import { extractRunCommand } from './branch-budget-path.js';
 import { canonicalBudgetPath } from './branch-budget-path.js';
 import type { ToolCall } from '../llm/types.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
-import { workspaceFileExists } from './workspace-path-guard.js';
+import { workspaceFileExists } from '../shared/path-scope.js';
 import {
   checkHostGuardWritePreflight,
 } from '../tools/shell-host-guard.js';
@@ -48,14 +48,6 @@ const DIST_ARTIFACT_RE = /^(?:dist|build|out)\//i;
 export function isDistArtifactPath(path: string | undefined): boolean {
   if (!path) return false;
   return DIST_ARTIFACT_RE.test(path.replace(/\\/g, '/'));
-}
-
-export function isBuildLikeCommand(command: string | undefined): boolean {
-  return !!command?.trim();
-}
-
-export function isDiagnosticAllowedCommand(_command: string | undefined): boolean {
-  return true;
 }
 
 function extractTargetPath(args: Record<string, unknown>): string | undefined {
@@ -335,7 +327,7 @@ export function shouldActivateBuildDiagnosticGate(args: {
   for (const tc of args.toolCalls) {
     if (tc.name !== 'run_command') continue;
     const command = extractRunCommand(tc.arguments);
-    if (!isBuildLikeCommand(command)) continue;
+    if (!command) continue;
     if (!args.branchBudget.wouldBlockCommandRetry(command)) continue;
     const sig = args.signatureOf(tc);
     if (args.executionFailedSignatures.includes(sig) || args.policyBlockedSignatures.includes(sig)) {

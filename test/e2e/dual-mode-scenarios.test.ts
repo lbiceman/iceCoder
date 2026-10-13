@@ -226,7 +226,6 @@ describe('L0/L1/L3 single-axis scenarios', () => {
         stopHookManager: { run: async () => ({ action: 'continue' as const }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),
-        resilienceV2Enabled: false,
         checkpointEngine: undefined,
         toolExecutor: createToolExecutor([makeTool('edit_file')]),
         permissionRules: [],

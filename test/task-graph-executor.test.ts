@@ -179,14 +179,6 @@ describe('GraphExecutor', () => {
     expect(ex.isTerminal()).toBe(true);
   });
 
-  // ── classifyFailure ──
-
-  it('classifyFailure 分类错误', () => {
-    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
-    const f = ex.classifyFailure('ENOENT: no such file', 'read_file');
-    expect(f.category).toBe('hallucinated_path');
-  });
-
   // ── intent 变化 ──
 
   it('question intent 创建图', () => {

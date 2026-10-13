@@ -11,7 +11,7 @@ import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js
 import type { VerificationSignalStatus } from './completion-facts-view.js';
 import { stripLeadingCdPrefix } from './run-command-result.js';
 import { isProjectCustomExemptPath } from './verification-exempt-config.js';
-import { workspaceFileExists } from './workspace-path-guard.js';
+import { workspaceFileExists } from '../shared/path-scope.js';
 
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 

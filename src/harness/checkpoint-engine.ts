@@ -67,7 +67,7 @@ export interface CheckpointSaveInput {
   /** 待注入的 recovery signal（新触发的） */
   appendRecoverySignal?: RecoverySignal;
   /** ExecutionPlan，可选（仅用于读 plan.version） */
-  plan?: any; // Phase 11: ExecutionPlan type removed
+  plan?: any;
   /** Harness loop 当前 stopReason（如果已停止） */
   lastStopReason?: TaskCheckpoint['stopReason'];
   /** TaskGraph 快照（Phase 6） */
@@ -92,7 +92,7 @@ const MAX_RECENT_FAILURES = 10;
 const MAX_RECOVERY_SIGNALS = 8;
 
 /**
- * §2.8 / T12 — forced 段比 free 段需要更激进的 checkpoint：
+ * forced 段比 free 段需要更激进的 checkpoint：
  * 包含 step_completed / verification_started 这类 free 段允许跳过的触发器。
  * free 段保留原有触发器集合，避免在「轻读取」任务里频繁落盘。
  */
@@ -108,11 +108,6 @@ const FORCED_EXTRA_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
   'verification_started',
 ]);
 
-/** 是否启用 Runtime Resilience v2（始终为 true，与 `isExecutionPlanEnabled` 策略一致） */
-export function isResilienceV2Enabled(): boolean {
-  return true;
-}
-
 /**
  * 增强 checkpoint 引擎。
  *
@@ -126,7 +121,7 @@ export class CheckpointEngine {
   private readonly projectStore: ProjectCheckpointStore;
   /** 内存中保留的 v2 累积状态（save 之间增量更新） */
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2();
-  /** §2.8 / T12 — forced 段是否启用更积极的 checkpoint policy。 */
+  /** forced 段是否启用更积极的 checkpoint policy。 */
   private forcedPolicyActive = false;
   /** Runtime Restore / in-flight tool batches forbid durable snapshots. */
   private restoreLock = false;
@@ -141,7 +136,7 @@ export class CheckpointEngine {
     return cloneV2(this.v2State);
   }
 
-  /** §2.8 / T12 — 启停 forced 段强制策略；调用方按 ExecutionMode gate。 */
+  /** 启停 forced 段策略；调用方按 ExecutionMode 切换。 */
   setForcedPolicy(active: boolean): void {
     this.forcedPolicyActive = active;
   }
@@ -217,12 +212,6 @@ export class CheckpointEngine {
       console.warn('[checkpoint-engine] loadV2 failed:', err instanceof Error ? err.message : err);
       return null;
     }
-  }
-
-  /** @deprecated Combined v1+v2 files are adapted through ProjectCheckpointStore.load. */
-  async loadCombined(): Promise<CombinedCheckpointFile | null> {
-    const project = await this.projectStore.load();
-    return project ? v3ToCombinedCompatibility(project) : null;
   }
 
   /**
@@ -444,41 +433,6 @@ function resilienceFromDurable(durable: unknown): RuntimeCheckpointV2 | null {
     verificationPending: false,
     acceptanceGate: undefined,
   });
-}
-
-function v3ToCombinedCompatibility(project: ProjectCheckpointV3): CombinedCheckpointFile {
-  const legacy = project.extensions.legacyApi;
-  const compat = legacy !== null && typeof legacy === 'object' && !Array.isArray(legacy)
-    ? legacy as Record<string, unknown>
-    : {};
-  return {
-    version: 1,
-    taskId: project.identity.checkpointId,
-    status: ['running', 'paused', 'completed', 'failed', 'aborted'].includes(String(compat.status))
-      ? compat.status as TaskCheckpoint['status']
-      : 'paused',
-    userGoal: typeof compat.userGoal === 'string' ? compat.userGoal : project.execution.taskState.goal,
-    phase: project.execution.taskState.phase,
-    taskState: project.execution.taskState,
-    repoContext: project.workspace.repoContext,
-    failedToolCalls: Array.isArray(compat.failedToolCalls)
-      ? compat.failedToolCalls.filter((value): value is string => typeof value === 'string')
-      : [],
-    stopReason: project.execution.lastStopReason,
-    messageCount: project.conversation.messages.length,
-    loop: {
-      currentRound: project.execution.loopState.currentRound,
-      totalToolCalls: project.execution.loopState.totalToolCalls,
-      totalInputTokens: project.execution.loopState.totalInputTokens,
-      totalOutputTokens: project.execution.loopState.totalOutputTokens,
-    },
-    createdAt: typeof compat.createdAt === 'string' ? compat.createdAt : project.snapshotMeta.capturedAt,
-    updatedAt: typeof compat.updatedAt === 'string' ? compat.updatedAt : project.snapshotMeta.capturedAt,
-    runtimeV2: resilienceFromAggregate(project) ?? undefined,
-    ...(project.extensions.taskGraph ? { taskGraph: project.extensions.taskGraph as CombinedCheckpointFile['taskGraph'] } : {}),
-    ...(project.extensions.graphMetrics ? { graphMetrics: project.extensions.graphMetrics as CombinedCheckpointFile['graphMetrics'] } : {}),
-    ...(project.extensions.graphSession ? { graphSession: project.extensions.graphSession as CombinedCheckpointFile['graphSession'] } : {}),
-  };
 }
 
 function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {

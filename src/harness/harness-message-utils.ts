@@ -47,8 +47,8 @@ export function getLastAssistantText(messages: UnifiedMessage[]): string {
 }
 
 /**
- * 识别「非真人用户」的 user 前缀（运行时状态、会话笔记摘要、工具规划等）。
- * {@link getLatestRealUserText} 会跳过此类消息。
+ * 识别「非真人用户」的 user 前缀。
+ * 压缩切分和真实用户文本查找共用这一份规则。
  */
 export function isSystemInjectedUserContent(content: string): boolean {
   const trimmed = content.trim();
@@ -56,7 +56,12 @@ export function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('<system-reminder>')
     || trimmed.startsWith('<session-notes>')
     || trimmed.startsWith('<context-summary>')
+    || trimmed.startsWith('<compact_boundary')
+    || trimmed.startsWith('<recent-dialogue-focus')
+    || trimmed.startsWith('<runtime-recovery-context>')
+    || trimmed.startsWith('<recent-file-contents>')
     || trimmed.startsWith('<resume-checkpoint>')
+    || trimmed.startsWith('[Background Task Status]')
     || trimmed.startsWith('[System Runtime State]')
     || trimmed.startsWith('[Workspace Anchor]')
     || trimmed.startsWith('[System / Workspace Change]')

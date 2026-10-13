@@ -30,9 +30,6 @@ export class ContextAssembler {
   private config: ContextAssemblyConfig;
   /** 静态系统提示词缓存（直到 invalidateCache 被调用） */
   private staticPromptCache: string | null = null;
-  /** 动态上下文缓存（内容变化时才重算） */
-  private dynamicContextCache: string | null = null;
-  private dynamicContextHash: string = '';
 
   constructor(config: ContextAssemblyConfig) {
     this.config = config;
@@ -204,8 +201,6 @@ ${serialized}
    */
   invalidateCache(): void {
     this.staticPromptCache = null;
-    this.dynamicContextCache = null;
-    this.dynamicContextHash = '';
   }
 }
 

@@ -36,7 +36,6 @@ export interface CheckpointRuntimeState {
   branchBudget?: BranchBudgetTracker;
   operationOutcomes?: OperationOutcomeLedger;
   restoredCompletionConditions?: CompletionCondition[];
-  completionGateContinuationCount?: number;
   completionGateBlockingSignature?: string;
   completionStatus?: CompletionStatus;
   completionReason?: CompletionReason;
@@ -84,9 +83,7 @@ export async function saveTaskCheckpoint(
             : {}),
           status: runtimeState.completionStatus,
           reason: runtimeState.completionReason,
-          continuationCount: runtimeState.verificationState?.continuationCount
-            ?? runtimeState.completionGateContinuationCount
-            ?? 0,
+          continuationCount: runtimeState.verificationState?.continuationCount ?? 0,
           blockingSignature: runtimeState.verificationState?.blockingSignature
             ?? runtimeState.completionGateBlockingSignature,
         },

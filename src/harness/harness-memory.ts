@@ -115,8 +115,6 @@ function emitMemoryStep(
 const HARNESS_FILE_CONTENT_TRUNCATE = 2000;
 /** 提取消息分块大小 */
 const EXTRACTION_CHUNK_SIZE = 20;
-/** 提取最大分块数 */
-const EXTRACTION_MAX_CHUNKS = 3;
 /** 粗召回倍数 */
 const COARSE_RECALL_MULTIPLIER = 6;
 /** 回退召回倍数 */
@@ -188,7 +186,6 @@ import {
   buildPlanFence,
   ICECODER_PLAN_FENCE_LANG,
 } from '../memory/file-memory/execution-plan-fence.js';
-// ExecutionPlan type removed (Phase 11)
 
 /**
  * 把 session-notes 文本中所有 `icecoder-plan` fence 移除（用于追加最新 plan 前去重）。
@@ -333,8 +330,8 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
  * 检测两条用户消息之间是否发生了话题切换。
  *
  * 使用 token 重叠度（Jaccard 系数）判断：
- * - 重叠度 < 0.15 → 话题切换（几乎没有共同词汇）
- * - 重叠度 >= 0.15 → 同一话题
+ * - 重叠度 < 0.2 → 话题切换（几乎没有共同词汇）
+ * - 重叠度 >= 0.2 → 同一话题
  *
  * 支持中英文混合：英文按空格分词，中文用 bigram 滑动窗口。
  * 不需要额外 LLM 调用，纯本地计算。

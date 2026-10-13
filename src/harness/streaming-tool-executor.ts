@@ -138,20 +138,6 @@ export class StreamingToolExecutor {
   }
 
   /**
-   * 获取已完成的结果（不等待未完成的）。
-   */
-  getCompletedResults(): StreamingToolResult[] {
-    return [...this.completedResults];
-  }
-
-  /**
-   * 是否有正在执行的工具。
-   */
-  hasPending(): boolean {
-    return this.pendingResults.size > this.completedResults.length;
-  }
-
-  /**
    * 等待所有 pending 的工具完成。
    */
   private async waitForAll(): Promise<void> {

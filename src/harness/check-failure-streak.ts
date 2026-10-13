@@ -1,8 +1,9 @@
 import { normalizeAcceptanceCommandKey } from './run-command-result.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
+import { RECOVERY_BUDGET } from './recovery-budget.js';
 
 /** 同一规范化命令连续失败多少次后注入 Rebuild（中间 write 不清零）。 */
-export const CHECK_FAILURE_STREAK_REBUILD = 6;
+export const CHECK_FAILURE_STREAK_REBUILD = RECOVERY_BUDGET.checkFailureStreak.max;
 
 export interface CheckFailureStreakEntry {
   failCount: number;

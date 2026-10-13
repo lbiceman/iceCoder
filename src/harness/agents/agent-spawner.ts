@@ -791,25 +791,26 @@ export class AgentSpawner {
         const targets = this.writeTargets(run, toolCall);
         if (targets.length === 0) return null;
         const now = this.now();
+        const taken: string[] = [];
         for (const target of targets) {
-          const holder = this.leases.holderOf(run.workspaceRoot, target);
-          if (holder && holder.agentId !== run.agentId) {
-            run.leaseRejects.push({
-              path: target,
-              toolName: toolCall.name,
-              holderAgentId: holder.agentId,
-              holderDescription: holder.description,
-              at: now,
-            });
-            run.view.leaseRejects = run.leaseRejects.length;
-            return { reason: 'agent_write_lease', message: formatLeaseRejectMessage(target, holder) };
-          }
-        }
-        for (const target of targets) {
-          this.leases.acquire(run.workspaceRoot, target, {
+          const acquired = this.leases.acquire(run.workspaceRoot, target, {
             agentId: run.agentId,
             description: run.view.description,
           }, now);
+          if (acquired.ok) {
+            if (!acquired.refreshed) taken.push(target);
+            continue;
+          }
+          for (const path of taken) this.leases.release(run.workspaceRoot, path, run.agentId);
+          run.leaseRejects.push({
+            path: target,
+            toolName: toolCall.name,
+            holderAgentId: acquired.holder.agentId,
+            holderDescription: acquired.holder.description,
+            at: now,
+          });
+          run.view.leaseRejects = run.leaseRejects.length;
+          return { reason: 'agent_write_lease', message: formatLeaseRejectMessage(target, acquired.holder) };
         }
         return null;
       },

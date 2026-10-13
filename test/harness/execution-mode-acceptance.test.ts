@@ -172,7 +172,7 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
     const directMutations: string[] = [];
 
     for (const file of await loadSourceFiles()) {
-      if (/\bstate\.executionMode\s*=/.test(file.content)) {
+      if (/\bstate\.executionMode\s*=(?!=)/.test(file.content)) {
         directMutations.push(file.relativePath);
       }
     }

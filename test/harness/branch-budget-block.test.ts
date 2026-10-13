@@ -7,7 +7,7 @@ import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
   extractRunCommand,
   extractToolTargetPath,
-} from '../../src/harness/branch-budget-tool-path.js';
+} from '../../src/harness/branch-budget-path.js';
 
 describe('BranchBudgetTracker - hard block gate', () => {
   it('wouldBlockFileEdit when count reaches fileEditMax', () => {

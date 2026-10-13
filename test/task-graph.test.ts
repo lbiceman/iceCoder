@@ -1,7 +1,7 @@
 /**
  * TaskGraph Runtime Core — 单元测试
  *
- * 覆盖：create / cursor / branch / snapshot / compaction / recovery / session
+ * 覆盖：create / cursor / branch / snapshot / compaction / recovery
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -32,11 +32,6 @@ import {
   applySnapshot,
   needsRecovery,
   compactGraph,
-  createGraphSession,
-  transitionSession,
-  findActiveSession,
-  getSession,
-  clearSession,
 } from '../src/harness/task-graph.js';
 
 // ─── Helpers ───
@@ -532,28 +527,5 @@ describe('CompactGraph', () => {
 
     compactGraph(graph, { maxNodeHistoryEntries: 50, maxBranchHistoryEntries: 20, compactErrors: false, pruneDeadFallbacks: true });
     expect(graph.fallbackBranches).toHaveLength(0);
-  });
-});
-
-// ═══════════════════════════════════════════════
-
-describe('GraphSession', () => {
-  it('create → transition → find', () => {
-    const s = createGraphSession('g-sess1', 'task-1', 'fix bug', 0);
-    expect(s.status).toBe('active');
-    expect(s.graphId).toBe('g-sess1');
-
-    const active = findActiveSession();
-    expect(active?.graphId).toBe('g-sess1');
-
-    transitionSession('g-sess1', 'completed');
-    expect(getSession('g-sess1')?.status).toBe('completed');
-    expect(findActiveSession()).toBeUndefined();
-  });
-
-  it('clearSession', () => {
-    createGraphSession('g-sess2', 'task-2', 'refactor', 1);
-    clearSession('g-sess2');
-    expect(getSession('g-sess2')).toBeUndefined();
   });
 });

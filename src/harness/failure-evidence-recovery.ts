@@ -9,7 +9,7 @@
 
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { extractRunCommand } from './branch-budget-tool-path.js';
+import { extractRunCommand } from './branch-budget-path.js';
 import { findLastFailedVerification } from './rebuild-escalation.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
 

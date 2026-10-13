@@ -7,10 +7,7 @@
  */
 
 import type { CasualExtractionConfig } from '../memory/file-memory/memory-config.js';
-import type { ToolDefinition } from '../llm/types.js';
 import type { TaskIntent } from '../types/runtime-snapshot.js';
-import { isActionableToolRequest } from './harness-message-utils.js';
-import { hasExecutableSideSignal, inferIntent } from './task-state.js';
 
 const CASUAL_INTENTS: ReadonlySet<TaskIntent> = new Set(['question', 'inspect']);
 
@@ -23,47 +20,9 @@ export function shouldApplyCasualHarness(intent: TaskIntent): boolean {
   return isCasualIntent(intent);
 }
 
-/** 日常 intent 下跳过 Resilience v2 checkpoint 写入 */
+/** 日常 intent 下跳过 resilience checkpoint 写入 */
 export function shouldSkipResilienceCheckpoint(intent: TaskIntent): boolean {
   return shouldApplyCasualHarness(intent);
-}
-
-/**
- * 纯 question 寒暄判定（仅供测试 / 日后可选优化参考）。
- * 当前 LLM 请求始终携带 tools，本函数不参与运行时 omit-tools 决策。
- */
-export function shouldUseCasualLlmFastPath(userMessage: string): boolean {
-  const text = userMessage.trim();
-  if (!text) return false;
-  const intent = inferIntent(text);
-  if (intent !== 'question') return false;
-  if (isActionableToolRequest(text)) return false;
-  if (hasExecutableSideSignal(text)) return false;
-  return true;
-}
-
-export interface ResolveLlmToolsOptions {
-  /** 本会话中真实 user 消息是否仅一条（首条寒暄 fast path 才安全） */
-  isFirstUserTurnInSession?: boolean;
-}
-
-/** 无 tools 时追加到 LLM 请求（不写回会话 history）的提醒。 */
-export function buildNoToolsLlmReminder(): string {
-  // 中文说明：当前请求未携带函数工具时，只允许自然语言回答，不得伪造工具调用。
-  return `<system-reminder>
-This LLM request has no function-calling tools. Respond with natural language only.
-Do not emit textual tool calls such as &lt;tool_call&gt; or &lt;function=...&gt;, and do not pretend to read or modify files.
-</system-reminder>`;
-}
-
-/** 按轮次解析 LLM 侧 tools：始终返回全量 tools（与 API function calling 一致）。 */
-export function resolveLlmToolsForRound(
-  tools: ToolDefinition[],
-  _round?: number,
-  _userMessage?: string,
-  _options?: ResolveLlmToolsOptions,
-): ToolDefinition[] {
-  return tools;
 }
 
 export interface CasualMemoryExtractionInput {

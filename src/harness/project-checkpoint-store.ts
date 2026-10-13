@@ -385,7 +385,8 @@ export class ProjectCheckpointStore {
 
   /**
    * Uses rename directly where the platform supports replacement. On Windows replacement
-   * errors, a fixed displaced file and marker make the two-rename transaction recoverable.
+   * errors, a fixed displaced file makes the two-rename transaction recoverable.
+   * Recovery looks at whether that file exists, not a phase marker.
    * This is crash-recoverable, not an operating-system atomic replacement guarantee.
    */
   private async recoverableReplace(checkpoint: ProjectCheckpointV3): Promise<string> {
@@ -403,23 +404,19 @@ export class ProjectCheckpointStore {
         await fs.rename(tmp, this.checkpointPath);
       } catch (error) {
         if (!isWindowsReplaceError(error)) throw error;
-        await this.writeRecoveryMarker('prepared');
         try {
           await fs.rename(this.checkpointPath, this.recoveryDisplacedPath);
         } catch (moveError) {
           if (!isNodeError(moveError, 'ENOENT')) throw moveError;
         }
-        await this.writeRecoveryMarker('displaced');
         try {
           await fs.rename(tmp, this.checkpointPath);
         } catch (replaceError) {
           if (await pathExists(this.recoveryDisplacedPath)) {
             await fs.rename(this.recoveryDisplacedPath, this.checkpointPath);
           }
-          await fs.unlink(this.recoveryMarkerPath).catch(() => undefined);
           throw replaceError;
         }
-        await this.writeRecoveryMarker('installed');
         await fs.unlink(this.recoveryDisplacedPath).catch(() => undefined);
         await fs.unlink(this.recoveryMarkerPath).catch(() => undefined);
       }
@@ -427,14 +424,6 @@ export class ProjectCheckpointStore {
     } finally {
       await fs.unlink(tmp).catch(() => undefined);
     }
-  }
-
-  private async writeRecoveryMarker(phase: 'prepared' | 'displaced' | 'installed'): Promise<void> {
-    await fs.writeFile(
-      this.recoveryMarkerPath,
-      JSON.stringify({ version: 1, phase, updatedAt: new Date().toISOString() }),
-      'utf-8',
-    );
   }
 
   private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {

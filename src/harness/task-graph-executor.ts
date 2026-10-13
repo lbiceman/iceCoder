@@ -3,7 +3,7 @@
  *
  * 职责：
  *   1. 持有 TaskGraph 实例
- *   2. 管理 ContractValidator / DeviationDetector / EscalationManager / FailureClassifier
+ *   2. 管理 ContractValidator / DeviationDetector / EscalationManager
  *   3. 提供 Harness 循环所需的注入点（节点上下文、工具约束、轮次评估、游标推进）
  *
  * 依赖：Phase 1 (types), Phase 2 (task-graph), Phase 3 (builder), Phase 4 (review)
@@ -30,7 +30,6 @@ import {
 import {
   ContractValidator,
   DeviationDetector,
-  FailureClassifier,
   EscalationManager,
 } from './task-graph-review.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
@@ -75,7 +74,6 @@ export class GraphExecutor {
   private contractValidator: ContractValidator | null = null;
   private deviationDetector = new DeviationDetector();
   private escalationManager = new EscalationManager();
-  private failureClassifier = new FailureClassifier();
   private currentRoundToolNames: string[] = [];
 
   // ═══════════════════════════════════════════════
@@ -91,7 +89,6 @@ export class GraphExecutor {
     this.graph = null;
     this.contractValidator = null;
     this.escalationManager.reset();
-    this.failureClassifier.reset();
     this.currentRoundToolNames = [];
   }
 
@@ -102,9 +99,8 @@ export class GraphExecutor {
   /**
    * 是否存在 pending/running 的 type='edit' 节点。
    *
-   * 服务于 Execution Mode `explicit_impl` 信号判定（§2.8.4 表 8）：
-   * graph 中存在尚未完成的 implement 类节点 → 进入 forced 的依据之一。
-   * 与 §2.8.7 / §3.2 一致：节点 type 来自 graph 运行态，不读用户原文。
+   * 图里还有未完成的 implement 节点时，可作为进入 forced 的依据。
+   * 节点 type 来自图的运行态，不读用户原文。
    */
   hasPendingImplementNode(): boolean {
     if (!this.graph) return false;
@@ -320,10 +316,6 @@ export class GraphExecutor {
   applySnapshot(snapshot: TaskGraphSnapshot): void {
     if (!this.graph) return;
     applySnapshot(this.graph, snapshot);
-  }
-
-  classifyFailure(error: string, toolName?: string): ReturnType<FailureClassifier['classify']> {
-    return this.failureClassifier.classify(error, toolName);
   }
 
   // ═══════════════════════════════════════════════

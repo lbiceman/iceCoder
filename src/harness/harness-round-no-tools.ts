@@ -10,6 +10,7 @@ import {
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
 } from './harness-constants.js';
+import { RECOVERY_BUDGET } from './recovery-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { hasAssistantToolCallAfterLatestRealUser } from './harness-message-utils.js';
 import {
@@ -128,7 +129,6 @@ export async function handleNoToolCalls(
 ): Promise<HandleNoToolCallsResult> {
   const { state, response, rawAssistantContent, userMessage, currentTools, tokenUsage, logger, onStep } = args;
   const msgs = state.messages;
-  state.consecutiveNoToolRounds++;
 
   const rawTextForEmbedded =
     (typeof rawAssistantContent === 'string' ? rawAssistantContent : '')
@@ -139,7 +139,7 @@ export async function handleNoToolCalls(
   if (
     hasEmbeddedToolText
     && currentTools.length > 0
-    && state.noToolExecutionRecoveryCount < 1
+    && state.noToolExecutionRecoveryCount < RECOVERY_BUDGET.embeddedToolSyntax.max
   ) {
     state.noToolExecutionRecoveryCount++;
     console.log('[harness] 检测到正文中嵌入工具调用（未走 API），注入恢复提示并继续');
@@ -161,7 +161,7 @@ export async function handleNoToolCalls(
     return { action: 'continue' };
   }
 
-  if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
+  if (state.justCompacted && state.amnesiaRecoveryCount < RECOVERY_BUDGET.amnesia.max) {
     if (looksLikeTaskAmnesia(response.content || '')) {
       state.amnesiaRecoveryCount++;
       console.log('[harness] 检测到压缩后失忆，自动注入任务上下文...');
@@ -480,7 +480,11 @@ export async function handleNoToolCalls(
   }
 
   if (stopVerification.status === 'failed') {
-    if (tryConsumeVerificationContinuation(state.verificationState, 1, plan.fingerprint)) {
+    if (tryConsumeVerificationContinuation(
+      state.verificationState,
+      RECOVERY_BUDGET.verificationContinuation.max,
+      plan.fingerprint,
+    )) {
       injectContinuationUserMessage(
         deps,
         state,

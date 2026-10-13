@@ -291,39 +291,62 @@
 
 ### 死代码 / 近死代码（已全仓 grep `src/` + `test/` 验证）
 
-- [ ] **56.** `permission.ts` 整个 `PermissionManager`（仅 `index.ts` 导出，默认 pattern 仍是过时的 `execute_shell_command`）；同步删 `index.ts` 文档注释中的条目
-- [ ] **57.** `isResilienceV2Enabled()` 恒 `true`（`checkpoint-engine.ts:112-114`）→ 删除函数、`Harness.resilienceV2Enabled` 字段及所有分支；`branchBudget` / `checkpointEngine` 可去掉可选性
-- [ ] **58.** `checkpoint-engine.ts:221-225` `loadCombined`
-- [ ] **59.** `legacy-checkpoint-adapter.ts:268` `adaptLegacyCheckpointPayload`
-- [ ] **60.** `resume-task-state.ts:116-124` `applyResumeTaskStateFixups`（deprecated）
-- [ ] **61.** `checkpoint-snapshot.ts` 中 `RoundSnapshotStore` / `CheckpointSnapshotProvider`（只有接口无实现）
-- [ ] **62.** `context-compactor.ts:901-909` `getTaskDescription`
-- [ ] **63.** `thinking-content-strip.ts:139-140` `stripSystemTagsFromContent`（deprecated 别名）
-- [ ] **64.** `context-assembler.ts:34-35`、`:207-208` `dynamicContextCache` / `dynamicContextHash`（只清零从不读）
-- [ ] **65.** `harness-memory.ts:117` `EXTRACTION_MAX_CHUNKS`
-- [ ] **66.** `memory-write-pipeline.ts:144-146` `getLongTermMemoryWriteCap`（`src/` 无调用）
-- [ ] **67.** `casual-mode.ts:51` `buildNoToolsLlmReminder`；`resolveLlmToolsForRound` / `shouldUseCasualLlmFastPath` 恒等透传
-- [ ] **68.** `run-command-result.ts:260` `firstCommandToken`
-- [ ] **69.** `harness-tool-preflight.ts:44-50` `isBuildLikeCommand`（恒真）、`isDiagnosticAllowedCommand`（未用）
-- [ ] **70.** `streaming-tool-executor.ts:143-152` `getCompletedResults` / `hasPending`（无外部调用，`hasPending` 逻辑也错）
-- [ ] **71.** `task-graph-metrics.ts` 整文件（生产未 import，仅测试）；`task-graph.ts:570-615` `graphSessions`；`task-graph-executor.ts:313` `classifyFailure`；`NodeCostTrackerImpl`
-- [ ] **72.** `HarnessRunState.consecutiveNoToolRounds`（只增减不决策）、`completionGateContinuationCount`（只读写 checkpoint 不门控）
-- [ ] **73.** `harness.ts:489-491` `typeof userMessage === 'string'` 恒真分支
-- [ ] **74.** `harness-tool-executor.ts:840-842` 空 Phase 11 注释块；`:779-781` `.catch(() => {})` 改为至少 debug 日志
+- [x] **56.** `permission.ts` 整个 `PermissionManager`（仅 `index.ts` 导出，默认 pattern 仍是过时的 `execute_shell_command`）；同步删 `index.ts` 文档注释中的条目
+  - **修复说明**：删除 `permission.ts`，以及 `index.ts` 的导出和模块注释。运行时权限仍走 `harness-permission-runtime.ts`。
+- [x] **57.** `isResilienceV2Enabled()` 恒 `true`（`checkpoint-engine.ts:112-114`）→ 删除函数、`Harness.resilienceV2Enabled` 字段及所有分支；`branchBudget` / `checkpointEngine` 可去掉可选性
+  - **修复说明**：删除恒真开关和 `resilienceV2Enabled` 字段。`branchBudget` 每次 run 必建，`HarnessRunState.branchBudget` 改为必填。`checkpointEngine` 仍只在有 `sessionDir` 时创建，没有会话目录的路径继续跳过落盘。
+- [x] **58.** `checkpoint-engine.ts:221-225` `loadCombined`
+  - **修复说明**：删除 `loadCombined` 以及只被它使用的 `v3ToCombinedCompatibility`。读取仍走 `ProjectCheckpointStore.load` / `loadV2`。
+- [x] **59.** `legacy-checkpoint-adapter.ts:268` `adaptLegacyCheckpointPayload`
+  - **修复说明**：删除别名。调用方使用 `adaptLegacyCheckpoint` / `adaptCombinedCheckpoint`。
+- [x] **60.** `resume-task-state.ts:116-124` `applyResumeTaskStateFixups`（deprecated）
+  - **修复说明**：删除无调用方的 deprecated 包装。恢复仍走 `syncHydratedTaskState`。
+- [x] **61.** `checkpoint-snapshot.ts` 中 `RoundSnapshotStore` / `CheckpointSnapshotProvider`（只有接口无实现）
+  - **修复说明**：删除这两个接口及 `SnapshotProvider` 别名。轻量边界事件和 `CheckpointSnapshotRestorer` 保留。
+- [x] **62.** `context-compactor.ts:901-909` `getTaskDescription`
+  - **修复说明**：删除无调用方的方法。
+- [x] **63.** `thinking-content-strip.ts:139-140` `stripSystemTagsFromContent`（deprecated 别名）
+  - **修复说明**：删除别名。剥离仍走 `stripSystemTagsFromReasoning`。
+- [x] **64.** `context-assembler.ts:34-35`、`:207-208` `dynamicContextCache` / `dynamicContextHash`（只清零从不读）
+  - **修复说明**：删除这两个字段及 `invalidateCache` 里对应的清零。静态提示词缓存保留。
+- [x] **65.** `harness-memory.ts:117` `EXTRACTION_MAX_CHUNKS`
+  - **修复说明**：删除未使用常量。提取上限仍用 `EXTRACTION_MAX_CHUNKS_PER_RUN`。
+- [x] **66.** `memory-write-pipeline.ts:144-146` `getLongTermMemoryWriteCap`（`src/` 无调用）
+  - **修复说明**：已在 #43 删除。`releaseLongTermMemoryWriteCap` 仍在。
+- [x] **67.** `casual-mode.ts:51` `buildNoToolsLlmReminder`；`resolveLlmToolsForRound` / `shouldUseCasualLlmFastPath` 恒等透传
+  - **修复说明**：删掉这三个函数和只覆盖它们的 `casual-fast-path.test.ts`。LLM 轮次直接使用 `state.tools`。
+- [x] **68.** `run-command-result.ts:260` `firstCommandToken`
+  - **修复说明**：删除无调用方的函数。
+- [x] **69.** `harness-tool-preflight.ts:44-50` `isBuildLikeCommand`（恒真）、`isDiagnosticAllowedCommand`（未用）
+  - **修复说明**：删除两个函数。诊断门禁改为跳过抽不出命令的 `run_command`。
+- [x] **70.** `streaming-tool-executor.ts:143-152` `getCompletedResults` / `hasPending`（无外部调用，`hasPending` 逻辑也错）
+  - **修复说明**：删除这两个方法。已完成结果仍由 `flush` 返回。
+- [x] **71.** `task-graph-metrics.ts` 整文件（生产未 import，仅测试）；`task-graph.ts:570-615` `graphSessions`；`task-graph-executor.ts:313` `classifyFailure`；`NodeCostTrackerImpl`
+  - **修复说明**：删除 `task-graph-metrics.ts`、只包装它的 `scripts/eval-runner.ts`，以及对应单测。删掉进程级 `graphSessions` 和 `GraphExecutor.classifyFailure`（`FailureClassifier` 类仍在）。删除无生产调用的 `NodeCostTrackerImpl`。Agent eval 仍走 `scripts/agent-eval.ts`。
+- [x] **72.** `HarnessRunState.consecutiveNoToolRounds`（只增减不决策）、`completionGateContinuationCount`（只读写 checkpoint 不门控）
+  - **修复说明**：删除这两个字段及其增减。验收续轮计数仍写在 `verificationState.continuationCount`，checkpoint 的 `continuationCount` 只从那里读取。
+- [x] **73.** `harness.ts:489-491` `typeof userMessage === 'string'` 恒真分支
+  - **修复说明**：`run` / `runScoped` 的 `userMessage` 已是 `string`，直接用作 `plainUserText`。
+- [x] **74.** `harness-tool-executor.ts:840-842` 空 Phase 11 注释块；`:779-781` `.catch(() => {})` 改为至少 debug 日志
+  - **修复说明**：删掉只剩 Phase 11 注释的空块。会话路径 touch 失败改为 `console.debug`。
 
 ### 重复 / 重叠机制
 
-- [ ] **75. 多代 checkpoint 收敛**：TaskCheckpointManager / CheckpointEngine / V3 ProjectCheckpoint / Intent / legacy adapter / session notes 并存。V3 已是权威源：
+- [x] **75. 多代 checkpoint 收敛**：TaskCheckpointManager / CheckpointEngine / V3 ProjectCheckpoint / Intent / legacy adapter / session notes 并存。V3 已是权威源：
   - `TaskCheckpointManager.save` + `CheckpointEngine.save` 合并为一次 `ProjectCheckpointStore.save`
   - legacy adapter 只保留「读旧格式」
   - recovery marker（`project-checkpoint-store.ts:304-313`、`:361-367`）写了又删、不参与恢复决策，按 phase 实现恢复或删除
-- [ ] **76. 「别停、换策略」机制收敛为一张 RecoveryBudget 表**：empty / reasoning-only / no-tool / amnesia / stop-hook / verification continuation / failure-evidence 阶梯 / rebuild escalation / check-failure-streak / step-review。统一维护「原因 → 上限 → 重置条件」。
-- [ ] **77. 合成 user 消息识别双实现**：`compaction-strategy.ts:50-62` `isSyntheticUserBlockContent` vs `harness-message-utils.ts:53-67` `isSystemInjectedUserContent`，规则不一致。合并为一个。
-- [ ] **78. 写租约检查双循环**：`agent-spawner.ts:765-785` 先 `holderOf` 再丢弃返回值调 `acquire`。改为单循环直接用 `acquire()` 结果。
+  - **修复说明**：成功工具的 `step_completed` 只 stage，由本轮 `saveTaskCheckpoint` 一次写入 `ProjectCheckpointStore`。`tool_failed` 仍立即落盘，因为 free 段收尾不会再叠 resilience。legacy adapter 继续只在读取旧文件时使用。恢复看被挪走的 checkpoint 文件是否还在，不再写 phase marker；加载时仍清掉遗留的 `.replace.json`。
+- [x] **76. 「别停、换策略」机制收敛为一张 RecoveryBudget 表**：empty / reasoning-only / no-tool / amnesia / stop-hook / verification continuation / failure-evidence 阶梯 / rebuild escalation / check-failure-streak / step-review。统一维护「原因 → 上限 → 重置条件」。
+  - **修复说明**：上限和重置条件收进 `recovery-budget.ts`。原有常量改为读这张表。重置仍留在触发它的事件旁边，避免把十条路径收成一个调度器后改变时机。
+- [x] **77. 合成 user 消息识别双实现**：`compaction-strategy.ts:50-62` `isSyntheticUserBlockContent` vs `harness-message-utils.ts:53-67` `isSystemInjectedUserContent`，规则不一致。合并为一个。
+  - **修复说明**：前缀并集放在 `isSystemInjectedUserContent`。`isSyntheticUserBlockContent` 改为调用它。压缩和真实用户查找用同一套规则。
+- [x] **78. 写租约检查双循环**：`agent-spawner.ts:765-785` 先 `holderOf` 再丢弃返回值调 `acquire`。改为单循环直接用 `acquire()` 结果。
+  - **修复说明**：`checkBeforeTool` 一次循环调用 `acquire`。中途被拒时只撤回本轮新取得的路径，已经持有的租约保留。
 
 ### 微文件合并（< 1.5KB）
 
-- [ ] **79.**
+- [x] **79.**
   - `tool-plan-intent-map.ts` → `tool-planner.ts`
   - `branch-budget-tool-path.ts` → `branch-budget-path.ts`
   - `harness-tool-gate-context.ts` → `supervisor/tool-gate.ts`
@@ -331,12 +354,16 @@
   - `workspace-path-guard.ts` → 直接用 `shared/path-scope`
   - `supervisor/mode-controller.ts`、`supervisor/supervisor-runtime-cache.ts` → `supervisor/supervisor-config.ts`
   - `harness-cache-segment.ts`、`harness-policy-stats.ts`、`tool-output-spill.ts` 视情况并入调用方
+  - **修复说明**：上面六组合并完成，调用方改走新路径。`workspaceFileExists` 放进 `shared/path-scope`。后三个文件各有多个调用方和独立测试，并进去会把统计、溢出和缓存段缠进调用方，保持独立。
 
 ### 注释与类型清理
 
-- [ ] **80. 清理历史标签**：`Batch 1 承载位`、`W1`/`W2`/`W3`/`W4`/`W5`、`F1`、`§2.8 / T12`、`Phase 4a`/`Phase 11`、`L2-6`。主要在 `harness-run-state.ts:145-177`、`harness.ts`、`branch-budget.ts:421`、`harness-tool-round.ts:221,495`、`token-budget.ts:62`、`harness-bg-summary.ts`。
-- [ ] **81. 注释与代码不符**：`harness-memory.ts:334-335` 写 Jaccard `< 0.15`，常量为 `0.2`（`:70`）。
-- [ ] **82. `HarnessRunState` 可选字段改必填**：`executionMode?`、`executionModeLockRemaining?`、`pendingModeSignals?`、`forcedTaskBearingRoundsSinceEntry?`、`stableRoundsSinceLastFailure?` 等在 `harness.ts:589-645` 总会初始化，改必填后可删大量 `?? 0` / `?? []`。
+- [x] **80. 清理历史标签**：`Batch 1 承载位`、`W1`/`W2`/`W3`/`W4`/`W5`、`F1`、`§2.8 / T12`、`Phase 4a`/`Phase 11`、`L2-6`。主要在 `harness-run-state.ts:145-177`、`harness.ts`、`branch-budget.ts:421`、`harness-tool-round.ts:221,495`、`token-budget.ts:62`、`harness-bg-summary.ts`。
+  - **修复说明**：去掉这些批次标签，注释改成当前行为。只说明「已删除」的 Phase 11 空注释一并删掉。
+- [x] **81. 注释与代码不符**：`harness-memory.ts:334-335` 写 Jaccard `< 0.15`，常量为 `0.2`（`:70`）。
+  - **修复说明**：注释改为与 `TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2` 一致。
+- [x] **82. `HarnessRunState` 可选字段改必填**：`executionMode?`、`executionModeLockRemaining?`、`pendingModeSignals?`、`forcedTaskBearingRoundsSinceEntry?`、`stableRoundsSinceLastFailure?` 等在 `harness.ts:589-645` 总会初始化，改必填后可删大量 `?? 0` / `?? []`。
+  - **修复说明**：这些字段以及 `executionModeEnteredBy`、`filesChangedAtRoundStart`、`recoveryPendingSticky`、`lastRoundModeEscalatingFailure`、`branchSwitchedThisRound` 改为必填。读取处去掉 `??`。`normalizeExecutionModeState` 仍给缺字段的测试对象补默认值。从 checkpoint 读回的可选快照保持 `??`。
 
 ---
 

@@ -10,7 +10,7 @@ import {
   endSessionHarnessRun,
 } from '../harness/harness-runtime-registry.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
-import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
+import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-config.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { AgentSpawner } from '../harness/agents/agent-spawner.js';

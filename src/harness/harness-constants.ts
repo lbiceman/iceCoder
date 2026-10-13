@@ -1,30 +1,26 @@
+import { RECOVERY_BUDGET } from './recovery-budget.js';
+
 // ─── max-output-tokens 恢复最大次数 ───
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
-// ─── 连续工具失败提示干预阈值 ───
-// 1 静默 | 2~3 轻提示 | 4~6 证据包 | 7~9 强警告 | ≥10 熔断
-export const LIGHT_HINT_FAILURE_THRESHOLD_START = 2;
-export const LIGHT_HINT_FAILURE_THRESHOLD_END = 3;
-export const FAILURE_EVIDENCE_THRESHOLD_START = 4;
-export const FAILURE_EVIDENCE_THRESHOLD_END = 6;
-export const STRONG_WARNING_FAILURE_THRESHOLD = 7;
-export const CIRCUIT_BREAKER_THRESHOLD = 10;
+// ─── 连续工具失败提示干预阈值（见 RECOVERY_BUDGET.failureEvidenceLadder）───
+export const LIGHT_HINT_FAILURE_THRESHOLD_START = RECOVERY_BUDGET.failureEvidenceLadder.lightHintStart;
+export const LIGHT_HINT_FAILURE_THRESHOLD_END = RECOVERY_BUDGET.failureEvidenceLadder.lightHintEnd;
+export const FAILURE_EVIDENCE_THRESHOLD_START = RECOVERY_BUDGET.failureEvidenceLadder.evidenceStart;
+export const FAILURE_EVIDENCE_THRESHOLD_END = RECOVERY_BUDGET.failureEvidenceLadder.evidenceEnd;
+export const STRONG_WARNING_FAILURE_THRESHOLD = RECOVERY_BUDGET.failureEvidenceLadder.strongWarningStart;
+export const CIRCUIT_BREAKER_THRESHOLD = RECOVERY_BUDGET.failureEvidenceLadder.circuitBreaker;
 
 /** @deprecated 连续失败不再在固定轮次触发 Rebuild；保留供 file-cap / segment 等路径引用 */
 export const REBUILD_ESCALATION_THRESHOLD = 5;
 /** @deprecated 使用 FAILURE_EVIDENCE_THRESHOLD_START */
 export const MAX_CONSECUTIVE_TOOL_FAILURES = FAILURE_EVIDENCE_THRESHOLD_START;
 /** 文件 cap / 续段等 Rebuild Escalation 每 run 最多注入次数 */
-export const MAX_REBUILD_ESCALATIONS_PER_RUN = 3;
+export const MAX_REBUILD_ESCALATIONS_PER_RUN = RECOVERY_BUDGET.rebuildEscalation.max;
 
-// ─── LLM 空响应重试最大次数 ───
-export const MAX_EMPTY_RESPONSE_RETRIES = 2;
-
-// ─── 仅 reasoning、无 toolCalls 时的恢复次数 ───
-export const MAX_REASONING_ONLY_RECOVERY = 2;
-
-// ─── stop_hook 连续干预上限 ───
-export const MAX_STOP_HOOK_CONTINUATIONS = 5;
+export const MAX_EMPTY_RESPONSE_RETRIES = RECOVERY_BUDGET.emptyResponse.max;
+export const MAX_REASONING_ONLY_RECOVERY = RECOVERY_BUDGET.reasoningOnly.max;
+export const MAX_STOP_HOOK_CONTINUATIONS = RECOVERY_BUDGET.stopHook.max;
 
 // ─── LLM 调用重试配置（Harness 层传输错误最多 3 次；abort 不重试） ───
 export const LLM_MAX_RETRIES = 3;

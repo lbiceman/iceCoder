@@ -1003,22 +1003,6 @@ Continue the conversation from where it left off without asking the user any fur
   }
 
   /**
-   * 从消息历史中提取任务描述（最早的长度 > 200 字符的用户消息）。
-   * 用于压缩前备份到会话笔记，确保压缩后模型能找回任务目标。
-   * @returns 截取前 300 字符的任务摘要，若无长用户消息则返回 null
-   */
-  getTaskDescription(messages: UnifiedMessage[]): string | null {
-    for (const msg of messages) {
-      if (msg.role !== 'user') continue;
-      const content = typeof msg.content === 'string' ? msg.content : '';
-      if (content.length > 200) {
-        return content.substring(0, 300);
-      }
-    }
-    return null;
-  }
-
-  /**
    * 第一层：Snip — 裁剪历史中的冗余段落。
    *
    * - 删除重复的 <system-reminder>（只保留最后一个）

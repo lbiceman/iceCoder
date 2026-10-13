@@ -368,7 +368,6 @@ describe('#46 硬压缩后最多补回 3 条最近记忆', () => {
           maxReinjectTokens: 0,
         }),
         memoryIntegration,
-        resilienceV2Enabled: false,
         checkpointEngine: undefined,
       } as never, {
         messages,

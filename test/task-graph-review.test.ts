@@ -1,17 +1,16 @@
 /**
  * Node Contract Layer — 单元测试
  *
- * 覆盖：ContractValidator / DeviationDetector / FailureClassifier / EscalationManager / NodeCostTracker
+ * 覆盖：ContractValidator / DeviationDetector / FailureClassifier / EscalationManager
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { NodeContract, NodeCostBudget } from '../src/types/task-graph.js';
+import type { NodeContract } from '../src/types/task-graph.js';
 import {
   ContractValidator,
   DeviationDetector,
   FailureClassifier,
   EscalationManager,
-  NodeCostTrackerImpl,
 } from '../src/harness/task-graph-review.js';
 
 // ═══════════════════════════════════════════════
@@ -268,50 +267,5 @@ describe('EscalationManager', () => {
     em.reset();
     expect(em.policy.currentLevel).toBe(0);
     expect(em.policy.history).toHaveLength(0);
-  });
-});
-
-// ═══════════════════════════════════════════════
-
-describe('NodeCostTracker', () => {
-  const budget: NodeCostBudget = {
-    maxTokens: 1000, maxRounds: 3, maxToolCalls: 5, maxToolOutputChars: 8000, maxDurationMs: 60000,
-  };
-
-  it('token 超限', () => {
-    const t = new NodeCostTrackerImpl(budget);
-    t.addTokens(1200);
-    expect(t.isExhausted()).toBe(true);
-    expect(t.exhaustedBy).toBe('tokens');
-  });
-
-  it('轮次超限', () => {
-    const t = new NodeCostTrackerImpl(budget);
-    t.addRound(2);
-    t.addRound(2);
-    t.addRound(2);
-    t.addRound(2);
-    expect(t.isExhausted()).toBe(true);
-    expect(t.exhaustedBy).toBe('rounds');
-  });
-
-  it('工具调用超限', () => {
-    const t = new NodeCostTrackerImpl(budget);
-    t.addRound(6);
-    expect(t.isExhausted()).toBe(true);
-    expect(t.exhaustedBy).toBe('tool_calls');
-  });
-
-  it('utilizationRate 计算', () => {
-    const t = new NodeCostTrackerImpl(budget);
-    t.addTokens(500);
-    expect(t.utilizationRate).toBeCloseTo(0.5, 1);
-  });
-
-  it('未超限', () => {
-    const t = new NodeCostTrackerImpl(budget);
-    t.addTokens(100);
-    t.addRound(1);
-    expect(t.isExhausted()).toBe(false);
   });
 });

@@ -6,7 +6,6 @@
  * - Harness: 核心循环引擎
  * - ContextAssembler: 上下文组装器
  * - LoopController: 循环控制器
- * - PermissionManager: 权限管理器
  * - ContextCompactor: 上下文压缩器
  * - HarnessLogger: 结构化日志器
  * - StopHookManager: 停止钩子管理器
@@ -17,7 +16,6 @@
 export { Harness } from './harness.js';
 export { ContextAssembler, normalizeMessages } from './context-assembler.js';
 export { LoopController } from './loop-controller.js';
-export { PermissionManager } from './permission.js';
 export { ContextCompactor, estimateTokens } from './context-compactor.js';
 export {
   readEffectiveContextWindowTokens,
@@ -65,7 +63,7 @@ export type { StreamingToolResult } from './streaming-tool-executor.js';
 // TaskGraph
 export { createTaskGraph, getCurrentNode, advanceCursor, markGraphDone, toSnapshot, applySnapshot } from './task-graph.js';
 export { buildGraph, discoverRepoShape } from './task-graph-builder.js';
-export { ContractValidator, DeviationDetector, FailureClassifier, EscalationManager, NodeCostTrackerImpl } from './task-graph-review.js';
+export { ContractValidator, DeviationDetector, FailureClassifier, EscalationManager } from './task-graph-review.js';
 export { GraphExecutor } from './task-graph-executor.js';
 export {
   serializeGraphSnapshot,

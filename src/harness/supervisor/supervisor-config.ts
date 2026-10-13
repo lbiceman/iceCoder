@@ -4,14 +4,15 @@ import path from 'node:path';
 import { getRuntimeDataDir } from '../../cli/paths.js';
 import type {
   ExecutionModeConfig,
+  GlobalModePolicy,
   ResolvedSupervisorConfig,
   SupervisorConfigFile,
+  SupervisorMode,
 } from '../../types/supervisor.js';
 import {
   readSupervisorModeFromMainConfig,
   resolveMainConfigPath,
 } from '../../config/main-config-supervisor-mode.js';
-import { resolveGlobalPolicy } from './mode-controller.js';
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends Array<infer U>
@@ -115,6 +116,45 @@ async function readConfigFile(configPath: string): Promise<DeepPartial<Superviso
     if (error && typeof error === 'object' && 'code' in error
       && (error as { code?: string }).code === 'ENOENT') return {};
     throw error;
+  }
+}
+
+export function resolveGlobalPolicy(
+  config: Pick<SupervisorConfigFile, 'mode'>,
+): GlobalModePolicy {
+  const supervisorMode = coalesceSupervisorMode(config.mode);
+  const enabled = supervisorMode !== 'off';
+  const strict = supervisorMode === 'strict';
+
+  return {
+    supervisorMode,
+    executionModeFloor: strict ? 'forced' : 'free',
+    modeDecisionEngineEnabled: enabled,
+  };
+}
+
+function coalesceSupervisorMode(mode: SupervisorMode | undefined): SupervisorMode {
+  if (mode === 'off' || mode === 'adaptive' || mode === 'strict') {
+    return mode;
+  }
+  return 'adaptive';
+}
+
+type SupervisorResetListener = () => void;
+
+const supervisorResetListeners = new Set<SupervisorResetListener>();
+
+export function registerSupervisorRuntimeReset(listener: SupervisorResetListener): void {
+  supervisorResetListeners.add(listener);
+}
+
+export function resetSupervisorRuntimeCache(): void {
+  for (const listener of supervisorResetListeners) {
+    try {
+      listener();
+    } catch {
+      /* ignore */
+    }
   }
 }
 

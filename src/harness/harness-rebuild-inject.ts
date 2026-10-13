@@ -72,7 +72,7 @@ export function tryInjectRebuildEscalation(
     stuckCommand
     && rebuildCtx.lastVerificationCommand
     && stuckCommand !== rebuildCtx.lastVerificationCommand
-    && state.branchBudget?.wouldBlockCommandRetry(rebuildCtx.lastVerificationCommand)
+    && state.branchBudget.wouldBlockCommandRetry(rebuildCtx.lastVerificationCommand)
   ) {
     state.branchBudget.grantCommandRetryBypass(rebuildCtx.lastVerificationCommand);
     bypasses.commandBypassGranted = true;
