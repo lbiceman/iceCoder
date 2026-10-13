@@ -14,9 +14,9 @@ import {
   buildFailureEvidencePackMessage,
   buildLightFailureHintMessage,
   buildStrongFailureWarningMessage,
+  clearResolvedVerificationFailures,
   collectFailureEvidenceEntries,
   purgeEphemeralFailureRecoveryMessagesInPlace,
-  roundHadSuccessfulVerification,
   type EphemeralFailureRecoveryKind,
 } from './failure-evidence-recovery.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
@@ -579,9 +579,7 @@ export async function runHarnessToolRound(
     // evaluateRound 会重新提交 recovery_pending。
     clearResolvedRecoveryPending(state);
     purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
-    if (roundHadSuccessfulVerification(executableToolCalls, toolStats.failedSignatures)) {
-      state.verificationOutputBuffer.clear();
-    }
+    clearResolvedVerificationFailures(state.verificationOutputBuffer, runCommandClassifications);
   } else {
     // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。
     state.stableRoundsSinceLastFailure = 0;
@@ -651,17 +649,16 @@ export async function runHarnessToolRound(
 
   if (deps.executionModeConfig) {
     const failedSignatures = new Set(toolStats.failedSignatures);
-    const successfulExecutableCalls = executableToolCalls.filter(tc => {
+    const policyBlockedSignatures = new Set(toolStats.policyBlockedSignatures);
+    const ranSuccessfully = (tc: import('../llm/types.js').ToolCall) => {
       const sig = toolCallSignature(tc);
-      return !failedSignatures.has(sig) && !blockedToolSignatures.has(sig);
-    });
-    const hadSuccessfulToolExecute = toolStats.totalCount > toolStats.failedCount
-      && successfulExecutableCalls.length > 0;
-    const writeToolSucceeded = executableToolCalls.some(tc => (
-      TASK_BEARING_WRITE_TOOLS.has(tc.name)
-        && !failedSignatures.has(toolCallSignature(tc))
-        && !blockedToolSignatures.has(toolCallSignature(tc))
-    )) && toolStats.totalCount > toolStats.failedCount;
+      return !failedSignatures.has(sig)
+        && !blockedToolSignatures.has(sig)
+        && !policyBlockedSignatures.has(sig);
+    };
+    const successfulExecutableCalls = executableToolCalls.filter(ranSuccessfully);
+    const hadSuccessfulToolExecute = successfulExecutableCalls.length > 0;
+    const writeToolSucceeded = successfulExecutableCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name));
     const repoFilesChangedAfter = state.repoContext.snapshot().filesChanged.length;
     recordTaskBearingRoundIfForced(state, {
       hadSuccessfulToolExecute,

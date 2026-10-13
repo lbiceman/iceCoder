@@ -104,41 +104,53 @@
 
 ### 完成判定 / 停止
 
-- [ ] **10. 「未交付文件」只拦一轮**
+> #10–#18 统一契约（参考 Codex / Claude Code）：**模型不带工具调用的回复就是它的完成决定**。Harness 只在有确定性证据时介入（未决操作、用户拒绝、验收命令失败），启发式只能换来一次带证据的自检，不能改写终态。系统提示词 `Stopping rules` 补了一条说明这个契约。
+> 回归测试：`test/harness/audit-p1-fixes.test.ts` + 各模块单测；端到端 eval：`test/eval/harness-audit-p1-eval.test.ts`，以及 `scripts/agent-eval-cases.ts` 的 `audit-file-deliverable-self-check`、`audit-routed-around-failure-completes`（`npm run eval:agent -- --mode=local`）。
+
+- [x] **10. 「未交付文件」只拦一轮**
   - `harness-round-no-tools.ts:309-328`、`:405-432`；`incomplete-completion.ts:9-14`
   - 一次 `noToolExecutionRecovery` 用完后，模型一句「已整理好」即 `completed`。终态前 `hasPendingWork` 为真应 `paused`，不要标 completed。需同步改 `harness-round-no-tools.test.ts:531-554` 的契约。
+  - **修复说明**：没有改成 `paused`，改为让模型自己决定（同 Claude Code 的 Stop hook `block` + `stop_hook_active`）。`hasPendingWork` 为真时注入一次 `[System / Completion Check]`：说明「目标要求产出文件，但本轮没有创建或修改任何文件」，让模型选择继续调工具，或明确说明已完成 / 不需要 / 被阻塞。自检每 run 只发一次（`completionSelfCheckIssued`），之后模型再停手即按正常路径收尾。原来只在「本轮从未调用工具」时才拦，现在读过文件后口头说「整理好了」也会自检。去掉了 `isImplementationIntent` / resume 分支；`noToolExecutionRecoveryCount` 只留给正文嵌入工具语法的协议恢复。
 
-- [ ] **11. 完成硬状态被跨 scope 历史失败粘住**
+- [x] **11. 完成硬状态被跨 scope 历史失败粘住**
   - `completion-state.ts:75-113`；放大源 `harness-verification-tool-adapter.ts:100-105`
   - 只看「未解决」项：同 target 后续成功即清除，或只看最近 meaningful_progress 之后的 outcome；验收探针命令不升格为终态门禁。
+  - **修复说明**：`evaluateCompletionHardState(ledger, { since })`：失败 / 拒绝 / 高风险缺回执只看本 run（`runStartedAt` 之后）记录的；失败类再要求发生在最近一次成功改动（completed + executed + 非 observe）之后（同毫秒视为未解决）；`stop-verification:` 前缀的合成调用整体排除，由验收路径裁决。未决操作（pending / awaiting_approval）不受这些过滤影响。
 
-- [ ] **12. optional 验收命令失败整体仍 passed**
+- [x] **12. optional 验收命令失败整体仍 passed**
   - `harness-stop-verification.ts:156-157`、`:178-184`
   - 改为 `passed_with_optional_failures` 或仅全部通过才 passed。
+  - **修复说明**：`StopVerificationResult` 增加 `optionalFailures`（失败或无法执行的可选命令）。`passed` 只表示必选命令全过；收尾正文追加「Required verification passed, but optional checks did not: …」。目前用户目标解析出的命令都是必选，可选命令只在直接构造计划时出现。
 
-- [ ] **13. 权限 / 用户拒绝未计入 `policyBlockedSignatures`**
+- [x] **13. 权限 / 用户拒绝未计入 `policyBlockedSignatures`**
   - `harness-tool-executor.ts:446-533`（对比 `emitHarnessPolicyBlock` `:134-200`）；`tool-round-progress.ts:18-47`
   - 被拒的写工具被当成进展，清零失败计数、解除 `recoveryPendingSticky`。所有 deny / confirm 拒绝 / 无 handler 统一走 `emitHarnessPolicyBlock`。
+  - **修复说明**：5 条分支（shell mandatory 无 handler / 被拒，permission deny / confirm 无 handler / 被拒）全部走 `emitHarnessPolicyBlock`，会写 tool_result step、telemetry、TaskState，并计入 `directTotalCount`。用户拒绝的 `toolOutcome` / telemetry outcome 为 `user_denied`。验收适配器里专门补事件的 `emitApprovalBlockCompletion` 已删除。同时修了 `harness-tool-round` 里 forced 模式统计 task-bearing 时没排除 policy 拦截的问题（之前所有 preflight 拦截也会被算成成功执行）。
 
-- [ ] **14. abort 后已完成工具结果被丢弃**
+- [x] **14. abort 后已完成工具结果被丢弃**
   - `harness-tool-executor.ts:315-317`、`:659-675`、`:848-850`
   - 已完成的结果正常写入 messages 并记账（BranchBudget / TaskState / touched），只对未完成 id 补 `interrupted`。
+  - **修复说明**：删掉结果循环里的 `isAborted() → break`。中断时 `flush()` 只返回已跑完的工具，这些照常写结果并记账；未完成的仍由 `yieldMissingToolResults` 补 `interrupted`。
 
-- [ ] **15. Stop hook 异常被吞后直接停止（fail-open）**
+- [x] **15. Stop hook 异常被吞后直接停止（fail-open）**
   - `stop-hooks.ts:81-90`
   - 异常时记 telemetry，并按 `paused` 处理，不当作「正常结束」。
+  - **修复说明**：`StopHookManager.execute` 记下第一个异常；其它钩子仍可要求继续，都不要求时返回 `error`。no-tool 路径据此以 `paused` / `stop_hook_error` / `completion_paused` 收尾（summary telemetry 带上该 reason）。checkpoint 校验已接受新 reason。
 
-- [ ] **16. 任意成功 `run_command` 都清空验收失败证据**
+- [x] **16. 任意成功 `run_command` 都清空验收失败证据**
   - `failure-evidence-recovery.ts:181-192`；调用 `harness-tool-round.ts:582-583`
   - 仅当命令匹配当前 VerificationPlan 的规范化键时才 clear。
+  - **修复说明**：`roundHadSuccessfulVerification` 换成 `clearResolvedVerificationFailures`：只有终态成功的命令（foreground 成功 / background 完成且 exit 0）才算数，并且只按 `normalizeAcceptanceCommandKey` 清掉同一命令（含 `a && b` 的各段）之前的失败输出。没有按 VerificationPlan 匹配：计划命令重跑成功本来就是同一个键，而没有计划时也需要这个行为。
 
-- [ ] **17. 验收续轮计数不随 mutation 重置**
+- [x] **17. 验收续轮计数不随 mutation 重置**
   - `verification-state.ts:104-110`、`:273-283`；持久化 `harness-checkpoint.ts:81`
   - mutation version 上升或新 fingerprint 时 `continuationCount` 归零。
+  - **修复说明**：新增 `continuationScope = "<planFingerprint>@<workspaceMutationVersion>"`，scope 变化时计数归零。效果：模型改了文件再停手，验收失败会再给一次续轮；不改文件直接再停手则收尾并报告失败，所以停不停仍由模型决定，不会死循环。旧 checkpoint 没有 scope，恢复后会多给一次续轮。
 
-- [ ] **18. 工程改动无验收计划时 `completed_unverified` 仍走 `model_done`**
+- [x] **18. 工程改动无验收计划时 `completed_unverified` 仍走 `model_done`**
   - `harness-round-no-tools.ts:405-413`、`:563-588`
   - 对 `hasEngineeringTestTargets` 默认 `paused` + `verification_plan_unavailable`，或 UI 文案明确区分「未验证」。
+  - **修复说明**：采用 UI 区分（按模型决定的契约，不改成 `paused`）。`model_task_final` 标记带上 `completionStatus`，轮次卡在 `completed_unverified` 时显示「模型已完成本次任务（未经独立验证）」，并随轮次快照持久化。桌宠气泡原本就会区分。
 
 ### 启发式正则过宽
 
@@ -292,7 +304,7 @@
 
 ### 测试缺口（按 P0/P1 对应）
 
-- [ ] **93.** 工具超时 / abort 真正中断（对应 #1、#14）
+- [x] **93.** 工具超时 / abort 真正中断（对应 #1、#14）
 - [ ] **94.** fenced 教学 JSON 不执行；未知工具名不执行（#2）
 - [ ] **95.** 快照恢复 `../`、跨盘绝对路径拒绝（#3）
 - [ ] **96.** 恶意 `messageId` 不写出目录（#4）
@@ -300,7 +312,7 @@
 - [ ] **98.** 强制压缩保持 tool 配对；摘要保留路径参数（#6、#7）
 - [ ] **99.** 会话笔记校验失败不推进游标（#8）
 - [ ] **100.** 写工具越界拦截（绝对路径 / junction）（#9）
-- [ ] **101.** 用户拒绝写工具不算 meaningful_progress（#13）
+- [x] **101.** 用户拒绝写工具不算 meaningful_progress（#13）
 - [ ] **102.** Windows 大小写 BranchBudget（#24）
 - [ ] **103.** `bash -c "git ..."` 被拦（#35）
 - [ ] **104.** 任务图 fallback 真正激活（#34）

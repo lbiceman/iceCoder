@@ -11,7 +11,6 @@ import {
   recordToolOperationOutcomes,
   type OperationOutcome,
 } from './operation-outcome.js';
-import { toolCallSignature } from './harness-permission-runtime.js';
 import {
   classifyRunCommandResult,
   extractRunCommandTaskId,
@@ -115,12 +114,6 @@ export function createHarnessVerificationToolAdapter(
       );
     }
     const blocked = isUnavailableOutcome(outcome);
-    if (
-      blocked
-      && !stats.policyBlockedSignatures.includes(toolCallSignature(toolCall))
-    ) {
-      emitApprovalBlockCompletion(options, toolCall);
-    }
     const result = adapterResult(options, toolCall, outcome, blocked);
     compactBackgroundPollMessages(options.state, toolCall, result, intermediatePollCallIds);
     return result;
@@ -252,38 +245,6 @@ function emitGateBlockObservability(
     success: false,
     outcome: 'policy_block',
     policyReason: 'tool_gate_block',
-    outputLength: output.length,
-  });
-  options.deps.loopController.recordToolCalls(1);
-}
-
-/**
- * permission/mandatory-confirm 的旧分支只发 tool_denied；为 synthetic 调用补齐
- * tool_result 与 telemetry，同时仍由原执行链决定是否允许。
- */
-function emitApprovalBlockCompletion(
-  options: HarnessVerificationToolAdapterOptions,
-  toolCall: ToolCall,
-): void {
-  const iteration = options.deps.loopController.getState().currentRound;
-  const output = latestToolOutput(options.state, toolCall.id);
-  options.onStep?.({
-    type: 'tool_result',
-    iteration,
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    toolSuccess: false,
-    toolOutcome: 'policy_block',
-    toolOutput: stepToolOutputPreview(toolCall.name, output),
-    toolError: 'verification_unavailable',
-    toolArgs: redactToolArguments(toolCall.name, toolCall.arguments),
-  });
-  options.deps.runtimeTelemetry?.recordTool({
-    round: iteration,
-    toolName: toolCall.name,
-    success: false,
-    outcome: 'policy_block',
-    policyReason: 'verification_unavailable',
     outputLength: output.length,
   });
   options.deps.loopController.recordToolCalls(1);

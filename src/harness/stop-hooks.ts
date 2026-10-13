@@ -23,6 +23,8 @@ export interface StopHookResult {
   message?: string;
   /** 钩子名称（用于日志） */
   hookName: string;
+  /** 有钩子抛错且没有其它钩子要求继续时设置；调用方不得把这次停止当作正常完成。 */
+  error?: string;
 }
 
 /**
@@ -72,12 +74,13 @@ export class StopHookManager {
   /**
    * 执行所有停止钩子。
    * 如果任何一个钩子要求继续，就继续。
-   * 返回第一个要求继续的钩子的结果。
+   * 返回第一个要求继续的钩子的结果；否则若有钩子抛错，返回带 error 的结果。
    */
   async execute(
     messages: UnifiedMessage[],
     lastContent: string,
   ): Promise<StopHookResult> {
+    let firstError: string | undefined;
     for (const hook of this.hooks) {
       try {
         const result = await hook(messages, lastContent);
@@ -86,13 +89,14 @@ export class StopHookManager {
         }
       } catch (error) {
         console.error('[stop-hook] 钩子执行失败:', error);
-        // 钩子失败不阻止停止
+        firstError ??= error instanceof Error ? error.message : String(error);
       }
     }
 
     return {
       shouldContinue: false,
-      hookName: 'none',
+      hookName: firstError ? 'error' : 'none',
+      ...(firstError ? { error: firstError } : {}),
     };
   }
 

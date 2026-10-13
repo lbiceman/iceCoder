@@ -1389,4 +1389,69 @@ export const agentEvalCases: AgentEvalCase[] = [
     maxRounds: 6,
     timeoutMs: 120_000,
   },
+  {
+    id: 'audit-file-deliverable-self-check',
+    category: 'completion-gate',
+    prompt: [
+      'Read README.md and save its key points as a markdown file named notes.md in the workspace root.',
+      'notes.md must contain the line "Purpose: demo".',
+    ].join(' '),
+    files: {
+      'README.md': '# Demo\n\nPurpose: demo\n\nRun `node index.js` to start.\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'completed',
+      finalContains: 'notes.md',
+    },
+    assertions: [
+      { path: 'notes.md', contains: 'Purpose: demo' },
+      { path: 'README.md', unchanged: true },
+    ],
+    // 第二轮模型只口头说「整理好了」：Harness 给一次完成自检，模型随后真正写出文件。
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'README.md' } },
+      { type: 'final', content: '要点已经整理好了。' },
+      { type: 'tool', name: 'write_file', arguments: { path: 'notes.md', content: '# Notes\n\nPurpose: demo\nStart: node index.js\n' } },
+      { type: 'final', content: 'notes.md 已写入工作区根目录。' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'audit-routed-around-failure-completes',
+    category: 'completion-gate',
+    prompt: [
+      'Fix add() in src/math.js so it returns a + b.',
+      'If an edit fails, correct the path or arguments and continue.',
+    ].join(' '),
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      completionStatus: 'completed',
+      completionReason: 'verification_passed',
+    },
+    assertions: [
+      { path: 'src/math.js', contains: 'return a + b;' },
+    ],
+    // 第一次编辑路径写错（失败），随后改对；旧失败不应把已验收通过的任务判成 failed / paused。
+    scriptedTurns: [
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/maths.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'final', content: 'Fixed add() in src/math.js after correcting the path.' },
+    ],
+    maxRounds: 8,
+    timeoutMs: 120_000,
+  },
 ];

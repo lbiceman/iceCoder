@@ -58,8 +58,12 @@ export interface HarnessRunState {
   consecutiveReadOnlyRounds: number;
   /** 本 run 是否已经跑过至少一轮可执行工具；下一轮 prep 据此改走标准召回 */
   hadToolRoundThisRun?: boolean;
-  /** 执行型任务但模型未调用工具时的自动恢复次数 */
+  /** 正文里嵌入工具语法（未走 native function-calling）时的协议恢复次数 */
   noToolExecutionRecoveryCount: number;
+  /** 本 run 是否已给过「文件交付未产出」的一次性完成自检 */
+  completionSelfCheckIssued?: boolean;
+  /** 本 run 开始时间；早于它的失败 / 拒绝来自旧 checkpoint，不作为收尾硬状态 */
+  runStartedAt?: number;
   /** 本轮是否已注入任务切换提示（防止重复注入） */
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */

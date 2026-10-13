@@ -571,6 +571,7 @@ function isVerificationRuntimeState(value: unknown): value is VerificationRuntim
   if (!isNullableNonEmptyString(value.verifiedPlanFingerprint)) return false;
   if (!isNullableNonEmptyString(value.attemptedPlanFingerprint)) return false;
   if (!isNonNegativeInteger(value.continuationCount)) return false;
+  if (value.continuationScope !== undefined && !isNullableString(value.continuationScope)) return false;
   if (!isNullableString(value.blockingSignature)) return false;
   if (!isVerificationLastResult(value.lastResult)) return false;
   if (
@@ -714,6 +715,7 @@ function isCompletionReason(value: unknown): value is CompletionReason {
     'timeout',
     'max_output_tokens',
     'stop_hook',
+    'stop_hook_error',
     'circuit_breaker',
     'error',
     'operation_user_denied',

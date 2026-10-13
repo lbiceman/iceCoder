@@ -597,6 +597,7 @@ export class Harness {
       consecutiveReadOnlyRounds: 0,
       hadToolRoundThisRun: false,
       noToolExecutionRecoveryCount: 0,
+      runStartedAt: Date.now(),
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
       transition: 'initial',

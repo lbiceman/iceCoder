@@ -133,12 +133,13 @@ describe('Harness verification tool adapter', () => {
     expect(onStep).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tool_result',
       toolCallId: 'verify-denied',
-      toolOutcome: 'policy_block',
+      toolOutcome: 'user_denied',
     }));
+    expect(onStep.mock.calls.filter(([event]) => event.type === 'tool_result')).toHaveLength(1);
     expect(recordTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: 'run_command',
       success: false,
-      outcome: 'policy_block',
+      outcome: 'user_denied',
     }));
   });
 

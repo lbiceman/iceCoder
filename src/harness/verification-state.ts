@@ -29,6 +29,8 @@ export interface VerificationFreshness {
 
 export interface VerificationRuntimeState extends VerificationFreshness {
   continuationCount: number;
+  /** continuationCount 所属的「计划指纹 + mutation version」；工作区再改动或换计划后计数归零。 */
+  continuationScope: string | null;
   blockingSignature: string | null;
   lastResult: VerificationLastResult | null;
   commandProgress: VerificationCommandProgress[];
@@ -75,6 +77,7 @@ export function createVerificationRuntimeState(): VerificationRuntimeState {
     attemptedMutationVersion: null,
     attemptedPlanFingerprint: null,
     continuationCount: 0,
+    continuationScope: null,
     blockingSignature: null,
     lastResult: null,
     commandProgress: [],
@@ -173,6 +176,7 @@ export function sanitizeVerificationRuntimeState(value: unknown): VerificationRu
     attemptedMutationVersion: attemptedStateIsValid ? attemptedVersion : null,
     attemptedPlanFingerprint: attemptedStateIsValid ? attemptedFingerprint : null,
     continuationCount: nonNegativeInteger(record.continuationCount),
+    continuationScope: nonEmptyString(record.continuationScope),
     blockingSignature: nonEmptyString(record.blockingSignature),
     lastResult: sanitizeLastResult(record.lastResult),
     commandProgress: sanitizeCommandProgress(record.commandProgress),
@@ -270,15 +274,23 @@ export function recordVerificationCommandResult(
   };
 }
 
+/**
+ * 每个「计划 + 工作区版本」最多续轮 maxContinuations 次。模型改了文件再停手算新一次尝试；
+ * 不改文件直接再停手则预算已用完，由模型的停手决定收尾。
+ */
 export function tryConsumeVerificationContinuation(
   state: VerificationRuntimeState,
   maxContinuations: number,
+  planFingerprint = '',
 ): boolean {
   if (!isNonNegativeInteger(maxContinuations)) return false;
-  const current = isNonNegativeInteger(state.continuationCount)
+  const scope = `${planFingerprint}@${state.workspaceMutationVersion}`;
+  const current = state.continuationScope === scope
+    && isNonNegativeInteger(state.continuationCount)
     ? state.continuationCount
     : 0;
   if (current >= maxContinuations) return false;
+  state.continuationScope = scope;
   state.continuationCount = current + 1;
   return true;
 }

@@ -1,3 +1,5 @@
+import { normalizeAcceptanceCommandKey, stripLeadingCdPrefix } from './run-command-result.js';
+
 export interface VerificationOutputEntry {
   command: string;
   outputBody: string;
@@ -50,6 +52,20 @@ export class VerificationOutputBuffer {
 
   restore(entries: VerificationOutputEntry[] | undefined): void {
     this.entries = (entries ?? []).slice(-MAX_ENTRIES).map(entry => ({ ...entry }));
+  }
+
+  /** 某命令终态成功后，只清掉同一命令（含 `a && b` 中的各段）之前的失败输出。 */
+  clearCommand(command: string): void {
+    const keys = new Set([
+      normalizeAcceptanceCommandKey(command),
+      ...stripLeadingCdPrefix(command)
+        .split(/\s*(?:&&|;)\s*/)
+        .map(segment => normalizeAcceptanceCommandKey(segment)),
+    ].filter(Boolean));
+    if (keys.size === 0) return;
+    this.entries = this.entries.filter(entry =>
+      !keys.has(normalizeAcceptanceCommandKey(entry.command)),
+    );
   }
 
   clear(): void {

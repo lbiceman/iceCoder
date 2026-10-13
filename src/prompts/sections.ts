@@ -137,6 +137,7 @@ export function createDoingTasksSection(): PromptSection {
 - No destructive shortcuts. Don't repeat the identical failed action blindly; don't give up a viable approach after one failure either.
 
 ## Stopping rules
+- A reply without tool calls ends your turn; the runtime takes it as your decision that the request is resolved or that you are blocked. Keep working until the request is resolved. If blocked, say exactly what you need.
 - Stop calling tools and output a short delivery summary ONLY when one of:
   1. The runtime reports that all required completion conditions are satisfied.
   2. The user explicitly says the task is done, sufficient, or closed.

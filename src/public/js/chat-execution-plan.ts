@@ -2731,6 +2731,7 @@ export const ChatExecutionPlan = (() => {
       record.isFinal = !!round.isFinal;
       record.endTs = roundTs + (round.durationMs || 1500);
       if (round.stopReason) record.stopReason = round.stopReason;
+      if (round.completionStatus) record.completionStatus = round.completionStatus;
       const tools = round.tools || [];
       for (let t = 0; t < tools.length; t++) {
         const tool = tools[t];
@@ -2861,6 +2862,7 @@ export const ChatExecutionPlan = (() => {
         signals: [],
         branchReasons: [],
         stopReason: '',
+        completionStatus: '',
         activeTitle: '',
         phase: '',
       };
@@ -2900,6 +2902,7 @@ export const ChatExecutionPlan = (() => {
         record.endTs = ts;
         record.status = 'done';
         if (evt.stopReason) record.stopReason = String(evt.stopReason);
+        if (evt.completionStatus) record.completionStatus = String(evt.completionStatus);
       }
       if (evt.type === 'model_task_final') {
         // 最终轮：标记任务完成，供轮次卡展示「已完成」结果。
@@ -2987,6 +2990,9 @@ export const ChatExecutionPlan = (() => {
   };
 
   function roundCompletionText(record) {
+    if (record.completionStatus === 'completed_unverified') {
+      return '✅ 模型已完成本次任务（未经独立验证）';
+    }
     if (record.stopReason && STOP_REASON_LABELS[record.stopReason]) {
       return '✅ ' + STOP_REASON_LABELS[record.stopReason];
     }
@@ -4713,6 +4719,7 @@ export const ChatExecutionPlan = (() => {
       signals: Array.isArray(record.signals) ? record.signals.slice() : [],
       branchReasons: Array.isArray(record.branchReasons) ? record.branchReasons.slice() : [],
       stopReason: record.stopReason || '',
+      completionStatus: record.completionStatus || '',
       activeTitle: record.activeTitle || '',
       phase: record.phase || '',
     };
