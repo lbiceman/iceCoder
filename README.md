@@ -8,7 +8,7 @@
 
 ### Desktop
 
-**Work / chat** — multi-session sidebar, transcript, **iceCoder Workbench** on the right, and `#` / `@` composer. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow below; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, files, and current-chapter elapsed time:
+**Work / chat** — left nav is Work / Tasks / Knowledge / Stats, with a multi-session list under Work. The transcript sits in the center, **iceCoder Workbench** on the right, and the `#` / `@` composer at the bottom. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow below; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, and changed files.
 
 ![Desktop — work chat: checkpoint directory and selected-chapter flow](./docs/assets/desktop-work-chat.png)
 
@@ -22,9 +22,9 @@
 
 ### Mobile H5
 
-Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Settings.
+Same bundle as desktop; routes `#/m/*`. Bottom tabs: Work / Tasks / Knowledge / Settings. Knowledge holds Skills, Memory, and Rules.
 
-**Work** — chat detail, bottom multi-model picker, token stats:
+**Work** — chat detail, bottom multi-model picker, and the Ice Bean:
 
 ![Mobile — work chat (dark theme)](./docs/assets/mobile-work-chat.png)
 
@@ -32,9 +32,9 @@ Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Se
 
 ![Mobile — work chat (light theme)](./docs/assets/mobile-work-chat-light.png)
 
-**Skills** — card list with delete and “Use skill”:
+**Knowledge · Skills** — skill cards with delete and “Use skill”; Memory and Rules are the other tabs:
 
-![Mobile — skills page](./docs/assets/mobile-skills.png)
+![Mobile — knowledge, skills tab](./docs/assets/mobile-skills.png)
 
 **Settings** — theme, data directory, and execution options:
 
@@ -112,7 +112,7 @@ Long-term facts live as **Markdown** under `data/memory-files/` (no external vec
 
 Reusable **Markdown skill files** live under `data/skills/` (`ICE_SKILLS_DIR`, same level as user-memory).
 
-- **Skills page**: sidebar tab **`#/skills`** (desktop) / **`#/m/skills`** (mobile) — list, preview, delete.
+- **Skills page**: Knowledge nav opens **`#/skills`** (desktop) / **`#/m/skills`** (mobile). Memory (`#/memory`) and Rules (`#/rules`) are sibling tabs — list, preview, delete.
 - **Chat `#` picker**: type `#` in the composer to attach skills as chips; bodies are injected into the prompt at send time.
 - **Layouts**: flat `name.md` or `folder/skill.md` with optional scripts; bundled guide [`data/skills/创建技能.md`](./data/skills/创建技能.md).
 - **API**: `GET/DELETE /api/skills` — agent-created skills must stay under `ICE_SKILLS_DIR` only.
@@ -131,7 +131,7 @@ See [`docs/使用文档.md` §配置](./docs/使用文档.md#配置) for example
 
 Sidebar **CRUD** per session — isolated history, `session-notes`, checkpoints, and per-session **workspace roots**.
 
-- **Mobile H5 Shell**: same bundle as desktop; routes **`#/m/work`**, **`#/m/work/:sessionId`**, **`#/m/memory`**, **`#/m/skills`**, **`#/m/config`** — bottom tabs, session drawer, keep-alive aligned with desktop.
+- **Mobile H5 Shell**: same bundle as desktop; routes **`#/m/work`**, **`#/m/work/:sessionId`**, **`#/m/tasks`**, **`#/m/skills`**, **`#/m/memory`**, **`#/m/rules`**, **`#/m/config`**. Bottom tabs are Work / Tasks / Knowledge / Settings; session drawer and keep-alive match desktop.
 - **`~scan`**: QR pairs phone and PC on the **same session id** (shared context, not a read-only mirror).
 - Keep-alive + **runningTurn** restores streaming UI after refresh or reconnect.
 
