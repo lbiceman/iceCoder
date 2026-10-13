@@ -2,6 +2,11 @@ import path from 'node:path';
 
 import { isUnderRoot, resolveAgainstWorkspace } from './workspace-path-guard.js';
 
+/** Windows 文件系统大小写不敏感：`Src/a.ts` 与 `src/a.ts` 必须落到同一个键。 */
+function platformPathKey(posixPath: string): string {
+  return process.platform === 'win32' ? posixPath.toLowerCase() : posixPath;
+}
+
 /** BranchBudget 统一使用 workspace 相对路径（POSIX `/`），合并绝对/相对重复键。 */
 export function canonicalBudgetPath(
   workspaceRoot: string | undefined,
@@ -10,19 +15,19 @@ export function canonicalBudgetPath(
   if (!rawPath?.trim()) return undefined;
   const trimmed = rawPath.trim();
   if (!workspaceRoot?.trim()) {
-    return trimmed.replace(/\\/g, '/');
+    return platformPathKey(trimmed.replace(/\\/g, '/'));
   }
 
   const abs = resolveAgainstWorkspace(trimmed, workspaceRoot);
   if (!isUnderRoot(abs, workspaceRoot)) {
-    return trimmed.replace(/\\/g, '/');
+    return platformPathKey(trimmed.replace(/\\/g, '/'));
   }
 
   const rel = path.relative(path.resolve(workspaceRoot), abs);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
-    return trimmed.replace(/\\/g, '/');
+    return platformPathKey(trimmed.replace(/\\/g, '/'));
   }
-  return rel.replace(/\\/g, '/');
+  return platformPathKey(rel.replace(/\\/g, '/'));
 }
 
 /** checkpoint 恢复后合并同文件不同路径表示的编辑计数。 */

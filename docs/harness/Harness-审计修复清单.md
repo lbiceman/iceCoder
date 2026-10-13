@@ -154,44 +154,106 @@
 
 ### 启发式正则过宽
 
-- [ ] **19. 未完成任务钩子关键字过宽**：`incomplete-task-stop-hook.ts:15-35`。「还需要注意…」「Next step for the user…」触发续跑最多 5 次。改为句首 / 祈使语气 + 排除回顾句。
-- [ ] **20. 文件交付目标误判**：`document-deliverable.ts:436-442`。单独「放到」即判定；要求与文件名词 / 扩展名共现。
-- [ ] **21. 失忆检测误判**：`harness-round-no-tools.ts:171-176`。`/忘记/`、`/forgot/i` 匹配「不要忘记提交」；锚定疑问句并排除否定。
-- [ ] **22. 验收输出未剥 ANSI / Windows 路径弱**：`verification-digest.ts:45-47`、`:127-141`；`run-command-result.ts`。分类与 digest 前统一 `stripAnsi`，路径正则支持 `C:\`。
-- [ ] **23. `containsEmbeddedToolCalls` 过宽**：`text-format-tool-call-parsers.ts:349-358`。抽不出调用也因 hint 返回 true，触发 no-tool recovery。控制流只认 `calls.length > 0`，hint 仅用于流式 hold。
+> 回归：`test/harness/audit-p1-heuristics.test.ts`；端到端 `test/eval/harness-audit-p1b-eval.test.ts`（#19、#23）。
+
+- [x] **19. 未完成任务钩子关键字过宽**
+  - **修复说明**：按分句匹配，承诺必须在分句开头且主语是模型自己（「接下来我会修改…」「I will fix…」）。「还需要注意…」「Next step for the user…」这类提醒不再续跑。
+
+- [x] **20. 文件交付目标误判**
+  - **修复说明**：单独的「放到 / put」不再算文件交付，必须同时出现文件名词或带扩展名的文件名。
+
+- [x] **21. 失忆检测误判**
+  - **修复说明**：只认「不知道 / 忘了当前任务」的陈述，以及疑问句里的「请重复任务 / What was the task」。先去掉「不要忘记 / don't forget」。
+
+- [x] **22. 验收输出未剥 ANSI / Windows 路径弱**
+  - **修复说明**：digest 与退出码解析前用 `stripVTControlCharacters`。构建错误路径支持 `C:\`、`D:\`。
+
+- [x] **23. `containsEmbeddedToolCalls` 过宽**
+  - **修复说明**：no-tool 恢复只认能解析出的调用。解析失败的专用标记，仅当标记外正文不超过 40 字符时才算；讲解里顺带提到 `<tool_call>` 不再触发恢复。流式 hold 仍用原来的 hint。
 
 ### 路径 / 持久化
 
-- [ ] **24. Windows 大小写导致 BranchBudget / missing-file 计数分裂**：`branch-budget-path.ts:5-26`、`harness-tool-preflight.ts:112-119`。`Src/a.ts` 与 `src/a.ts` 分别计数可绕过 fileEditMax；win32 键统一小写 + `/`。
-- [ ] **25. `workspace.json` 非原子写**：`session-workspace-store.ts:103-113`。改用 `src/memory/file-memory/atomic-write.ts` 的 `writeFileAtomic`；损坏时保留 `.corrupt` 并 warn。
-- [ ] **26. checkpoint JSON 损坏 / 校验失败被当作「无 checkpoint」**：`project-checkpoint-store.ts:135-137`、`:295-301`；`checkpoint-engine.ts:216-218`；`harness-checkpoint.ts:93-95`。区分 ENOENT / 损坏 / schema 失败，损坏文件 rename 为 `.corrupt.<ts>`，日志升到 warn。
-- [ ] **27. Intent 回合收尾调用会改 cursor 的 API**：`intent-checkpoint-turn-snapshot.ts:148-153` 调 `saveIntentCheckpoint`（`intent-checkpoint-store.ts:177-205`）。改用 `rewriteIntentCheckpoint`。
-- [ ] **28. `lastCompletedStep` / `nextSuggestedStep` 落盘丢失**：`checkpoint.ts:161-167` 计算，`:214-223` 只写 `legacyApi`，`:295-316` 从 `legacySource` 读。统一字段或改为恢复时即时推断。
-- [ ] **29. 文件锁 30s 直接删、无 PID 校验**：`project-checkpoint-store.ts:409-434`。锁内写 pid，`process.kill(pid, 0)` 仍存活则等待，或心跳刷新 mtime。
-- [ ] **30. Intent 索引写入未走统一原子写**：`intent-checkpoint-store.ts:125-133`、`:161-167`、`:181-185`。Windows `EPERM/EEXIST` 无重试；统一 `writeFileAtomic`。
-- [ ] **31. Intent 索引锁 key 未规范化**：`intent-checkpoint-store.ts:49`。与 `writeStateKey` 一样 `path.resolve().toLowerCase()`。
-- [ ] **32. 恢复协调器优先用当前 `workspace.json` 根而非 archive 根**：`runtime-restore-coordinator.ts:333-344`、`:452-456`。以 archive.workspaceRoot 为准并归一化。
-- [ ] **33. 工作区快照写回非原子、无事务**：`workspace-snapshot.ts:139-166`。每文件 tmp+rename；失败抛明确的 `RestoreFailedError`。
+> 回归：`test/harness/audit-p1-persistence.test.ts`。
+
+- [x] **24. Windows 大小写导致 BranchBudget / missing-file 计数分裂**
+  - **修复说明**：win32 上 `canonicalBudgetPath` 统一成小写 + `/`。missing-file 查询时按同一键合并不同写法。旧测试改为按平台断言键名。
+
+- [x] **25. `workspace.json` 非原子写**
+  - **修复说明**：改走 `writeFileAtomic`。解析失败时把原文件留成 `.corrupt` 并 `console.warn`。
+
+- [x] **26. checkpoint JSON 损坏 / 校验失败被当作「无 checkpoint」**
+  - **修复说明**：ENOENT 仍是「没有」；损坏或 schema 失败把文件改名为 `.corrupt.<ts>`，日志升到 warn。保存失败同样是 warn。隔离后引擎继续写新 checkpoint，避免会话再也无法落盘。
+
+- [x] **27. Intent 回合收尾调用会改 cursor 的 API**
+  - **修复说明**：`finalizeIntentCheckpointTurn` 改为 `rewriteIntentCheckpoint`，不再移动 cursor。
+
+- [x] **28. `lastCompletedStep` / `nextSuggestedStep` 落盘丢失**
+  - **修复说明**：这两个字段写入 `legacyApi`，读回时先看 `legacyApi` 再回落到 `legacySource`。
+
+- [x] **29. 文件锁 30s 直接删、无 PID 校验**
+  - **修复说明**：锁里写 pid。`process.kill(pid, 0)` 仍存活则等待并靠心跳刷新 mtime；进程已死才接管。
+
+- [x] **30. Intent 索引写入未走统一原子写**
+  - **修复说明**：索引与归档写入统一 `writeFileAtomic`（含 Windows `EPERM` / `EEXIST` 重试）。
+
+- [x] **31. Intent 索引锁 key 未规范化**
+  - **修复说明**：与 `writeStateKey` 一样，win32 上 `path.resolve().toLowerCase()`。
+
+- [x] **32. 恢复协调器优先用当前 `workspace.json` 根而非 archive 根**
+  - **修复说明**：以归档里的 `workspaceRoot` 为准并归一化，不再被当前 `workspace.json` 盖掉。
+
+- [x] **33. 工作区快照写回非原子、无事务**
+  - **修复说明**：每个文件先写临时文件再 rename。中途失败抛 `RestoreFailedError`，并带上已经写成功的路径。越界检查保持不变。
 
 ### 子 Agent / Supervisor
 
-- [ ] **34. 任务图 fallback 几乎永不激活**：`task-graph-executor.ts:351-361`；`task-graph.ts:440-464`；调用 `harness-tool-round.ts:597-622`。`needsRecovery()` 要求节点 `failed`，force_switch 时节点仍是 running。切换前先标 failed，或独立 `tryFallback`。
-- [ ] **35. git 策略可被嵌套 shell 绕过**：`agents/agent-git-policy.ts:27-61`。`bash -c "git commit"`、`pwsh -Command ...`、`cmd /c git` 不拦；对命令串做段拆分 + 子串扫描。
-- [ ] **36. 写租约表进程级单例跨会话串扰**：`agents/write-lease.ts:63-64`；`agent-spawner.ts:320`；`web/chat-ws-agents.ts:67-90`。按 session 创建独立 `WriteLeaseRegistry`。
-- [ ] **37. `run_command` 改文件不受租约约束**：`agent-spawner.ts:791-836`。命令后 diff 触及他人租约应失败或强警告；文档写明。
-- [ ] **38. 后台 hub 只增不删；关机未 dispose spawner**：`agents/agent-background-hub.ts:38-118`；`agent-spawner.ts:1058`；`web/chat-ws-runtime.ts:273-281`。终态且已 drain 后 prune；关机遍历 `dispose()`。
-- [ ] **39. `raceAbort` 不取消原确认 Promise**：`agent-spawner.ts:1111-1120`。确认通道支持 AbortSignal，abort 时撤销 UI 确认。
+> 回归：`test/harness/audit-p1-agents.test.ts`。
+
+- [x] **34. 任务图 fallback 几乎永不激活**
+  - **修复说明**：`attemptFallback` 不再依赖 `needsRecovery()`。当前节点还在 running 时先标失败，再切 fallback 并启动新节点；没有 fallback 才把整张图标失败。
+
+- [x] **35. git 策略可被嵌套 shell 绕过**
+  - **修复说明**：按 `&&` / `|` / `;` 和引号拆段，并展开 `bash -c`、`pwsh -Command`、`cmd /c`、`env` / `npx` 以及 `git.exe` 完整路径。`echo "git commit"` 这种引用不拦。
+
+- [x] **36. 写租约表进程级单例跨会话串扰**
+  - **修复说明**：删掉进程级单例。每个 `AgentSpawner` 自带一张 `WriteLeaseRegistry`，也可以从外面传入。Web 侧本来就是每个会话一个 spawner。
+
+- [x] **37. `run_command` 改文件不受租约约束**
+  - **修复说明**：命令后的工作区 diff 若碰到其他 Agent 持有的租约，这次命令记为失败，并在工具结果里写明被谁占用。
+
+- [x] **38. 后台 hub 只增不删；关机未 dispose spawner**
+  - **修复说明**：终态且结果已被取走的登记会被 prune。关机时遍历会话 spawner 调用 `dispose()`，并清掉后台唤醒定时器。
+
+- [x] **39. `raceAbort` 不取消原确认 Promise**
+  - **修复说明**：确认 handler 增加可选 `AbortSignal`。abort 时撤掉挂着的 UI 确认，按拒绝结算。不传 signal 的调用方行为不变。
 
 ### 主循环 / 记忆
 
-- [ ] **40. Harness 实例复用时 `workspaceRoot` 残留**：`harness.ts:509` 改写 `this.workspaceRoot`。下一次 run 若无锁定根，沿用上次值而非 `config.workspaceRoot`。改为 run 内局部变量，或每次 run 开头重置为 `this.config.workspaceRoot ?? process.cwd()`。
-- [ ] **41. 记忆与压缩的上下文窗口两套逻辑**：`harness-memory.ts:1514-1518` 写死 128K；`context-compactor.ts:268-270` 构造时冻结 `tokenThreshold`。统一走 `readEffectiveContextWindowTokens()`，阈值按当前窗口动态计算。
-- [ ] **42. 空召回冷却忽略话题切换**：`harness-memory.ts:777-782`。冷却期内 `hasTopicShifted` 为真则清冷却。
-- [ ] **43. `dispose` 清空进程级长期记忆 cap**：`harness-memory.ts:1297-1299`；`memory/file-memory/memory-write-pipeline.ts:140-176`。只清本 session，或废弃全局槽。
-- [ ] **44. `splitMessages` 文件工具集合与策略白名单不一致**：`context-compactor.ts:1073-1082` vs `compaction-strategy.ts:29-40`。漏 `batch_edit_file`、`diff_files`；统一用 `FILE_TOOLS_PRESERVE_FULL_OUTPUT`。
-- [ ] **45. 「首条长 user」保护导致自然压缩 zero-drop**：`context-compactor.ts:1112-1124`。改为保留最近一条长任务 user 或锚点注入。
-- [ ] **46. 微压缩记忆 reinject 条件与 break 矛盾**：`harness-compaction.ts:190-196`。条件 `< 3` 但首条即 `break`，实际只保留 1 条。
-- [ ] **47. `skipPermissionChecks` 连 deny 规则也跳过**：`harness-tool-executor.ts:484-487`；`types.ts:183`。skip 时 deny 仍生效，只跳过 confirm。
+> 回归：`test/harness/audit-p1-loop-memory.test.ts`。
+
+- [x] **40. Harness 实例复用时 `workspaceRoot` 残留**
+  - **修复说明**：`this.workspaceRoot` 改成只读的构造默认值。工作区锁只写进本次 run 的局部变量，下一次没有锁时回到 `config.workspaceRoot`。
+
+- [x] **41. 记忆与压缩的上下文窗口两套逻辑**
+  - **修复说明**：记忆窗口和压缩阈值都走 `readEffectiveContextWindowTokens()`，未显式配置时按当前窗口 × `HARD_COMPACTION_RATIO` 现算。测试里传入的 `compactionTokenThreshold` 仍然优先。
+
+- [x] **42. 空召回冷却忽略话题切换**
+  - **修复说明**：冷却期内若 `hasTopicShifted` 为真，清掉冷却和连续空召回计数，当轮继续召回。
+
+- [x] **43. `dispose` 清空进程级长期记忆 cap**
+  - **修复说明**：`releaseLongTermMemoryWriteCap` 只在全局槽仍指向本会话的 cap 时才清空。无调用方的 `getLongTermMemoryWriteCap` 已删（对应 #66 的这一处）。
+
+- [x] **44. `splitMessages` 文件工具集合与策略白名单不一致**
+  - **修复说明**：裁剪和切分都改用 `FILE_TOOLS_PRESERVE_FULL_OUTPUT`，补上 `batch_edit_file`、`diff_files`。
+
+- [x] **45. 「首条长 user」保护导致自然压缩 zero-drop**
+  - **修复说明**：切割点不再为了最早那条长 user 前移。最近一条长任务描述若落在丢弃区，单独挪到 recent 前面，其余历史仍可丢。
+
+- [x] **46. 微压缩记忆 reinject 条件与 break 矛盾**
+  - **修复说明**：去掉循环里的 `break`，最多保留 3 条。重新注入时只补回压缩后已经不在消息里的那些，避免重复。
+
+- [x] **47. `skipPermissionChecks` 连 deny 规则也跳过**
+  - **修复说明**：skip 时仍执行显式 deny；confirm 和无 handler 的确认才跳过。Shell 文件工具的 confirm 与 Shell mandatory confirm 不受影响。
 
 ---
 
@@ -313,9 +375,9 @@
 - [ ] **99.** 会话笔记校验失败不推进游标（#8）
 - [ ] **100.** 写工具越界拦截（绝对路径 / junction）（#9）
 - [x] **101.** 用户拒绝写工具不算 meaningful_progress（#13）
-- [ ] **102.** Windows 大小写 BranchBudget（#24）
-- [ ] **103.** `bash -c "git ..."` 被拦（#35）
-- [ ] **104.** 任务图 fallback 真正激活（#34）
+- [x] **102.** Windows 大小写 BranchBudget（#24）
+- [x] **103.** `bash -c "git ..."` 被拦（#35）
+- [x] **104.** 任务图 fallback 真正激活（#34）
 - [ ] **105.** `finalizeIntentCheckpointTurn` 不移动 cursor（#27）
 - [ ] **106.** `workspace.json` 半写恢复（#25）
 

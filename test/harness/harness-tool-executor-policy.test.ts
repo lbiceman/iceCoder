@@ -76,8 +76,9 @@ describe('harness-tool-executor policy blocks', () => {
       },
     );
 
+    const budgetKey = process.platform === 'win32' ? relPath.toLowerCase() : relPath;
     expect(execute).not.toHaveBeenCalled();
-    expect(statsObj.budgetBlockByPath[relPath]).toBe(1);
-    expect(stats.budgetBlockedFilePaths).toEqual([relPath]);
+    expect(statsObj.budgetBlockByPath[budgetKey]).toBe(1);
+    expect(stats.budgetBlockedFilePaths).toEqual([budgetKey]);
   });
 });

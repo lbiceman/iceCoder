@@ -66,7 +66,7 @@ export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
   loopController: LoopController;
   permissionRules: ToolPermissionRule[];
-  /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
+  /** 为 true 时跳过 confirm / onConfirm；显式 deny 规则仍生效 */
   skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** Shell 协作 mandatory confirm；不可被 skipPermissionChecks 跳过 */
@@ -502,8 +502,9 @@ export async function executeToolCallsStreaming(
 
     // Shell 文件工具走 permission confirm；Shell 模式不受 skipPermissionChecks 影响。
     // Shell 命令工具（shell_exec 等）未命中 mandatory 时也不进入普通 permission。
-    const runPermissionChecks = !isShellCommandTool
-      && (isShellFileTool || !deps.skipPermissionChecks);
+    // skipPermissionChecks 只跳过 confirm，显式 deny 规则仍生效。
+    const runPermissionChecks = !isShellCommandTool;
+    const runConfirmChecks = isShellFileTool || !deps.skipPermissionChecks;
     if (runPermissionChecks) {
       const permission = resolveToolPermission(tc, deps.permissionRules);
       if (permission.permission === 'deny') {
@@ -526,7 +527,7 @@ export async function executeToolCallsStreaming(
         continue;
       }
 
-      if (permission.permission === 'confirm' && !deps.onConfirm) {
+      if (runConfirmChecks && permission.permission === 'confirm' && !deps.onConfirm) {
         emitHarnessPolicyBlock({
           deps,
           tc,
@@ -547,7 +548,8 @@ export async function executeToolCallsStreaming(
       }
 
       if (
-        permission.permission === 'confirm'
+        runConfirmChecks
+        && permission.permission === 'confirm'
         && deps.onConfirm
         && !(shellMandatoryConfirmApproved && tc.name === 'run_command')
       ) {

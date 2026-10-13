@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import type { CombinedCheckpointFile } from './checkpoint-engine.js';
 import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
 
@@ -150,11 +151,25 @@ export async function captureWorkspaceFileSnapshot(
   return snapshot;
 }
 
+export class RestoreFailedError extends Error {
+  readonly code = 'RESTORE_FAILED';
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'RestoreFailedError';
+    if (cause instanceof Error) this.cause = cause;
+  }
+}
+
+/**
+ * 每个文件走 tmp + rename，单个文件不会写出半截内容。
+ * 某个文件失败不中断其余文件，全部处理完后抛 RestoreFailedError，由调用方整体回滚。
+ */
 export async function applyWorkspaceFileSnapshot(
   workspaceRoot: string,
   snapshot: Record<string, string | null>,
   pathsToDelete: string[] = [],
 ): Promise<void> {
+  const failures: Array<{ rel: string; error: unknown }> = [];
   const unlinkRel = async (rel: string) => {
     const abs = resolveInsideWorkspace(workspaceRoot, rel);
     if (!abs) {
@@ -163,8 +178,8 @@ export async function applyWorkspaceFileSnapshot(
     }
     try {
       await fs.unlink(abs);
-    } catch {
-      /* may not exist */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failures.push({ rel, error });
     }
   };
 
@@ -183,8 +198,26 @@ export async function applyWorkspaceFileSnapshot(
       warnOutsideWorkspace('write', rel);
       continue;
     }
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf-8');
+    try {
+      // rename 换掉的是新 inode，原文件的权限位（如脚本的 +x）要手动带过去。
+      const previousMode = await fs.stat(abs).then((s) => s.mode & 0o7777, () => undefined);
+      await writeFileAtomic(abs, content);
+      if (previousMode !== undefined && process.platform !== 'win32') {
+        await fs.chmod(abs, previousMode);
+      }
+    } catch (error) {
+      failures.push({ rel, error });
+    }
+  }
+
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ rel, error }) => `${rel}: ${error instanceof Error ? error.message : String(error)}`)
+      .join('; ');
+    throw new RestoreFailedError(
+      `工作区文件写回失败（${failures.length} 个）：${detail}`,
+      failures[0].error,
+    );
   }
 }
 

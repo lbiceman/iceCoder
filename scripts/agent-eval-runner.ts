@@ -111,7 +111,7 @@ export async function runAgentEvalCase(
         timeout: testCase.timeoutMs ?? 120_000,
         tokenBudget: 250_000,
       },
-      permissions: [],
+      permissions: testCase.permissions ?? [],
       skipPermissionChecks: true,
       compactionThreshold: testCase.compactionThreshold ?? 40,
       compactionTokenThreshold: testCase.compactionTokenThreshold ?? 80_000,
@@ -144,6 +144,11 @@ export async function runAgentEvalCase(
     }
 
     const harness = new Harness(harnessConfig, executor);
+    if (testCase.incompleteTaskStopHook) {
+      const { evaluateIncompleteTaskStopHook } = await import('../src/harness/incomplete-task-stop-hook.js');
+      harness.getStopHookManager().register(async (messages, lastContent) =>
+        evaluateIncompleteTaskStopHook(messages, lastContent));
+    }
     const result = await harness.run(
       buildPrompt(testCase),
       chatFn,
@@ -194,6 +199,17 @@ function usage(): LLMResponse['usage'] {
   return { inputTokens: 40, outputTokens: 20, totalTokens: 60, provider: 'eval' };
 }
 
+function finalFromLastTool(msgs: { role: string; content?: unknown }[], contains: string) {
+  const toolText = msgs
+    .filter(message => message.role === 'tool')
+    .map(message => typeof message.content === 'string' ? message.content : '')
+    .join('\n');
+  const content = toolText.includes(contains)
+    ? toolText
+    : `tool result did not contain ${JSON.stringify(contains)}`;
+  return { content, usage: usage(), finishReason: 'stop' as const };
+}
+
 export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFunction | undefined {
   if (!turns || turns.length === 0) return undefined;
   let index = 0;
@@ -216,6 +232,7 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
     }
     if (index >= turns.length) {
       const last = turns.at(-1);
+      if (last?.type === 'final-from-tool') return finalFromLastTool(msgs, last.contains);
       return {
         content: last && last.type === 'final' ? last.content : 'done',
         usage: usage(),
@@ -226,6 +243,7 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
     if (turn.type === 'final') {
       return { content: turn.content, usage: usage(), finishReason: 'stop' };
     }
+    if (turn.type === 'final-from-tool') return finalFromLastTool(msgs, turn.contains);
     const calls = turn.type === 'tools'
       ? turn.calls
       : [{ name: turn.name, arguments: turn.arguments }];
@@ -278,6 +296,7 @@ function createChildScriptedChat(
     }
     if (index >= turns.length) {
       const last = turns.at(-1);
+      if (last?.type === 'final-from-tool') return finalFromLastTool(msgs, last.contains);
       return {
         content: last && last.type === 'final' ? last.content : 'done',
         usage: usage(),
@@ -288,6 +307,7 @@ function createChildScriptedChat(
     if (turn.type === 'final') {
       return { content: turn.content, usage: usage(), finishReason: 'stop' };
     }
+    if (turn.type === 'final-from-tool') return finalFromLastTool(msgs, turn.contains);
     const calls = turn.type === 'tools'
       ? turn.calls
       : [{ name: turn.name, arguments: turn.arguments }];
@@ -425,6 +445,14 @@ async function scoreCase(args: {
     failures.push(
       `expected completionStatus=${testCase.expected.completionStatus}, got ${result.completionStatus ?? '(missing)'}`,
     );
+  }
+  if (testCase.expected.maxLlmCalls !== undefined) {
+    const llmCalls = result.log.filter(entry => entry.event === 'llm_call').length;
+    if (llmCalls > testCase.expected.maxLlmCalls) {
+      failures.push(
+        `expected at most ${testCase.expected.maxLlmCalls} LLM calls, got ${llmCalls}`,
+      );
+    }
   }
   if (
     testCase.expected.completionReason

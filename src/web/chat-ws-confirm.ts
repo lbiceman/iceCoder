@@ -185,10 +185,10 @@ function formatShellMandatoryConfirmToolName(request: ShellMandatoryConfirmReque
 
 export function createShellMandatoryConfirmHandler(
   runSessionId: string,
-): (request: ShellMandatoryConfirmRequest) => Promise<boolean> {
-  return (request) => new Promise<boolean>((resolve) => {
+): (request: ShellMandatoryConfirmRequest, signal?: AbortSignal) => Promise<boolean> {
+  return (request, signal) => new Promise<boolean>((resolve) => {
     const toolName = formatShellMandatoryConfirmToolName(request);
-    startPendingConfirm(runSessionId, toolName, {
+    const confirmId = startPendingConfirm(runSessionId, toolName, {
       type: 'confirm',
       toolName,
       args: {
@@ -206,20 +206,22 @@ export function createShellMandatoryConfirmHandler(
         normalizedCommandHash: request.normalizedCommandHash,
       },
     }, resolve, 'shell_mandatory');
+    cancelConfirmOnAbort(confirmId, signal);
   });
 }
 
 /** handleChatMessage 使用的普通工具确认；与 shell mandatory 共用 pendingConfirms / first-win。 */
 export function createToolConfirmHandler(
   runSessionId: string,
-): (toolName: string, args: Record<string, any>) => Promise<boolean> {
-  return (toolName, args) => {
+): (toolName: string, args: Record<string, any>, signal?: AbortSignal) => Promise<boolean> {
+  return (toolName, args, signal) => {
     return new Promise<boolean>((resolve) => {
-      startPendingConfirm(runSessionId, toolName, {
+      const confirmId = startPendingConfirm(runSessionId, toolName, {
         type: 'confirm',
         toolName,
         args,
       }, resolve);
+      cancelConfirmOnAbort(confirmId, signal);
     });
   };
 }
@@ -231,7 +233,7 @@ export interface ConfirmAgentSource {
   type: string;
 }
 
-/** 子 Agent 停止后撤掉它挂着的确认，按拒绝处理。 */
+/** 调用方（如子 Agent）停止后撤掉它挂着的确认，按拒绝处理。 */
 function cancelConfirmOnAbort(confirmId: string, signal?: AbortSignal): void {
   if (!signal) return;
   if (signal.aborted) {

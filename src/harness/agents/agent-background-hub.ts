@@ -81,24 +81,24 @@ export class AgentBackgroundHub {
     return n;
   }
 
-  /** 取走一个 Agent 的终态报告（取一次即清空）。 */
+  /** 取走一个 Agent 的终态报告（取一次即清空，登记随之移除）。 */
   takeOutput(agentId: string): string | undefined {
     const found = this.find(agentId);
     if (!found || found.entry.output === undefined) return undefined;
     const out = found.entry.output;
-    delete found.entry.output;
+    this.remove(found.entry);
     return out;
   }
 
-  /** 取走该会话所有已结束、尚未注入的报告。 */
+  /** 取走该会话所有已结束、尚未注入的报告（取走的登记随之移除）。 */
   drainOutputs(sessionId: string): DrainedBackgroundResult[] {
     const map = this.bySession.get(sessionId);
     if (!map) return [];
     const out: DrainedBackgroundResult[] = [];
-    for (const entry of map.values()) {
+    for (const entry of [...map.values()]) {
       if (entry.output === undefined) continue;
       out.push({ agentId: entry.agentId, toolCallId: entry.toolCallId, output: entry.output });
-      delete entry.output;
+      this.remove(entry);
     }
     return out.sort((a, b) => a.agentId.localeCompare(b.agentId));
   }
@@ -119,6 +119,13 @@ export class AgentBackgroundHub {
 
   reset(): void {
     this.bySession.clear();
+  }
+
+  private remove(entry: BackgroundAgentEntry): void {
+    const map = this.bySession.get(entry.sessionId);
+    if (!map) return;
+    map.delete(entry.agentId);
+    if (map.size === 0) this.bySession.delete(entry.sessionId);
   }
 
   private find(agentId: string): { entry: BackgroundAgentEntry } | undefined {

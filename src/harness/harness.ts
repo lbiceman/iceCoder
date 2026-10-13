@@ -155,7 +155,8 @@ export class Harness {
   private checkpointPersistTail = Promise.resolve();
   private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
-  private workspaceRoot: string;
+  /** 构造时的默认工作区；工作区锁只覆盖单次 run，不回写此字段 */
+  private readonly workspaceRoot: string;
   private sessionDir?: string;
   private sessionId: string;
   private resilienceV2Enabled: boolean;
@@ -489,6 +490,7 @@ export class Harness {
     const plainUserText = typeof userMessage === 'string'
       ? userMessage
       : getLatestRealUserText(messages, '');
+    let workspaceRoot = this.workspaceRoot;
     let lockedWorkspaceRoot: string | undefined;
     let referenceReads: string[] = [];
     if (this.config.workspaceLock) {
@@ -506,24 +508,24 @@ export class Harness {
         messages.push({ role: 'user', content: applied.detection.changeNotice });
       }
       if (lockedWorkspaceRoot && isPlausibleWorkspaceRoot(lockedWorkspaceRoot)) {
-        this.workspaceRoot = lockedWorkspaceRoot;
+        workspaceRoot = lockedWorkspaceRoot;
       }
     }
 
-    clearReadBeforeEditScope(this.workspaceRoot, this.sessionId);
+    clearReadBeforeEditScope(workspaceRoot, this.sessionId);
 
     const exemptPrefixes = await resolveVerificationExemptDirPrefixes({
-      workspaceRoot: this.workspaceRoot,
+      workspaceRoot,
       globalDirs: this.verificationExemptDirs,
       mainConfigPath: process.env.ICE_CONFIG_PATH,
     });
     setVerificationExemptRuntime({
-      workspaceRoot: this.workspaceRoot,
+      workspaceRoot,
       prefixes: exemptPrefixes,
     });
 
     const deps = this.buildRunDeps();
-    deps.workspaceRoot = this.workspaceRoot;
+    deps.workspaceRoot = workspaceRoot;
     deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
     deps.referenceReads = referenceReads;
     const spawner = this.config.agentSpawner;
@@ -538,7 +540,7 @@ export class Harness {
           spawner.runTask(toolCall, {
             config: this.config,
             toolExecutor: parentToolExecutor,
-            workspaceRoot: this.workspaceRoot,
+            workspaceRoot,
             lockedWorkspaceRoot,
             referenceReads,
             deadline,
@@ -564,7 +566,7 @@ export class Harness {
     );
     const verificationPlanResolution = await resolveVerificationPlan({
       goal: sessionGoalAnchor,
-      workspaceRoot: this.workspaceRoot,
+      workspaceRoot,
       onWarning: warning => {
         console.debug(
           `[harness] verification plan ${warning.kind} (${warning.source}):`,

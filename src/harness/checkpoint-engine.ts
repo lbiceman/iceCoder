@@ -213,7 +213,8 @@ export class CheckpointEngine {
       }
       this.v2State = cloneV2(v2);
       return cloneV2(this.v2State);
-    } catch {
+    } catch (err) {
+      console.warn('[checkpoint-engine] loadV2 failed:', err instanceof Error ? err.message : err);
       return null;
     }
   }

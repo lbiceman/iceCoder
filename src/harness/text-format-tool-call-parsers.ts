@@ -397,18 +397,32 @@ export function parseEmbeddedToolCallsForExecution(
     .map(m => m.call);
 }
 
+/** 解析失败的工具标记外，正文（去空白）超过该长度即视为在讲解格式，不触发恢复。 */
+const UNPARSED_MARKUP_MAX_SURROUNDING_PROSE = 40;
+
+const EXPLICIT_TOOL_MARKUP_HINT =
+  /<tool[_-]?call>|<invoke\b|<\][a-zA-Z][\w.-]*\[>|\[<[a-zA-Z_][\w.-]*>|\[调用工具:\s*[\w.,\s-]+\]/i;
+
+function proseAroundToolMarkup(text: string): string {
+  return text
+    .replace(/<tool[_-]?call>[\s\S]*?<\/tool[_-]?call>/gi, '')
+    .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, '')
+    .replace(/<\/?(?:tool[_-]?call|invoke|parameter)\b[^>]*>/gi, '')
+    .replace(/\[调用工具:[^\]]*\]/g, '')
+    .replace(/(?:<\][a-zA-Z]|\[<[a-zA-Z_])[^\n]*/g, '')
+    .replace(/\s+/g, '');
+}
+
 /**
  * 正文是否像「本该走 API 却写成文本」的工具调用（驱动 no-tool 恢复）。
- * 讲解型 JSON 示例不算。
+ * 只认能解析出的调用；解析失败的专用标记仅在正文几乎只有标记时才算，
+ * 讲解型 JSON 示例、正文里顺带提到 `<invoke>` 都不算。
  */
 export function containsExecutableEmbeddedToolCalls(content: string | undefined): boolean {
   if (!content?.trim()) return false;
-  return parseEmbeddedToolCallsForExecution(content).length > 0
-    || /<tool[_-]?call>/i.test(content)
-    || /<invoke\b/i.test(content)
-    || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
-    || /\[<[a-zA-Z_][\w.-]*>/i.test(content)
-    || /\[调用工具:\s*[\w.,\s-]+\]/.test(content);
+  if (parseEmbeddedToolCallsForExecution(content).length > 0) return true;
+  return EXPLICIT_TOOL_MARKUP_HINT.test(content)
+    && proseAroundToolMarkup(content).length <= UNPARSED_MARKUP_MAX_SURROUNDING_PROSE;
 }
 
 /** 正文是否含可识别的嵌入工具调用。 */

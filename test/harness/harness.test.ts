@@ -837,14 +837,14 @@ describe('Harness - 破坏性工具权限确认', () => {
     )).toBe(true);
   });
 
-  it('skipPermissionChecks=true 时跳过 deny/confirm 并直接执行', async () => {
+  it('skipPermissionChecks=true 时跳过 confirm 并直接执行', async () => {
     const tools = [makeTool('read_file')];
     const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
     const executor = createToolExecutor(tools, handler);
     const onConfirm = vi.fn().mockResolvedValue(false);
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
-      permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
+      permissions: [{ pattern: 'read_file', permission: 'confirm', reason: 'confirm reads' }],
       skipPermissionChecks: true,
       onConfirm,
     }), executor);

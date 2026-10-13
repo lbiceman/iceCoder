@@ -50,7 +50,8 @@ export class AgentAwareToolExecutor extends ToolExecutor {
 
 export interface AgentToolRecorder {
   beforeTool(toolCall: ToolCall): Promise<void>;
-  afterTool(toolCall: ToolCall, result: ToolResult): void;
+  /** 返回 ToolResult 时替换原结果交给子 Harness。 */
+  afterTool(toolCall: ToolCall, result: ToolResult): void | ToolResult | Promise<void | ToolResult>;
 }
 
 export class AgentRecordingToolExecutor extends ToolExecutor {
@@ -68,7 +69,6 @@ export class AgentRecordingToolExecutor extends ToolExecutor {
   ): Promise<ToolResult> {
     await this.recorder.beforeTool(toolCall);
     const result = await this.inner.executeTool(toolCall, onOutput, signal);
-    this.recorder.afterTool(toolCall, result);
-    return result;
+    return (await this.recorder.afterTool(toolCall, result)) ?? result;
   }
 }

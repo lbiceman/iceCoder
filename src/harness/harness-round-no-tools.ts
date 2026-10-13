@@ -163,14 +163,7 @@ export async function handleNoToolCalls(
   }
 
   if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
-    const responseText = response.content || '';
-    const amnesiaPatterns = [
-      /无法确定.*任务/, /不确定.*任务/, /忘记/, /请重复/, /请描述/,
-      /unsure what task/i, /don'?t know what task/i, /what (was|is) the task/i,
-      /can'?t remember/i, /forgot/i, /what would you like/i,
-    ];
-    const isAmnesia = amnesiaPatterns.some(p => p.test(responseText));
-    if (isAmnesia) {
+    if (looksLikeTaskAmnesia(response.content || '')) {
       state.amnesiaRecoveryCount++;
       console.log('[harness] 检测到压缩后失忆，自动注入任务上下文...');
       if (response.content) {
@@ -528,6 +521,32 @@ export async function handleNoToolCalls(
     content: sanitizeAssistantContentForUser(response.content),
     assistantAlreadyRecorded: true,
   });
+}
+
+/** 直接陈述不知道 / 忘了当前任务。 */
+const TASK_UNKNOWN_STATEMENT = [
+  /(?:无法确定|不确定|不清楚|不知道|记不清|想不起)[^。！？\n]{0,12}(?:任务|需求|要做什么|要我做什么)/,
+  /忘(?:记|了)[^。！？\n]{0,8}(?:任务|需求|要做什么|上下文|之前的(?:对话|内容))/,
+  /\b(?:unsure|not sure|don'?t know|do not know|can'?t (?:remember|recall)|cannot (?:remember|recall)|forgot|lost track of)\b[^.?!\n]{0,40}\b(?:task|request|what you (?:asked|wanted|need))/i,
+];
+
+/** 只在疑问句里才算失忆：反问用户要做什么 / 让用户重复任务。 */
+const TASK_QUESTION = [
+  /请(?:重复|再说一遍|重新描述|再描述|描述一下)[^。！？\n]{0,12}(?:任务|需求|问题|要做)/,
+  /(?:你|您)(?:想|希望|需要)(?:让)?我(?:做|帮)(?:什么|些什么)/,
+  /\bwhat (?:was|is) the task\b/i,
+  /\bwhat would you like (?:me )?to do\b(?![^?]*\b(?:next|else)\b)/i,
+  /\b(?:could|can) you (?:repeat|restate|remind me of)\b[^?]{0,30}\b(?:task|request)/i,
+];
+
+const NEGATED_FORGET = /(?:不要|别|勿|不会|没有|千万别)忘(?:记|了)?|\b(?:don'?t|do not|never|won'?t|will not) forget\b/gi;
+
+/** 压缩后的回复是否表现为「不知道当前任务」；嘱咐类的「不要忘记…」不算。 */
+export function looksLikeTaskAmnesia(text: string): boolean {
+  const cleaned = text.replace(NEGATED_FORGET, '');
+  if (TASK_UNKNOWN_STATEMENT.some(pattern => pattern.test(cleaned))) return true;
+  const questions = cleaned.match(/[^。！？.!?\n]*[？?]/g) ?? [];
+  return questions.some(sentence => TASK_QUESTION.some(pattern => pattern.test(sentence)));
 }
 
 function buildCompletionSelfCheckPrompt(calledToolsThisTurn: boolean): string {

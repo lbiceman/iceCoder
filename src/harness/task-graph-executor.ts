@@ -23,7 +23,6 @@ import {
   markGraphFailed,
   toSnapshot,
   applySnapshot,
-  needsRecovery,
   switchToFallbackBranch,
   syncCursorToTaskPhase as alignGraphCursorToPhase,
 } from './task-graph.js';
@@ -350,13 +349,17 @@ export class GraphExecutor {
 
   private attemptFallback(reason: string): boolean {
     if (!this.graph) return false;
-    const recovery = needsRecovery(this.graph);
-    if (recovery) {
-      switchToFallbackBranch(this.graph, 'retries_exceeded');
+    // force_switch 时当前节点通常仍是 running，先判失败再切分支
+    const node = getCurrentNode(this.graph);
+    if (node && node.status !== 'failed' && node.status !== 'done' && node.status !== 'skipped') {
+      completeCurrentNode(this.graph, reason);
+    }
+    if (switchToFallbackBranch(this.graph, 'retries_exceeded')) {
+      startCurrentNode(this.graph);
       this.resetNodeState();
       return true;
     }
-    markGraphFailed(this.graph);
+    markGraphFailed(this.graph, reason);
     console.warn(`[task-graph] 无可用 fallback，停止图执行：${reason}`);
     return false;
   }

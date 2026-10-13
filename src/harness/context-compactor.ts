@@ -160,8 +160,37 @@ export interface CompactionConfig {
   sessionId?: string;
 }
 
-/** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
+/** 用户消息内容长度超过此阈值时视为任务描述，硬压缩时保留最近一条 */
 const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
+
+function isLongTaskUserMessage(msg: UnifiedMessage): boolean {
+  return msg.role === 'user'
+    && typeof msg.content === 'string'
+    && msg.content.length > MIN_USER_MSG_LENGTH_TO_PRESERVE
+    && !isSyntheticUserBlockContent(msg.content);
+}
+
+/**
+ * 按 splitAt 切分；最近一条长任务描述若落在丢弃区，单独前置到 recent。
+ * 切割点不随它前移，否则其后的历史全都丢不掉。
+ */
+function splitKeepingTaskAnchor(
+  messages: UnifiedMessage[],
+  contentStart: number,
+  splitAt: number,
+): { droppedMessages: UnifiedMessage[]; recentMessages: UnifiedMessage[] } {
+  const droppedMessages = messages.slice(contentStart, splitAt);
+  const recentMessages = messages.slice(splitAt);
+  for (let i = messages.length - 1; i >= contentStart; i--) {
+    if (!isLongTaskUserMessage(messages[i])) continue;
+    if (i < splitAt) {
+      const [anchor] = droppedMessages.splice(i - contentStart, 1);
+      recentMessages.unshift(anchor);
+    }
+    break;
+  }
+  return { droppedMessages, recentMessages };
+}
 
 /** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
 const SHORT_USER_MSG_MAX_LENGTH = 50;
@@ -317,7 +346,6 @@ export class ContextCompactor {
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.config.tokenThreshold ??= Math.floor(getContextWindow() * HARD_COMPACTION_RATIO);
     const reinjectCap = this.config.maxReinjectFiles;
     this.config.maxReinjectFiles =
       typeof reinjectCap === 'number' &&
@@ -413,11 +441,7 @@ export class ContextCompactor {
     const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
 
     if (effectiveUsed >= tokenThreshold) return true;
-    if (remaining < COMPACTION_RESERVE_TOKENS) return true;
-
-    // 向后兼容：未配置 token 阈值时也检查旧的消息数阈值逻辑。
-    if (this.config.tokenThreshold) return false;
-    return messages.length > this.config.threshold;
+    return remaining < COMPACTION_RESERVE_TOKENS;
   }
 
   /** 双轨有效占用（供日志 / 主动收缩判定） */
@@ -466,11 +490,7 @@ export class ContextCompactor {
     if (splitAt <= contentStart || splitAt >= compacted.length) {
       return split;
     }
-    return {
-      systemMessages,
-      droppedMessages: compacted.slice(contentStart, splitAt),
-      recentMessages: compacted.slice(splitAt),
-    };
+    return { systemMessages, ...splitKeepingTaskAnchor(compacted, contentStart, splitAt) };
   }
 
   /**
@@ -1128,7 +1148,7 @@ Continue the conversation from where it left off without asking the user any fur
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCalls) {
         for (const tc of msg.toolCalls) {
-          if (['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file'].includes(tc.name)) {
+          if (FILE_TOOLS_PRESERVE_FULL_OUTPUT.has(tc.name)) {
             fileToolCallIds.add(tc.id);
           }
         }
@@ -1156,20 +1176,6 @@ Continue the conversation from where it left off without asking the user any fur
         && !msg.toolCalls?.length
         && typeof msg.content === 'string'
         && msg.content.length > 500
-      ) {
-        splitAt = i;
-        break;
-      }
-    }
-
-    // 保护包含任务描述的长用户消息（content > MIN_USER_MSG_LENGTH_TO_PRESERVE），
-    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致模型无法继续执行任务。
-    for (let i = contentStart; i < splitAt; i++) {
-      const msg = messages[i];
-      if (
-        msg.role === 'user'
-        && typeof msg.content === 'string'
-        && msg.content.length > MIN_USER_MSG_LENGTH_TO_PRESERVE
       ) {
         splitAt = i;
         break;
@@ -1250,11 +1256,7 @@ Continue the conversation from where it left off without asking the user any fur
       break;
     }
 
-    return {
-      systemMessages,
-      droppedMessages: messages.slice(contentStart, splitAt),
-      recentMessages: messages.slice(splitAt),
-    };
+    return { systemMessages, ...splitKeepingTaskAnchor(messages, contentStart, splitAt) };
   }
 
   /**

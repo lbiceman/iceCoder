@@ -8,6 +8,7 @@ import {
   resolveMemoryRootForPath,
 } from '../memory/file-memory/memory-write-pipeline.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
+import { canonicalBudgetPath } from './branch-budget-path.js';
 import type { ToolCall } from '../llm/types.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
@@ -99,6 +100,25 @@ export function buildMissingFileBlockMessage(
   return lines.join('\n');
 }
 
+function missingFileAttemptKey(workspaceRoot: string, rawPath: string): string {
+  return canonicalBudgetPath(workspaceRoot, rawPath) ?? rawPath;
+}
+
+/** 计数按原始 path 记录（执行器 ENOENT 计数同样如此）；查询时合并同一文件的不同写法取最大值。 */
+function priorMissingFileAttempts(
+  attempts: Map<string, number>,
+  workspaceRoot: string,
+  attemptKey: string,
+): number {
+  let prior = 0;
+  for (const [rawKey, count] of attempts) {
+    if (missingFileAttemptKey(workspaceRoot, rawKey) === attemptKey) {
+      prior = Math.max(prior, count);
+    }
+  }
+  return prior;
+}
+
 export function checkMissingFilePreflight(input: {
   toolName: string;
   path: string | undefined;
@@ -117,7 +137,10 @@ export function checkMissingFilePreflight(input: {
     return { blocked: false };
   }
 
-  const priorAttempts = missingFileAttempts?.get(path) ?? 0;
+  const attemptKey = missingFileAttemptKey(workspaceRoot, path);
+  const priorAttempts = missingFileAttempts
+    ? priorMissingFileAttempts(missingFileAttempts, workspaceRoot, attemptKey)
+    : 0;
   // read_file：首次放行到执行器（mock/真 ENOENT 后再拦）；写类工具直接拦。
   if (toolName === 'read_file' && priorAttempts === 0) {
     return { blocked: false };

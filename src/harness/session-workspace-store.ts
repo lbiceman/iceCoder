@@ -2,6 +2,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 
 import { getDefaultWorkDir } from '../cli/paths.js';
+import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import {
   detectWorkspaceFromUserMessage,
   emptySessionWorkspaceState,
@@ -81,19 +82,52 @@ async function repairCorruptFileLockedRoot(
   return state;
 }
 
+/** 解析失败的文件挪到 `.corrupt` 保留现场，避免下一次保存把它静默覆盖。 */
+async function quarantineCorruptWorkspaceFile(file: string, err: unknown): Promise<void> {
+  const corruptPath = `${file}.corrupt`;
+  try {
+    await fs.rm(corruptPath, { force: true });
+    await fs.rename(file, corruptPath);
+    console.warn(
+      `[session-workspace] ${file} 解析失败，已另存为 ${corruptPath}:`,
+      err instanceof Error ? err.message : err,
+    );
+  } catch (renameErr) {
+    console.warn(
+      `[session-workspace] ${file} 解析失败且无法另存:`,
+      renameErr instanceof Error ? renameErr.message : renameErr,
+    );
+  }
+}
+
 export async function loadSessionWorkspace(
   sessionDir: string,
   sessionId: string,
 ): Promise<SessionWorkspaceState> {
+  const file = workspaceFilePath(sessionDir, sessionId);
+  let raw: string;
   try {
-    const raw = await fs.readFile(workspaceFilePath(sessionDir, sessionId), 'utf-8');
-    const parsed = JSON.parse(raw) as SessionWorkspaceState;
-    const state = {
-      referenceReads: parsed.referenceReads ?? [],
-      changeCount: parsed.changeCount ?? 0,
-      lockedRoot: parsed.lockedRoot,
-      lockedAt: parsed.lockedAt,
-    };
+    raw = await fs.readFile(file, 'utf-8');
+  } catch {
+    return emptySessionWorkspaceState();
+  }
+  let parsed: SessionWorkspaceState;
+  try {
+    parsed = JSON.parse(raw) as SessionWorkspaceState;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('workspace state is not an object');
+    }
+  } catch (err) {
+    await quarantineCorruptWorkspaceFile(file, err);
+    return emptySessionWorkspaceState();
+  }
+  const state = {
+    referenceReads: parsed.referenceReads ?? [],
+    changeCount: parsed.changeCount ?? 0,
+    lockedRoot: parsed.lockedRoot,
+    lockedAt: parsed.lockedAt,
+  };
+  try {
     return await repairCorruptFileLockedRoot(sessionDir, sessionId, state);
   } catch {
     return emptySessionWorkspaceState();
@@ -105,12 +139,7 @@ export async function saveSessionWorkspace(
   sessionId: string,
   state: SessionWorkspaceState,
 ): Promise<void> {
-  await fs.mkdir(sessionDir, { recursive: true });
-  await fs.writeFile(
-    workspaceFilePath(sessionDir, sessionId),
-    JSON.stringify(state, null, 2),
-    'utf-8',
-  );
+  await writeFileAtomic(workspaceFilePath(sessionDir, sessionId), JSON.stringify(state, null, 2));
 }
 
 export async function clearSessionWorkspace(

@@ -1,7 +1,14 @@
+import { stripVTControlCharacters } from 'node:util';
+
 const OUTPUT_TAIL_CHARS = 1200;
 
+/** 测试 / 构建输出常带颜色码，行首匹配（`FAIL`、`error TS`）前必须先去掉。 */
+function plainOutput(output: string): string {
+  return stripVTControlCharacters(output).trim();
+}
+
 export function takeCommandOutputTail(output: string, maxChars = OUTPUT_TAIL_CHARS): string {
-  const body = output.replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
+  const body = plainOutput(output).replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
   if (!body) return '';
   return body.length <= maxChars ? body : body.slice(-maxChars);
 }
@@ -30,7 +37,7 @@ export function buildVerificationSuccessSummary(command: string, output: string)
  * 从 vitest / npm test 输出中提取简短失败摘要，供验收失败时注入模型上下文。
  */
 export function parseVitestFailureDigest(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
 
   const lines = body.split(/\r?\n/);
@@ -81,7 +88,7 @@ export function parseVitestFailureDigest(output: string): string | null {
 
 /** 从 tsc / vite / rollup 输出中提取 build 失败摘要。 */
 export function parseBuildFailureDigest(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
 
   const lines = body.split(/\r?\n/);
@@ -125,15 +132,16 @@ export function parseBuildFailureDigest(output: string): string | null {
 
 /** 从 build 输出中提取疑似源文件路径。 */
 export function parseBuildErrorSourcePaths(output: string): string[] {
+  const text = plainOutput(output);
   const paths = new Set<string>();
   const patterns = [
-    /(?:^|\s)((?:\.\/)?[\w./\\-]+\.\w+)(?:\(\d+,\d+\))?/gi,
+    /(?:^|[\s('"])((?:[A-Za-z]:[\\/]|\.{1,2}[\\/])?[\w.\\/-]+\.\w+)(?:\(\d+,\d+\)|:\d+(?::\d+)?)?/gim,
     /error TS\d+:.*?\(([^)]+)\)/gi,
   ];
   for (const re of patterns) {
     re.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = re.exec(output)) !== null) {
+    while ((match = re.exec(text)) !== null) {
       const p = match[1]?.replace(/^[('"]+|[)'"]+$/g, '');
       if (p && !p.includes('node_modules') && /[\\/]|\.\w+$/.test(p)) paths.add(p);
     }
@@ -149,7 +157,7 @@ export function parseBuildErrorSourcePaths(output: string): string[] {
  * 返回 `8 files / 22 tests passed`，失败时返回 null（让调用方走 failure digest）。
  */
 export function parseVitestSuccessSummary(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
   if (/\b(\d+\s+failed|FAIL\b|AssertionError)/i.test(body)) return null;
 
@@ -169,7 +177,7 @@ export function parseVitestSuccessSummary(output: string): string | null {
  * 典型输出：`5 passed (4.4s)`、`Running 5 tests using 1 worker` + `5 passed`。
  */
 export function parsePlaywrightSuccessSummary(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
   if (/\b(failed|timed out|Test timeout)\b/i.test(body) && !/\b0 failed\b/i.test(body)) {
     return null;
@@ -186,7 +194,7 @@ export function parsePlaywrightSuccessSummary(output: string): string | null {
  * 典型：`✓ built in 7.49s` / `built in 7.49s`。
  */
 export function parseBuildSuccessSummary(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
   if (/\b(error TS\d+|RollupError|Build failed|ERROR\b)/i.test(body)) return null;
 
@@ -202,7 +210,7 @@ export function parseBuildSuccessSummary(output: string): string | null {
  * 从 `npm ci` / `npm install` 输出中提取成功摘要。
  */
 export function parseNpmInstallSuccessSummary(output: string): string | null {
-  const body = output.trim();
+  const body = plainOutput(output);
   if (!body) return null;
   if (/\b(npm ERR!|EACCES|EBUSY)\b/i.test(body)) return null;
   const match = body.match(/added\s+(\d+)\s+packages?(?:\s+in\s+([0-9.]+\s*[a-z]+))?/i);

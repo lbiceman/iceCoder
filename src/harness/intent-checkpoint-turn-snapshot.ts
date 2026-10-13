@@ -6,7 +6,7 @@
 import { promises as fs } from 'node:fs';
 import {
   loadIntentCheckpoint,
-  saveIntentCheckpoint,
+  rewriteIntentCheckpoint,
 } from './intent-checkpoint-store.js';
 import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
 import {
@@ -152,5 +152,5 @@ export async function finalizeIntentCheckpointTurn(
     workspaceFiles: mergedFiles,
     trackedPaths: [...mergedTracked],
   };
-  await saveIntentCheckpoint({ sessionDir, sessionId, archive: next });
+  await rewriteIntentCheckpoint(sessionDir, sessionId, next);
 }

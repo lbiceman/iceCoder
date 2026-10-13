@@ -3,7 +3,8 @@
  *
  * - 每个子 Agent 是一个完整 Harness 实例（长循环、压缩、恢复、权限、验证计划与停手判断）。
  * - 并发上限与每轮总数上限；超出总数时 task 直接报错。
- * - 写租约：并行子 Agent 不能写同一个文件；run_command 的改动只能事后发现，冲突写进结果。
+ * - 写租约：并行子 Agent 不能写同一个文件；run_command 的改动只能事后发现：
+ *   改到别人租约文件的那次命令按失败返回，冲突写进结果。
  * - 结果汇总只采信系统记录（写工具、命令、清单差异），不采信子 Agent 自述。
  */
 
@@ -66,9 +67,10 @@ import {
 } from './agent-background-hub.js';
 import { parseCheckAgentInput, parseTaskToolInput } from './task-tool.js';
 import {
-  defaultWriteLeaseRegistry,
+  WriteLeaseRegistry,
+  formatCommandLeaseViolationMessage,
   formatLeaseRejectMessage,
-  type WriteLeaseRegistry,
+  type WriteLeaseHolder,
 } from './write-lease.js';
 
 export interface AgentSource {
@@ -117,6 +119,7 @@ export interface AgentSpawnerOptions {
   ): Promise<boolean>;
   maxConcurrent?: number;
   maxPerRun?: number;
+  /** 缺省为本 spawner 独有的租约表（会话级，不跨会话共享）。 */
   leaseRegistry?: WriteLeaseRegistry;
   /** 卡片进度推送节流（毫秒） */
   updateThrottleMs?: number;
@@ -201,6 +204,8 @@ interface CommandTracking {
   classification?: RunCommandResultClassification;
   /** 命令结束（含其自身改动）时的全局写序号 */
   writeSeq: number;
+  /** 命令开始前其它 Agent 租约文件的内容（null = 不存在） */
+  foreignLeases: Array<{ absPath: string; content: string | null }>;
 }
 
 interface AgentRun {
@@ -317,7 +322,7 @@ export class AgentSpawner {
   constructor(private readonly options: AgentSpawnerOptions) {
     this.semaphore = new Semaphore(Math.max(1, options.maxConcurrent ?? agentConfig.maxConcurrent));
     this.maxPerRun = Math.max(1, options.maxPerRun ?? agentConfig.maxPerRun);
-    this.leases = options.leaseRegistry ?? defaultWriteLeaseRegistry;
+    this.leases = options.leaseRegistry ?? new WriteLeaseRegistry();
     this.backgroundHub = options.backgroundHub ?? sessionAgentBackgroundHub;
   }
 
@@ -679,17 +684,22 @@ export class AgentSpawner {
     const tools = filterToolsForAgentType(run.type, pc.context.tools);
     const source = this.sourceOf(run);
     const signal = run.controller.signal;
+    // 父确认回调可选接收 signal 以撤掉挂着的确认；忽略 signal 的实现由 raceAbort 兜底
+    const parentConfirm: AbortableConfirm<[string, Record<string, any>]> | undefined = pc.onConfirm;
+    const parentShellConfirm: AbortableConfirm<[ShellMandatoryConfirmRequest]> | undefined =
+      pc.onShellMandatoryConfirm;
     const onConfirm = this.options.onConfirm
       ? (toolName: string, args: Record<string, any>) =>
-          raceAbort(this.options.onConfirm!(source, toolName, args, signal), signal)
-      : pc.onConfirm
-        ? (toolName: string, args: Record<string, any>) => raceAbort(pc.onConfirm!(toolName, args), signal)
+          raceAbort(() => this.options.onConfirm!(source, toolName, args, signal), signal)
+      : parentConfirm
+        ? (toolName: string, args: Record<string, any>) =>
+            raceAbort(() => parentConfirm(toolName, args, signal), signal)
         : undefined;
     const onShellMandatoryConfirm = this.options.onShellMandatoryConfirm
       ? (req: ShellMandatoryConfirmRequest) =>
-          raceAbort(this.options.onShellMandatoryConfirm!(source, req, signal), signal)
-      : pc.onShellMandatoryConfirm
-        ? (req: ShellMandatoryConfirmRequest) => raceAbort(pc.onShellMandatoryConfirm!(req), signal)
+          raceAbort(() => this.options.onShellMandatoryConfirm!(source, req, signal), signal)
+      : parentShellConfirm
+        ? (req: ShellMandatoryConfirmRequest) => raceAbort(() => parentShellConfirm(req, signal), signal)
         : undefined;
 
     return {
@@ -843,11 +853,18 @@ export class AgentSpawner {
       beforeTool: async (toolCall) => {
         if (toolCall.name === 'run_command' || toolCall.name === 'shell_exec') {
           const args = toolCall.arguments ?? {};
+          const foreignLeases = await Promise.all(
+            this.leases.leasesHeldByOthers(run.agentId).map(async ({ absPath }) => ({
+              absPath,
+              content: await readFileOrNull(absPath),
+            })),
+          );
           run.commands.set(toolCall.id, {
             toolCallId: toolCall.id,
             command: String(args.command ?? args.cmd ?? args.action ?? ''),
             startedAt: this.now(),
             writeSeq: this.writeSeq,
+            foreignLeases,
           });
         }
         for (const rel of this.writeTargets(run, toolCall)) {
@@ -856,19 +873,24 @@ export class AgentSpawner {
           }
         }
       },
-      afterTool: (toolCall, result) => {
-        if (toolCall.name === 'run_command') {
+      afterTool: async (toolCall, result) => {
+        if (toolCall.name === 'run_command' || toolCall.name === 'shell_exec') {
           const tracking = run.commands.get(toolCall.id);
-          const output = result.success ? result.output : `${result.error ?? ''}\n${result.output}`;
-          const classification = classifyRunCommandResult(toolCall.arguments, output, result.success);
-          if (tracking && classification) {
-            tracking.classification = classification;
-            tracking.writeSeq = this.writeSeq;
-          } else if (tracking) {
-            run.commands.delete(toolCall.id);
+          const violations = tracking ? await this.commandLeaseViolations(run, tracking) : [];
+          if (toolCall.name === 'run_command') {
+            const output = result.success ? result.output : `${result.error ?? ''}\n${result.output}`;
+            const classification = classifyRunCommandResult(toolCall.arguments, output, result.success);
+            if (tracking && classification) {
+              tracking.classification = classification;
+              tracking.writeSeq = this.writeSeq;
+            } else if (tracking) {
+              run.commands.delete(toolCall.id);
+            }
+            run.view.commands = collectCommandRecords(run).map(c => ({ command: c.command, exitCode: c.exitCode }));
           }
-          run.view.commands = collectCommandRecords(run).map(c => ({ command: c.command, exitCode: c.exitCode }));
-          return;
+          if (violations.length === 0) return;
+          const message = formatCommandLeaseViolationMessage(violations);
+          return { ...result, success: false, error: result.error ? `${message}\n${result.error}` : message };
         }
         if (!result.success) return;
         const targets = this.writeTargets(run, toolCall);
@@ -882,6 +904,22 @@ export class AgentSpawner {
         }
       },
     };
+  }
+
+  /** 命令改动了其它 Agent 在命令开始前就已写过的租约文件。 */
+  private async commandLeaseViolations(
+    run: AgentRun,
+    tracking: CommandTracking,
+  ): Promise<Array<{ path: string; holder: WriteLeaseHolder }>> {
+    const out: Array<{ path: string; holder: WriteLeaseHolder }> = [];
+    for (const snap of tracking.foreignLeases) {
+      const holder = this.leases.holderOf(run.workspaceRoot, snap.absPath);
+      // 租约已释放，或持有者在命令运行期间自己写入：不算本命令的改动
+      if (!holder || holder.agentId === run.agentId || holder.lastWriteAt >= tracking.startedAt) continue;
+      if (await readFileOrNull(snap.absPath) === snap.content) continue;
+      out.push({ path: normalizeWorkRelPath(run.workspaceRoot, snap.absPath), holder });
+    }
+    return out;
   }
 
   private async refreshFileStat(run: AgentRun, rel: string): Promise<void> {
@@ -1108,12 +1146,15 @@ export class AgentSpawner {
   }
 }
 
-function raceAbort(promise: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+type AbortableConfirm<A extends unknown[]> = (...args: [...A, AbortSignal?]) => Promise<boolean>;
+
+/** 已停止时不再发起确认；未响应 signal 的确认在停止后按拒绝处理。 */
+function raceAbort(confirm: () => Promise<boolean>, signal: AbortSignal): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
   return new Promise(resolve => {
     const onAbort = () => resolve(false);
     signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
+    confirm().then(
       value => { signal.removeEventListener('abort', onAbort); resolve(value); },
       () => { signal.removeEventListener('abort', onAbort); resolve(false); },
     );

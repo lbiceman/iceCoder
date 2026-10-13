@@ -275,6 +275,12 @@ export function clearRuntimeOnShutdown(): void {
     try { ctrl.abort(); } catch { /* ignore */ }
   }
   sessionAbortControllers.clear();
+  for (const spawner of sessionAgentSpawners.values()) {
+    try { spawner.dispose(); } catch { /* ignore */ }
+  }
+  sessionAgentSpawners.clear();
+  for (const timer of sessionBackgroundWakeTimers.values()) clearInterval(timer);
+  sessionBackgroundWakeTimers.clear();
   sessionProcessing.clear();
   runPhaseBySession.clear();
   setCachedMessages(getActiveSessionId(), undefined);

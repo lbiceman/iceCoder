@@ -4,6 +4,8 @@
  * 后台启动成功不等于命令执行成功；只有前台终态或后台 check 终态
  * 才能供验收、失败连续计数等下游使用。
  */
+import { stripVTControlCharacters } from 'node:util';
+
 export type RunCommandResultClassification =
   | { kind: 'foreground'; command: string; foregroundSuccess: boolean; exitCode?: number }
   | { kind: 'background_start'; command: string }
@@ -100,7 +102,7 @@ function foregroundExitCode(rawOutput: string): number | undefined {
   if (typeof parsed?.exitCode === 'number' && Number.isFinite(parsed.exitCode)) {
     return Math.trunc(parsed.exitCode);
   }
-  const match = rawOutput.match(/exit\s+code\s*[:=]?\s*\(?\s*(-?\d+)/i);
+  const match = stripVTControlCharacters(rawOutput).match(/exit\s+code\s*[:=]?\s*\(?\s*(-?\d+)/i);
   return match ? Number.parseInt(match[1]!, 10) : undefined;
 }
 

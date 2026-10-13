@@ -5,10 +5,10 @@
  * 索引文件：`{sessionId}.checkpoint-index.json`
  */
 
-import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import type {
   CheckpointIndexEntry,
   CheckpointIndexFile,
@@ -62,7 +62,7 @@ function withCheckpointIndexLock<T>(
   sessionId: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const key = `${sessionDir}::${sessionId}`;
+  const key = path.resolve(indexPath(sessionDir, sessionId)).toLowerCase();
   const run = () => fn();
   const next = (indexWriteChains.get(key) ?? Promise.resolve()).then(run, run);
   const tail = next.then(() => undefined, () => undefined);
@@ -143,10 +143,7 @@ async function saveCheckpointIndex(
   sessionId: string,
   index: CheckpointIndexFile,
 ): Promise<void> {
-  await fs.mkdir(sessionDir, { recursive: true });
-  const tmp = `${indexPath(sessionDir, sessionId)}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(index, null, 2), 'utf-8');
-  await fs.rename(tmp, indexPath(sessionDir, sessionId));
+  await writeFileAtomic(indexPath(sessionDir, sessionId), JSON.stringify(index, null, 2));
 }
 
 export async function loadIntentCheckpoint(
@@ -177,10 +174,7 @@ export async function rewriteIntentCheckpoint(
 ): Promise<void> {
   const archiveToWrite = withoutLegacyRuntime(archive);
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
-  await fs.mkdir(checkpointsDir(sessionDir, sessionId), { recursive: true });
-  const tmp = `${dest}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(archiveToWrite, null, 2), 'utf-8');
-  await fs.rename(tmp, dest);
+  await writeFileAtomic(dest, JSON.stringify(archiveToWrite, null, 2));
 }
 
 export interface SaveIntentCheckpointInput {
@@ -193,12 +187,9 @@ export interface SaveIntentCheckpointInput {
 export async function saveIntentCheckpoint(input: SaveIntentCheckpointInput): Promise<void> {
   const { sessionDir, sessionId, archive } = input;
   const archiveToWrite = withoutLegacyRuntime(archive);
-  await fs.mkdir(checkpointsDir(sessionDir, sessionId), { recursive: true });
   const fileName = `${archive.messageId}.intent.json`;
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
-  const tmp = `${dest}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(archiveToWrite, null, 2), 'utf-8');
-  await fs.rename(tmp, dest);
+  await writeFileAtomic(dest, JSON.stringify(archiveToWrite, null, 2));
 
   await withCheckpointIndexLock(sessionDir, sessionId, async () => {
     const index = await loadCheckpointIndex(sessionDir, sessionId);

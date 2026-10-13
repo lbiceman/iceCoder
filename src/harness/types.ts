@@ -179,11 +179,14 @@ export interface HarnessConfig {
   loop: LoopControlConfig;
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
-  /** 为 true 时跳过 deny/confirm/破坏性确认等全部权限检查 */
+  /**
+   * 为 true 时跳过 confirm 与破坏性操作确认；`permissions` 中显式的 deny 规则仍生效。
+   * Shell 协作文件工具的 confirm 与 Shell mandatory confirm 不受影响。
+   */
   skipPermissionChecks?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
-  /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */
+  /** 硬压缩的 token 阈值；未设置时按当前上下文窗口 × HARD_COMPACTION_RATIO 动态计算 */
   compactionTokenThreshold?: number;
   /** 上下文压缩后保留的最近消息数 */
   compactionKeepRecent?: number;

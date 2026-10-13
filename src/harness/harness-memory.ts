@@ -38,6 +38,7 @@ import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/mem
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import { evaluateMemoryExtractionGate, type MemoryExtractionGateResult } from './memory-extraction-gate.js';
 import {
   isSessionContextWriteStale,
@@ -62,6 +63,7 @@ import {
   resolveMessageForRememberWriteGuard,
   getOrCreateSessionLongTermMemoryWriteCap,
   registerLongTermMemoryWriteCap,
+  releaseLongTermMemoryWriteCap,
   recordLongTermMemoryWriteSuccess,
   type LongTermMemoryWriteCap,
 } from '../memory/file-memory/memory-write-pipeline.js';
@@ -775,10 +777,15 @@ export class HarnessMemoryIntegration {
     }
 
     // ── 空召回冷却机制 ──
-    // 连续多次空召回后暂停几轮，避免无意义的重复扫描
+    // 连续多次空召回后暂停几轮，避免无意义的重复扫描；话题切换后旧的空召回不再说明问题
     if (this.emptyRecallCooldown > 0) {
-      this.emptyRecallCooldown--;
-      return;
+      if (hasTopicShifted(this.lastInjectionUserMessage, latestUserMsg)) {
+        this.emptyRecallCooldown = 0;
+        this.consecutiveEmptyRecalls = 0;
+      } else {
+        this.emptyRecallCooldown--;
+        return;
+      }
     }
 
     const recallCfg = getRecallConfig();
@@ -1296,7 +1303,7 @@ ${candidateList}`;
    */
   dispose(): void {
     registerAgentMemoryWriteGuard(null, this.sessionId);
-    registerLongTermMemoryWriteCap(null);
+    releaseLongTermMemoryWriteCap(this.sessionMemoryWriteCap);
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
@@ -1507,14 +1514,9 @@ ${candidateList}`;
     });
   }
 
-  /**
-   * 估算模型上下文窗口大小。
-   * 优先从环境变量读取，否则使用默认 128k。
-   */
+  /** 与压缩器同源的生效上下文窗口（ICE_CONTEXT_WINDOW → 默认 provider → 128K） */
   private estimateContextWindow(): number {
-    const envWindow = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-    if (Number.isFinite(envWindow) && envWindow > 0) return envWindow;
-    return 128_000;
+    return readEffectiveContextWindowTokens();
   }
 
   /**

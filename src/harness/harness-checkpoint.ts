@@ -91,7 +91,7 @@ export async function saveTaskCheckpoint(
       };
       await deps.checkpointManager!.save(checkpointSave);
     } catch (err) {
-      console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
+      console.warn('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
     }
   });
 }
