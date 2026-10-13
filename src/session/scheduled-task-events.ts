@@ -35,6 +35,19 @@ export function describeScheduledTaskStop(reason: StopReason | undefined, detail
   return `${label}：${clipped}`;
 }
 
+/**
+ * 定时任务成败只看模型有没有返回正文。
+ * 收尾门禁、验收、熔断、轮次上限都不参与。
+ * 调用本身失败（抛错、没有停止原因，或 stopReason 为 error）没有模型回复，仍算失败。
+ */
+export function scheduledTaskLlmSucceeded(
+  stopReason: StopReason | undefined,
+  finalContent: string | undefined,
+): boolean {
+  if (!stopReason || stopReason === 'error') return false;
+  return !!finalContent?.trim();
+}
+
 let handler: ScheduledTaskResultHandler | null = null;
 
 export function registerScheduledTaskResultHandler(next: ScheduledTaskResultHandler | null): void {

@@ -46,7 +46,7 @@ export function resolveLocalDataDir(env: NodeJS.ProcessEnv = process.env): strin
 /** 源码本地开发运行时数据根 */
 export const LOCAL_DATA_DIR = resolveLocalDataDir();
 
-/** 开发环境：项目根 `.iceCoder/`（MCP、memory.md 等项目级配置） */
+/** 开发环境：项目根 `.iceCoder/`（MCP 等项目级配置） */
 export const LOCAL_ICECODER_DIR = path.resolve('.iceCoder');
 
 /** 生产环境：NODE_ENV=production */

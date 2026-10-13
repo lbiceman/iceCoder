@@ -49,8 +49,8 @@ function asSkillList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
 }
 
-/** 非数组原样交给 normalizeSchedule 报错；元素按数字解析（REST 表单可能传字符串）。 */
-function asWeekdays(v: unknown): number[] {
+/** 星期 / 日期列表：非数组原样交给 normalizeSchedule 报错；元素按数字解析（REST 表单可能传字符串）。 */
+function asDayList(v: unknown): number[] {
   return Array.isArray(v) ? v.map((d) => (typeof d === 'string' && d.trim() !== '' ? Number(d) : d) as number) : (v as number[]);
 }
 
@@ -63,7 +63,8 @@ function parsePatch(input: ScheduledTaskInput): ScheduledTaskUpdatePatch {
   if (input.intervalValue !== undefined) patch.intervalValue = Number(input.intervalValue);
   if (input.intervalUnit !== undefined) patch.intervalUnit = input.intervalUnit as ScheduledTaskIntervalUnit;
   if (input.timeOfDay !== undefined) patch.timeOfDay = input.timeOfDay as string;
-  if (input.weekdays !== undefined) patch.weekdays = asWeekdays(input.weekdays);
+  if (input.weekdays !== undefined) patch.weekdays = asDayList(input.weekdays);
+  if (input.monthDays !== undefined) patch.monthDays = asDayList(input.monthDays);
   if (input.once !== undefined) patch.once = input.once === true;
   if (input.enabled !== undefined) patch.enabled = input.enabled === true;
   return patch;
@@ -97,12 +98,12 @@ export function createScheduledTaskService(deps: ScheduledTaskServiceDeps): Sche
       if (!name) throw new Error('任务名称不能为空');
       if (!prompt) throw new Error('任务提示词不能为空');
       // 先做完整校验再复制附件，避免非法输入留下孤儿附件。
-      const { scheduleKind, intervalValue, intervalUnit, timeOfDay, weekdays } = parsePatch(input);
+      const { scheduleKind, intervalValue, intervalUnit, timeOfDay, weekdays, monthDays } = parsePatch(input);
       const draft = {
         name,
         prompt,
         skillFilenames: asSkillList(input.skillFilenames),
-        ...normalizeSchedule({ scheduleKind, intervalValue, intervalUnit, timeOfDay, weekdays }),
+        ...normalizeSchedule({ scheduleKind, intervalValue, intervalUnit, timeOfDay, weekdays, monthDays }),
         once: input.once === true,
         enabled: input.enabled !== false,
       };

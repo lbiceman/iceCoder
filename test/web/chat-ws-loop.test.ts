@@ -424,11 +424,25 @@ describe('chat-ws-loop', () => {
       registerScheduledTaskResultHandler(null);
     });
 
-    it('model_done 回写成功', async () => {
+    it('模型返回正文时回写成功，并跳过收尾门禁', async () => {
       const sid = uniqueSid();
       const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        expect(input.skipCompletionGate).toBe(true);
+        input.onFinalContent?.('已完成。');
+        return 'model_done';
+      });
       await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
       expect(results).toEqual([{ taskId: 'task-r', success: true, error: null }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('模型没有返回正文时回写失败', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockResolvedValue('model_done');
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: false, error: '执行失败（详情见任务会话）' }]);
       setSessionUnattended(sid, false);
     });
 
@@ -445,6 +459,18 @@ describe('chat-ws-loop', () => {
         success: false,
         error: '执行出错：LLM 调用错误: OpenAI API Error [401]: invalid api key',
       }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('收尾门禁失败但模型已回复时回写成功', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        input.onFinalContent?.('已完成。目标日期 2026-10-12，已写出总结文件。');
+        return 'completion_failed';
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: true, error: null }]);
       setSessionUnattended(sid, false);
     });
 

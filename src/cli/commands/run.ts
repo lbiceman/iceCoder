@@ -65,11 +65,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
   if (!jsonOutput) spinner.start();
 
   try {
-    const assembled = await loadAssembledChatPrompt({
-      logPrefix: '[run]',
-      systemPromptPath: ctx.paths.systemPromptPath,
-      defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
-    });
     let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
     const { supervisorConfig, globalPolicy } = await loadHarnessSupervisorRuntime({
       dataDir: ctx.paths.dataDir,
@@ -91,6 +86,12 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+    const assembled = await loadAssembledChatPrompt({
+      logPrefix: '[run]',
+      workspaceRoot: wsCtx.effectiveWorkspaceRoot,
+      systemPromptPath: ctx.paths.systemPromptPath,
+      defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
+    });
     const promptToolNames = toolDefs.map((tool) => tool.name);
     // Lazy Tool Offering（CLI）：按信号裁剪文档工具；CLI 暂无上传/引用/多模态
     const offeringResult = selectToolsForOffering(toolDefs, {

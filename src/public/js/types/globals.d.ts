@@ -69,6 +69,7 @@ declare global {
     MobileChatPage?: any;
     MobileMemoryPage?: any;
     MobileSkillsPage?: any;
+    MobileRulesPage?: any;
     MobileConfigPage?: any;
     ChatTaskQueue?: any;
     ChatShellDock?: any;
@@ -81,6 +82,7 @@ declare global {
     ChatPage?: any;
     MemoryPage?: any;
     SkillsPage?: any;
+    RulesPage?: any;
     StatsPage?: any;
     AppShell?: any;
     AppRouter?: any;

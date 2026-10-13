@@ -21,7 +21,7 @@ export const MobileShell = (() => {
     });
   }
 
-  /** mKnowledge 是虚拟入口：点击打开上次的知识库页签（mSkills / mMemory） */
+  /** mKnowledge 是虚拟入口：点击打开上次的知识库页签（mSkills / mMemory / mRules） */
   const NAV_ITEMS = [
     { page: 'work', label: '工作', path: '/m/chat', icon: 'work' },
     { page: 'mTasks', label: '任务', path: '/m/tasks', icon: 'tasks' },
@@ -31,7 +31,7 @@ export const MobileShell = (() => {
 
   function navPageFor(page) {
     if (page === 'workChat') return 'work';
-    if (page === 'mSkills' || page === 'mMemory') return 'mKnowledge';
+    if (page === 'mSkills' || page === 'mMemory' || page === 'mRules') return 'mKnowledge';
     return page;
   }
 
@@ -139,6 +139,7 @@ export const MobileShell = (() => {
     if (path.startsWith('/m/work/')) return 'workChat';
     if (path === '/m/memory') return 'mMemory';
     if (path === '/m/skills') return 'mSkills';
+    if (path === '/m/rules') return 'mRules';
     if (path === '/m/tasks') return 'mTasks';
     if (path === '/m/config') return 'mConfig';
 
@@ -147,6 +148,7 @@ export const MobileShell = (() => {
     if (h.startsWith('#/m/work')) return 'work';
     if (h.startsWith('#/m/memory')) return 'mMemory';
     if (h.startsWith('#/m/skills')) return 'mSkills';
+    if (h.startsWith('#/m/rules')) return 'mRules';
     if (h.startsWith('#/m/tasks')) return 'mTasks';
     if (h.startsWith('#/m/config')) return 'mConfig';
     return 'work';
@@ -251,7 +253,7 @@ export const MobileShell = (() => {
           }
         });
       }
-    } else if (mode === 'memory' || mode === 'skills') {
+    } else if (mode === 'memory' || mode === 'skills' || mode === 'rules') {
       const Tabs = window.KnowledgeTabs;
       center.innerHTML = Tabs
         ? `${Tabs.html(mode, 'is-segmented')}${getConnectionDot()}`

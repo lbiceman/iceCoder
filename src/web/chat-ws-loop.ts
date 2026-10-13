@@ -16,6 +16,7 @@ import {
 import {
   describeScheduledTaskStop,
   notifyScheduledTaskResult,
+  scheduledTaskLlmSucceeded,
 } from '../session/scheduled-task-events.js';
 import { applyFirstPromptSessionTitle } from './session-title.js';
 import { buildUserMessageDisplayFields } from './user-message-display.js';
@@ -303,6 +304,7 @@ export async function runSessionMessageLoop(
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
   let terminalError: string | undefined;
+  let finalContent: string | undefined;
   try {
     publishRunState(runSid, 'running');
     beginSessionBatch(runSid);
@@ -310,7 +312,6 @@ export async function runSessionMessageLoop(
     ensureRunningTurn(runSid);
     broadcastToSession(runSid, { type: 'status', status: 'processing' });
     let stopReason: StopReason | undefined;
-    let finalContent: string | undefined;
     try {
       stopReason = await handleChatMessage({
         ws: first.ws,
@@ -326,7 +327,10 @@ export async function runSessionMessageLoop(
         skipUserMessageAppend: first.skipUserMessageAppend,
         source: first.source,
         reasoningEffort: first.reasoningEffort,
-        ...(first.scheduledTaskId ? { onFinalContent: (content: string) => { finalContent = content; } } : {}),
+        ...(first.scheduledTaskId ? {
+          skipCompletionGate: true,
+          onFinalContent: (content: string) => { finalContent = content; },
+        } : {}),
       });
     } catch (err) {
       terminalError = formatFriendlyError(err);
@@ -354,11 +358,13 @@ export async function runSessionMessageLoop(
   } finally {
     sessionProcessing.delete(runSid);
     // user_checkpoint 的会话仍是 running（等人接管），但定时任务这一次已经结束，同样要回写。
+    // 成败只看模型返回的正文，不用收尾门禁。
     if (first.scheduledTaskId && terminalPhase) {
+      const success = scheduledTaskLlmSucceeded(terminalReason, finalContent);
       await notifyScheduledTaskResult({
         taskId: first.scheduledTaskId,
-        success: terminalPhase === 'done',
-        error: terminalPhase === 'done' ? null : describeScheduledTaskStop(terminalReason, terminalError),
+        success,
+        error: success ? null : describeScheduledTaskStop(terminalReason, terminalError),
       });
     }
     // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。

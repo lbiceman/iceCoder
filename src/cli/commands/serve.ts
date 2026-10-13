@@ -63,6 +63,7 @@ import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import { createMemoryDreamRouter } from '../../web/routes/memory-dream.js';
 import { createSkillsRouter } from '../../web/routes/skills.js';
+import { createUserRulesRouter } from '../../web/routes/user-rules.js';
 import { createMcpStatusRouter } from '../../web/routes/mcp-status.js';
 import { createWorkspaceBrowseRouter } from '../../web/routes/workspace-browse.js';
 import type { Server } from 'http';
@@ -149,6 +150,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/token-usage', router: createTokenUsageRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/user-rules', router: createUserRulesRouter() },
       { path: '/api/scheduled-tasks', router: createScheduledTasksRouter({
         ...scheduledTaskServiceDeps,
         sessionExists: scheduledTaskSessionExists,

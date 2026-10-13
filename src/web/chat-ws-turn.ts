@@ -170,6 +170,8 @@ export interface HandleChatMessageInput {
   reasoningEffort?: ReasoningEffort;
   /** Harness 本轮的最终文本（出错时即错误描述），供定时任务回写失败原因。 */
   onFinalContent?: (content: string) => void;
+  /** 定时任务：跳过收尾硬状态门禁。 */
+  skipCompletionGate?: boolean;
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -262,8 +264,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   await rebindBgTaskPusher(runSessionId);
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
-  const assembled = await loadAssembledPrompt();
-  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
 
@@ -486,6 +486,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       ];
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
+  const assembled = await loadAssembledPrompt(effectiveWorkspace);
+  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   const offeringResult = selectToolsForOffering(toolDefs, {
     userMessage: harnessMessageText,
@@ -571,6 +573,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: createToolConfirmHandler(runSessionId),
+    skipCompletionGate: input.skipCompletionGate === true,
   };
 
   // 若上一轮仍有后台子 Agent 在跑，复用同一个 spawner，让它们跨轮存活。

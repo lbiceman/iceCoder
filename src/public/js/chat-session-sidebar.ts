@@ -78,22 +78,22 @@ export const ChatSessionSidebar = (() => {
 
   function getRouteFromHash() {
     const h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'tasks' || h === 'stats' || h === 'settings' || h === 'config') {
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'rules' || h === 'tasks' || h === 'stats' || h === 'settings' || h === 'config') {
       return h === 'config' ? 'settings' : h;
     }
     if (h === 'knowledge') return 'skills';
     return 'chat';
   }
 
-  /** 技能、记忆两个路由同属「知识库」导航项 */
+  /** 技能、记忆、规则三个路由同属「知识库」导航项 */
   function navPageForRoute(route) {
-    return route === 'skills' || route === 'memory' ? 'knowledge' : route;
+    return route === 'skills' || route === 'memory' || route === 'rules' ? 'knowledge' : route;
   }
 
   /** 任务 / 知识库 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
   function isAuxiliaryNavPage() {
     const route = getRouteFromHash();
-    return route === 'memory' || route === 'skills' || route === 'tasks' || route === 'stats' || route === 'settings';
+    return route === 'memory' || route === 'skills' || route === 'rules' || route === 'tasks' || route === 'stats' || route === 'settings';
   }
 
   function navigateToChatPage() {

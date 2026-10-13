@@ -91,7 +91,9 @@ describe('scheduled tasks router', () => {
       { ...validInput, intervalValue: 0 },
       { ...validInput, intervalValue: 1.5 },
       { ...validInput, intervalUnit: 'week' },
+      { ...validInput, scheduleKind: 'yearly', timeOfDay: '10:00' },
       { ...validInput, scheduleKind: 'monthly', timeOfDay: '10:00' },
+      { ...validInput, scheduleKind: 'monthly', timeOfDay: '10:00', monthDays: [0] },
       { ...validInput, scheduleKind: 'daily', timeOfDay: '7点' },
       { ...validInput, scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [] },
       { ...validInput, scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [8] },
@@ -116,6 +118,12 @@ describe('scheduled tasks router', () => {
     expect(weekly.body.task).toMatchObject({ scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
     expect(new Date(weekly.body.task.nextRunAt).getDay()).toBe(5);
     expect(weekly.body.task.nextRunAt).toBeGreaterThan(now);
+
+    const monthly = await call('PUT', `/api/scheduled-tasks/${id}`, { scheduleKind: 'monthly', monthDays: ['15'], timeOfDay: '10:00' });
+    expect(monthly.status).toBe(200);
+    expect(monthly.body.task).toMatchObject({ scheduleKind: 'monthly', monthDays: [15], weekdays: [], timeOfDay: '10:00' });
+    expect(new Date(monthly.body.task.nextRunAt).getDate()).toBe(15);
+    expect(monthly.body.task.nextRunAt).toBeGreaterThan(now);
     await call('PUT', `/api/scheduled-tasks/${id}`, { scheduleKind: 'interval', intervalValue: 2, intervalUnit: 'hour' });
 
     const off = await call('POST', `/api/scheduled-tasks/${id}/toggle`);
@@ -130,7 +138,7 @@ describe('scheduled tasks router', () => {
     const del = await call('DELETE', `/api/scheduled-tasks/${id}`);
     expect(del.body.success).toBe(true);
     expect(await store.list()).toHaveLength(0);
-    expect(scheduler.reschedule).toHaveBeenCalledTimes(7);
+    expect(scheduler.reschedule).toHaveBeenCalledTimes(8);
   });
 
   it('creates and edits one-time tasks; edits without once keep it', async () => {

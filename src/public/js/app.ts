@@ -22,12 +22,14 @@
     settings: { shell: 'desktop', root: null, mounted: false },
     memory: { shell: 'desktop', root: null, mounted: false },
     skills: { shell: 'desktop', root: null, mounted: false },
+    rules: { shell: 'desktop', root: null, mounted: false },
     tasks: { shell: 'desktop', root: null, mounted: false },
     stats: { shell: 'desktop', root: null, mounted: false },
     work: { shell: 'mobile', root: null, mounted: false },
     workChat: { shell: 'mobile', root: null, mounted: false },
     mMemory: { shell: 'mobile', root: null, mounted: false },
     mSkills: { shell: 'mobile', root: null, mounted: false },
+    mRules: { shell: 'mobile', root: null, mounted: false },
     mTasks: { shell: 'mobile', root: null, mounted: false },
     mConfig: { shell: 'mobile', root: null, mounted: false },
   };
@@ -283,6 +285,7 @@
     }
     if (path === '/m/memory') return { shell: 'mobile', page: 'mMemory' };
     if (path === '/m/skills') return { shell: 'mobile', page: 'mSkills' };
+    if (path === '/m/rules') return { shell: 'mobile', page: 'mRules' };
     if (path === '/m/tasks') return { shell: 'mobile', page: 'mTasks' };
     if (path === '/m/config') return { shell: 'mobile', page: 'mConfig' };
     return null;
@@ -290,6 +293,13 @@
 
   function lastKnowledgeTab() {
     return window.KnowledgeTabs ? window.KnowledgeTabs.lastTab() : 'skills';
+  }
+
+  function lastMobileKnowledgePage() {
+    const tab = lastKnowledgeTab();
+    if (tab === 'memory') return 'mMemory';
+    if (tab === 'rules') return 'mRules';
+    return 'mSkills';
   }
 
   function mobilePageToPath(page, opts) {
@@ -300,6 +310,7 @@
     if (page === 'work') return '/m/chat';
     if (page === 'mMemory') return '/m/memory';
     if (page === 'mSkills') return '/m/skills';
+    if (page === 'mRules') return '/m/rules';
     if (page === 'mTasks') return '/m/tasks';
     if (page === 'mConfig') return '/m/config';
     return '/m/chat';
@@ -360,9 +371,10 @@
       if (rest.startsWith('/work')) return { shell: 'mobile', page: 'work' };
       if (rest.startsWith('/memory')) return { shell: 'mobile', page: 'mMemory' };
       if (rest.startsWith('/skills')) return { shell: 'mobile', page: 'mSkills' };
+      if (rest.startsWith('/rules')) return { shell: 'mobile', page: 'mRules' };
       if (rest.startsWith('/tasks')) return { shell: 'mobile', page: 'mTasks' };
       if (rest.startsWith('/knowledge')) {
-        return { shell: 'mobile', page: lastKnowledgeTab() === 'memory' ? 'mMemory' : 'mSkills' };
+        return { shell: 'mobile', page: lastMobileKnowledgePage() };
       }
       if (rest.startsWith('/config')) return { shell: 'mobile', page: 'mConfig' };
       return { shell: 'mobile', page: 'work' };
@@ -371,6 +383,7 @@
     if (h.startsWith('#/settings')) return { shell: 'desktop', page: 'settings' };
     if (h.startsWith('#/memory')) return { shell: 'desktop', page: 'memory' };
     if (h.startsWith('#/skills')) return { shell: 'desktop', page: 'skills' };
+    if (h.startsWith('#/rules')) return { shell: 'desktop', page: 'rules' };
     if (h.startsWith('#/knowledge')) return { shell: 'desktop', page: lastKnowledgeTab() };
     if (h.startsWith('#/tasks')) return { shell: 'desktop', page: 'tasks' };
     if (h.startsWith('#/stats')) return { shell: 'desktop', page: 'stats' };
@@ -389,6 +402,7 @@
     if (page === 'work') return '#/m/work';
     if (page === 'mMemory') return '#/m/memory';
     if (page === 'mSkills') return '#/m/skills';
+    if (page === 'mRules') return '#/m/rules';
     if (page === 'mTasks') return '#/m/tasks';
     if (page === 'mConfig') return '#/m/config';
     return '#/m/work';
@@ -434,6 +448,7 @@
     if (page === 'settings') newHash = '#/settings';
     else if (page === 'memory') newHash = '#/memory';
     else if (page === 'skills') newHash = '#/skills';
+    else if (page === 'rules') newHash = '#/rules';
     else if (page === 'tasks') newHash = '#/tasks';
     else if (page === 'stats') newHash = '#/stats';
 
@@ -462,6 +477,10 @@
     ) {
       window.SkillsPage.destroy();
       pages.skills.mounted = false;
+    }
+    if (prev === 'rules' && page !== 'rules' && window.RulesPage) {
+      window.RulesPage.destroy();
+      pages.rules.mounted = false;
     }
     if (prev === 'tasks' && page !== 'tasks' && window.TasksPage) {
       window.TasksPage.destroy();
@@ -524,6 +543,10 @@
     ) {
       window.MobileSkillsPage.destroy();
       pages.mSkills.mounted = false;
+    }
+    if (prev === 'mRules' && page !== 'mRules' && window.MobileRulesPage) {
+      window.MobileRulesPage.destroy();
+      pages.mRules.mounted = false;
     }
     if (prev === 'mTasks' && page !== 'mTasks' && window.MobileTasksPage) {
       window.MobileTasksPage.destroy();
@@ -602,6 +625,8 @@
         window.MemoryPage.render(root);
       } else if (page === 'skills' && window.SkillsPage) {
         window.SkillsPage.render(root);
+      } else if (page === 'rules' && window.RulesPage) {
+        window.RulesPage.render(root);
       } else if (page === 'tasks' && window.TasksPage) {
         window.TasksPage.render(root);
       } else if (page === 'stats' && window.StatsPage) {
@@ -614,6 +639,8 @@
         window.MobileMemoryPage.render(root);
       } else if (page === 'mSkills' && window.MobileSkillsPage) {
         window.MobileSkillsPage.render(root);
+      } else if (page === 'mRules' && window.MobileRulesPage) {
+        window.MobileRulesPage.render(root);
       } else if (page === 'mTasks' && window.MobileTasksPage) {
         window.MobileTasksPage.render(root);
       } else if (page === 'mConfig' && window.MobileConfigPage) {
@@ -632,6 +659,8 @@
       window.MemoryPage.render(root);
     } else if (page === 'skills' && window.SkillsPage) {
       window.SkillsPage.render(root);
+    } else if (page === 'rules' && window.RulesPage) {
+      window.RulesPage.render(root);
     } else if (page === 'tasks' && window.TasksPage) {
       window.TasksPage.render(root);
     } else if (page === 'stats' && window.StatsPage) {
@@ -650,6 +679,8 @@
       window.MobileMemoryPage.render(root);
     } else if (page === 'mSkills' && window.MobileSkillsPage) {
       window.MobileSkillsPage.render(root);
+    } else if (page === 'mRules' && window.MobileRulesPage) {
+      window.MobileRulesPage.render(root);
     } else if (page === 'mTasks' && window.MobileTasksPage) {
       window.MobileTasksPage.render(root);
     } else if (page === 'mConfig' && window.MobileConfigPage) {

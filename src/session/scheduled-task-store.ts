@@ -4,8 +4,11 @@ import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 
 export type ScheduledTaskIntervalUnit = 'second' | 'minute' | 'hour' | 'day';
 
-/** interval：按固定间隔；daily：每天 timeOfDay；weekly：weekdays 中每一天的 timeOfDay。钟点按服务所在机器的本地时区。 */
-export type ScheduledTaskScheduleKind = 'interval' | 'daily' | 'weekly';
+/**
+ * interval：按固定间隔；daily：每天 timeOfDay；weekly：weekdays 中每一天的 timeOfDay；
+ * monthly：每月 monthDays 中每一天的 timeOfDay。钟点按服务所在机器的本地时区。
+ */
+export type ScheduledTaskScheduleKind = 'interval' | 'daily' | 'weekly' | 'monthly';
 
 export interface ScheduledTaskSchedule {
   scheduleKind: ScheduledTaskScheduleKind;
@@ -16,6 +19,8 @@ export interface ScheduledTaskSchedule {
   timeOfDay: string;
   /** 0=周日 … 6=周六，升序去重；只有 weekly 任务非空。 */
   weekdays: number[];
+  /** 1-31，升序去重；只有 monthly 任务非空。当月没有的日期（如 2 月的 30、31 日）在当月最后一天执行。 */
+  monthDays: number[];
 }
 
 /** 任务附带的图片或文件（已转存到任务附件目录的长期副本，不随会话删除）。 */
@@ -41,6 +46,7 @@ export interface ScheduledTask {
   intervalUnit: ScheduledTaskIntervalUnit;
   timeOfDay: string;
   weekdays: number[];
+  monthDays: number[];
   /** 一次性任务：到点执行一次后自动停用。interval 时间隔作为启用后的等待时长，钟点任务在下一个匹配时刻执行。 */
   once: boolean;
   /** 专属会话；空串表示还没有会话——会话只在执行时创建（见 scheduled-task-runtime）。 */
@@ -69,6 +75,7 @@ export type ScheduledTaskCreateInput = {
   intervalUnit?: ScheduledTaskIntervalUnit;
   timeOfDay?: string;
   weekdays?: number[];
+  monthDays?: number[];
   once?: boolean;
   sessionId: string;
   enabled: boolean;
@@ -87,6 +94,7 @@ export type ScheduledTaskUpdatePatch = Partial<
     | 'intervalUnit'
     | 'timeOfDay'
     | 'weekdays'
+    | 'monthDays'
     | 'once'
     | 'enabled'
   >
@@ -132,18 +140,31 @@ export function advanceToFuture(nextRunAt: number, intervalMs: number, now: numb
 export function nextClockRunAt(schedule: ScheduledTaskSchedule, after: number): number {
   const [hour, minute] = schedule.timeOfDay.split(':').map(Number) as [number, number];
   const day = new Date(after);
-  // 今天 + 之后 7 天必然覆盖任意星期组合。
-  for (let i = 0; i < 8; i++) {
+  // 今天 + 之后 7 天必然覆盖任意星期组合；超出月长的日期落到月末，所以任意两个相邻匹配日相隔不超过 31 天。
+  const span = schedule.scheduleKind === 'monthly' ? 32 : 8;
+  for (let i = 0; i < span; i++) {
     const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate() + i, hour, minute, 0, 0);
     if (candidate.getTime() <= after) continue;
     if (schedule.scheduleKind === 'weekly' && !schedule.weekdays.includes(candidate.getDay())) continue;
+    if (schedule.scheduleKind === 'monthly' && !matchesMonthDay(schedule.monthDays, candidate)) continue;
     return candidate.getTime();
   }
   throw new Error('无法计算下次执行时间');
 }
 
+function matchesMonthDay(monthDays: number[], date: Date): boolean {
+  const day = date.getDate();
+  if (monthDays.includes(day)) return true;
+  const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  return day === lastDay && monthDays.some((d) => d > lastDay);
+}
+
+export function isClockScheduleKind(kind: ScheduledTaskScheduleKind): boolean {
+  return kind === 'daily' || kind === 'weekly' || kind === 'monthly';
+}
+
 function isClockSchedule(schedule: ScheduledTaskSchedule): boolean {
-  return schedule.scheduleKind === 'daily' || schedule.scheduleKind === 'weekly';
+  return isClockScheduleKind(schedule.scheduleKind);
 }
 
 /** 新建、修改调度或重新启用时的首次执行时间。 */
@@ -192,6 +213,8 @@ export const SCHEDULE_KIND_INVALID_MESSAGE = '调度方式无效';
 export const TIME_OF_DAY_INVALID_MESSAGE = '执行时刻格式应为 HH:mm';
 export const WEEKDAYS_EMPTY_MESSAGE = '每周执行至少选择一天';
 export const WEEKDAYS_INVALID_MESSAGE = '星期取值应为 0-6 的整数（0 为周日）';
+export const MONTH_DAYS_EMPTY_MESSAGE = '每月执行至少选择一天';
+export const MONTH_DAYS_INVALID_MESSAGE = '日期取值应为 1-31 的整数';
 
 /** 接受 H:mm / HH:mm；「24 点」按次日零点记为 00:00。 */
 export function normalizeTimeOfDay(raw: unknown): string {
@@ -210,6 +233,12 @@ function normalizeWeekdays(raw: unknown): number[] {
   return [...new Set(raw as number[])].sort((a, b) => a - b);
 }
 
+function normalizeMonthDays(raw: unknown): number[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error(MONTH_DAYS_EMPTY_MESSAGE);
+  if (!raw.every((d) => Number.isInteger(d) && d >= 1 && d <= 31)) throw new Error(MONTH_DAYS_INVALID_MESSAGE);
+  return [...new Set(raw as number[])].sort((a, b) => a - b);
+}
+
 /** 校验并规整调度字段：只校验当前方式用到的字段，用不到的清空（间隔字段对钟点任务缺省为 1 天）。 */
 export function normalizeSchedule(raw: Partial<ScheduledTaskSchedule>): ScheduledTaskSchedule {
   const scheduleKind = raw.scheduleKind ?? 'interval';
@@ -222,9 +251,10 @@ export function normalizeSchedule(raw: Partial<ScheduledTaskSchedule>): Schedule
       intervalUnit: raw.intervalUnit as ScheduledTaskIntervalUnit,
       timeOfDay: '',
       weekdays: [],
+      monthDays: [],
     };
   }
-  if (scheduleKind !== 'daily' && scheduleKind !== 'weekly') throw new Error(SCHEDULE_KIND_INVALID_MESSAGE);
+  if (!isClockScheduleKind(scheduleKind)) throw new Error(SCHEDULE_KIND_INVALID_MESSAGE);
   const intervalValid = Number.isInteger(raw.intervalValue) && (raw.intervalValue as number) > 0
     && INTERVAL_UNITS.includes(raw.intervalUnit as ScheduledTaskIntervalUnit);
   return {
@@ -233,13 +263,16 @@ export function normalizeSchedule(raw: Partial<ScheduledTaskSchedule>): Schedule
     intervalUnit: intervalValid ? raw.intervalUnit as ScheduledTaskIntervalUnit : 'day',
     timeOfDay: normalizeTimeOfDay(raw.timeOfDay),
     weekdays: scheduleKind === 'weekly' ? normalizeWeekdays(raw.weekdays) : [],
+    monthDays: scheduleKind === 'monthly' ? normalizeMonthDays(raw.monthDays) : [],
   };
 }
 
 function sameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedule): boolean {
   if (a.scheduleKind !== b.scheduleKind) return false;
   if (a.scheduleKind === 'interval') return a.intervalValue === b.intervalValue && a.intervalUnit === b.intervalUnit;
-  return a.timeOfDay === b.timeOfDay && a.weekdays.join(',') === b.weekdays.join(',');
+  return a.timeOfDay === b.timeOfDay
+    && a.weekdays.join(',') === b.weekdays.join(',')
+    && a.monthDays.join(',') === b.monthDays.join(',');
 }
 
 /** 旧版本持久化的任务没有附件字段、once 与钟点调度字段，图片存的是会话图片 URL 字符串。 */
@@ -255,6 +288,7 @@ function normalizeLoadedTask(task: ScheduledTask): ScheduledTask {
     scheduleKind: task.scheduleKind ?? 'interval',
     timeOfDay: typeof task.timeOfDay === 'string' ? task.timeOfDay : '',
     weekdays: Array.isArray(task.weekdays) ? task.weekdays : [],
+    monthDays: Array.isArray(task.monthDays) ? task.monthDays : [],
     once: task.once === true,
   };
   if (legacyImageUrls.length > 0) normalized.legacyImageUrls = legacyImageUrls;
@@ -436,6 +470,7 @@ export class ScheduledTaskStore {
         intervalUnit: patch.intervalUnit ?? current.intervalUnit,
         timeOfDay: patch.timeOfDay ?? current.timeOfDay,
         weekdays: patch.weekdays ?? current.weekdays,
+        monthDays: patch.monthDays ?? current.monthDays,
       });
       if (patch.enabled !== undefined) {
         enabled = patch.enabled;

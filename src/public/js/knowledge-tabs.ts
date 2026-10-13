@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 「知识库」页签：技能与记忆仍是两个独立路由（#/skills、#/memory；移动端 mSkills、mMemory），
+ * 「知识库」页签：技能、记忆、规则是三个独立路由（#/skills、#/memory、#/rules；移动端 mSkills、mMemory、mRules），
  * 由这里统一渲染页签、记住上次所在页签，并提供侧栏 / 底栏入口的跳转目标。
  */
 
@@ -12,10 +12,13 @@ export const KnowledgeTabs = (() => {
   const TABS = [
     { id: 'skills', label: '技能' },
     { id: 'memory', label: '记忆' },
+    { id: 'rules', label: '规则' },
   ];
 
+  const MOBILE_PAGES = { skills: 'mSkills', memory: 'mMemory', rules: 'mRules' };
+
   function isTab(id) {
-    return id === 'skills' || id === 'memory';
+    return id === 'skills' || id === 'memory' || id === 'rules';
   }
 
   function lastTab() {
@@ -41,7 +44,7 @@ export const KnowledgeTabs = (() => {
     const target = isTab(tab) ? tab : lastTab();
     remember(target);
     if (isMobileShell()) {
-      if (window.AppRouter) window.AppRouter.navigate(target === 'memory' ? 'mMemory' : 'mSkills');
+      if (window.AppRouter) window.AppRouter.navigate(MOBILE_PAGES[target]);
       return;
     }
     const hash = `#/${target}`;

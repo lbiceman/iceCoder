@@ -78,6 +78,33 @@ describe('chat-ws-prewarm', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  it('工作区切换或其 AGENTS.md 变化时刷新缓存，并按工作区加载', async () => {
+    const dirA = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-prompt-ws-a-'));
+    const dirB = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-prompt-ws-b-'));
+    resetAssembledChatPromptCache();
+
+    const spy = vi.spyOn(
+      await import('../../src/prompts/load-chat-prompt.js'),
+      'loadAssembledChatPrompt',
+    ).mockResolvedValue(fakePrompt);
+
+    await getOrLoadAssembledChatPrompt('[test]', dirA);
+    await getOrLoadAssembledChatPrompt('[test]', dirA);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    await fs.writeFile(path.join(dirA, 'AGENTS.md'), 'rule', 'utf-8');
+    await getOrLoadAssembledChatPrompt('[test]', dirA);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    await getOrLoadAssembledChatPrompt('[test]', dirB);
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy).toHaveBeenLastCalledWith({ logPrefix: '[test]', workspaceRoot: dirB });
+
+    spy.mockRestore();
+    await fs.rm(dirA, { recursive: true, force: true });
+    await fs.rm(dirB, { recursive: true, force: true });
+  });
+
   it('prewarmChatRuntime 并行触发三个 hook 且吞掉错误', async () => {
     const ensureMemory = vi.fn().mockResolvedValue(undefined);
     const getSupervisor = vi.fn().mockResolvedValue({});

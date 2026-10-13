@@ -192,8 +192,8 @@ export async function ensureMemoryInitialized(): Promise<void> {
   memoryInitialized = true;
 }
 
-export async function loadAssembledPrompt(): Promise<AssembledPrompt> {
-  return getOrLoadAssembledChatPrompt('[chat-ws]');
+export async function loadAssembledPrompt(workspaceRoot?: string): Promise<AssembledPrompt> {
+  return getOrLoadAssembledChatPrompt('[chat-ws]', workspaceRoot);
 }
 
 export function startChatRuntimePrewarm(): void {

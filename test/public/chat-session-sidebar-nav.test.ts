@@ -135,6 +135,23 @@ describe('桌面侧栏主导航与会话列表', () => {
       hash: '#/memory',
       activeNavPage: 'knowledge',
     });
+
+    await page.evaluate(() => {
+      (window as any).KnowledgeTabs.remember('rules');
+      window.location.hash = '#/rules';
+    });
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/rules',
+      activeNavPage: 'knowledge',
+      activeSessionId: null,
+    });
+
+    await page.locator('.chat-sidebar-nav-btn[data-page="tasks"]').click();
+    await page.locator('.chat-sidebar-nav-btn[data-page="knowledge"]').click();
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/rules',
+      activeNavPage: 'knowledge',
+    });
   });
 
   it('任务/知识库/统计/设置页取消会话高亮，点击会话回到聊天页', async () => {

@@ -10,7 +10,7 @@ export const ScheduledTasksPage = (() => {
 
   const UNIT_LABELS = { second: '秒', minute: '分钟', hour: '小时', day: '天' };
   const UNITS = ['second', 'minute', 'hour', 'day'];
-  const SCHEDULE_KINDS = [['interval', '按间隔'], ['daily', '每天'], ['weekly', '每周']];
+  const SCHEDULE_KINDS = [['interval', '按间隔'], ['daily', '每天'], ['weekly', '每周'], ['monthly', '每月']];
   const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   /** 表单里周一在前。 */
   const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -44,10 +44,18 @@ export const ScheduledTasksPage = (() => {
   }
 
   function isClockKind(kind) {
-    return kind === 'daily' || kind === 'weekly';
+    return kind === 'daily' || kind === 'weekly' || kind === 'monthly';
+  }
+
+  function monthDaysLabel(days) {
+    return days.map((d) => `${d} 日`).join('、');
   }
 
   function formatSchedule(task) {
+    if (task.scheduleKind === 'monthly') {
+      const days = monthDaysLabel(task.monthDays || []);
+      return task.once ? `下一个 ${days} ${task.timeOfDay} 执行一次` : `每月 ${days} ${task.timeOfDay}`;
+    }
     if (isClockKind(task.scheduleKind)) {
       const days = task.scheduleKind === 'daily'
         ? '天'
@@ -134,7 +142,7 @@ export const ScheduledTasksPage = (() => {
     if (!listEl) return;
     if (!tasks.length) {
       listEl.innerHTML =
-        '<div class="skills-empty">暂无定时任务。点击「新建任务」，设定提示词与执行计划（按间隔，或每天 / 每周的固定时刻）。</div>';
+        '<div class="skills-empty">暂无定时任务。点击「新建任务」，设定提示词与执行计划（按间隔，或每天 / 每周 / 每月的固定时刻）。</div>';
       return;
     }
     listEl.innerHTML = tasks.map(renderTaskCard).join('');
@@ -575,26 +583,33 @@ export const ScheduledTasksPage = (() => {
     },
   };
 
+  const MONTH_END_HINT = '当月没有所选日期时（如 2 月的 30、31 日）在当月最后一天执行。';
+
   function applyScheduleUi(form) {
     const once = form.elements.mode.value === 'once';
     const kind = form.elements.scheduleKind.value;
     const clock = isClockKind(kind);
     const text = (clock ? CLOCK_MODE_TEXT : MODE_TEXT)[once ? 'once' : 'repeat'];
     form.querySelector('.sched-interval-label').textContent = text.label;
-    form.querySelector('.sched-interval-hint').textContent = text.hint;
+    form.querySelector('.sched-interval-hint').textContent = kind === 'monthly' ? `${text.hint}${MONTH_END_HINT}` : text.hint;
     form.querySelector('.sched-interval-every').hidden = clock;
     form.querySelector('.sched-clock').hidden = !clock;
     form.querySelector('.sched-weekday-select').hidden = kind !== 'weekly';
+    form.querySelector('.sched-monthday-select').hidden = kind !== 'monthly';
     form.querySelector('.sched-interval-prefix').hidden = once;
     form.querySelector('.sched-interval-suffix').hidden = !once;
   }
 
-  /** 表单下拉的选项与当前值；weekdays 的值是逗号分隔的星期。 */
+  /** 表单下拉的选项与当前值；weekdays / monthDays 的值是逗号分隔的星期 / 日期。 */
   function scheduleSelects(task) {
     const weekdays = (task && task.weekdays && task.weekdays.length) ? task.weekdays : [1];
-    // AI 可以建多天的每周任务；下拉只能单选，多天组合单独列一项，保存时不丢。
+    const monthDays = (task && task.monthDays && task.monthDays.length) ? task.monthDays : [1];
+    // AI 可以建多天的每周 / 每月任务；下拉只能单选，多天组合单独列一项，保存时不丢。
     const multiDay = weekdays.length > 1
       ? [{ value: weekdays.join(','), label: weekdays.map((d) => WEEKDAY_LABELS[d]).join('、') }]
+      : [];
+    const multiMonthDay = monthDays.length > 1
+      ? [{ value: monthDays.join(','), label: monthDaysLabel(monthDays) }]
       : [];
     const [hour, minute] = ((task && task.timeOfDay) || '09:00').split(':');
     const pad = (n) => String(n).padStart(2, '0');
@@ -609,6 +624,10 @@ export const ScheduledTasksPage = (() => {
       weekdays: {
         value: weekdays.join(','),
         options: multiDay.concat(WEEKDAY_ORDER.map((d) => ({ value: String(d), label: WEEKDAY_LABELS[d] }))),
+      },
+      monthDays: {
+        value: monthDays.join(','),
+        options: multiMonthDay.concat(Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: `${i + 1} 日` }))),
       },
     };
   }
@@ -708,6 +727,7 @@ export const ScheduledTasksPage = (() => {
           '</div>' +
           '<div class="sched-interval sched-clock">' +
             selectHtml('weekdays', selects.weekdays, 'sched-weekday-select', '星期') +
+            selectHtml('monthDays', selects.monthDays, 'sched-monthday-select', '日期') +
             selectHtml('hour', selects.hour, 'sched-time-select', '时') +
             '<span>:</span>' +
             selectHtml('minute', selects.minute, 'sched-time-select', '分') +
@@ -737,6 +757,9 @@ export const ScheduledTasksPage = (() => {
       schedule.timeOfDay = `${form.elements.hour.value}:${form.elements.minute.value}`;
       if (scheduleKind === 'weekly') {
         schedule.weekdays = form.elements.weekdays.value.split(',').map(Number);
+      }
+      if (scheduleKind === 'monthly') {
+        schedule.monthDays = form.elements.monthDays.value.split(',').map(Number);
       }
     } else {
       schedule.intervalValue = Number(form.elements.intervalValue.value);

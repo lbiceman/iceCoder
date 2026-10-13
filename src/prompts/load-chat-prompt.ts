@@ -4,15 +4,19 @@
  */
 
 import { promises as fsPromises } from 'node:fs';
-import path from 'path';
 import type { AssembledPrompt } from './types.js';
 import { PromptAssembler } from './prompt-assembler.js';
 import { applyEvaluationModePromptOverlay } from './evaluation-mode-prompt.js';
+import { LEGACY_PROJECT_INSTRUCTION_RELATIVE_PATH, loadProjectInstructions } from './project-instructions.js';
 import { getDefaultWorkDir } from '../cli/paths.js';
+import { enabledUserRules, estimateUserRulesTokens, formatUserRulesList } from './user-rules.js';
+import { readUserRules } from './user-rules-store.js';
 
 export interface LoadChatPromptOptions {
   /** 日志前缀，如 '[chat-ws]' */
   logPrefix?: string;
+  /** 被操作工程的根目录，从这里查找 AGENTS.md；默认运行时默认工作区 */
+  workspaceRoot?: string;
   /** 兼容旧配置：用户显式编辑过的 system-prompt.md 可作为 custom system */
   systemPromptPath?: string;
   /** 默认 system-prompt.md 内容；内容与默认值一致时忽略 */
@@ -24,7 +28,7 @@ export function shouldDisableRuntimeTools(): boolean {
 }
 
 /**
- * 加载 .iceCoder/memory.md、评测附加段，组装稳定 system + harnessOverlay。
+ * 加载工程 AGENTS.md（见 project-instructions.ts）、评测附加段，组装稳定 system + harnessOverlay。
  */
 export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {}): Promise<AssembledPrompt> {
   const prefix = options.logPrefix ?? '[prompt]';
@@ -40,23 +44,26 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
     assembler.removeSection('actions');
   }
 
-  const iceCoderDir = path.resolve('.iceCoder');
-  const memoryMdPath = path.join(iceCoderDir, 'memory.md');
-  let projectMemory = '';
-  try {
-    projectMemory = (await fsPromises.readFile(memoryMdPath, 'utf-8')).trim();
-    if (projectMemory) {
-      console.log(`${prefix} 已加载项目指令 (.iceCoder/memory.md, ${projectMemory.length} 字符)`);
+  const workspaceRoot = options.workspaceRoot ?? getDefaultWorkDir();
+  const projectInstructions = await loadProjectInstructions(workspaceRoot);
+  if (projectInstructions.content) {
+    console.log(`${prefix} 已加载项目指令 (${projectInstructions.sources.join(', ')}, ${projectInstructions.content.length} 字符)`);
+    if (projectInstructions.sources.some((s) => s.endsWith(LEGACY_PROJECT_INSTRUCTION_RELATIVE_PATH))) {
+      console.log(`${prefix} .iceCoder/memory.md 已弃用，建议迁移到工程根目录 AGENTS.md`);
     }
-  } catch {
-    try {
-      await fsPromises.mkdir(iceCoderDir, { recursive: true });
-      await fsPromises.writeFile(memoryMdPath, '# Project Memory\n', 'utf-8');
-      console.log(`${prefix} 已创建 .iceCoder/memory.md 模板文件`);
-    } catch { /* ignore */ }
+  }
+  if (projectInstructions.ignored.length > 0) {
+    console.warn(`${prefix} 已忽略低优先级项目指令（同级已有 AGENTS.md / 新格式文件）: ${projectInstructions.ignored.join(', ')}`);
   }
 
-  const appendParts = [projectMemory].filter(Boolean);
+  // 评测需可复现，不受个人规则影响
+  const userRules = isEvalMode ? [] : enabledUserRules(await readUserRules());
+  const userRulesList = formatUserRulesList(userRules);
+  if (userRules.length > 0) {
+    console.log(`${prefix} 已加载用户规则 (${userRules.length} 条, 约 ${estimateUserRulesTokens(userRules)} tokens)`);
+  }
+
+  const appendParts = [projectInstructions.content].filter(Boolean);
   const appendPrompt = appendParts.length > 0 ? appendParts.join('\n\n') : undefined;
   const systemPromptPath = options.systemPromptPath ?? process.env.ICE_SYSTEM_PROMPT_PATH;
   let customSystemPrompt: string | undefined;
@@ -80,6 +87,7 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
       currentDate: new Date().toISOString().slice(0, 10),
     },
     appendSystemPrompt: appendPrompt,
+    userRules: userRulesList || undefined,
   });
   return isEvalMode
     ? applyEvaluationModePromptOverlay(assembled)

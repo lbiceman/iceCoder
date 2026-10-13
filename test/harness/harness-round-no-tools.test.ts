@@ -671,6 +671,61 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
     }
   });
 
+  it('定时任务跳过收尾门禁，失败的本地变更不否决模型回复', async () => {
+    function failedWriteState(): HarnessRunState {
+      const messages: UnifiedMessage[] = [{ role: 'user', content: '写一份会话总结' }];
+      const state = makeState(messages, '写一份会话总结');
+      state.operationOutcomes = new OperationOutcomeLedger();
+      state.operationOutcomes.record({
+        toolCallId: 'c1',
+        toolName: 'run_command',
+        status: 'failed',
+        effect: 'local_change',
+        risk: 'low',
+        disposition: 'execution_fail',
+        reversibility: 'compensatable',
+        scope: 'target:python',
+        error: 'spawn cmd.exe ENOENT',
+        at: 1,
+      });
+      return state;
+    }
+    const reply = { content: '已完成。写出了总结文件。', finishReason: 'stop' as const };
+    const args = {
+      userMessage: '写一份会话总结',
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    };
+
+    const blockedState = failedWriteState();
+    const blocked = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      ...args,
+      state: blockedState,
+      response: reply,
+      currentTools: blockedState.tools,
+    });
+    expect(blocked.action).toBe('return');
+    if (blocked.action === 'return') {
+      expect(blocked.result.loopState.stopReason).toBe('completion_failed');
+    }
+
+    const skippedState = failedWriteState();
+    const skipped = await handleNoToolCalls({
+      ...makeDeps(new StopHookManager()),
+      skipCompletionGate: true,
+    }, {
+      ...args,
+      state: skippedState,
+      response: reply,
+      currentTools: skippedState.tools,
+    });
+    expect(skipped.action).toBe('return');
+    if (skipped.action === 'return') {
+      expect(skipped.result.loopState.stopReason).toBe('model_done');
+      expect(skipped.result.content).toBe('已完成。写出了总结文件。');
+    }
+  });
+
   it('普通无副作用 execute 探测失败不否决模型停手', async () => {
     const messages: UnifiedMessage[] = [{ role: 'user', content: '运行测试' }];
     const state = makeState(messages, '运行测试');

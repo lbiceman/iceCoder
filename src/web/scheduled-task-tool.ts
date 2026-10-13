@@ -65,6 +65,7 @@ const SCHEDULE_KIND_ALIASES: Record<string, ScheduledTaskScheduleKind> = {
   interval: 'interval', every: 'interval', 间隔: 'interval',
   daily: 'daily', day: 'daily', everyday: 'daily', 每天: 'daily', 每日: 'daily',
   weekly: 'weekly', week: 'weekly', 每周: 'weekly',
+  monthly: 'monthly', month: 'monthly', 每月: 'monthly',
 };
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -87,7 +88,7 @@ const WEEKDAY_ALIASES: Record<string, number> = {};
 });
 
 const INPUT_FIELDS = [
-  'name', 'prompt', 'scheduleKind', 'intervalValue', 'intervalUnit', 'timeOfDay', 'weekdays', 'once', 'enabled', 'skillFilenames',
+  'name', 'prompt', 'scheduleKind', 'intervalValue', 'intervalUnit', 'timeOfDay', 'weekdays', 'monthDays', 'once', 'enabled', 'skillFilenames',
 ] as const;
 
 const LIST_PROMPT_PREVIEW_CHARS = 80;
@@ -128,6 +129,19 @@ export function normalizeWeekdays(raw: unknown): unknown {
   });
 }
 
+/** 接受 [1, 15] / ["15"] / "1,15" / "15号"；无法识别的原样交给服务校验报错。 */
+export function normalizeMonthDays(raw: unknown): unknown {
+  const items = typeof raw === 'string' ? raw.split(/[,，、\s]+/).filter(Boolean)
+    : typeof raw === 'number' ? [raw]
+    : Array.isArray(raw) ? raw
+    : null;
+  if (!items) return raw;
+  return items.map((item: unknown) => {
+    const m = typeof item === 'string' ? /^(\d+)\s*[号日]?$/.exec(item.trim()) : null;
+    return m ? Number(m[1]) : item;
+  });
+}
+
 function pickInput(args: Record<string, unknown>): ScheduledTaskInput {
   const input: ScheduledTaskInput = {};
   for (const key of INPUT_FIELDS) {
@@ -136,6 +150,7 @@ function pickInput(args: Record<string, unknown>): ScheduledTaskInput {
   if (input.scheduleKind !== undefined) input.scheduleKind = normalizeScheduleKind(input.scheduleKind);
   if (input.intervalUnit !== undefined) input.intervalUnit = normalizeIntervalUnit(input.intervalUnit);
   if (input.weekdays !== undefined) input.weekdays = normalizeWeekdays(input.weekdays);
+  if (input.monthDays !== undefined) input.monthDays = normalizeMonthDays(input.monthDays);
   if (typeof input.once === 'string') input.once = input.once === 'true';
   if (typeof input.enabled === 'string') input.enabled = input.enabled === 'true';
   return input;
@@ -168,14 +183,15 @@ export function buildScheduledTaskDescription(
     '- interval (default): runs every intervalValue x intervalUnit (second | minute | hour | day). The first run is one interval after the task is created or enabled.',
     '- daily: runs every day at timeOfDay ("HH:mm", 24-hour, local time of the machine running iceCoder). "Every day at midnight / 24:00" is timeOfDay "00:00".',
     '- weekly: runs at timeOfDay on every day in weekdays (0=Sunday, 1=Monday, ... 5=Friday, 6=Saturday). "Every Friday at 10:00" = scheduleKind "weekly", weekdays [5], timeOfDay "10:00"; "workdays at 9:00" = weekdays [1,2,3,4,5].',
-    '- once:true: interval runs once one interval after enabling; daily/weekly run once at the next matching time. Then the task disables itself. Use for "remind me in 10 minutes" / "tomorrow at 8:00".',
-    '- One task has exactly one schedule. Different times (e.g. "every day at 00:00" and "every Friday at 10:00") need separate tasks with distinct names. Monthly or date-based rules and cron expressions are NOT supported: translate cron into the kinds above when possible, otherwise say plainly what cannot be expressed and offer the nearest schedule.',
-    '- Changing schedule fields (scheduleKind, intervalValue/intervalUnit, timeOfDay, weekdays) or re-enabling restarts the countdown from now (clock schedules: the next matching time after now). Editing name/prompt/skillFilenames keeps the schedule.',
+    '- monthly: runs at timeOfDay on every day-of-month in monthDays (1-31). A day the month does not have (e.g. 31 in April, 30 in February) runs on that month\'s last day instead, so monthDays [31] means "the last day of every month". "The 1st and 15th of every month at 9:00" = scheduleKind "monthly", monthDays [1,15], timeOfDay "09:00".',
+    '- once:true: interval runs once one interval after enabling; daily/weekly/monthly run once at the next matching time. Then the task disables itself. Use for "remind me in 10 minutes" / "tomorrow at 8:00".',
+    '- One task has exactly one schedule. Different times (e.g. "every day at 00:00" and "every Friday at 10:00") need separate tasks with distinct names. Rules like "the second Monday of the month", specific calendar dates in a year and cron expressions are NOT supported: translate cron into the kinds above when possible, otherwise say plainly what cannot be expressed and offer the nearest schedule.',
+    '- Changing schedule fields (scheduleKind, intervalValue/intervalUnit, timeOfDay, weekdays, monthDays) or re-enabling restarts the countdown from now (clock schedules: the next matching time after now). Editing name/prompt/skillFilenames keeps the schedule.',
     '- If the previous run of the task is still going, a recurring trigger is skipped and action:"run" fails as busy. Runs missed while the service was stopped are not caught up; a missed once-task is disabled.',
     '',
     'Actions:',
     '- list: every task with id, schedule, enabled state, next/last run, last status and a prompt preview.',
-    '- create: name, prompt and a schedule are required (interval: intervalValue + intervalUnit; daily: timeOfDay; weekly: weekdays + timeOfDay); optional scheduleKind (default interval, inferred from timeOfDay/weekdays when omitted), once (default false), enabled (default true), skillFilenames. Refused when the name already exists (use update) and inside a task\'s own session.',
+    '- create: name, prompt and a schedule are required (interval: intervalValue + intervalUnit; daily: timeOfDay; weekly: weekdays + timeOfDay; monthly: monthDays + timeOfDay); optional scheduleKind (default interval, inferred from timeOfDay/weekdays/monthDays when omitted), once (default false), enabled (default true), skillFilenames. Refused when the name already exists (use update) and inside a task\'s own session.',
     '- update: id plus only the fields to change.',
     '- toggle: id; enabled:true/false, or omit enabled to flip.',
     '- run: id; runs once now in the task session, schedule unchanged.',
@@ -208,6 +224,10 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
   const formatTime = deps.formatTime ?? defaultFormatTime;
 
   function scheduleText(task: ScheduledTask): string {
+    if (task.scheduleKind === 'monthly') {
+      const days = task.monthDays.map((d) => `${d} 日`).join('、');
+      return task.once ? `一次性，在下一个 ${days} ${task.timeOfDay} 执行` : `每月 ${days} ${task.timeOfDay} 执行一次`;
+    }
     if (task.scheduleKind === 'daily' || task.scheduleKind === 'weekly') {
       const days = task.scheduleKind === 'daily' ? '天' : task.weekdays.map((d) => WEEKDAY_LABELS[d]).join('、');
       return task.once ? `一次性，在下一个${task.scheduleKind === 'daily' ? '' : days} ${task.timeOfDay} 执行` : `每${days} ${task.timeOfDay} 执行一次`;
@@ -272,16 +292,21 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
           },
           scheduleKind: {
             type: 'string',
-            enum: ['interval', 'daily', 'weekly'],
-            description: 'interval (default): every intervalValue x intervalUnit. daily: every day at timeOfDay. weekly: at timeOfDay on each of weekdays.',
+            enum: ['interval', 'daily', 'weekly', 'monthly'],
+            description: 'interval (default): every intervalValue x intervalUnit. daily: every day at timeOfDay. weekly: at timeOfDay on each of weekdays. monthly: at timeOfDay on each of monthDays.',
           },
           intervalValue: { type: 'integer', minimum: 1, description: 'interval only. Positive integer; with intervalUnit gives the repeat interval (or the delay when once:true).' },
           intervalUnit: { type: 'string', enum: ['second', 'minute', 'hour', 'day'] },
-          timeOfDay: { type: 'string', description: 'daily/weekly only. "HH:mm", 24-hour local time; midnight is "00:00".' },
+          timeOfDay: { type: 'string', description: 'daily/weekly/monthly only. "HH:mm", 24-hour local time; midnight is "00:00".' },
           weekdays: {
             type: 'array',
             items: { type: 'integer', minimum: 0, maximum: 6 },
             description: 'weekly only. 0=Sunday, 1=Monday, ... 5=Friday, 6=Saturday.',
+          },
+          monthDays: {
+            type: 'array',
+            items: { type: 'integer', minimum: 1, maximum: 31 },
+            description: 'monthly only. Days of the month 1-31; a day the month lacks runs on its last day (31 = last day of every month).',
           },
           once: { type: 'boolean', description: 'true = run once (after one interval, or at the next matching clock time), then disable. Default false.' },
           enabled: { type: 'boolean', description: 'create/update: default true. toggle: target state; omit to flip.' },
@@ -303,7 +328,7 @@ export function createScheduledTaskTool(deps: ScheduledTaskToolDeps): Registered
             if (inTaskSession) return fail(SCHEDULED_TASK_CREATE_IN_TASK_SESSION_MESSAGE);
             const input = pickInput(args);
             if (input.scheduleKind === undefined && input.timeOfDay !== undefined) {
-              input.scheduleKind = input.weekdays !== undefined ? 'weekly' : 'daily';
+              input.scheduleKind = input.monthDays !== undefined ? 'monthly' : input.weekdays !== undefined ? 'weekly' : 'daily';
             }
             const name = typeof input.name === 'string' ? input.name.trim() : '';
             const existing = name ? (await service.list()).find((t) => t.name === name) : undefined;

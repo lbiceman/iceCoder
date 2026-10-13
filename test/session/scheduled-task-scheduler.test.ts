@@ -26,6 +26,7 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     intervalUnit: 'second',
     timeOfDay: '',
     weekdays: [],
+    monthDays: [],
     once: false,
     sessionId: 's1',
     enabled: true,

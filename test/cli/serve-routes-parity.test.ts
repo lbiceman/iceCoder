@@ -18,6 +18,7 @@ const REQUIRED_API_PREFIXES = [
   '/api/token-usage',
   '/api/memory/files',
   '/api/skills',
+  '/api/user-rules',
   '/api/scheduled-tasks',
   '/api/mcp',
   '/api/workspace',

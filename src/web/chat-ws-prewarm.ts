@@ -6,6 +6,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AssembledPrompt } from '../prompts/types.js';
 import { loadAssembledChatPrompt } from '../prompts/load-chat-prompt.js';
+import { projectInstructionsFingerprint } from '../prompts/project-instructions.js';
+import { userRulesFingerprint } from '../prompts/user-rules-store.js';
+import { getDefaultWorkDir } from '../cli/paths.js';
 
 let assembledPromptPromise: Promise<AssembledPrompt> | null = null;
 let assembledPromptFingerprint: string | null = null;
@@ -23,34 +26,39 @@ async function fileFingerprint(filePath: string): Promise<string> {
  * 只跟踪动态 overlay 与显式自定义 system 的输入。
  * 普通会话中指纹不变，静态 system 保持字节稳定，避免损害 provider 前缀缓存。
  */
-async function resolvePromptInputFingerprint(): Promise<string> {
-  const memoryPath = path.resolve('.iceCoder', 'memory.md');
+async function resolvePromptInputFingerprint(workspaceRoot: string): Promise<string> {
   const customPath = process.env.ICE_SYSTEM_PROMPT_PATH
     ? path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH)
     : '';
-  const [memory, custom] = await Promise.all([
-    fileFingerprint(memoryPath),
+  const [instructions, custom, userRules] = await Promise.all([
+    projectInstructionsFingerprint(workspaceRoot),
     customPath ? fileFingerprint(customPath) : Promise.resolve('none'),
+    userRulesFingerprint(),
   ]);
   return [
     new Date().toISOString().slice(0, 10),
     process.env.ICE_EVAL_MODE ?? '',
     process.env.ICE_DISABLE_TOOLS ?? '',
-    memory,
+    path.resolve(workspaceRoot),
+    instructions,
     customPath,
     custom,
+    userRules,
   ].join('|');
 }
 
-/** 输入未变化时复用；memory/date/custom 变化时重载动态 overlay。 */
-export async function getOrLoadAssembledChatPrompt(logPrefix = '[chat-ws]'): Promise<AssembledPrompt> {
-  const fingerprint = await resolvePromptInputFingerprint();
+/** 输入未变化时复用；工作区 / AGENTS.md / 用户规则 / date / custom 变化时重载动态 overlay。 */
+export async function getOrLoadAssembledChatPrompt(
+  logPrefix = '[chat-ws]',
+  workspaceRoot: string = getDefaultWorkDir(),
+): Promise<AssembledPrompt> {
+  const fingerprint = await resolvePromptInputFingerprint(workspaceRoot);
   if (assembledPromptPromise && assembledPromptFingerprint === fingerprint) {
     return assembledPromptPromise;
   }
 
   assembledPromptFingerprint = fingerprint;
-  const pending = loadAssembledChatPrompt({ logPrefix });
+  const pending = loadAssembledChatPrompt({ logPrefix, workspaceRoot });
   assembledPromptPromise = pending;
   try {
     return await pending;

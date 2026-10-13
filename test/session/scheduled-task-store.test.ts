@@ -19,7 +19,7 @@ const at = (...parts: [number, number, number, number?, number?]) =>
   new Date(parts[0], parts[1] - 1, parts[2], parts[3] ?? 0, parts[4] ?? 0).getTime();
 
 function clock(overrides: Partial<ScheduledTaskSchedule>): ScheduledTaskSchedule {
-  return { scheduleKind: 'daily', intervalValue: 1, intervalUnit: 'day', timeOfDay: '00:00', weekdays: [], ...overrides };
+  return { scheduleKind: 'daily', intervalValue: 1, intervalUnit: 'day', timeOfDay: '00:00', weekdays: [], monthDays: [], ...overrides };
 }
 
 describe('钟点调度计算（本地时区）', () => {
@@ -46,6 +46,39 @@ describe('钟点调度计算（本地时区）', () => {
     expect(nextClockRunAt(monWedSun, at(2026, 10, 17, 9))).toBe(at(2026, 10, 18, 8, 30));
   });
 
+  it('每月 15 日 09:00：当月未到取当月，已过取下月，跨年', () => {
+    const mid = clock({ scheduleKind: 'monthly', monthDays: [15], timeOfDay: '09:00' });
+    expect(nextClockRunAt(mid, at(2026, 10, 12, 16, 36))).toBe(at(2026, 10, 15, 9));
+    expect(nextClockRunAt(mid, at(2026, 10, 15, 8, 59))).toBe(at(2026, 10, 15, 9));
+    expect(nextClockRunAt(mid, at(2026, 10, 15, 9))).toBe(at(2026, 11, 15, 9));
+    expect(nextClockRunAt(mid, at(2026, 12, 20))).toBe(at(2027, 1, 15, 9));
+  });
+
+  it('每月 1 日：月初刚过要等满一个月（31 天的月份）', () => {
+    const first = clock({ scheduleKind: 'monthly', monthDays: [1], timeOfDay: '00:00' });
+    expect(nextClockRunAt(first, at(2026, 1, 1, 0, 1))).toBe(at(2026, 2, 1));
+    expect(nextClockRunAt(first, at(2026, 12, 1, 0, 0))).toBe(at(2027, 1, 1));
+  });
+
+  it('每月 31 日：小月和 2 月落到当月最后一天，闰年 2 月 29 日', () => {
+    const last = clock({ scheduleKind: 'monthly', monthDays: [31], timeOfDay: '18:00' });
+    expect(nextClockRunAt(last, at(2026, 1, 31, 18))).toBe(at(2026, 2, 28, 18));
+    expect(nextClockRunAt(last, at(2026, 2, 28, 18))).toBe(at(2026, 3, 31, 18));
+    expect(nextClockRunAt(last, at(2026, 4, 1))).toBe(at(2026, 4, 30, 18));
+    expect(nextClockRunAt(last, at(2028, 2, 1))).toBe(at(2028, 2, 29, 18));
+    // 30 日与 31 日在 2 月重合为同一天，只执行一次，之后回到 3 月 30 日。
+    const both = clock({ scheduleKind: 'monthly', monthDays: [30, 31], timeOfDay: '18:00' });
+    expect(nextClockRunAt(both, at(2026, 2, 1))).toBe(at(2026, 2, 28, 18));
+    expect(nextClockRunAt(both, at(2026, 2, 28, 18))).toBe(at(2026, 3, 30, 18));
+    expect(nextClockRunAt(both, at(2026, 3, 30, 18))).toBe(at(2026, 3, 31, 18));
+  });
+
+  it('每月多天取最近的一天', () => {
+    const days = clock({ scheduleKind: 'monthly', monthDays: [1, 10, 20], timeOfDay: '08:00' });
+    expect(nextClockRunAt(days, at(2026, 10, 12))).toBe(at(2026, 10, 20, 8));
+    expect(nextClockRunAt(days, at(2026, 10, 25))).toBe(at(2026, 11, 1, 8));
+  });
+
   it('advanceSchedule：钟点任务取 now 之后最近时刻，间隔任务按原节拍推进', () => {
     const daily = clock({ timeOfDay: '00:00' });
     expect(advanceSchedule(daily, at(2026, 10, 13), at(2026, 10, 13, 0, 0) + 5)).toBe(at(2026, 10, 14));
@@ -64,14 +97,22 @@ describe('钟点调度计算（本地时区）', () => {
   });
 
   it('normalizeSchedule：只校验当前方式用到的字段，其余清空', () => {
-    expect(normalizeSchedule({ scheduleKind: 'weekly', weekdays: [5, 1, 5], timeOfDay: '10:00' })).toEqual({
-      scheduleKind: 'weekly', intervalValue: 1, intervalUnit: 'day', timeOfDay: '10:00', weekdays: [1, 5],
+    expect(normalizeSchedule({ scheduleKind: 'weekly', weekdays: [5, 1, 5], timeOfDay: '10:00', monthDays: [3] })).toEqual({
+      scheduleKind: 'weekly', intervalValue: 1, intervalUnit: 'day', timeOfDay: '10:00', weekdays: [1, 5], monthDays: [],
+    });
+    expect(normalizeSchedule({ scheduleKind: 'monthly', monthDays: [31, 1, 31], weekdays: [2], timeOfDay: '10:00' })).toEqual({
+      scheduleKind: 'monthly', intervalValue: 1, intervalUnit: 'day', timeOfDay: '10:00', weekdays: [], monthDays: [1, 31],
     });
     expect(normalizeSchedule({ scheduleKind: 'daily', timeOfDay: '00:00', weekdays: [3], intervalValue: 2, intervalUnit: 'hour' }))
-      .toEqual({ scheduleKind: 'daily', intervalValue: 2, intervalUnit: 'hour', timeOfDay: '00:00', weekdays: [] });
+      .toEqual({ scheduleKind: 'daily', intervalValue: 2, intervalUnit: 'hour', timeOfDay: '00:00', weekdays: [], monthDays: [] });
     expect(normalizeSchedule({ intervalValue: 5, intervalUnit: 'minute', timeOfDay: '10:00' }))
-      .toMatchObject({ scheduleKind: 'interval', timeOfDay: '', weekdays: [] });
-    expect(() => normalizeSchedule({ scheduleKind: 'monthly' as never, timeOfDay: '10:00' })).toThrow('调度方式无效');
+      .toMatchObject({ scheduleKind: 'interval', timeOfDay: '', weekdays: [], monthDays: [] });
+    expect(() => normalizeSchedule({ scheduleKind: 'yearly' as never, timeOfDay: '10:00' })).toThrow('调度方式无效');
+    expect(() => normalizeSchedule({ scheduleKind: 'monthly', timeOfDay: '10:00' })).toThrow('每月执行至少选择一天');
+    for (const bad of [0, 32, 1.5]) {
+      expect(() => normalizeSchedule({ scheduleKind: 'monthly', timeOfDay: '10:00', monthDays: [bad] }), String(bad))
+        .toThrow('日期取值应为 1-31 的整数');
+    }
     expect(() => normalizeSchedule({ scheduleKind: 'daily' })).toThrow('执行时刻格式应为 HH:mm');
     expect(() => normalizeSchedule({ scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [] })).toThrow('每周执行至少选择一天');
     expect(() => normalizeSchedule({ scheduleKind: 'weekly', timeOfDay: '10:00', weekdays: [7] })).toThrow('星期取值应为 0-6');
@@ -282,7 +323,7 @@ describe('scheduled task store', () => {
     await fs.writeFile(filePath, JSON.stringify({ version: 1, tasks: [legacy] }), 'utf-8');
     const [task] = await store.list();
     expect(task).toMatchObject({
-      id: 'old', images: [], files: [], once: false, scheduleKind: 'interval', timeOfDay: '', weekdays: [],
+      id: 'old', images: [], files: [], once: false, scheduleKind: 'interval', timeOfDay: '', weekdays: [], monthDays: [],
     });
   });
 
@@ -297,6 +338,28 @@ describe('scheduled task store', () => {
 
     const reloaded = await new ScheduledTaskStore(filePath).get(weekly.id);
     expect(reloaded).toMatchObject({ scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00' });
+
+    const monthly = await store.create(baseInput({ name: '月报', scheduleKind: 'monthly', monthDays: [1], timeOfDay: '09:00' }));
+    expect(monthly.nextRunAt).toBe(at(2026, 11, 1, 9));
+    expect(await new ScheduledTaskStore(filePath).get(monthly.id))
+      .toMatchObject({ scheduleKind: 'monthly', monthDays: [1], weekdays: [], timeOfDay: '09:00' });
+  });
+
+  it('修改每月日期时重算 nextRunAt，切走后清空 monthDays', async () => {
+    let now = at(2026, 10, 12, 16, 36);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-scheduled-'));
+    dirs.push(dir);
+    const store = new ScheduledTaskStore(path.join(dir, 'scheduled-tasks.json'), () => now);
+    const task = await store.create(baseInput({ scheduleKind: 'monthly', monthDays: [20], timeOfDay: '10:00' }));
+    expect(task.nextRunAt).toBe(at(2026, 10, 20, 10));
+
+    now = at(2026, 10, 13);
+    expect((await store.update(task.id, { name: '改名' })).nextRunAt).toBe(at(2026, 10, 20, 10));
+    expect((await store.update(task.id, { monthDays: [1] })).nextRunAt).toBe(at(2026, 11, 1, 10));
+    const daily = await store.update(task.id, { scheduleKind: 'daily' });
+    expect(daily).toMatchObject({ scheduleKind: 'daily', monthDays: [], timeOfDay: '10:00' });
+    expect(daily.nextRunAt).toBe(at(2026, 10, 13, 10));
+    await expect(store.update(task.id, { scheduleKind: 'monthly' })).rejects.toThrow('每月执行至少选择一天');
   });
 
   it('修改钟点计划或切换调度方式时重算 nextRunAt，只改名称不影响', async () => {

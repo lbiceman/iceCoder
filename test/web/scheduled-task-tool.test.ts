@@ -10,6 +10,7 @@ import {
   SCHEDULED_TASK_CREATE_IN_TASK_SESSION_MESSAGE,
   createScheduledTaskTool,
   normalizeIntervalUnit,
+  normalizeMonthDays,
   normalizeScheduleKind,
   normalizeWeekdays,
 } from '../../src/web/scheduled-task-tool.js';
@@ -66,6 +67,9 @@ describe('scheduled_task tool', () => {
     expect(description).toMatch(/cron expressions are NOT supported/);
     expect(description).toMatch(/- daily: runs every day at timeOfDay/);
     expect(description).toMatch(/weekdays \[5\], timeOfDay "10:00"/);
+    expect(description).toMatch(/- monthly: runs at timeOfDay on every day-of-month in monthDays/);
+    expect(description).toMatch(/monthDays \[1,15\], timeOfDay "09:00"/);
+    expect(description).not.toMatch(/Monthly .* NOT supported/);
     expect(description).not.toMatch(/Clock times .* are NOT supported/);
     expect(description).toMatch(/cannot see this chat/);
     expect(description).toMatch(/auto-approved/);
@@ -143,15 +147,24 @@ describe('scheduled_task tool', () => {
     expect((await store.list()).find((t) => t.name === '周报')).toMatchObject({
       scheduleKind: 'weekly', weekdays: [5], timeOfDay: '10:00', nextRunAt: new Date(2026, 9, 16, 10).getTime(),
     });
+
+    const monthly = await tool.handler({ action: 'create', name: '月报', prompt: '写月报', scheduleKind: '每月', monthDays: ['15号', 1], timeOfDay: '9:00' });
+    expect(monthly.success).toBe(true);
+    expect(monthly.output).toContain('每月 1 日、15 日 09:00 执行一次');
+    expect((await store.list()).find((t) => t.name === '月报')).toMatchObject({
+      scheduleKind: 'monthly', monthDays: [1, 15], weekdays: [], timeOfDay: '09:00', nextRunAt: new Date(2026, 9, 15, 9).getTime(),
+    });
   });
 
-  it('infers scheduleKind from timeOfDay / weekdays on create', async () => {
+  it('infers scheduleKind from timeOfDay / weekdays / monthDays on create', async () => {
     const tool = makeTool();
     await tool.handler({ action: 'create', name: 'a', prompt: 'p', timeOfDay: '08:00' });
     await tool.handler({ action: 'create', name: 'b', prompt: 'p', timeOfDay: '08:00', weekdays: '1,3,5' });
+    await tool.handler({ action: 'create', name: 'c', prompt: 'p', timeOfDay: '08:00', monthDays: '31' });
     const tasks = await store.list();
     expect(tasks.find((t) => t.name === 'a')).toMatchObject({ scheduleKind: 'daily' });
     expect(tasks.find((t) => t.name === 'b')).toMatchObject({ scheduleKind: 'weekly', weekdays: [1, 3, 5] });
+    expect(tasks.find((t) => t.name === 'c')).toMatchObject({ scheduleKind: 'monthly', monthDays: [31] });
   });
 
   it('describes one-shot clock tasks and rejects bad clock input', async () => {
@@ -162,10 +175,16 @@ describe('scheduled_task tool', () => {
       .toMatchObject({ success: false, error: '执行时刻格式应为 HH:mm' });
     expect(await tool.handler({ action: 'create', name: 'x', prompt: 'p', scheduleKind: 'weekly', timeOfDay: '10:00' }))
       .toMatchObject({ success: false, error: '每周执行至少选择一天' });
+    expect(await tool.handler({ action: 'create', name: 'x', prompt: 'p', scheduleKind: 'monthly', timeOfDay: '10:00' }))
+      .toMatchObject({ success: false, error: '每月执行至少选择一天' });
+    expect(await tool.handler({ action: 'create', name: 'x', prompt: 'p', scheduleKind: 'monthly', monthDays: [32], timeOfDay: '10:00' }))
+      .toMatchObject({ success: false, error: '日期取值应为 1-31 的整数' });
+    const onceMonthly = await tool.handler({ action: 'create', name: '月末提醒', prompt: 'p', scheduleKind: 'monthly', monthDays: [31], timeOfDay: '18:00', once: true });
+    expect(onceMonthly.output).toContain('一次性，在下一个 31 日 18:00 执行');
   });
 
   it.each([
-    ['Daily', 'daily'], ['每周', 'weekly'], ['interval', 'interval'], ['monthly', 'monthly'],
+    ['Daily', 'daily'], ['每周', 'weekly'], ['interval', 'interval'], ['monthly', 'monthly'], ['每月', 'monthly'], ['Month', 'monthly'],
   ])('normalizeScheduleKind(%s) = %s', (raw, expected) => {
     expect(normalizeScheduleKind(raw)).toBe(expected);
   });
@@ -174,6 +193,12 @@ describe('scheduled_task tool', () => {
     [[5], [5]], [['5'], [5]], ['fri', [5]], ['周一,周三、星期五', [1, 3, 5]], [7, [0]], [['Sunday'], [0]], [['周八'], ['周八']],
   ])('normalizeWeekdays(%j) = %j', (raw, expected) => {
     expect(normalizeWeekdays(raw)).toEqual(expected);
+  });
+
+  it.each<[unknown, unknown]>([
+    [[15], [15]], [['1', '15'], [1, 15]], ['1,15、31', [1, 15, 31]], ['15号', [15]], [['1日'], [1]], [20, [20]], [['last'], ['last']],
+  ])('normalizeMonthDays(%j) = %j', (raw, expected) => {
+    expect(normalizeMonthDays(raw)).toEqual(expected);
   });
 
   it('describes one-shot tasks and honours enabled:false', async () => {
