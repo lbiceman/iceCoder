@@ -1,0 +1,188 @@
+/* 知识库 ·「规则」页签（页头、按钮复用 skills.css） */
+.rules-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+
+.rules-main > * {
+  max-width: 860px;
+}
+
+.rules-notice {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+
+.rules-notice-text {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.rules-notice-text strong {
+  color: var(--text-primary);
+}
+
+.rules-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rules-stats strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.rules-stats.is-over,
+.rules-stats.is-over strong {
+  color: var(--danger);
+}
+
+.rules-meter {
+  margin-top: 8px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.rules-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--transition);
+}
+
+.rules-meter.is-over .rules-meter-fill {
+  background: var(--danger);
+}
+
+.rules-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 10px;
+}
+
+.rules-toolbar .skills-btn:disabled,
+.rules-card .skills-btn:disabled,
+.rules-editor .skills-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rules-card {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+
+.rules-card.is-disabled .rules-card-content {
+  opacity: 0.55;
+}
+
+.rules-card.is-editing {
+  border-color: var(--accent-border-strong);
+}
+
+.rules-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.rules-card-index {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-secondary);
+}
+
+.rules-card-meta {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.rules-card-switch {
+  flex: 0 0 auto;
+}
+
+.rules-card-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rules-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rules-editor-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.rules-editor-input:focus {
+  outline: none;
+  border-color: var(--accent-border-strong);
+}
+
+.rules-editor-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.rules-editor-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rules-editor-count.is-over {
+  color: var(--danger);
+}
+
+.rules-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .rules-main {
+    padding: 12px;
+  }
+}

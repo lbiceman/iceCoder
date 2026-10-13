@@ -15,7 +15,7 @@ data/*
 data/skills/*
 !data/skills/创建技能.md
 
-# 项目级本地配置（MCP、memory.md 等），不提交
+# 项目级本地配置（MCP 等），不提交
 .iceCoder/
 .cursor/
 

@@ -2163,20 +2163,21 @@ export const ChatPage = (() => {
                 '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
                 '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
               '</div>' +
-              '<button class="btn-send" id="btn-send" type="button" title="Send" aria-label="Send">' +
-                (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
-              '</button>' +
-              '<div class="cmd-palette-anchor">' +
-                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
-                  (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
-                '</button>' +
-              '</div>' +
               '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
               + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
               + 'aria-label="Shell 协作模式">'
               + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
               + '<span class="shell-collab-label">Shell协作</span>'
               + '</span>' +
+              '<div class="composer-toolbar-spacer" aria-hidden="true"></div>' +
+              '<div class="cmd-palette-anchor">' +
+                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                  (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
+                '</button>' +
+              '</div>' +
+              '<button class="btn-send" id="btn-send" type="button" title="发送" aria-label="Send">' +
+                (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
+              '</button>' +
             '</div>' +
           '</div>' +
           '</div>' +

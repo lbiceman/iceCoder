@@ -14,6 +14,10 @@ export interface QueuedTask {
   reasoningEffort?: ReasoningEffort;
   enqueuedAt: number;
   source: 'implicit' | 'explicit';
+  /** 后台子 Agent 完成后的自动续跑：不产生用户气泡，只给主 Agent 继续工作。 */
+  continuation?: boolean;
+  /** 由定时任务投递时的任务 id，用于回写执行结果。 */
+  scheduledTaskId?: string;
 }
 
 export type TaskEnqueueInput = Omit<QueuedTask, 'id' | 'enqueuedAt'> & { text: string };
@@ -34,6 +38,8 @@ function toQueuedTask(task: TaskEnqueueInput, id: string, enqueuedAt: number): Q
     enqueuedAt,
     source: task.source,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(task.continuation ? { continuation: true } : {}),
+    ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
   };
 }
 
@@ -55,8 +61,17 @@ export class TaskQueueManager {
   private runExclusive<T>(sessionId: string, op: () => Promise<T>): Promise<T> {
     const prev = this.opTails.get(sessionId) ?? Promise.resolve();
     const run = prev.then(op, op);
-    this.opTails.set(sessionId, run.then(() => undefined, () => undefined));
+    const tail = run.then(() => undefined, () => undefined);
+    this.opTails.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.opTails.get(sessionId) === tail) this.opTails.delete(sessionId);
+    });
     return run;
+  }
+
+  /** 测试用：当前仍挂着串行链的会话数。 */
+  pendingOpCount(): number {
+    return this.opTails.size;
   }
 
   private async ensureLoaded(sessionId: string): Promise<QueuedTask[]> {

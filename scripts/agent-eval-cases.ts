@@ -63,6 +63,8 @@ export interface AgentEvalCase {
      * always：真实模型也必须派出，用来反复观察子 Agent 是否真的跑起来。
      */
     taskCalls?: { min?: number; max?: number; enforce?: 'scripted' | 'always' };
+    /** 父模型发出的 check_agent 调用次数（后台子 Agent 取结果）。 */
+    checkAgentCalls?: { min?: number; max?: number };
     /** 脚本化时，task 的工具结果文本应包含这些子串（子 Agent 报告）。 */
     taskResultContains?: string[];
     /** 脚本化时必须留下子 Agent 记录；真实模型若派了，记录数不能少于 task 次数。 */
@@ -1236,5 +1238,83 @@ export const agentEvalCases: AgentEvalCase[] = [
     },
     maxRounds: 10,
     timeoutMs: 240_000,
+  },
+  {
+    id: 'local-subagent-background-check',
+    category: 'sub-agent',
+    prompt: [
+      'Read src/payment/timeout.js and src/refund/flow.js.',
+      'The final answer must contain the exact text payment-delay=0; refund=ok.',
+      'Do not modify any file.',
+      'Delegate a read-only explore sub-agent with task(run_in_background:true), then fetch its report with check_agent.',
+    ].join(' '),
+    files: {
+      'src/payment/timeout.js': [
+        'function retryDelayMs() {',
+        '  return 0;',
+        '}',
+        '',
+        'module.exports = { retryDelayMs };',
+        '',
+      ].join('\n'),
+      'src/refund/flow.js': [
+        'function refundStatus() {',
+        "  return 'ok';",
+        '}',
+        '',
+        'module.exports = { refundStatus };',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      finalContains: 'payment-delay=0; refund=ok',
+      taskCalls: { min: 1, max: 1 },
+      checkAgentCalls: { min: 1, max: 1 },
+      requireAgentMeta: true,
+      agentTypes: ['explore'],
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+      },
+    },
+    assertions: [
+      { path: 'src/payment/timeout.js', unchanged: true },
+      { path: 'src/refund/flow.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      {
+        type: 'tool',
+        name: 'task',
+        arguments: {
+          description: '后台查看支付与退款',
+          subagent_type: 'explore',
+          run_in_background: true,
+          prompt: 'BG-EXPLORE Read src/payment/timeout.js and src/refund/flow.js. Do not modify files or run commands.',
+        },
+      },
+      {
+        type: 'tool',
+        name: 'check_agent',
+        arguments: { agentId: '$lastAgentId', waitMs: 5000 },
+      },
+      { type: 'final', content: 'payment-delay=0; refund=ok' },
+    ],
+    subAgents: {
+      scripts: [
+        {
+          match: 'BG-EXPLORE',
+          turns: [
+            { type: 'tool', name: 'read_file', arguments: { path: 'src/payment/timeout.js' } },
+            { type: 'tool', name: 'read_file', arguments: { path: 'src/refund/flow.js' } },
+            { type: 'final', content: 'payment-delay=0; refund=ok' },
+          ],
+        },
+      ],
+    },
+    maxRounds: 6,
+    timeoutMs: 90_000,
   },
 ];

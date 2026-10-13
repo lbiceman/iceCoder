@@ -113,9 +113,10 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   const { memoryFilesDir } = ctx.paths;
 
   /** 加载提示词（与 WebSocket 共用逻辑；不绑定固定自然语言）。 */
-  async function loadAssembledPrompt(): Promise<AssembledPrompt> {
+  async function loadAssembledPrompt(workspaceRoot: string): Promise<AssembledPrompt> {
     return loadAssembledChatPrompt({
       logPrefix: '[cli]',
+      workspaceRoot,
       systemPromptPath: ctx.paths.systemPromptPath,
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
@@ -409,7 +410,6 @@ ${c.bold}终端内置命令:${c.reset}
     spinner.start();
 
     try {
-      const assembled = await loadAssembledPrompt();
       let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
 
       const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
@@ -427,6 +427,7 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      const assembled = await loadAssembledPrompt(wsCtx.effectiveWorkspaceRoot);
       const promptToolNames = toolDefs.map((tool) => tool.name);
       // Lazy Tool Offering（CLI）：按信号裁剪文档工具
       const offeringResult = selectToolsForOffering(toolDefs, {

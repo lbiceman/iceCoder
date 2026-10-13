@@ -37,6 +37,8 @@ export interface PromptAssemblyConfig {
   customSystemPrompt?: string;
   /** 附加说明（项目公约、评测模式等）：进入 harness 动态层 `projectMarkdown`，不拼进静态 system */
   appendSystemPrompt?: string;
+  /** 用户级全局规则（已格式化的编号列表）：进入 harness 动态层 `userRules` */
+  userRules?: string;
   /** 若设置，则经由 overlay 注入动态 `# Language`；默认聊天可不传，由用户消息决定语气 */
   language?: string;
   /** 环境信息 */
@@ -94,8 +96,10 @@ export interface HarnessPromptOverlay {
   environment?: Record<string, string>;
   /** 示例："中文"；注入为简短的 Language 段 */
   language?: string;
-  /** 如 .iceCoder/memory.md */
+  /** 如工程根目录 AGENTS.md */
   projectMarkdown?: string;
+  /** 知识库「规则」页中启用的用户级全局规则 */
+  userRules?: string;
 }
 
 /**

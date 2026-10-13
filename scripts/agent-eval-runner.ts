@@ -195,7 +195,15 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
   if (!turns || turns.length === 0) return undefined;
   let index = 0;
   let toolSeq = 0;
+  let lastAgentId = '';
   return async (msgs) => {
+    // 记录最近一次后台 task 的结果里的 agentId，供后续 check_agent 脚本引用。
+    const agentIdMatch = /\[Agent ([a-z0-9]+)\]/.exec(
+      msgs.filter(m => m.role === 'tool')
+        .map(m => typeof m.content === 'string' ? m.content : '')
+        .join('\n'),
+    );
+    if (agentIdMatch) lastAgentId = agentIdMatch[1]!;
     const isPrimary = msgs.some(message =>
       typeof message.content === 'string'
       && message.content.includes('isolated local eval workspace'),
@@ -222,12 +230,27 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
       content: '',
       toolCalls: calls.map((call) => {
         toolSeq += 1;
-        return { id: `scripted-${toolSeq}`, name: call.name, arguments: call.arguments };
+        // $lastAgentId 由运行期最近一次 task 结果动态替换（脚本无法预知 agentId）。
+        const args = substituteAgentId(call.arguments, lastAgentId);
+        return { id: `scripted-${toolSeq}`, name: call.name, arguments: args };
       }),
       usage: usage(),
       finishReason: 'tool_calls',
     };
   };
+}
+
+/** 把脚本里的 $lastAgentId 占位替换成运行期真实 agentId。 */
+function substituteAgentId(
+  args: Record<string, unknown>,
+  agentId: string,
+): Record<string, unknown> {
+  if (!agentId) return args;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    out[key] = value === '$lastAgentId' ? agentId : value;
+  }
+  return out;
 }
 
 /** 每个子 Agent 一份独立脚本，按它收到的任务文本选择。 */
@@ -436,6 +459,18 @@ async function scoreCase(args: {
     }
     if (bounds.max !== undefined && taskCallCount > bounds.max) {
       failures.push(`expected at most ${bounds.max} task call(s), got ${taskCallCount}`);
+    }
+  }
+  if (testCase.expected.checkAgentCalls) {
+    const checkAgentCallCount = events.filter(event =>
+      event.type === 'tool_call' && event.toolName === 'check_agent' && !event.agentId,
+    ).length;
+    const bounds = testCase.expected.checkAgentCalls;
+    if (bounds.min !== undefined && checkAgentCallCount < bounds.min) {
+      failures.push(`expected at least ${bounds.min} check_agent call(s), got ${checkAgentCallCount}`);
+    }
+    if (bounds.max !== undefined && checkAgentCallCount > bounds.max) {
+      failures.push(`expected at most ${bounds.max} check_agent call(s), got ${checkAgentCallCount}`);
     }
   }
   const agentMetas = testCase.subAgents

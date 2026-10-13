@@ -59,7 +59,12 @@ import {
   filterToolsForAgentType,
   type AgentTypeDefinition,
 } from './agent-types.js';
-import { parseTaskToolInput } from './task-tool.js';
+import {
+  AgentBackgroundHub,
+  sessionAgentBackgroundHub,
+  type DrainedBackgroundResult,
+} from './agent-background-hub.js';
+import { parseCheckAgentInput, parseTaskToolInput } from './task-tool.js';
 import {
   defaultWriteLeaseRegistry,
   formatLeaseRejectMessage,
@@ -118,6 +123,8 @@ export interface AgentSpawnerOptions {
   /** 是否写 agents 目录（测试可关） */
   persist?: boolean;
   now?: () => number;
+  /** 后台子 Agent 跨轮登记处；缺省用进程级默认实例。 */
+  backgroundHub?: AgentBackgroundHub;
 }
 
 export interface AgentParentContext {
@@ -216,6 +223,8 @@ interface AgentRun {
   lastUpdateAt: number;
   updateTimer?: ReturnType<typeof setTimeout>;
   workspaceRoot: string;
+  /** run_in_background：不阻塞 task，结果经后台注册表异步交付 */
+  background: boolean;
 }
 
 interface PendingOutcome {
@@ -300,6 +309,8 @@ export class AgentSpawner {
   private readonly runs = new Map<string, AgentRun>();
   private readonly outcomes = new Map<string, PendingOutcome>();
   private readonly finishedViews = new Map<string, AgentView>();
+  private readonly backgroundHub: AgentBackgroundHub;
+  private readonly parentAbort = new AbortController();
   private spawnedThisRun = 0;
   private writeSeq = 0;
 
@@ -307,6 +318,7 @@ export class AgentSpawner {
     this.semaphore = new Semaphore(Math.max(1, options.maxConcurrent ?? agentConfig.maxConcurrent));
     this.maxPerRun = Math.max(1, options.maxPerRun ?? agentConfig.maxPerRun);
     this.leases = options.leaseRegistry ?? defaultWriteLeaseRegistry;
+    this.backgroundHub = options.backgroundHub ?? sessionAgentBackgroundHub;
   }
 
   get parentSessionId(): string {
@@ -339,8 +351,113 @@ export class AgentSpawner {
     return true;
   }
 
+  /**
+   * 中止本轮前台子 Agent。后台子 Agent（run_in_background）跨轮存活，不在这里中止。
+   */
   stopAll(): void {
+    for (const run of this.runs.values()) {
+      if (!run.background) this.abortRun(run, 'cancelled');
+    }
+  }
+
+  /** 是否仍有在跑的后台子 Agent（决定 spawner 是否要跨轮保留）。 */
+  hasLiveBackgrounds(): boolean {
+    for (const run of this.runs.values()) {
+      if (run.background) return true;
+    }
+    return false;
+  }
+
+  /** 是否还有后台相关工作（在跑或结果未注入）——据此决定是否保留 spawner。 */
+  hasBackgroundWork(): boolean {
+    return this.hasLiveBackgrounds() || this.hasPendingBackgroundResults();
+  }
+
+  /** 会话被删除 / 服务关停：中止全部子 Agent 并丢弃登记。 */
+  dispose(): void {
     for (const run of this.runs.values()) this.abortRun(run, 'cancelled');
+    this.parentAbort.abort();
+    this.backgroundHub.clearSession(this.options.parentSessionId);
+  }
+
+  /** 已结束、尚未注入主 Agent 的后台子 Agent 报告（取走即清空）。 */
+  drainBackgroundResults(): DrainedBackgroundResult[] {
+    return this.backgroundHub.drainOutputs(this.options.parentSessionId);
+  }
+
+  /** 是否有已完成、尚未注入的后台子 Agent 报告（用于空闲时唤醒主 Agent）。 */
+  hasPendingBackgroundResults(): boolean {
+    return this.backgroundHub.hasPendingOutputs(this.options.parentSessionId);
+  }
+
+  /** 后台子 Agent 视图（用于「后台 Agent：N 运行中」状态条）。 */
+  listBackgroundViews(): AgentView[] {
+    return this.listViews().filter(v => v.background === true);
+  }
+
+  /**
+   * `check_agent`：查询（并可有界等待）一个后台子 Agent。
+   * 缺 agentId 时列出本会话所有子 Agent。
+   */
+  async runCheckAgent(toolCall: ToolCall): Promise<ToolResult> {
+    const parsed = parseCheckAgentInput(toolCall.arguments);
+    if (!parsed.ok) return { success: false, output: '', error: parsed.error };
+    const { agentId, waitMs } = parsed.input;
+
+    if (!agentId) {
+      const views = this.listViews();
+      if (views.length === 0) {
+        return { success: true, output: 'No sub-agents have been started in this session.' };
+      }
+      const lines = views.map(v => `- ${v.agentId} [${v.type}] ${v.description} — ${v.status}`);
+      return { success: true, output: `Sub-agents in this session:\n${lines.join('\n')}` };
+    }
+
+    if (waitMs > 0 && this.runs.has(agentId)) {
+      await this.waitForAgentTerminal(agentId, waitMs);
+    }
+
+    const run = this.runs.get(agentId);
+    const view = run ? { ...run.view } : this.finishedViews.get(agentId);
+    if (!view) {
+      return {
+        success: false,
+        output: '',
+        error: `Unknown agentId "${agentId}". Use check_agent without agentId to list agents.`,
+      };
+    }
+    if (run) {
+      return {
+        success: true,
+        output: `[Agent ${agentId}] still ${view.status}${view.currentActivity ? ` — ${view.currentActivity}` : ''}. `
+          + `${view.rounds} rounds, ${view.toolCalls} tool calls so far. Check again later or keep working.`,
+      };
+    }
+    // 已结束：优先给终态报告全文（若已生成且尚未被自动注入取走）。
+    const full = this.backgroundHub.takeOutput(agentId);
+    return {
+      success: true,
+      output: full ?? this.finishedOutput(agentId, view),
+    };
+  }
+
+  private waitForAgentTerminal(agentId: string, waitMs: number): Promise<void> {
+    if (!this.runs.has(agentId)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      // 用真实时钟轮询；后台子 Agent 同一进程内跑完即从 runs 移除。
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        if (!this.runs.has(agentId) || Date.now() - startedAt >= waitMs) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 100);
+    });
+  }
+
+  private finishedOutput(agentId: string, view: AgentView): string {
+    return `[Agent ${agentId}] finished with status=${view.status}.`
+      + (view.reportPreview ? `\n--- report preview ---\n${view.reportPreview}` : '');
   }
 
   /**
@@ -406,37 +523,86 @@ export class AgentSpawner {
       streamTail: '',
       lastUpdateAt: 0,
       workspaceRoot: parent.workspaceRoot,
+      background: parsed.input.runInBackground,
     };
     this.runs.set(agentId, run);
+    run.view.background = run.background;
 
-    const onParentAbort = () => this.abortRun(run, 'cancelled');
-    if (parent.signal?.aborted) onParentAbort();
-    else parent.signal?.addEventListener('abort', onParentAbort, { once: true });
+    // 前台子 Agent 随父回合中止；后台子 Agent 跨轮存活，只在 spawner 生命周期结束时中止。
+    const lifetimeAbort = new AbortController();
+    const onLifetimeAbort = () => this.abortRun(run, 'cancelled');
+    this.parentAbort.signal.addEventListener('abort', onLifetimeAbort, { once: true });
+    const stopSignal = run.background
+      ? AbortSignal.any([lifetimeAbort.signal])
+      : AbortSignal.any([lifetimeAbort.signal, ...(parent.signal ? [parent.signal] : [])]);
+    const onStop = () => this.abortRun(run, 'cancelled');
+    if (stopSignal.aborted) onStop();
+    else stopSignal.addEventListener('abort', onStop, { once: true });
 
     this.emitUpdate(run, parent, true);
     void this.persistMeta(run);
 
-    let acquired = false;
-    try {
-      acquired = await this.semaphore.acquire(run.controller.signal);
-      if (!acquired) {
-        return this.finish(run, parent, {
-          status: 'cancelled',
-          report: '',
-          rounds: 0,
-          toolCalls: 0,
-          tokens: 0,
-          messages: [],
-        });
-      }
-      return await this.execute(run, parent);
-    } finally {
-      if (acquired) this.semaphore.release();
-      parent.signal?.removeEventListener('abort', onParentAbort);
-      this.leases.releaseAgent(agentId);
-      if (run.updateTimer) clearTimeout(run.updateTimer);
-      this.runs.delete(agentId);
+    if (run.background) {
+      this.backgroundHub.register({
+        agentId,
+        sessionId: this.options.parentSessionId,
+        toolCallId: toolCall.id,
+        type: type.name,
+        description: run.view.description,
+        startedAt: now,
+      });
     }
+
+    // 后台子 Agent 不受父回合 deadline 约束（主 Agent 可能已开始新一轮）。
+    const taskParent: AgentParentContext = run.background
+      ? { ...parent, deadline: undefined }
+      : parent;
+
+    const settle = async (): Promise<ToolResult> => {
+      let acquired = false;
+      try {
+        acquired = await this.semaphore.acquire(run.controller.signal);
+        if (!acquired) {
+          return this.finish(run, taskParent, {
+            status: 'cancelled',
+            report: '',
+            rounds: 0,
+            toolCalls: 0,
+            tokens: 0,
+            messages: [],
+          });
+        }
+        return await this.execute(run, taskParent);
+      } finally {
+        if (acquired) this.semaphore.release();
+        stopSignal.removeEventListener('abort', onStop);
+        this.parentAbort.signal.removeEventListener('abort', onLifetimeAbort);
+        this.leases.releaseAgent(agentId);
+        if (run.updateTimer) clearTimeout(run.updateTimer);
+        this.runs.delete(agentId);
+      }
+    };
+
+    if (!run.background) return settle();
+
+    // 后台：立即返回，允许主 Agent 继续；结果稍后进注册表。
+    void settle().then(
+      (result) => {
+        this.backgroundHub.finish(agentId, this.runStatus(agentId), result.output);
+      },
+      () => {
+        this.backgroundHub.finish(agentId, 'failed', '');
+      },
+    );
+    return {
+      success: true,
+      output: `[Agent ${agentId}] started in background as ${type.name}. `
+        + 'You can keep working; use check_agent to fetch its report, or it will be given to you automatically once it finishes.',
+    };
+  }
+
+  private runStatus(agentId: string): AgentStatus {
+    return this.finishedViews.get(agentId)?.status ?? 'failed';
   }
 
   // ─── 执行 ───

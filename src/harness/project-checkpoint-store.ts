@@ -49,6 +49,29 @@ export interface ProjectCheckpointRestoreOptions extends ProjectCheckpointSaveOp
 
 const writeStates = new Map<string, SessionWriteState>();
 
+function writeStateKey(sessionDir: string, sessionId: string): string {
+  return path.resolve(path.join(sessionDir, `${sessionId}.checkpoint.json`)).toLowerCase();
+}
+
+/** 会话删除后释放进程内缓存的最新 checkpoint（含完整对话/工作区快照）；排队中的写入完成后再移除。 */
+export function releaseProjectCheckpointWriteState(sessionDir: string, sessionId: string): void {
+  const key = writeStateKey(sessionDir, sessionId);
+  const state = writeStates.get(key);
+  if (!state) return;
+  const drain = (): void => {
+    const tail = state.tail;
+    void tail.then(() => {
+      if (state.tail !== tail) return drain();
+      if (writeStates.get(key) === state) writeStates.delete(key);
+    });
+  };
+  drain();
+}
+
+export function hasProjectCheckpointWriteState(sessionDir: string, sessionId: string): boolean {
+  return writeStates.has(writeStateKey(sessionDir, sessionId));
+}
+
 /**
  * The only durable writer for an active session checkpoint. Every save replaces the complete
  * aggregate; no state is merged from the current file.
@@ -71,7 +94,7 @@ export class ProjectCheckpointStore {
     this.recoveryDisplacedPath = `${this.checkpointPath}.replace`;
     this.recoveryMarkerPath = `${this.checkpointPath}.replace.json`;
     this.lockPath = `${this.checkpointPath}.lock`;
-    const key = path.resolve(this.checkpointPath).toLowerCase();
+    const key = writeStateKey(options.sessionDir, this.sessionId);
     let state = writeStates.get(key);
     if (!state) {
       state = { tail: Promise.resolve(), generation: 0, latest: null, persistBlocked: false };

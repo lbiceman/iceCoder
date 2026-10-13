@@ -622,8 +622,8 @@ Metrics per case and aggregate:
 - **CLI `web` / `start` / `chat`**: default port **`3784`** unless `PORT` or `--port` is set (`src/cli/commands/serve.ts`, `chat.ts`).
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients use `/api/remote` and related routes.
-- **Desktop routes**: `#/chat`, `#/memory`, `#/skills`, `#/config` — left sidebar shell.
-- **Mobile H5 routes**: `#/m/work`, `#/m/work/:sessionId`, `#/m/memory`, `#/m/skills`, `#/m/config` — bottom tab shell (`src/public/js/shell/mobile-shell.js`).
+- **Desktop routes**: `#/chat`, `#/tasks`, `#/skills`, `#/memory`, `#/rules`, `#/stats`, `#/settings` — left nav: Work / Tasks / Knowledge / Stats.
+- **Mobile H5 routes**: `#/m/work`, `#/m/work/:sessionId`, `#/m/tasks`, `#/m/skills`, `#/m/memory`, `#/m/rules`, `#/m/config` — bottom tabs: Work / Tasks / Knowledge / Settings (`src/public/js/shell/mobile-shell.ts`).
 - **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/skills`, `/api/workspace/browse`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export), `/api/supervisor/events` (Supervisor / Execution Mode events report — see **`~supervisor`** under Dual-mode Supervisor).
 - **Frontend** lives under `src/public/` (chat UI, Skills/Memory pages, Ice Bean, mobile pages). Production build output: `dist/public/`.
 
@@ -649,7 +649,7 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 ![Mobile work chat](./assets/mobile-work-chat.png)
 
-![Mobile skills](./assets/mobile-skills.png)
+![Mobile knowledge — skills](./assets/mobile-skills.png)
 
 ![Mobile MCP settings](./assets/mobile-config-mcp.png)
 

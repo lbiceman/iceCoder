@@ -21,6 +21,7 @@ import {
   lazyToolOfferingLogEnabled,
   DEFERRED_TOOLS,
   buildAvailableDocToolsContext,
+  isLazyOfferedTool,
 } from '../tools/tool-offering-selector.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
@@ -82,7 +83,7 @@ import {
 } from './chat-ws-broadcast.js';
 import { createShellMandatoryConfirmHandler, createToolConfirmHandler } from './chat-ws-confirm.js';
 import { broadcastAgentStep, createWebAgentSpawner } from './chat-ws-agents.js';
-import { TASK_TOOL_NAME } from '../harness/agents/task-tool.js';
+import { CHECK_AGENT_TOOL_NAME, TASK_TOOL_NAME } from '../harness/agents/task-tool.js';
 import { rebindBgTaskPusher } from './chat-ws-bg-tasks.js';
 import {
   appendMessages,
@@ -167,6 +168,10 @@ export interface HandleChatMessageInput {
   skipUserMessageAppend?: boolean;
   source?: 'implicit' | 'explicit';
   reasoningEffort?: ReasoningEffort;
+  /** Harness 本轮的最终文本（出错时即错误描述），供定时任务回写失败原因。 */
+  onFinalContent?: (content: string) => void;
+  /** 定时任务：跳过收尾硬状态门禁。 */
+  skipCompletionGate?: boolean;
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -259,8 +264,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   await rebindBgTaskPusher(runSessionId);
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
-  const assembled = await loadAssembledPrompt();
-  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
 
@@ -477,9 +480,14 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
-    : [...toolDefs.map((tool) => tool.name), ...(agentTaskEnabled ? [TASK_TOOL_NAME] : [])];
+    : [
+        ...toolDefs.map((tool) => tool.name),
+        ...(agentTaskEnabled ? [TASK_TOOL_NAME, CHECK_AGENT_TOOL_NAME] : []),
+      ];
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
+  const assembled = await loadAssembledPrompt(effectiveWorkspace);
+  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   const offeringResult = selectToolsForOffering(toolDefs, {
     userMessage: harnessMessageText,
@@ -565,16 +573,21 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: createToolConfirmHandler(runSessionId),
+    skipCompletionGate: input.skipCompletionGate === true,
   };
 
+  // 若上一轮仍有后台子 Agent 在跑，复用同一个 spawner，让它们跨轮存活。
+  const priorSpawner = sessionAgentSpawners.get(runSessionId);
   const agentSpawner = agentTaskEnabled
-    ? createWebAgentSpawner({
-        sessionId: runSessionId,
-        messageId: userMsgId,
-        llmAdapter,
-        reasoningEffort,
-        harnessFactory: (config, executor) => new Harness(config, executor),
-      })
+    ? (priorSpawner && priorSpawner.hasBackgroundWork()
+        ? priorSpawner
+        : createWebAgentSpawner({
+            sessionId: runSessionId,
+            messageId: userMsgId,
+            llmAdapter,
+            reasoningEffort,
+            harnessFactory: (config, executor) => new Harness(config, executor),
+          }))
     : undefined;
   if (agentSpawner) {
     harnessConfig.agentSpawner = agentSpawner;
@@ -727,7 +740,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
           const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
           console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
 
-          if (event.toolSuccess && DEFERRED_TOOLS.has(String(event.toolName))) {
+          if (event.toolSuccess && isLazyOfferedTool(String(event.toolName))) {
             recordSessionDeferredToolCall(runSessionId, String(event.toolName));
           }
         }
@@ -848,11 +861,14 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       ...(usedModel ? { usedModel } : {}),
     });
     stopReason = result.loopState.stopReason;
+    input.onFinalContent?.(result.content);
   } finally {
     clearInterval(pulseTimer);
     if (agentSpawner) {
       agentSpawner.stopAll();
-      if (sessionAgentSpawners.get(runSessionId) === agentSpawner) {
+      // 仍然后台子 Agent 在跑（或结果未注入）时保留 spawner，让它们跨轮存活；否则摘掉。
+      if (!agentSpawner.hasBackgroundWork()
+        && sessionAgentSpawners.get(runSessionId) === agentSpawner) {
         sessionAgentSpawners.delete(runSessionId);
       }
     }

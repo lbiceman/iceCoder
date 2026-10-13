@@ -21,19 +21,19 @@ export const MobileShell = (() => {
     });
   }
 
-  const NAV_ICON_NAMES = {
-    work: 'work',
-    memory: 'memory',
-    skills: 'skills',
-    config: 'settings',
-  };
-
+  /** mKnowledge 是虚拟入口：点击打开上次的知识库页签（mSkills / mMemory / mRules） */
   const NAV_ITEMS = [
-    { page: 'work', label: '工作', path: '/m/chat' },
-    { page: 'mMemory', label: '记忆', path: '/m/memory' },
-    { page: 'mSkills', label: '技能', path: '/m/skills' },
-    { page: 'mConfig', label: '设置', path: '/m/config' },
+    { page: 'work', label: '工作', path: '/m/chat', icon: 'work' },
+    { page: 'mTasks', label: '任务', path: '/m/tasks', icon: 'tasks' },
+    { page: 'mKnowledge', label: '知识库', path: '/m/skills', icon: 'knowledge' },
+    { page: 'mConfig', label: '设置', path: '/m/config', icon: 'settings' },
   ];
+
+  function navPageFor(page) {
+    if (page === 'workChat') return 'work';
+    if (page === 'mSkills' || page === 'mMemory' || page === 'mRules') return 'mKnowledge';
+    return page;
+  }
 
   function themeBtnHtml() {
     return (
@@ -89,12 +89,9 @@ export const MobileShell = (() => {
 
   function buildBottomNav() {
     if (!bottomNavEl) return;
-    bottomNavEl.innerHTML = NAV_ITEMS.map((item) => {
-      const iconKey = item.page === 'work' ? 'work' : item.page === 'mMemory' ? 'memory' : item.page === 'mSkills' ? 'skills' : 'config';
-      return (
-        `<button type="button" class="mobile-bottom-nav-btn" data-page="${item.page}" data-path="${item.path}" role="tab" aria-selected="false"><span class="mobile-bottom-nav-icon" aria-hidden="true">${ic(NAV_ICON_NAMES[iconKey])}</span><span class="mobile-bottom-nav-label">${item.label}</span></button>`
-      );
-    }).join('');
+    bottomNavEl.innerHTML = NAV_ITEMS.map((item) => (
+      `<button type="button" class="mobile-bottom-nav-btn" data-page="${item.page}" data-path="${item.path}" role="tab" aria-selected="false"><span class="mobile-bottom-nav-icon" aria-hidden="true">${ic(item.icon)}</span><span class="mobile-bottom-nav-label">${item.label}</span></button>`
+    )).join('');
     if (window.AppIcon) window.AppIcon.hydrate(bottomNavEl);
   }
 
@@ -104,6 +101,13 @@ export const MobileShell = (() => {
       const btn = e.target && e.target.closest ? e.target.closest('.mobile-bottom-nav-btn') : null;
       if (!btn) return;
       const page = btn.getAttribute('data-page');
+      if (page === 'mKnowledge') {
+        if (btn.classList.contains('is-active')) return;
+        if (window.KnowledgeTabs) {
+          window.KnowledgeTabs.open();
+          return;
+        }
+      }
       if (page && window.AppRouter && typeof window.AppRouter.navigate === 'function') {
         window.AppRouter.navigate(page);
       }
@@ -135,6 +139,8 @@ export const MobileShell = (() => {
     if (path.startsWith('/m/work/')) return 'workChat';
     if (path === '/m/memory') return 'mMemory';
     if (path === '/m/skills') return 'mSkills';
+    if (path === '/m/rules') return 'mRules';
+    if (path === '/m/tasks') return 'mTasks';
     if (path === '/m/config') return 'mConfig';
 
     const h = window.location.hash || '';
@@ -142,6 +148,8 @@ export const MobileShell = (() => {
     if (h.startsWith('#/m/work')) return 'work';
     if (h.startsWith('#/m/memory')) return 'mMemory';
     if (h.startsWith('#/m/skills')) return 'mSkills';
+    if (h.startsWith('#/m/rules')) return 'mRules';
+    if (h.startsWith('#/m/tasks')) return 'mTasks';
     if (h.startsWith('#/m/config')) return 'mConfig';
     return 'work';
   }
@@ -152,14 +160,11 @@ export const MobileShell = (() => {
     const hideNav = current === 'workChat';
     bottomNavEl.classList.toggle('is-hidden', hideNav);
 
+    const navPage = navPageFor(current);
     const btns = bottomNavEl.querySelectorAll('.mobile-bottom-nav-btn');
     for (let i = 0; i < btns.length; i++) {
       const btn = btns[i];
-      const page = btn.getAttribute('data-page');
-      let on = page === current || (current === 'workChat' && page === 'work');
-      if (current !== 'workChat') {
-        on = page === current;
-      }
+      const on = btn.getAttribute('data-page') === navPage;
       btn.classList.toggle('is-active', on);
       btn.setAttribute('aria-selected', on ? 'true' : 'false');
     }
@@ -248,11 +253,15 @@ export const MobileShell = (() => {
           }
         });
       }
-    } else if (mode === 'memory') {
-      center.innerHTML = `<span class="mobile-top-bar-title">记忆</span>${getConnectionDot()}`;
+    } else if (mode === 'memory' || mode === 'skills' || mode === 'rules') {
+      const Tabs = window.KnowledgeTabs;
+      center.innerHTML = Tabs
+        ? `${Tabs.html(mode, 'is-segmented')}${getConnectionDot()}`
+        : `<span class="mobile-top-bar-title">知识库</span>${getConnectionDot()}`;
+      if (Tabs) Tabs.bind(center.querySelector('.knowledge-tabs'));
       right.innerHTML = themeBtnHtml();
-    } else if (mode === 'skills') {
-      center.innerHTML = `<span class="mobile-top-bar-title">技能</span>${getConnectionDot()}`;
+    } else if (mode === 'tasks') {
+      center.innerHTML = `<span class="mobile-top-bar-title">任务</span>${getConnectionDot()}`;
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'config') {
       center.innerHTML = `<span class="mobile-top-bar-title">设置</span>${getConnectionDot()}`;

@@ -21,6 +21,7 @@ import {
   type HarnessLike,
 } from '../../../src/harness/agents/agent-spawner.js';
 import { WriteLeaseRegistry } from '../../../src/harness/agents/write-lease.js';
+import { AgentBackgroundHub } from '../../../src/harness/agents/agent-background-hub.js';
 import { deleteAgentRecordsForMessages, loadAgentMeta, loadAgentMessages } from '../../../src/harness/agents/agent-store.js';
 import { hasFileBeenRead, markFileRead } from '../../../src/tools/read-before-edit.js';
 
@@ -209,7 +210,7 @@ describe('AgentSpawner 与真实子 Harness', () => {
       .run('do it', parentChat);
 
     expect(seenTools['GEN-TASK']).toEqual(expect.arrayContaining(['read_file', 'write_file', 'run_command']));
-    for (const name of ['task', 'memory_write', 'request_analysis']) {
+    for (const name of ['task', 'check_agent', 'memory_write', 'request_analysis']) {
       expect(seenTools['GEN-TASK']).not.toContain(name);
       expect(seenTools['EXP-TASK']).not.toContain(name);
     }
@@ -306,7 +307,7 @@ describe('AgentSpawner 与真实子 Harness', () => {
     expect(Number(/rounds=(\d+)/.exec(result.output)?.[1])).toBeGreaterThan(50);
     expect(events.some(e => e.agentId && e.type === 'compaction')).toBe(true);
     expect(hasFileBeenRead(root, 'parent-read.ts', 'parent-session')).toBe(true);
-  });
+  }, 20_000);
 
   it('两个并行子 Agent 写同一文件：后写者被租约拒绝', async () => {
     const { createLlm } = scriptedChildLlm({
@@ -673,4 +674,106 @@ describe('AgentSpawner 并发与生命周期', () => {
     expect(await loadAgentMeta(sessionsDir, 'parent-session', agentId)).toBeNull();
     expect(await loadAgentMessages(sessionsDir, 'parent-session', agentId)).toBeNull();
   });
+});
+
+// ─── 后台子 Agent（run_in_background） ───
+
+describe('后台子 Agent', () => {
+  const bgCtx = () => ({
+    config: parentConfig(root, sessionsDir),
+    toolExecutor: makeWorkspaceExecutor(root),
+    workspaceRoot: root,
+  });
+
+  function withHub(hub: AgentBackgroundHub, factory: AgentHarnessFactory, sessionId = 'p') {
+    return new AgentSpawner({
+      parentSessionId: sessionId, sessionsDir, messageId: 'm', persist: false,
+      backgroundHub: hub, createLlm: () => ({ chat: async () => final('x') }),
+      harnessFactory: factory,
+    });
+  }
+
+  it('立即返回 agentId 不阻塞；完成后结果进注册表，取走即清空', async () => {
+    const hub = new AgentBackgroundHub();
+    const spawner = withHub(hub, stubFactory(
+      { started: [], active: 0, maxActive: 0 },
+      async () => { await sleep(40); return { content: 'BG-DONE' }; },
+    ));
+    const res = await spawner.runTask(
+      { id: 't1', name: 'task', arguments: { description: 'bg', prompt: 'p', run_in_background: true } },
+      bgCtx(),
+    );
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('started in background');
+    // 立即返回时后台仍在跑
+    expect(spawner.hasLiveBackgrounds()).toBe(true);
+
+    await sleep(120);
+    expect(spawner.hasPendingBackgroundResults()).toBe(true);
+    const drained = spawner.drainBackgroundResults();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]!.output).toContain('BG-DONE');
+    // 取走即清空，不重复注入
+    expect(spawner.drainBackgroundResults()).toHaveLength(0);
+    expect(hub.liveCount('p')).toBe(0);
+  });
+
+  it('check_agent 有界等待到完成并返回报告；未知 agentId 报错；无 id 时列出', async () => {
+    const hub = new AgentBackgroundHub();
+    const spawner = withHub(hub, stubFactory(
+      { started: [], active: 0, maxActive: 0 },
+      async () => { await sleep(80); return { content: 'REPORT-42' }; },
+    ), 'p2');
+    const res = await spawner.runTask(
+      { id: 't1', name: 'task', arguments: { description: 'bg', prompt: 'p', run_in_background: true } },
+      bgCtx(),
+    );
+    const agentId = /\[Agent (\w+)\]/.exec(res.output)![1]!;
+
+    const check = await spawner.runCheckAgent({ id: 'c1', name: 'check_agent', arguments: { agentId, waitMs: 2000 } });
+    expect(check.success).toBe(true);
+    expect(check.output).toContain('REPORT-42');
+
+    const unknown = await spawner.runCheckAgent({ id: 'c2', name: 'check_agent', arguments: { agentId: 'nope' } });
+    expect(unknown.success).toBe(false);
+
+    const list = await spawner.runCheckAgent({ id: 'c3', name: 'check_agent', arguments: {} });
+    expect(list.success).toBe(true);
+    expect(list.output).toContain(agentId);
+  });
+
+  it('stopAll 不停后台；dispose 停全部并清空后台登记', async () => {
+    const hub = new AgentBackgroundHub();
+    const control = { started: [], active: 0, maxActive: 0 };
+    const spawner = withHub(hub, stubFactory(control, async (prompt, config) => {
+      if (prompt === 'bg') { await waitForAbort(config.loop.signal); return { stopReason: 'user_abort' }; }
+      await sleep(20);
+      return {};
+    }), 'p3');
+    await spawner.runTask(
+      { id: 'b', name: 'task', arguments: { description: 'bg', prompt: 'bg', run_in_background: true } },
+      bgCtx(),
+    );
+    expect(spawner.hasLiveBackgrounds()).toBe(true);
+    spawner.stopAll();
+    await sleep(30);
+    expect(spawner.hasLiveBackgrounds()).toBe(true); // 后台跨轮存活，未被 stopAll 打断
+    spawner.dispose();
+    await sleep(30);
+    expect(spawner.hasLiveBackgrounds()).toBe(false);
+  });
+
+  it('后台注册表：take 一次即清空，liveCount 反映未终态数', () => {
+    const hub = new AgentBackgroundHub();
+    hub.register({ agentId: 'a1', sessionId: 's', toolCallId: 'tc1', type: 'general', description: 'd', startedAt: 1 });
+    expect(hub.liveCount('s')).toBe(1);
+    expect(hub.hasPendingOutputs('s')).toBe(false);
+    hub.finish('a1', 'completed', 'OUT');
+    expect(hub.liveCount('s')).toBe(0);
+    expect(hub.hasPendingOutputs('s')).toBe(true);
+    expect(hub.takeOutput('a1')).toBe('OUT');
+    expect(hub.takeOutput('a1')).toBeUndefined();
+    expect(hub.hasPendingOutputs('s')).toBe(false);
+  });
+
 });

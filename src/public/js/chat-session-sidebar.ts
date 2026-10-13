@@ -61,7 +61,7 @@ export const ChatSessionSidebar = (() => {
     sidebar = document.createElement('aside');
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
-      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="memory" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('memory')}</span><span class="chat-sidebar-nav-btn-label">记忆</span></button><button class="chat-sidebar-nav-btn" data-page="skills" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('skills')}</span><span class="chat-sidebar-nav-btn-label">技能</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button><button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('clock')}</span><span class="chat-sidebar-control-label">自适应</span></button><div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('wifi')}</span></div></div>`;
+      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">任务</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">知识库</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span><button class="chat-sidebar-search-btn" type="button" title="搜索会话" aria-label="搜索会话" aria-expanded="false">${ic('search', 14)}</button></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-search" hidden><span class="chat-sidebar-search-icon" aria-hidden="true">${ic('search', 13)}</span><input class="chat-sidebar-search-input" type="search" placeholder="搜索会话标题" aria-label="搜索会话标题" autocomplete="off" spellcheck="false"></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button><button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('clock')}</span><span class="chat-sidebar-control-label">自适应</span></button><div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('wifi')}</span></div></div>`;
 
     const mainEl = host.querySelector('.app-main');
     if (mainEl) {
@@ -78,16 +78,22 @@ export const ChatSessionSidebar = (() => {
 
   function getRouteFromHash() {
     const h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'stats' || h === 'settings' || h === 'config') {
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'rules' || h === 'tasks' || h === 'stats' || h === 'settings' || h === 'config') {
       return h === 'config' ? 'settings' : h;
     }
+    if (h === 'knowledge') return 'skills';
     return 'chat';
   }
 
-  /** 记忆 / 技能 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
+  /** 技能、记忆、规则三个路由同属「知识库」导航项 */
+  function navPageForRoute(route) {
+    return route === 'skills' || route === 'memory' || route === 'rules' ? 'knowledge' : route;
+  }
+
+  /** 任务 / 知识库 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
   function isAuxiliaryNavPage() {
     const route = getRouteFromHash();
-    return route === 'memory' || route === 'skills' || route === 'stats' || route === 'settings';
+    return route === 'memory' || route === 'skills' || route === 'rules' || route === 'tasks' || route === 'stats' || route === 'settings';
   }
 
   function navigateToChatPage() {
@@ -107,7 +113,7 @@ export const ChatSessionSidebar = (() => {
 
   function syncSidebarNavActive() {
     if (!sidebar) return;
-    const current = getRouteFromHash();
+    const current = navPageForRoute(getRouteFromHash());
     const btns = sidebar.querySelectorAll('.chat-sidebar-nav-btn');
     for (let i = 0; i < btns.length; i++) {
       const btn = btns[i];
@@ -123,11 +129,13 @@ export const ChatSessionSidebar = (() => {
     sidebar.querySelector('.chat-sidebar-new-btn').addEventListener('click', () => {
       Store.createSession('新会话', (session) => {
         if (session) {
-          renderList();
+          revealSession(session.id);
           selectSession(session.id);
         }
       });
     });
+
+    bindSearch();
 
     const navBtns = sidebar.querySelectorAll('.chat-sidebar-nav-btn');
     for (let i = 0; i < navBtns.length; i++) {
@@ -135,6 +143,10 @@ export const ChatSessionSidebar = (() => {
         btn.addEventListener('click', () => {
           const page = btn.getAttribute('data-page');
           if (!page) return;
+          if (page === 'knowledge' && window.KnowledgeTabs) {
+            window.KnowledgeTabs.open();
+            return;
+          }
           if (window.location.hash !== `#/${page}`) {
             window.location.hash = `#/${page}`;
           } else {
@@ -292,6 +304,168 @@ export const ChatSessionSidebar = (() => {
     }
   }
 
+  const TASK_TITLE_PREFIX = '定时任务：';
+  /** 普通会话在上、默认展开；任务会话在下、默认折叠 */
+  const SESSION_GROUPS = [
+    { key: 'normal', label: '普通会话', emptyText: '暂无会话' },
+    { key: 'task', label: '任务会话', emptyText: '暂无任务会话' },
+  ];
+  /** 只存内存：每次打开页面都回到默认折叠状态 */
+  const groupCollapsed = { normal: false, task: true };
+  /** 待展开所在分组的会话；会话可能还没进列表，等它出现时再消费 */
+  let pendingRevealId = '';
+
+  /**
+   * 只按标题在本地过滤：消息正文在服务端逐会话存盘（任务会话可达 20 MB），
+   * 全文搜索要读遍所有会话文件，会拖慢正在流式输出的回合。
+   */
+  let searchKeyword = '';
+  /** 搜索期间的折叠状态，不覆盖 groupCollapsed；换关键字或退出搜索即重置 */
+  let searchCollapsed = {};
+
+  function matchesSearch(s) {
+    return !searchKeyword || String(s.title || '未命名').toLowerCase().indexOf(searchKeyword) !== -1;
+  }
+
+  function setSearchKeyword(value) {
+    const next = String(value || '').trim().toLowerCase();
+    if (next === searchKeyword) return;
+    searchKeyword = next;
+    searchCollapsed = {};
+    renderList();
+  }
+
+  function setSearchOpen(open) {
+    if (!sidebar) return;
+    const box = sidebar.querySelector('.chat-sidebar-search');
+    const btn = sidebar.querySelector('.chat-sidebar-search-btn');
+    const input = sidebar.querySelector('.chat-sidebar-search-input');
+    if (!box || !input) return;
+    box.hidden = !open;
+    if (btn) {
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.classList.toggle('is-active', open);
+    }
+    if (open) {
+      input.focus();
+      return;
+    }
+    input.value = '';
+    setSearchKeyword('');
+  }
+
+  function isSearchOpen() {
+    const box = sidebar && sidebar.querySelector('.chat-sidebar-search');
+    return !!box && !box.hidden;
+  }
+
+  function bindSearch() {
+    const btn = sidebar.querySelector('.chat-sidebar-search-btn');
+    const input = sidebar.querySelector('.chat-sidebar-search-input');
+    if (!btn || !input) return;
+    btn.addEventListener('click', () => { setSearchOpen(!isSearchOpen()); });
+    input.addEventListener('input', () => { setSearchKeyword(input.value); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSearchOpen(false);
+      }
+    });
+  }
+
+  /** 「新建会话」「打开会话」等显式跳转时调用，展开该会话所在的分组（搜索中会先退出搜索） */
+  function revealSession(sessionId) {
+    pendingRevealId = sessionId ? String(sessionId) : '';
+    if (isSearchOpen()) setSearchOpen(false);
+    renderList();
+  }
+
+  function taskStateOf(sessionId) {
+    return Store.getScheduledTaskSession ? Store.getScheduledTaskSession(sessionId) : null;
+  }
+
+  function formatClock(ts) {
+    const d = new Date(Number(ts));
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (d.toDateString() === new Date().toDateString()) return hm;
+    return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  }
+
+  /** 任务会话 meta 行文案；状态未知时返回 null（回退为相对时间） */
+  function describeTaskSession(st) {
+    if (!st) return null;
+    if (st.state === 'deleted') return { text: '任务已删除', error: false };
+    if (st.state === 'history') return { text: '历史', error: false };
+    if (st.state !== 'current') return null;
+    const failed = st.lastStatus === 'error';
+    const parts = [];
+    if (failed) parts.push('上次失败');
+    if (!st.enabled) parts.push('已停用');
+    else if (st.nextRunAt) parts.push(`下次 ${formatClock(st.nextRunAt)}`);
+    return parts.length ? { text: parts.join(' · '), error: failed } : null;
+  }
+
+  function displayTitle(s, isTask) {
+    const title = s.title || '未命名';
+    if (!isTask || title.indexOf(TASK_TITLE_PREFIX) !== 0) return title;
+    return title.slice(TASK_TITLE_PREFIX.length) || title;
+  }
+
+  /** 折叠时组头圆点：有在跑的显示运行中，否则有失败的显示失败（已完成不提示，周期任务太吵） */
+  function groupRunPhase(groupSessions) {
+    let failed = false;
+    for (let i = 0; i < groupSessions.length; i++) {
+      const phase = Store.getRunPhase ? Store.getRunPhase(groupSessions[i].id) : '';
+      if (phase === 'running') return 'running';
+      if (phase === 'error') failed = true;
+    }
+    return failed ? 'error' : '';
+  }
+
+  function renderGroup(group, groupSessions, activeId, highlightActive) {
+    const collapsed = searchKeyword ? !!searchCollapsed[group.key] : groupCollapsed[group.key];
+    const el = document.createElement('div');
+    el.className = 'chat-sidebar-group' + (collapsed ? ' is-collapsed' : '');
+    el.setAttribute('data-group', group.key);
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'chat-sidebar-group-toggle';
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.title = `${collapsed ? '展开' : '折叠'}${group.label}`;
+    toggle.innerHTML =
+      `<span class="chat-sidebar-group-chevron" aria-hidden="true">${ic('chevron-down', 12)}</span><span class="chat-sidebar-group-label">${group.label}</span><span class="chat-sidebar-group-count">${groupSessions.length}</span>`;
+    if (collapsed) {
+      const phase = groupRunPhase(groupSessions);
+      if (phase) {
+        const dot = document.createElement('span');
+        dot.className = `chat-sidebar-group-run-dot is-${phase}`;
+        dot.setAttribute('aria-label', `${group.label}${phase === 'running' ? '有进行中的' : '有失败的'}`);
+        toggle.appendChild(dot);
+      }
+    }
+    toggle.addEventListener('click', () => {
+      if (searchKeyword) searchCollapsed[group.key] = !collapsed;
+      else groupCollapsed[group.key] = !groupCollapsed[group.key];
+      renderList();
+    });
+    el.appendChild(toggle);
+
+    if (collapsed) return el;
+    if (!groupSessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-sidebar-group-empty';
+      empty.textContent = searchKeyword ? '无匹配会话' : group.emptyText;
+      el.appendChild(empty);
+      return el;
+    }
+    for (let i = 0; i < groupSessions.length; i++) {
+      const s = groupSessions[i];
+      el.appendChild(renderItem(s, activeId, highlightActive, group.key === 'task' ? taskStateOf(s.id) : null));
+    }
+    return el;
+  }
+
   function renderList() {
     if (!sidebar) return;
     const list = sidebar.querySelector('.chat-sidebar-list');
@@ -302,104 +476,122 @@ export const ChatSessionSidebar = (() => {
     const activeId = Store.getActiveSessionId();
     const highlightActive = !isAuxiliaryNavPage();
 
+    const currentTasks = [];
+    const otherTasks = [];
+    const normalSessions = [];
     for (let i = 0; i < sessions.length; i++) {
-      const s = sessions[i];
-      const isActive = highlightActive && s.id === activeId;
-      const item = document.createElement('div');
-      item.className = 'chat-sidebar-item' + (isActive ? ' active' : '');
-      item.setAttribute('data-id', s.id);
+      if (!matchesSearch(sessions[i])) continue;
+      const st = taskStateOf(sessions[i].id);
+      if (!st) normalSessions.push(sessions[i]);
+      else (st.state === 'current' ? currentTasks : otherTasks).push(sessions[i]);
+    }
+    const bySessions = { normal: normalSessions, task: currentTasks.concat(otherTasks) };
 
-      const runPhase = Store.getRunPhase ? Store.getRunPhase(s.id) : '';
-      if (runPhase === 'running' || runPhase === 'done' || runPhase === 'error') {
-        item.setAttribute('data-run-phase', runPhase);
-        item.classList.add('has-run-dot');
-        const runDot = document.createElement('span');
-        runDot.className = `chat-sidebar-item-run-dot is-${runPhase}`;
-        runDot.setAttribute(
-          'aria-label',
-          runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败',
-        );
-        item.appendChild(runDot);
+    for (let i = 0; i < SESSION_GROUPS.length; i++) {
+      const group = SESSION_GROUPS[i];
+      const groupSessions = bySessions[group.key];
+      if (pendingRevealId && groupSessions.some((s) => s.id === pendingRevealId)) {
+        groupCollapsed[group.key] = false;
+        pendingRevealId = '';
       }
-
-      const body = document.createElement('div');
-      body.className = 'chat-sidebar-item-body';
-
-      const titleRow = document.createElement('div');
-      titleRow.className = 'chat-sidebar-item-title-row';
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'chat-sidebar-item-title';
-      titleSpan.textContent = s.title || '未命名';
-      titleSpan.title = s.title || '未命名';
-
-      ((sid, titleEl) => {
-        titleEl.addEventListener('dblclick', (e) => {
-          e.stopPropagation();
-          startRename(sid, titleEl);
-        });
-      })(s.id, titleSpan);
-      titleRow.appendChild(titleSpan);
-
-      if (!isActive) {
-        const delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'chat-sidebar-item-delete';
-        delBtn.title = '删除会话';
-        delBtn.setAttribute('aria-label', '删除会话');
-        delBtn.textContent = '×';
-        ((sid) => {
-          delBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            deleteSessionItem(sid);
-          });
-        })(s.id);
-        titleRow.appendChild(delBtn);
-      }
-
-      body.appendChild(titleRow);
-
-      const meta = document.createElement('div');
-      meta.className = 'chat-sidebar-item-meta';
-
-      if (Store.getShellCollabActive && Store.getShellCollabActive(s.id)) {
-        const shellBadge = document.createElement('span');
-        shellBadge.className = 'chat-sidebar-item-shell-badge';
-        shellBadge.title = 'Shell 协作模式已固定；需要普通 Agent 请新建会话';
-        shellBadge.setAttribute('aria-label', 'Shell 协作模式');
-        shellBadge.innerHTML =
-          `${ic('terminal', 11)}<span class="chat-sidebar-item-shell-label">Shell</span>`;
-        meta.appendChild(shellBadge);
-      }
-
-      if (isActive) {
-        const subtitle = document.createElement('span');
-        subtitle.className = 'chat-sidebar-item-subtitle';
-        const subtitleText = formatWorkspaceSubtitle(s.id);
-        const fullPath = fullWorkspacePath(s.id);
-        subtitle.textContent = subtitleText || '默认工作区';
-        if (subtitleText === '默认工作区' || !subtitleText) subtitle.classList.add('is-default');
-        if (fullPath) subtitle.title = fullPath;
-        meta.appendChild(subtitle);
-      } else {
-        const time = document.createElement('span');
-        time.className = 'chat-sidebar-item-time';
-        time.textContent = formatRelativeTime(s.updatedAt);
-        meta.appendChild(time);
-      }
-
-      body.appendChild(meta);
-
-      item.appendChild(body);
-
-      ((sid) => {
-        item.addEventListener('click', () => { selectSession(sid); });
-      })(s.id);
-
-      list.appendChild(item);
+      list.appendChild(renderGroup(group, groupSessions, activeId, highlightActive));
     }
     if (window.AppIcon) window.AppIcon.hydrate(list);
     renderWorkspaceFooter();
+  }
+
+  /** taskState 非空表示任务会话：标题去前缀，meta 行显示任务状态 */
+  function renderItem(s, activeId, highlightActive, taskState) {
+    const isActive = highlightActive && s.id === activeId;
+    const item = document.createElement('div');
+    item.className = 'chat-sidebar-item' + (isActive ? ' active' : '');
+    item.setAttribute('data-id', s.id);
+
+    const runPhase = Store.getRunPhase ? Store.getRunPhase(s.id) : '';
+    if (runPhase === 'running' || runPhase === 'done' || runPhase === 'error') {
+      item.setAttribute('data-run-phase', runPhase);
+      item.classList.add('has-run-dot');
+      const runDot = document.createElement('span');
+      runDot.className = `chat-sidebar-item-run-dot is-${runPhase}`;
+      runDot.setAttribute(
+        'aria-label',
+        runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败',
+      );
+      item.appendChild(runDot);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'chat-sidebar-item-body';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'chat-sidebar-item-title-row';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'chat-sidebar-item-title';
+    titleSpan.textContent = displayTitle(s, !!taskState);
+    titleSpan.title = s.title || '未命名';
+
+    titleSpan.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startRename(s.id, titleSpan, s.title || '未命名');
+    });
+    titleRow.appendChild(titleSpan);
+
+    if (!isActive) {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'chat-sidebar-item-delete';
+      delBtn.title = '删除会话';
+      delBtn.setAttribute('aria-label', '删除会话');
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSessionItem(s.id);
+      });
+      titleRow.appendChild(delBtn);
+    }
+
+    body.appendChild(titleRow);
+
+    const meta = document.createElement('div');
+    meta.className = 'chat-sidebar-item-meta';
+
+    if (Store.getShellCollabActive && Store.getShellCollabActive(s.id)) {
+      const shellBadge = document.createElement('span');
+      shellBadge.className = 'chat-sidebar-item-shell-badge';
+      shellBadge.title = 'Shell 协作模式已固定；需要普通 Agent 请新建会话';
+      shellBadge.setAttribute('aria-label', 'Shell 协作模式');
+      shellBadge.innerHTML =
+        `${ic('terminal', 11)}<span class="chat-sidebar-item-shell-label">Shell</span>`;
+      meta.appendChild(shellBadge);
+    }
+
+    const taskMeta = describeTaskSession(taskState);
+    if (taskMeta) {
+      const tag = document.createElement('span');
+      tag.className = 'chat-sidebar-item-task-meta' + (taskMeta.error ? ' is-error' : '');
+      tag.textContent = taskMeta.text;
+      meta.appendChild(tag);
+    } else if (isActive && !taskState) {
+      const subtitle = document.createElement('span');
+      subtitle.className = 'chat-sidebar-item-subtitle';
+      const subtitleText = formatWorkspaceSubtitle(s.id);
+      const fullPath = fullWorkspacePath(s.id);
+      subtitle.textContent = subtitleText || '默认工作区';
+      if (subtitleText === '默认工作区' || !subtitleText) subtitle.classList.add('is-default');
+      if (fullPath) subtitle.title = fullPath;
+      meta.appendChild(subtitle);
+    } else {
+      const time = document.createElement('span');
+      time.className = 'chat-sidebar-item-time';
+      time.textContent = formatRelativeTime(s.updatedAt);
+      meta.appendChild(time);
+    }
+
+    body.appendChild(meta);
+    item.appendChild(body);
+    item.addEventListener('click', () => { selectSession(s.id); });
+    return item;
   }
 
   function applyWorkspaceForSession(sessionId, workspacePayload) {
@@ -453,8 +645,9 @@ export const ChatSessionSidebar = (() => {
     });
   }
 
-  function startRename(sessionId, titleEl) {
-    const current = titleEl.textContent;
+  /** currentTitle：完整标题（任务会话显示时去掉了前缀，改名要基于原标题） */
+  function startRename(sessionId, titleEl, currentTitle) {
+    const current = currentTitle || titleEl.textContent;
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'chat-sidebar-rename-input';
@@ -593,6 +786,7 @@ export const ChatSessionSidebar = (() => {
     create,
     destroy,
     renderList,
+    revealSession,
     notifyWorkspaceUpdated,
     notifyShellCollabUpdated,
   };

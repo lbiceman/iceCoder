@@ -11,27 +11,32 @@ import type { ToolCall } from '../../llm/types.js';
 import { ToolExecutor } from '../../tools/tool-executor.js';
 import { ToolRegistry } from '../../tools/tool-registry.js';
 import type { ToolOutputCallback, ToolResult } from '../../tools/types.js';
-import { TASK_TOOL_NAME } from './task-tool.js';
+import { CHECK_AGENT_TOOL_NAME, TASK_TOOL_NAME } from './task-tool.js';
 
 export type TaskToolHandler = (toolCall: ToolCall) => Promise<ToolResult>;
+export type CheckAgentToolHandler = (toolCall: ToolCall) => Promise<ToolResult>;
 
 export class AgentAwareToolExecutor extends ToolExecutor {
   constructor(
     private readonly inner: ToolExecutor,
     private readonly onTask: TaskToolHandler,
+    private readonly onCheckAgent?: CheckAgentToolHandler,
   ) {
     super(new ToolRegistry());
   }
 
   override async executeTool(toolCall: ToolCall, onOutput?: ToolOutputCallback): Promise<ToolResult> {
-    if (toolCall.name === TASK_TOOL_NAME) {
+    const handler = toolCall.name === TASK_TOOL_NAME
+      ? this.onTask
+      : toolCall.name === CHECK_AGENT_TOOL_NAME ? this.onCheckAgent : undefined;
+    if (handler) {
       try {
-        return await this.onTask(toolCall);
+        return await handler(toolCall);
       } catch (err) {
         return {
           success: false,
           output: '',
-          error: `task failed: ${err instanceof Error ? err.message : String(err)}`,
+          error: `${toolCall.name} failed: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
     }

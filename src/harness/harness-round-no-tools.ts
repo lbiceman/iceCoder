@@ -95,6 +95,8 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   sessionId?: string;
   sessionDir?: string;
   abortSignal?: AbortSignal;
+  /** 定时任务不跑收尾硬状态门禁，模型回复后按普通收口继续。 */
+  skipCompletionGate?: boolean;
 }
 
 export interface HandleNoToolCallsArgs {
@@ -356,7 +358,9 @@ export async function handleNoToolCalls(
     }
   }
 
-  const hardState = evaluateCompletionHardState(state.operationOutcomes);
+  const hardState = deps.skipCompletionGate
+    ? null
+    : evaluateCompletionHardState(state.operationOutcomes);
   if (hardState) {
     return finishNoToolRound(deps, args, {
       status: hardState.status,

@@ -236,6 +236,11 @@ export interface HarnessConfig {
   workspaceLock?: { lockedRoot?: string; referenceReads: string[] };
   /** 不召回、不提取长期记忆，不写会话笔记（子 Agent）。 */
   memoryDisabled?: boolean;
+  /**
+   * 定时任务：不跑收尾硬状态门禁（失败写入、未决操作、缺回执等）。
+   * 回合按模型自己的回复结束；任务成败另由回复正文判断。
+   */
+  skipCompletionGate?: boolean;
 }
 
 /** 子 Agent 工具作用域：由 AgentSpawner 为每个子 Harness 构造。 */

@@ -3,6 +3,7 @@ import type { LLMAdapterInterface, ToolDefinition } from '../llm/types.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
 import { registerMcpToolsOnRegistry } from '../mcp/start-mcp-background.js';
 import { initializeToolSystem } from '../tools/index.js';
+import { collectSessionProvidedTools } from '../tools/session-tool-providers.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import {
@@ -48,6 +49,10 @@ export async function resolveWorkspaceToolContext(
     fileParser: params.fileParser,
     llmAdapter: params.llmAdapter,
   });
+
+  for (const tool of await collectSessionProvidedTools({ sessionId: params.sessionId })) {
+    toolSystem.registry.register(tool);
+  }
 
   if (params.mcpManager) {
     await params.mcpManager.whenReady();

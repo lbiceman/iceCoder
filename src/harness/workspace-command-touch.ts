@@ -54,6 +54,8 @@ interface BackgroundInventoryEntry {
 export const WORKSPACE_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024;
 export const WORKSPACE_CONTENT_HASH_CACHE_LIMIT = 512;
 export const BACKGROUND_INVENTORY_LIMIT = 128;
+/** 同一轮并行的 shell 类工具调用远少于此；超出说明有调用没走到 take（异常路径），按最旧淘汰。 */
+export const PRE_COMMAND_INVENTORY_LIMIT = 32;
 export const BACKGROUND_INVENTORY_TTL_MS = 5 * 60_000;
 
 const backgroundCommandInventories = new Map<string, BackgroundInventoryEntry>();
@@ -250,7 +252,20 @@ export function rememberPreCommandInventory(
   inventory: WorkspaceFileInventory,
 ): void {
   if (!sessionId || !toolCallId) return;
-  preCommandInventories.set(inventoryKey(sessionId, toolCallId), inventory);
+  const key = inventoryKey(sessionId, toolCallId);
+  preCommandInventories.delete(key);
+  while (preCommandInventories.size >= PRE_COMMAND_INVENTORY_LIMIT) {
+    const oldest = preCommandInventories.keys().next().value as string | undefined;
+    if (!oldest) break;
+    preCommandInventories.delete(oldest);
+  }
+  preCommandInventories.set(key, inventory);
+}
+
+/** 中断 / 异常时丢弃未被 take 的命令前快照。 */
+export function discardPreCommandInventories(sessionId: string, toolCallIds: Iterable<string>): void {
+  if (!sessionId) return;
+  for (const id of toolCallIds) preCommandInventories.delete(inventoryKey(sessionId, id));
 }
 
 export function takePreCommandInventory(
@@ -305,10 +320,12 @@ function purgeExpiredBackgroundInventories(nowMs: number): void {
 export function getWorkspaceInventoryDiagnostics(): {
   contentHashCacheSize: number;
   backgroundInventorySize: number;
+  preCommandInventorySize: number;
 } {
   return {
     contentHashCacheSize: contentHashCache.size,
     backgroundInventorySize: backgroundCommandInventories.size,
+    preCommandInventorySize: preCommandInventories.size,
   };
 }
 

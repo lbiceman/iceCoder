@@ -59,6 +59,15 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 20_000,
     tags: [],
   },
+  // check_agent 只读取子 Agent 状态并（可选）有界等待，相对不阻塞，可并行。
+  check_agent: {
+    name: 'check_agent',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 20_000,
+    tags: [],
+  },
 
   // ── 文件操作 ──
   read_file: {
@@ -295,6 +304,15 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isDestructive: true,
     maxResultSizeChars: 10000,
     tags: ['file_write'],
+  },
+  // 破坏性按 action 判断（delete），见 isDestructiveToolCall()
+  scheduled_task: {
+    name: 'scheduled_task',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 20_000,
+    tags: [],
   },
 };
 

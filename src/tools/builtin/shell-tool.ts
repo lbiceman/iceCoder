@@ -13,6 +13,7 @@ import {
   normalizeRunCommand,
 } from './shell-command-normalizer.js';
 import { analyzeInlineScriptCommand } from '../shell-inline-script-advisory.js';
+import { checkOsSchedulerCommand } from '../shell-os-scheduler-guard.js';
 import { analyzeShellSandbox } from '../shell-sandbox.js';
 import { buildShellChildEnv } from '../shell-host-guard.js';
 import { resolveShellExecutable } from '../shell-spawn-env.js';
@@ -158,6 +159,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (!command) return { success: false, output: '', error: 'Command cannot be empty' };
         const memoryShellErr = assertAgentMemoryShellCommandAllowed(command, sessionId);
         if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
+        const osSchedulerErr = checkOsSchedulerCommand(command, sessionId);
+        if (osSchedulerErr) return { success: false, output: '', error: osSchedulerErr };
         const inlineAdvisory = analyzeInlineScriptCommand(command);
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
@@ -196,6 +199,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       if (!command) return { success: false, output: '', error: 'Command is required for foreground execution' };
       const memoryShellErr = assertAgentMemoryShellCommandAllowed(command, sessionId);
       if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
+      const osSchedulerErr = checkOsSchedulerCommand(command, sessionId);
+      if (osSchedulerErr) return { success: false, output: '', error: osSchedulerErr };
       // classifier 收紧 short 命令前台 timeout 上限到 10s
       const timeout = pickForegroundTimeout(
         shellClass,

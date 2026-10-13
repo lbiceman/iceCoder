@@ -247,6 +247,18 @@ export function purgeSessionMaps(sessionId: string): void {
   if (sessionId === getActiveSessionId()) {
     cachedMessages = undefined;
   }
+  clearBackgroundWake(sessionId);
+}
+
+/** 后台子 Agent 完成后的唤醒定时器（会话级）。 */
+export const sessionBackgroundWakeTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+export function clearBackgroundWake(sessionId: string): void {
+  const timer = sessionBackgroundWakeTimers.get(sessionId);
+  if (timer) {
+    clearInterval(timer);
+    sessionBackgroundWakeTimers.delete(sessionId);
+  }
 }
 
 /** abort harness 并丢掉会话级运行锁。须在 stopAllShellWork 之后调用。 */
@@ -254,7 +266,7 @@ export function dropSessionRunLocks(sessionId: string): void {
   abortSession(sessionId);
   sessionAbortControllers.delete(sessionId);
   sessionProcessing.delete(sessionId);
-  sessionAgentSpawners.get(sessionId)?.stopAll();
+  sessionAgentSpawners.get(sessionId)?.dispose();
   sessionAgentSpawners.delete(sessionId);
 }
 

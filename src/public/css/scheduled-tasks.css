@@ -1,0 +1,380 @@
+/* 任务页：页头 + 定时任务面板 */
+.tasks-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-page);
+  color: var(--text-primary);
+}
+
+.tasks-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.tasks-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.tasks-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.tasks-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sched-root {
+  padding: 16px 24px 32px;
+}
+
+.sched-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sched-notice {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  background: var(--warning-light);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.sched-notice strong {
+  color: var(--warning);
+}
+
+.sched-notice ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.sched-notice b {
+  color: var(--text-primary, inherit);
+}
+
+.sched-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+.sched-list > .skills-empty {
+  grid-column: 1 / -1;
+  padding: 48px 12px;
+}
+
+.sched-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.sched-card.is-disabled { opacity: 0.7; }
+
+.sched-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sched-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sched-status,
+.sched-badge {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+.sched-badge.is-on {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.sched-badge.is-once {
+  border-color: transparent;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+.sched-status-queued {
+  color: var(--warning);
+  background: var(--warning-light);
+  border-color: transparent;
+}
+.sched-status-success {
+  color: var(--success);
+  background: var(--success-light);
+  border-color: transparent;
+}
+.sched-status-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: transparent;
+}
+
+.sched-card-prompt {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sched-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sched-chip {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sched-meta {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+}
+.sched-meta > div { display: flex; gap: 10px; }
+.sched-meta dt {
+  width: 56px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.sched-meta dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.sched-error {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  word-break: break-word;
+}
+
+.sched-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.sched-actions .skills-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* 新建 / 编辑表单（Modal.panel 内） */
+.modal-panel-box:has(.sched-form) { width: 560px; }
+.modal-panel-box:has(.sched-form) .modal-panel-body { min-height: 0; }
+
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sched-form .sched-input { box-sizing: border-box; width: 100%; }
+.sched-form .sched-interval-value,
+.sched-form .sched-interval-unit { width: 96px; }
+
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sched-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.sched-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.sched-input {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 18px;
+  font-family: inherit;
+}
+.sched-input:focus {
+  outline: none;
+  border-color: var(--accent-border-strong, var(--accent));
+}
+.sched-interval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.sched-interval [hidden],
+.sched-interval[hidden] { display: none; }
+/* 下拉按钮：外观同输入框，浮层用 ChatDropdown（与模型选择一致） */
+.sched-form .sched-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 96px;
+  /* 中文标签（周一）回退字体的行高比数字大，不定高会让每天/每周切换时整行跳动 */
+  height: 34px;
+  text-align: left;
+  cursor: pointer;
+}
+.sched-form .sched-select[hidden] { display: none; }
+.sched-form .sched-time-select { width: 68px; }
+.sched-form .sched-select.active { border-color: var(--accent-border-strong, var(--accent)); }
+.sched-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sched-select .chip-caret {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform var(--transition);
+}
+.sched-select.active .chip-caret {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+.sched-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.sched-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.sched-mode-option input { margin: 0; accent-color: var(--accent); }
+/* 提示词编辑器：仿主输入框（技能 chip + textarea + 工具栏，附件预览在顶部） */
+.sched-composer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  transition: border-color var(--transition);
+}
+.sched-composer:focus-within,
+.sched-composer.is-drag-over {
+  border-color: var(--accent-border-strong, var(--accent));
+}
+.sched-composer .pending-images-preview { padding: 10px 10px 0; }
+.sched-composer .file-upload-status { padding: 10px 10px 0; }
+.sched-composer .skill-chips-bar { padding: 10px 10px 0; }
+.sched-composer .pending-image-thumb { width: 64px; height: 64px; }
+.sched-composer .pending-image-item.is-uploading .pending-image-thumb { opacity: 0.5; }
+.sched-composer .pending-image-item.is-failed .pending-image-thumb { outline: 2px solid var(--danger); }
+.sched-composer .skill-chip.is-missing { opacity: 0.6; text-decoration: line-through; }
+.sched-composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.sched-composer-input:focus { outline: none; }
+.sched-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+}
+/* 技能下拉默认 z-index 低于弹层遮罩 */
+body:has(.sched-form) .cmd-dropdown { z-index: 10001; }
+.sched-chip.is-attachment {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.sched-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sched-form-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+.sched-form-error[hidden] { display: none; }
+
+.sched-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .tasks-header { display: none; }
+  .sched-root { padding: 12px; }
+  .sched-list { grid-template-columns: 1fr; }
+}

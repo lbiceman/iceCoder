@@ -29,8 +29,19 @@ interface PendingConfirm {
 }
 
 const pendingConfirms = new Map<string, PendingConfirm>();
+/** 无人值守（定时任务触发）的会话：所有确认（含删除、Shell 强制确认）直接通过。 */
+const unattendedSessions = new Set<string>();
 let nextConfirmIdCounter = 1;
 let hooksWired = false;
+
+export function setSessionUnattended(sessionId: string, unattended: boolean): void {
+  if (unattended) unattendedSessions.add(sessionId);
+  else unattendedSessions.delete(sessionId);
+}
+
+export function isSessionUnattended(sessionId: string): boolean {
+  return unattendedSessions.has(sessionId);
+}
 
 function nextConfirmId(): string {
   return `c-${Date.now().toString(36)}-${(nextConfirmIdCounter++).toString(36)}`;
@@ -103,6 +114,11 @@ function startPendingConfirm(
 ): string {
   tryWireConfirmHooks();
   const confirmId = nextConfirmId();
+  if (unattendedSessions.has(sessionId)) {
+    broadcastToSession(sessionId, { type: 'info', message: `⏱ 定时任务无人值守，已自动通过：${toolName}` });
+    resolve(true);
+    return confirmId;
+  }
   const entry: PendingConfirm = {
     sessionId,
     toolName,
@@ -268,6 +284,7 @@ export function createAgentShellMandatoryConfirmHandler(
 }
 
 export function purgeSessionConfirms(sessionId: string): void {
+  unattendedSessions.delete(sessionId);
   for (const [cid, entry] of pendingConfirms) {
     if (entry.sessionId !== sessionId) continue;
     if (entry.timer) clearTimeout(entry.timer);
@@ -277,6 +294,7 @@ export function purgeSessionConfirms(sessionId: string): void {
 }
 
 export function clearAllConfirms(): void {
+  unattendedSessions.clear();
   for (const [cid, entry] of pendingConfirms) {
     if (entry.timer) clearTimeout(entry.timer);
     pendingConfirms.delete(cid);

@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 技能库页面：列表、查看、删除技能 Markdown 文件。
+ * 知识库 ·「技能」页签：列表、查看、删除技能 Markdown 文件（「记忆」页签见 memory-page）。
  */
 
 /* exported SkillsPage */
@@ -275,20 +275,24 @@ export const SkillsPage = (() => {
     destroy();
     containerEl = parentEl;
     parentEl.innerHTML = '';
+    const Tabs = window.KnowledgeTabs;
+    if (Tabs) Tabs.remember('skills');
 
     const root = document.createElement('div');
     root.className = 'skills-root';
 
     const header = document.createElement('header');
-    header.className = 'skills-header';
+    header.className = 'skills-header knowledge-header';
     header.innerHTML =
       '<div class="skills-header-text">' +
-        '<h1 class="skills-title">技能库</h1>' +
+        '<h1 class="skills-title">知识库</h1>' +
         '<p class="skills-hint">技能以 Markdown 文件存储，与 <code>user-memory</code> 同级。在聊天输入框输入 <code>#</code> 可快速选用技能。</p>' +
       '</div>' +
       '<div class="skills-header-actions">' +
         '<span class="skills-count" id="skills-total-count">载入中…</span>' +
-      '</div>';
+      '</div>' +
+      (Tabs ? Tabs.html('skills') : '');
+    if (Tabs) Tabs.bind(header);
 
     const main = document.createElement('main');
     main.className = 'skills-main';

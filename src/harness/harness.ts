@@ -125,6 +125,8 @@ function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
   stopHookManager: StopHookManager;
   tokenBudgetTracker?: TokenBudgetTracker;
+  /** 定时任务跳过收尾硬状态门禁。 */
+  skipCompletionGate?: boolean;
 };
 
 /**
@@ -146,6 +148,7 @@ export class Harness {
   private onShellMandatoryConfirm?: HarnessConfig['onShellMandatoryConfirm'];
   private shellCollabActive: boolean;
   private planModeActive: boolean;
+  private skipCompletionGate: boolean;
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
@@ -203,6 +206,7 @@ export class Harness {
     this.onShellMandatoryConfirm = config.onShellMandatoryConfirm;
     this.shellCollabActive = config.shellCollabActive === true;
     this.planModeActive = config.planModeActive === true;
+    this.skipCompletionGate = config.skipCompletionGate === true;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.verificationExemptDirs = config.verificationExemptDirs;
@@ -261,6 +265,7 @@ export class Harness {
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
       planModeActive: this.planModeActive,
+      skipCompletionGate: this.skipCompletionGate,
       ephemeralSystemContext: this.contextAssembler.buildEphemeralSystemContextMessage(),
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
@@ -527,17 +532,20 @@ export class Harness {
       const parentToolExecutor = this.toolExecutor;
       const timeout = this.config.loop.timeout;
       const deadline = timeout && timeout > 0 ? Date.now() + timeout : undefined;
-      deps.toolExecutor = new AgentAwareToolExecutor(parentToolExecutor, (toolCall) =>
-        spawner.runTask(toolCall, {
-          config: this.config,
-          toolExecutor: parentToolExecutor,
-          workspaceRoot: this.workspaceRoot,
-          lockedWorkspaceRoot,
-          referenceReads,
-          deadline,
-          signal: this.abortSignal,
-          onStep,
-        }),
+      deps.toolExecutor = new AgentAwareToolExecutor(
+        parentToolExecutor,
+        (toolCall) =>
+          spawner.runTask(toolCall, {
+            config: this.config,
+            toolExecutor: parentToolExecutor,
+            workspaceRoot: this.workspaceRoot,
+            lockedWorkspaceRoot,
+            referenceReads,
+            deadline,
+            signal: this.abortSignal,
+            onStep,
+          }),
+        (toolCall) => spawner.runCheckAgent(toolCall),
       );
       deps.agentSpawner = spawner;
     }

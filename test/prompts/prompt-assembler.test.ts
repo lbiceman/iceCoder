@@ -15,6 +15,7 @@ import {
   createToolUsageSection,
   createToolResultClearingSection,
   getDefaultSections,
+  harnessOverlayToContextFields,
   loadAssembledChatPrompt,
   PromptAssembler,
   shouldDisableRuntimeTools,
@@ -162,6 +163,18 @@ describe('prompt assembly safeguards', () => {
     expect(assembled.systemPrompt).toContain('These constraints override conflicting project guidance');
     expect(assembled.systemPromptSections.at(-1)?.id).toBe('evaluation_mode');
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('从工作区 AGENTS.md 加载项目指令并进入 project_instructions', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), `prompt-agents-${randomUUID()}`));
+    await fs.writeFile(path.join(workspace, 'AGENTS.md'), 'Run npm test before finishing.', 'utf-8');
+
+    const assembled = await loadAssembledChatPrompt({ logPrefix: '[test]', workspaceRoot: workspace });
+    expect(assembled.harnessOverlay?.projectMarkdown).toContain('Run npm test before finishing.');
+    expect(assembled.systemPrompt).not.toContain('Run npm test before finishing.');
+    const fields = harnessOverlayToContextFields(assembled);
+    expect(fields.userContext?.project_instructions).toContain('Run npm test before finishing.');
+    await fs.rm(workspace, { recursive: true, force: true });
   });
 
   it('只在旧 system-prompt.md 被用户改过时作为 custom system 生效', async () => {

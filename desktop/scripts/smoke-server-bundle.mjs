@@ -49,7 +49,8 @@ function main() {
     process.stderr.write(b);
   });
 
-  const timeoutMs = 15_000;
+  // 全量测试并行时冷启动可能超过 15s；外层测试 30s 才强杀。
+  const timeoutMs = 25_000;
   const start = Date.now();
 
   function probe() {

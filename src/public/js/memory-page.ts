@@ -1007,6 +1007,7 @@ export const MemoryPage = (() => {
   // ---- Mobile list rendering ----
 
   function renderMobile(innerContainer) {
+    if (window.KnowledgeTabs) window.KnowledgeTabs.remember('memory');
     teardownMemoryPageRuntime();
     const epochSnap = ++memoryPageEpoch;
     containerEl = innerContainer;
@@ -1138,13 +1139,16 @@ export const MemoryPage = (() => {
     const root = /** @type {HTMLElement} */ (document.createElement('div'));
     root.className = 'memory-root';
 
+    const Tabs = window.KnowledgeTabs;
+    if (Tabs) Tabs.remember('memory');
+
     const header = document.createElement('header');
-    header.className = 'memory-header';
+    header.className = 'memory-header knowledge-header';
     header.innerHTML =
       '<div class="memory-header-text">' +
-      '<h1 class="memory-title">记忆图谱</h1>' +
-      '<p class="memory-sidebar-hint">' +
-      '圆点表示一条记忆，<strong>共用标签</strong>的会用线连起来。左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。' +
+      '<h1 class="memory-title">知识库</h1>' +
+      '<p class="memory-header-hint" title="左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。">' +
+      '记忆图谱：点标签筛选，滚轮缩放，拖动平移。' +
       '</p>' +
       '</div>' +
       '<div class="memory-header-actions">' +
@@ -1155,7 +1159,9 @@ export const MemoryPage = (() => {
       '</span>' +
       '<button type="button" class="memory-export-btn" id="memory-export-btn" title="打包下载全部记忆 Markdown">导出记忆</button>' +
       '<button type="button" class="memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
-      '</div>';
+      '</div>' +
+      (Tabs ? Tabs.html('memory') : '');
+    if (Tabs) Tabs.bind(header);
 
     const exportBtn = header.querySelector('#memory-export-btn');
     const consolidateBtn = header.querySelector('#memory-consolidate-btn');

@@ -13,6 +13,11 @@ import {
   type QueuedTask,
   type TaskEnqueueInput,
 } from '../session/task-queue.js';
+import {
+  describeScheduledTaskStop,
+  notifyScheduledTaskResult,
+  scheduledTaskLlmSucceeded,
+} from '../session/scheduled-task-events.js';
 import { applyFirstPromptSessionTitle } from './session-title.js';
 import { buildUserMessageDisplayFields } from './user-message-display.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -29,11 +34,25 @@ import {
   SESSIONS_DIR,
   beginSessionBatch,
   endSessionBatch,
+  clearBackgroundWake,
+  getSessionAgentSpawner,
+  sessionBackgroundWakeTimers,
   sessionProcessing,
   setSessionRunPhase,
   type SessionRunPhase,
 } from './chat-ws-runtime.js';
 import { handleChatMessage } from './chat-ws-turn.js';
+import { setSessionUnattended } from './chat-ws-confirm.js';
+
+/** 后台子 Agent 完成后的唤醒轮询间隔。 */
+const BACKGROUND_WAKE_INTERVAL_MS = 3_000;
+
+/**
+ * 后台子 Agent 完成后的续跑提示。不产生用户气泡（skipUserMessageAppend），
+ * 只作为一次致动让主 Agent 继续；真正的报告由 Harness 轮次预处理注入。
+ */
+const BACKGROUND_CONTINUATION_TEXT =
+  '[System] Background sub-agent results are ready. Review the injected reports and continue the task.';
 
 export interface ChatRunDeps {
   orchestrator: Orchestrator;
@@ -50,6 +69,8 @@ export interface PendingChatMessage {
   source: 'implicit' | 'explicit';
   skipUserMessageAppend?: boolean;
   reasoningEffort?: ReasoningEffort;
+  scheduledTaskId?: string;
+  continuation?: boolean;
   ws: WebSocket;
 }
 
@@ -61,10 +82,22 @@ export function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingCha
     referencePaths: task.referencePaths ?? [],
     messageId: task.messageId,
     source: task.source,
-    skipUserMessageAppend: task.source === 'implicit' && !!task.messageId,
+    skipUserMessageAppend: task.continuation === true
+      || (task.source === 'implicit' && !!task.messageId),
     ws,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(task.scheduledTaskId ? { scheduledTaskId: task.scheduledTaskId } : {}),
+    ...(task.continuation ? { continuation: true } : {}),
   };
+}
+
+/**
+ * 定时任务触发的轮次进入无人值守（确认自动通过）；用户亲自发的消息退出无人值守。
+ * 后台子 Agent 的续跑沿用上一轮的状态，让定时任务派生的子 Agent 也不被确认卡住。
+ */
+function applyUnattendedMode(runSid: string, pending: PendingChatMessage): void {
+  if (pending.scheduledTaskId) setSessionUnattended(runSid, true);
+  else if (!pending.continuation) setSessionUnattended(runSid, false);
 }
 
 export async function publishTaskQueueState(sessionId: string): Promise<void> {
@@ -197,6 +230,37 @@ async function claimNextQueuedTask(
   return queuedTaskToPending(next, loopWs);
 }
 
+/**
+ * 后台子 Agent 完成后的唤醒：会话空闲时投递一次续跑（无用户气泡），
+ * 让主 Agent 收到注入的后台报告并继续。停止条件：无常驻后台工作、或结果已注入。
+ */
+function scheduleBackgroundWake(deps: ChatRunDeps, runSid: string, ws: WebSocket): void {
+  const spawner = getSessionAgentSpawner(runSid);
+  if (!spawner || !spawner.hasBackgroundWork()) return;
+  if (sessionBackgroundWakeTimers.has(runSid)) return;
+
+  const timer = setInterval(() => {
+    const active = getSessionAgentSpawner(runSid);
+    if (!active) {
+      clearBackgroundWake(runSid);
+      return;
+    }
+    // 会话忙碌（用户在跑别的任务）时让路，等空闲再投递。
+    if (hasBusySessionRun(runSid) || sessionProcessing.has(runSid)) return;
+    if (active.hasPendingBackgroundResults()) {
+      clearBackgroundWake(runSid);
+      void enqueueAndMaybeKickoff(deps, runSid, ws, {
+        text: BACKGROUND_CONTINUATION_TEXT,
+        source: 'implicit',
+        continuation: true,
+      });
+      return;
+    }
+    if (!active.hasBackgroundWork()) clearBackgroundWake(runSid);
+  }, BACKGROUND_WAKE_INTERVAL_MS);
+  sessionBackgroundWakeTimers.set(runSid, timer);
+}
+
 async function tryKickoffSessionLoop(
   deps: ChatRunDeps,
   runSid: string,
@@ -236,8 +300,11 @@ export async function runSessionMessageLoop(
   first: PendingChatMessage,
 ): Promise<void> {
   sessionProcessing.add(runSid);
+  applyUnattendedMode(runSid, first);
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
+  let terminalError: string | undefined;
+  let finalContent: string | undefined;
   try {
     publishRunState(runSid, 'running');
     beginSessionBatch(runSid);
@@ -260,9 +327,14 @@ export async function runSessionMessageLoop(
         skipUserMessageAppend: first.skipUserMessageAppend,
         source: first.source,
         reasoningEffort: first.reasoningEffort,
+        ...(first.scheduledTaskId ? {
+          skipCompletionGate: true,
+          onFinalContent: (content: string) => { finalContent = content; },
+        } : {}),
       });
     } catch (err) {
-      broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+      terminalError = formatFriendlyError(err);
+      broadcastToSession(runSid, { type: 'error', message: terminalError });
       terminalPhase = 'error';
     } finally {
       endSessionBatch(runSid);
@@ -278,22 +350,36 @@ export async function runSessionMessageLoop(
     } else if (stopReason !== 'model_done') {
       terminalPhase = resolveTerminalPhase(stopReason);
       terminalReason = stopReason;
+      if (stopReason === 'error' && finalContent?.trim()) terminalError = finalContent.trim();
     } else {
       terminalPhase = 'done';
       terminalReason = 'model_done';
     }
   } finally {
     sessionProcessing.delete(runSid);
+    // user_checkpoint 的会话仍是 running（等人接管），但定时任务这一次已经结束，同样要回写。
+    // 成败只看模型返回的正文，不用收尾门禁。
+    if (first.scheduledTaskId && terminalPhase) {
+      const success = scheduledTaskLlmSucceeded(terminalReason, finalContent);
+      await notifyScheduledTaskResult({
+        taskId: first.scheduledTaskId,
+        success,
+        error: success ? null : describeScheduledTaskStop(terminalReason, terminalError),
+      });
+    }
     // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。
+    let relayed = false;
     if (shouldRelayQueuedTask(terminalReason)) {
       const next = await claimNextQueuedTask(runSid, ws, true);
       if (next) {
+        relayed = true;
         await runSessionMessageLoop(deps, runSid, next.ws, next);
-        return;
       }
     }
-    if (terminalPhase && terminalPhase !== 'running') {
+    if (!relayed && terminalPhase && terminalPhase !== 'running') {
       publishRunState(runSid, terminalPhase, terminalReason);
     }
+    // 有后台子 Agent 在跑或结果待注入：空闲后自动续跑。
+    scheduleBackgroundWake(deps, runSid, ws);
   }
 }

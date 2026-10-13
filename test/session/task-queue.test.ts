@@ -120,4 +120,19 @@ describe('TaskQueueManager', () => {
     expect((await manager.list('s1')).map((item) => item.text)).toEqual(['one', 'one-b']);
     expect((await manager.list('s2')).map((item) => item.text)).toEqual(['two']);
   });
+
+  it('keeps the continuation flag through enqueue / insertAt / dequeue', async () => {
+    await manager.enqueue('s1', { text: 'wake', source: 'implicit', continuation: true });
+    await manager.insertAt('s1', 1, { text: 'wake-2', source: 'implicit', continuation: true });
+    await manager.enqueue('s1', { text: 'plain', source: 'implicit' });
+    expect((await manager.dequeue('s1'))?.continuation).toBe(true);
+    expect((await manager.dequeue('s1'))?.continuation).toBe(true);
+    expect(await manager.dequeue('s1')).not.toHaveProperty('continuation');
+  });
+
+  it('releases per-session operation chains once idle', async () => {
+    await Promise.all(['a', 'b', 'c'].map((sid) => manager.enqueue(sid, { text: sid, source: 'implicit' })));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(manager.pendingOpCount()).toBe(0);
+  });
 });

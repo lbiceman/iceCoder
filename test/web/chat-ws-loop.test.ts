@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { WebSocket } from 'ws';
 import {
@@ -13,6 +13,11 @@ import { ensureRunningTurn, clearRunningTurn } from '../../src/web/chat-ws-runni
 import { getSessionsDir, sessionProcessing } from '../../src/web/chat-ws-runtime.js';
 import { getTaskQueueManager } from '../../src/session/task-queue.js';
 import { subscribeWsToSession, clearBroadcastState, addChatClient } from '../../src/web/chat-ws-broadcast.js';
+import { isSessionUnattended, setSessionUnattended } from '../../src/web/chat-ws-confirm.js';
+import {
+  registerScheduledTaskResultHandler,
+  type ScheduledTaskResult,
+} from '../../src/session/scheduled-task-events.js';
 
 vi.mock('../../src/web/chat-ws-turn.js', () => ({
   handleChatMessage: vi.fn(async () => 'model_done'),
@@ -79,6 +84,33 @@ describe('chat-ws-loop', () => {
       enqueuedAt: Date.now(),
       reasoningEffort: 'high',
     }, ws).reasoningEffort).toBe('high');
+  });
+
+  it('queuedTaskToPending：continuation 续跑不产生用户气泡', () => {
+    const pending = queuedTaskToPending({
+      id: 'c1', text: '[System] wake', source: 'implicit', continuation: true, enqueuedAt: Date.now(),
+    }, fakeWs());
+    expect(pending).toMatchObject({ continuation: true, skipUserMessageAppend: true });
+  });
+
+  it('定时任务轮次无人值守，续跑沿用，用户亲自发消息后退出', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    const seen: boolean[] = [];
+    vi.mocked(handleChatMessage).mockImplementation(async () => {
+      seen.push(isSessionUnattended(sid));
+      return 'user_abort';
+    });
+    const base = { images: [], referencePaths: [], source: 'implicit' as const, ws };
+    try {
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', scheduledTaskId: 'task-x' });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'wake', continuation: true });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'hi', source: 'explicit' });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'wake', continuation: true });
+      expect(seen).toEqual([true, true, false, false]);
+    } finally {
+      setSessionUnattended(sid, false);
+    }
   });
 
   it('会话 busy 时 enqueue 只入队不 kickoff', async () => {
@@ -377,6 +409,78 @@ describe('chat-ws-loop', () => {
     });
     await vi.waitFor(() => {
       expect(sessionProcessing.has(sid)).toBe(false);
+    });
+  });
+
+  describe('定时任务执行结果回写', () => {
+    const results: ScheduledTaskResult[] = [];
+    const base = { images: [], referencePaths: [], source: 'implicit' as const, scheduledTaskId: 'task-r' };
+
+    beforeEach(() => {
+      results.length = 0;
+      registerScheduledTaskResultHandler((r) => { results.push(r); });
+    });
+    afterEach(() => {
+      registerScheduledTaskResultHandler(null);
+    });
+
+    it('模型返回正文时回写成功，并跳过收尾门禁', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        expect(input.skipCompletionGate).toBe(true);
+        input.onFinalContent?.('已完成。');
+        return 'model_done';
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: true, error: null }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('模型没有返回正文时回写失败', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockResolvedValue('model_done');
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: false, error: '执行失败（详情见任务会话）' }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('LLM 出错时把本轮的错误文本写进失败原因', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        input.onFinalContent?.('LLM 调用错误: OpenAI API Error [401]: invalid api key');
+        return 'error';
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{
+        taskId: 'task-r',
+        success: false,
+        error: '执行出错：LLM 调用错误: OpenAI API Error [401]: invalid api key',
+      }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('收尾门禁失败但模型已回复时回写成功', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+        input.onFinalContent?.('已完成。目标日期 2026-10-12，已写出总结文件。');
+        return 'completion_failed';
+      });
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: true, error: null }]);
+      setSessionUnattended(sid, false);
+    });
+
+    it('等待人工接管（user_checkpoint）也回写为失败，不会一直显示执行中', async () => {
+      const sid = uniqueSid();
+      const ws = fakeWs();
+      vi.mocked(handleChatMessage).mockResolvedValue('user_checkpoint');
+      await runSessionMessageLoop(dummyDeps, sid, ws, { ...base, content: 'tick', ws });
+      expect(results).toEqual([{ taskId: 'task-r', success: false, error: '等待人工确认（详情见任务会话）' }]);
+      setSessionUnattended(sid, false);
     });
   });
 

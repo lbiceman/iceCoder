@@ -175,6 +175,7 @@ export function toAgentView(meta: AgentMetaRecord): AgentView {
     ...(meta.reportPreview ? { reportPreview: meta.reportPreview } : {}),
     ...(meta.error ? { error: meta.error } : {}),
     ...(meta.interrupted ? { interrupted: true } : {}),
+    ...(meta.background ? { background: true } : {}),
   };
 }
 
@@ -183,7 +184,11 @@ export function normalizeInterruptedAgentMeta(
   meta: AgentMetaRecord,
   isLive: (agentId: string) => boolean,
 ): AgentMetaRecord {
-  if ((meta.status === 'running' || meta.status === 'queued') && !isLive(meta.agentId)) {
+  if (
+    (meta.status === 'running' || meta.status === 'queued')
+    && !meta.background
+    && !isLive(meta.agentId)
+  ) {
     return { ...meta, status: 'cancelled', interrupted: true };
   }
   return meta;

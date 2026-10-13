@@ -37,6 +37,10 @@ function archivePath(sessionDir: string, sessionId: string, messageId: string): 
 
 const indexWriteChains = new Map<string, Promise<void>>();
 
+export function getCheckpointIndexLockCount(): number {
+  return indexWriteChains.size;
+}
+
 function withCheckpointIndexLock<T>(
   sessionDir: string,
   sessionId: string,
@@ -45,7 +49,11 @@ function withCheckpointIndexLock<T>(
   const key = `${sessionDir}::${sessionId}`;
   const run = () => fn();
   const next = (indexWriteChains.get(key) ?? Promise.resolve()).then(run, run);
-  indexWriteChains.set(key, next.then(() => undefined, () => undefined));
+  const tail = next.then(() => undefined, () => undefined);
+  indexWriteChains.set(key, tail);
+  void tail.then(() => {
+    if (indexWriteChains.get(key) === tail) indexWriteChains.delete(key);
+  });
   return next;
 }
 

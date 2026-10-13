@@ -32,6 +32,13 @@ import {
   mutateSessionIndex,
   type SessionMeta,
 } from '../session-index-store.js';
+import {
+  backfillScheduledTaskSessionMarks,
+  buildScheduledTaskSessionStates,
+  type ScheduledTaskSessionLink,
+  type ScheduledTaskSessionSource,
+  type ScheduledTaskSessionState,
+} from '../scheduled-task-session-index.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
 import {
   readSessionBgTasks,
@@ -269,7 +276,85 @@ function rejectUnsafeSessionId(res: Response, sessionId: string): boolean {
   return true;
 }
 
-export function createSessionsRouter(): Router {
+/** 新建空会话并写入 index（REST 与定时任务共用）。 */
+export async function createSessionRecord(title: string): Promise<SessionMeta> {
+  const id = randomUUID().slice(0, 8);
+  const now = Date.now();
+  const meta: SessionMeta = { id, title, createdAt: now, updatedAt: now, messageCount: 0 };
+  await mutateSessionIndex(async (index) => {
+    index.unshift(meta);
+    await ensureDir();
+    await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+    return index;
+  });
+  sessionListLiveSync?.notifyIndexUpdated();
+  return meta;
+}
+
+/** 侧栏会话列表需要刷新（如定时任务启停、下次执行时间变化）。 */
+export function notifySessionListChanged(): void {
+  sessionListLiveSync?.notifyIndexUpdated();
+}
+
+/** 把会话标记为定时任务专属会话（侧栏归入「任务会话」分组）。 */
+export async function markScheduledTaskSession(sessionId: string, taskId: string): Promise<void> {
+  let changed = false;
+  await mutateSessionIndex((index) => {
+    const entry = index.find((s) => s.id === sessionId);
+    if (entry && entry.scheduledTaskId !== taskId) {
+      entry.scheduledTaskId = taskId;
+      changed = true;
+    }
+    return index;
+  });
+  if (changed) notifySessionListChanged();
+}
+
+/** 启动时给标记功能之前创建的任务会话补标记。 */
+export async function backfillScheduledTaskSessions(tasks: ScheduledTaskSessionLink[]): Promise<void> {
+  let changed = false;
+  await mutateSessionIndex((index) => {
+    changed = backfillScheduledTaskSessionMarks(index, tasks);
+    return index;
+  });
+  if (changed) notifySessionListChanged();
+}
+
+async function buildScheduledTaskIndex(
+  index: SessionMeta[],
+  listScheduledTasks: (() => Promise<ScheduledTaskSessionSource[]>) | undefined,
+): Promise<Record<string, ScheduledTaskSessionState>> {
+  if (!listScheduledTasks) return buildScheduledTaskSessionStates(index, []);
+  try {
+    return buildScheduledTaskSessionStates(index, await listScheduledTasks());
+  } catch (err) {
+    console.warn('[sessions] 读取定时任务失败，本次列表不带任务状态:', err);
+    return {};
+  }
+}
+
+/** 删除会话（index + 文件族 + 进程内缓存）；会话不存在时返回 false。 */
+export async function deleteSessionRecord(sessionId: string): Promise<boolean> {
+  if (!isSafeSessionId(sessionId)) return false;
+  let found = false;
+  await mutateSessionIndex(async (index) => {
+    found = index.some(s => s.id === sessionId);
+    if (!found) return index;
+    // 先摘掉消息文件，避免并发 GET 对账时把已删会话补回 index
+    await fs.unlink(path.join(SESSIONS_DIR, `${sessionId}.json`)).catch(() => {});
+    return index.filter(s => s.id !== sessionId);
+  });
+  if (!found) return false;
+  await purgeSessionFiles(sessionId);
+  sessionListLiveSync?.notifyIndexUpdated();
+  return true;
+}
+
+export interface SessionsRouterDeps {
+  listScheduledTasks?: () => Promise<ScheduledTaskSessionSource[]>;
+}
+
+export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
   const router = Router();
 
   /**
@@ -280,11 +365,12 @@ export function createSessionsRouter(): Router {
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
     const sessionIds = index.map((s) => s.id);
-    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId] = await Promise.all([
+    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId, scheduledTasks] = await Promise.all([
       buildWorkspaceIndex(sessionIds),
       buildShellCollabActiveIndex(sessionIds, SESSIONS_DIR),
       buildPlanModeActiveIndex(sessionIds, SESSIONS_DIR),
       bootstrapActiveSessionIdFromIndex(),
+      buildScheduledTaskIndex(index, deps.listScheduledTasks),
     ]);
     res.json({
       sessions: index,
@@ -292,6 +378,7 @@ export function createSessionsRouter(): Router {
       workspaces,
       shellCollabActive,
       planModeActive,
+      scheduledTasks,
       activeSessionId,
       sessionRunStates: sessionListLiveSync ? sessionListLiveSync.getRunStates() : [],
     });
@@ -301,17 +388,7 @@ export function createSessionsRouter(): Router {
    * POST /api/sessions - 创建新会话
    */
   router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const title = (req.body?.title as string) || '新会话';
-    const id = randomUUID().slice(0, 8);
-    const now = Date.now();
-    const meta: SessionMeta = { id, title, createdAt: now, updatedAt: now, messageCount: 0 };
-    await mutateSessionIndex(async (index) => {
-      index.unshift(meta);
-      await ensureDir();
-      await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
-      return index;
-    });
-    sessionListLiveSync?.notifyIndexUpdated();
+    const meta = await createSessionRecord((req.body?.title as string) || '新会话');
     res.json({ success: true, session: meta });
   });
 
@@ -358,17 +435,7 @@ export function createSessionsRouter(): Router {
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
     if (rejectUnsafeSessionId(res, sessionId)) return;
-    let found = false;
-    await mutateSessionIndex(async (index) => {
-      found = index.some(s => s.id === sessionId);
-      if (!found) return index;
-      // 先摘掉消息文件，避免并发 GET 对账时把已删会话补回 index
-      await fs.unlink(path.join(SESSIONS_DIR, `${sessionId}.json`)).catch(() => {});
-      return index.filter(s => s.id !== sessionId);
-    });
-    if (!found) { res.status(404).json({ error: 'not found' }); return; }
-    await purgeSessionFiles(sessionId);
-    sessionListLiveSync?.notifyIndexUpdated();
+    if (!(await deleteSessionRecord(sessionId))) { res.status(404).json({ error: 'not found' }); return; }
     res.json({ success: true });
   });
 

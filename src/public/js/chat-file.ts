@@ -349,9 +349,9 @@ export const ChatFile = (() => {
    * Electron 打包端：clipboardData 经常没有 image item，回退读系统剪贴板位图。
    * 有普通文本时不抢粘贴；文本像图片路径（微信截图）时仍取位图。
    */
-  function tryPasteFromDesktopClipboard(clipboardData) {
+  function readDesktopClipboardImageFile(clipboardData) {
     const api = window.iceDesktop;
-    if (!api || typeof api.readClipboardImage !== 'function') return false;
+    if (!api || typeof api.readClipboardImage !== 'function') return null;
     let text = '';
     try {
       text = clipboardData && typeof clipboardData.getData === 'function'
@@ -360,9 +360,12 @@ export const ChatFile = (() => {
     } catch (_e) {
       text = '';
     }
-    if (text && text.trim() && !looksLikeImagePath(text)) return false;
-    const payload = api.readClipboardImage();
-    const file = fileFromDesktopClipboardPayload(payload);
+    if (text && text.trim() && !looksLikeImagePath(text)) return null;
+    return fileFromDesktopClipboardPayload(api.readClipboardImage());
+  }
+
+  function tryPasteFromDesktopClipboard(clipboardData) {
+    const file = readDesktopClipboardImageFile(clipboardData);
     if (!file) return false;
     addPendingImage(file);
     return true;
@@ -385,6 +388,7 @@ export const ChatFile = (() => {
     isImageFile,
     collectClipboardImageFiles,
     handlePasteEvent,
+    readDesktopClipboardImageFile,
     tryPasteFromDesktopClipboard,
     getComposerSnapshot() {
       return {

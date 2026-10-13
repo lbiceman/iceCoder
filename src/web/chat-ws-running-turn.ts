@@ -230,9 +230,16 @@ export function recordPersistedToolTraceDiff(
 
 /** 把一条 step 事件 fold 进运行中快照，便于新订阅者重建 UI */
 export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
-  const t = ensureRunningTurn(sessionId);
   if (!event || typeof event !== 'object') return;
-  if (typeof event.agentId === 'string' && event.agentId) {
+  const agentId = typeof event.agentId === 'string' && event.agentId ? event.agentId : '';
+  let t = runningTurns.get(sessionId);
+  if (!t) {
+    // 后台子 Agent 在父回合结束后仍会推事件：不得凭空重建运行中快照，
+    // 否则 hasBusySessionRun 会一直为真，会话被误判为「运行中」。
+    if (agentId) return;
+    t = ensureRunningTurn(sessionId);
+  }
+  if (agentId) {
     foldAgentStep(sessionId, t, event);
     return;
   }

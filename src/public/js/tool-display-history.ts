@@ -45,6 +45,31 @@ export const ToolDisplayHistory = (() => {
     return extractUnifiedDiffFromOutput(toolOutput);
   }
 
+  /** 工具参数原样 JSON（无参数返回空串） */
+  function stringifyToolArgs(toolArgs) {
+    const args = normalizeToolArgs(toolArgs);
+    if (!args || Object.keys(args).length === 0) return '';
+    try {
+      return JSON.stringify(args, null, 2);
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  /**
+   * 工具「参数 + 结果」面板内容（点击工具名展开，UI 同 diff 面板）。
+   * 变更类工具已有 diff 面板时不重复展示；web_search / fetch_url / read_file 等展示参数 + 结果原文。
+   * @returns {{ text: string, kind: 'args'|'output'|'both' }|null}
+   */
+  function buildToolIoTrace(toolName, toolArgs, toolOutput, diffSource) {
+    if (diffSource) return null;
+    const argsText = stringifyToolArgs(toolArgs);
+    const outText = typeof toolOutput === 'string' ? toolOutput : '';
+    if (!argsText && !outText) return null;
+    const kind = argsText && outText ? 'both' : (argsText ? 'args' : 'output');
+    return { text: argsText + outText, kind };
+  }
+
   /** @deprecated 使用 extractDiffSource(toolName, toolOutput, toolArgs) */
   function resolveDiffSource(toolOutput, toolArgs, toolName) {
     return extractDiffSource(toolName, toolOutput, toolArgs);
@@ -369,6 +394,8 @@ export const ToolDisplayHistory = (() => {
   return {
     extractDiffSource,
     resolveDiffSource,
+    stringifyToolArgs,
+    buildToolIoTrace,
     isDiffCapableTool,
     parseStructuredToolRounds,
     flattenStructuredToolEntries,
