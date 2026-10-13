@@ -218,6 +218,24 @@ export class ProjectCheckpointStore {
     return pathExists(this.checkpointPath);
   }
 
+  /**
+   * 删除活动 checkpoint 文件并清空进程内缓存。排在已入队写入之后执行，
+   * 否则缓存里的旧 aggregate 会在下一次 save 时被写回。
+   */
+  async clear(): Promise<void> {
+    await this.enqueue(async () => {
+      this.discardCachedLatest();
+      try {
+        await fs.access(path.dirname(this.checkpointPath));
+      } catch {
+        return;
+      }
+      await this.withFileLock(async () => {
+        await fs.unlink(this.checkpointPath).catch(() => undefined);
+      });
+    });
+  }
+
   /** Transaction rollback hook when the active checkpoint did not exist before restore. */
   discardCachedLatest(): void {
     this.writeState.latest = null;

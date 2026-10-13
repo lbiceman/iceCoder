@@ -66,10 +66,20 @@ export function remapSnapshotToWorkspace(
   return out;
 }
 
-function absInWorkspace(workspaceRoot: string, storedPath: string): string {
-  const rel = remapPathToWorkspace(workspaceRoot, storedPath)
-    ?? storedPath.replace(/\\/g, '/');
-  return path.resolve(path.resolve(workspaceRoot), rel);
+/**
+ * 把存储路径解析为工作区内的绝对路径；`../`、跨盘绝对路径等落在工作区外时返回 null。
+ * 所有对工作区文件的读写删都必须经过这里。
+ */
+export function resolveInsideWorkspace(workspaceRoot: string, storedPath: string): string | null {
+  const root = path.resolve(workspaceRoot);
+  const rel = remapPathToWorkspace(root, storedPath);
+  if (!rel) return null;
+  const abs = path.resolve(root, rel);
+  return toPosixRel(root, abs) ? abs : null;
+}
+
+function warnOutsideWorkspace(action: string, storedPath: string): void {
+  console.warn(`[workspace-snapshot] 跳过工作区外路径 (${action}): ${storedPath}`);
 }
 
 export function collectTrackedPathsFromCheckpoint(
@@ -121,7 +131,11 @@ export async function captureWorkspaceFileSnapshot(
 
   for (const rel of trackedPaths) {
     const key = remapPathToWorkspace(workspaceRoot, rel) ?? rel.replace(/\\/g, '/');
-    const abs = absInWorkspace(workspaceRoot, key);
+    const abs = resolveInsideWorkspace(workspaceRoot, key);
+    if (!abs) {
+      warnOutsideWorkspace('capture', rel);
+      continue;
+    }
     try {
       const stat = await fs.stat(abs);
       if (stat.isFile()) {
@@ -142,7 +156,11 @@ export async function applyWorkspaceFileSnapshot(
   pathsToDelete: string[] = [],
 ): Promise<void> {
   const unlinkRel = async (rel: string) => {
-    const abs = absInWorkspace(workspaceRoot, rel);
+    const abs = resolveInsideWorkspace(workspaceRoot, rel);
+    if (!abs) {
+      warnOutsideWorkspace('delete', rel);
+      return;
+    }
     try {
       await fs.unlink(abs);
     } catch {
@@ -156,9 +174,13 @@ export async function applyWorkspaceFileSnapshot(
 
   const remapped = remapSnapshotToWorkspace(workspaceRoot, snapshot);
   for (const [rel, content] of Object.entries(remapped)) {
-    const abs = absInWorkspace(workspaceRoot, rel);
     if (content === null) {
       await unlinkRel(rel);
+      continue;
+    }
+    const abs = resolveInsideWorkspace(workspaceRoot, rel);
+    if (!abs) {
+      warnOutsideWorkspace('write', rel);
       continue;
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });

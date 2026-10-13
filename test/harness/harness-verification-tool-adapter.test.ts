@@ -59,7 +59,7 @@ describe('Harness verification tool adapter', () => {
 
     const result = await adapter(toolCall);
 
-    expect(executeTool).toHaveBeenCalledWith(toolCall, expect.any(Function));
+    expect(executeTool).toHaveBeenCalledWith(toolCall, expect.any(Function), undefined);
     expect(result).toMatchObject({
       classification: {
         kind: 'foreground',

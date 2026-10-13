@@ -5,6 +5,7 @@
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import { isSafeIntentMessageId } from '../harness/intent-checkpoint-store.js';
 import type { WebSocket } from 'ws';
 import {
   getShellCollabState,
@@ -110,7 +111,7 @@ export async function handleShellCollabRoute(
   await loadForSession(sessionId, SESSIONS_DIR);
 
   const now = Date.now();
-  const userMsgId = clientMessageId ?? randomUUID();
+  const userMsgId = isSafeIntentMessageId(clientMessageId) ? clientMessageId : randomUUID();
   const trimmedPrompt = String(prompt || '').trim();
   let resolvedReferencePaths = referencePaths.slice();
   let resolvedSkills = skills.slice();

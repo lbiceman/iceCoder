@@ -1,4 +1,12 @@
+import { realpathSync } from 'node:fs';
+import nodePath from 'node:path';
+
 import type { BranchBudgetTracker } from './branch-budget.js';
+import { isUnderRoot } from '../shared/path-scope.js';
+import {
+  canonicalizeMemoryToolPath,
+  resolveMemoryRootForPath,
+} from '../memory/file-memory/memory-write-pipeline.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { ToolCall } from '../llm/types.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
@@ -22,7 +30,7 @@ export interface ToolPreflightInput {
 
 export interface ToolPreflightDecision {
   blocked: boolean;
-  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_hard_block';
+  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_hard_block' | 'outside_workspace';
   message?: string;
   hostKillLabel?: string;
 }
@@ -125,8 +133,83 @@ export function checkMissingFilePreflight(input: {
   };
 }
 
+/** shell 命令的写目标只能启发式提取，不在此拦截。 */
+const BOUNDARY_WRITE_TOOLS = new Set([
+  'write_file', 'edit_file', 'append_file', 'patch_file', 'batch_edit_file', 'fs_operation',
+]);
+
+function collectBoundaryWriteTargets(toolName: string, args: Record<string, unknown>): string[] {
+  const targets: string[] = [];
+  const add = (raw: unknown) => {
+    if (typeof raw === 'string' && raw.trim()) targets.push(raw.trim());
+  };
+  if (toolName === 'fs_operation') {
+    const op = String(args.operation ?? '').toLowerCase();
+    if (op === 'list') return targets;
+    add(args.path ?? args.filePath);
+    if (op === 'move' || op === 'copy') add(args.target);
+    return targets;
+  }
+  add(args.path ?? args.file_path);
+  return targets;
+}
+
+/** 已存在的最近祖先目录的真实路径；用于识别指向工作区外的 symlink / junction。 */
+function realpathOfNearestExisting(absPath: string): string {
+  let current = absPath;
+  while (true) {
+    try {
+      const real = realpathSync.native(current);
+      return current === absPath ? real : nodePath.join(real, nodePath.relative(current, absPath));
+    } catch {
+      const parent = nodePath.dirname(current);
+      if (parent === current) return absPath;
+      current = parent;
+    }
+  }
+}
+
+function isWriteTargetInsideWorkspace(rawPath: string, workspaceRoot: string): boolean {
+  const canonical = canonicalizeMemoryToolPath(rawPath, workspaceRoot);
+  if (resolveMemoryRootForPath(canonical)) return true;
+  if (!isUnderRoot(canonical, workspaceRoot)) return false;
+  return isUnderRoot(realpathOfNearestExisting(canonical), realpathOfNearestExisting(nodePath.resolve(workspaceRoot)));
+}
+
+/**
+ * 锁定工作区后，写类文件工具的目标必须在工作区内（长期记忆目录除外）。
+ * referenceReads 只允许读，因此同样被拦。未锁定工作区时不限制。
+ */
+export function checkWorkspaceWriteBoundary(input: {
+  toolName: string;
+  args: Record<string, unknown>;
+  workspaceRoot?: string;
+  lockedWorkspaceRoot?: string;
+}): ToolPreflightDecision {
+  const { toolName, args, workspaceRoot, lockedWorkspaceRoot } = input;
+  if (!workspaceRoot || !lockedWorkspaceRoot || !BOUNDARY_WRITE_TOOLS.has(toolName)) {
+    return { blocked: false };
+  }
+  for (const target of collectBoundaryWriteTargets(toolName, args)) {
+    if (isWriteTargetInsideWorkspace(target, workspaceRoot)) continue;
+    return {
+      blocked: true,
+      reason: 'outside_workspace',
+      message: [
+        `[Harness / Workspace Boundary] ${toolName} blocked: ${target} is outside the locked workspace.`,
+        `Workspace: ${workspaceRoot}`,
+        'Only write inside the workspace. If the user really wants files elsewhere, ask them to switch the workspace first.',
+      ].join('\n'),
+    };
+  }
+  return { blocked: false };
+}
+
 export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDecision {
   const path = extractTargetPath(input.args);
+
+  const boundary = checkWorkspaceWriteBoundary(input);
+  if (boundary.blocked) return boundary;
 
   const missing = checkMissingFilePreflight({
     toolName: input.toolName,

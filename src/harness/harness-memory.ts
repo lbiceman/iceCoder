@@ -2048,6 +2048,9 @@ ${candidateList}`;
           }
           const { promises: fsPromises } = await import('node:fs');
           await fsPromises.writeFile(this.sessionMemoryState.notesPath, finalNotes, 'utf-8');
+          // 只有写盘成功才推进游标；失败时靠 backoff 节流，之后仍会重新覆盖这段消息。
+          this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
+          this.sessionMemoryState.lastProcessedIndex = messages.length;
           await this.telemetry.logSessionMemory({
             wrote: true,
             evidenceAnchored: !!pkg,
@@ -2091,9 +2094,6 @@ ${candidateList}`;
           retried: sessionRetried,
         }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
       }
-
-      this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
-      this.sessionMemoryState.lastProcessedIndex = messages.length;
     } catch (err) {
       console.debug('[harness-memory] session memory update failed:', err instanceof Error ? err.message : err);
     } finally {

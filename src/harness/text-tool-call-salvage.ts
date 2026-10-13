@@ -7,6 +7,7 @@
 import type { LLMResponse } from '../llm/types.js';
 import {
   containsEmbeddedToolCalls,
+  parseEmbeddedToolCallsForExecution,
   parseEmbeddedToolCallsFromText,
   partialEmbeddedToolPrefixSuffix,
   prepareAssistantContentForHistory,
@@ -59,8 +60,12 @@ export function absorbEmbeddedThinking(response: LLMResponse): LLMResponse {
 /**
  * 统一抢救入口：原生 tool_calls 时净化正文；否则从嵌入文本解析 toolCalls。
  * 净化后若仍像工具正文但未解析出调用，由 harness 走 no_tool 恢复（见 handleNoToolCalls）。
+ * allowedToolNames 为本轮可用工具；不在其中的名字不会被执行。
  */
-export function salvageTextToolCallsInResponse(response: LLMResponse): LLMResponse {
+export function salvageTextToolCallsInResponse(
+  response: LLMResponse,
+  allowedToolNames?: ReadonlySet<string>,
+): LLMResponse {
   response = absorbEmbeddedThinking(response);
   if (response.toolCalls?.length) {
     return { ...response, content: prepareAssistantContentForHistory(response.content ?? '') };
@@ -70,7 +75,7 @@ export function salvageTextToolCallsInResponse(response: LLMResponse): LLMRespon
     return response;
   }
 
-  const { calls } = parseEmbeddedToolCallsFromText(raw);
+  const calls = parseEmbeddedToolCallsForExecution(raw, allowedToolNames);
   if (calls.length === 0) {
     return response;
   }
@@ -85,14 +90,17 @@ export function salvageTextToolCallsInResponse(response: LLMResponse): LLMRespon
 }
 
 /** 供 harness 主循环使用：在 {@link salvageTextToolCallsInResponse} 之后再尝试一次嵌入解析。 */
-export function resolveSalvagedLlmResponse(raw: LLMResponse): LLMResponse {
-  let response = salvageTextToolCallsInResponse(raw);
+export function resolveSalvagedLlmResponse(
+  raw: LLMResponse,
+  allowedToolNames?: ReadonlySet<string>,
+): LLMResponse {
+  const response = salvageTextToolCallsInResponse(raw, allowedToolNames);
   if (response.toolCalls?.length) return response;
 
   const rawText = stripEmbeddedThinking(raw.content?.trim() ?? '');
   if (!rawText || !containsEmbeddedToolCalls(rawText)) return response;
 
-  const { calls } = parseEmbeddedToolCallsFromText(rawText);
+  const calls = parseEmbeddedToolCallsForExecution(rawText, allowedToolNames);
   if (calls.length === 0) return response;
 
   return {

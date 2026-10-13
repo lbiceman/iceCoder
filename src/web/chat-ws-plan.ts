@@ -5,6 +5,7 @@
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import { isSafeIntentMessageId } from '../harness/intent-checkpoint-store.js';
 import type { WebSocket } from 'ws';
 import {
   getPlanModeState,
@@ -141,7 +142,7 @@ export async function handlePlanModeRoute(
   }
 
   const now = Date.now();
-  const userMsgId = clientMessageId ?? randomUUID();
+  const userMsgId = isSafeIntentMessageId(clientMessageId) ? clientMessageId : randomUUID();
   const trimmedPrompt = String(prompt || '').trim();
   let resolvedReferencePaths = referencePaths.slice();
   let resolvedSkills = skills.slice();
@@ -241,7 +242,7 @@ export async function handlePlanModeExit(
   const userMessage = options.persistUserMessage
     ? buildPlanUserMessage(
         options.rawContent ?? '/plan exit',
-        options.clientMessageId ?? randomUUID(),
+        isSafeIntentMessageId(options.clientMessageId) ? options.clientMessageId : randomUUID(),
         now,
       )
     : null;

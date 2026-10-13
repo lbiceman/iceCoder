@@ -66,7 +66,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         required: [],
       },
     },
-    handler: async (args, onOutput?: ToolOutputCallback) => {
+    handler: async (args, onOutput?: ToolOutputCallback, signal?: AbortSignal) => {
       // Normalize: cmd is an accepted alias for command
       if (args.cmd !== undefined && args.command === undefined) args.command = args.cmd;
       const action = (args.action as string) || '';
@@ -247,9 +247,15 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         let escalated = false;
         let settled = false;
 
+        const onAbort = () => {
+          if (escalated || settled) return;
+          killed = true;
+          killShellProcessTree(child.pid ?? null, child);
+        };
         const safeResolve = (value: any) => {
           if (settled) return;
           settled = true;
+          signal?.removeEventListener('abort', onAbort);
           resolve(value);
         };
 
@@ -258,6 +264,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
           killed = true;
           killShellProcessTree(child.pid ?? null, child);
         }, timeout);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
 
         // 软超时 escalate：仅 ICE_SHELL_SOFT_ESCALATE=1 的 auto 命令
         let softTimer: ReturnType<typeof setTimeout> | null = null;

@@ -31,8 +31,24 @@ function checkpointsDir(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, sessionId, 'checkpoints');
 }
 
+const SAFE_MESSAGE_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** messageId 会拼进文件名；含路径分隔符、盘符等字符的 id 不得落盘。 */
+export function isSafeIntentMessageId(messageId: string | null | undefined): messageId is string {
+  return typeof messageId === 'string' && SAFE_MESSAGE_ID_RE.test(messageId);
+}
+
 function archivePath(sessionDir: string, sessionId: string, messageId: string): string {
+  if (!isSafeIntentMessageId(messageId)) {
+    throw new Error(`[intent-checkpoint] unsafe messageId: ${JSON.stringify(messageId)}`);
+  }
   return path.join(checkpointsDir(sessionDir, sessionId), `${messageId}.intent.json`);
+}
+
+/** 索引里的 archiveFileName 可能来自旧版本或被篡改，删除前必须确认是纯文件名。 */
+function archiveFilePathFromIndex(sessionDir: string, sessionId: string, fileName: string): string | null {
+  if (!fileName || path.basename(fileName) !== fileName || !SAFE_MESSAGE_ID_RE.test(fileName)) return null;
+  return path.join(checkpointsDir(sessionDir, sessionId), fileName);
 }
 
 const indexWriteChains = new Map<string, Promise<void>>();
@@ -355,11 +371,7 @@ export async function truncateCheckpointsFrom(
   });
 
   for (const entry of toRemove) {
-    try {
-      await fs.unlink(path.join(checkpointsDir(sessionDir, sessionId), entry.archiveFileName));
-    } catch {
-      /* already gone */
-    }
+    await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
   }
 }
 
@@ -386,11 +398,7 @@ export async function removeCheckpoint(
   });
 
   if (!removed) return;
-  try {
-    await fs.unlink(path.join(checkpointsDir(sessionDir, sessionId), removed.archiveFileName));
-  } catch {
-    /* already gone */
-  }
+  await unlinkArchiveFromIndex(sessionDir, sessionId, removed);
 }
 
 /** 删除 cursor 之后的 checkpoint 条目与归档（Restore 后截断时间线）。 */
@@ -414,11 +422,24 @@ export async function truncateCheckpointsAfter(
   });
 
   for (const entry of toRemove) {
-    try {
-      await fs.unlink(path.join(checkpointsDir(sessionDir, sessionId), entry.archiveFileName));
-    } catch {
-      /* already gone */
-    }
+    await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
+  }
+}
+
+async function unlinkArchiveFromIndex(
+  sessionDir: string,
+  sessionId: string,
+  entry: CheckpointIndexEntry,
+): Promise<void> {
+  const file = archiveFilePathFromIndex(sessionDir, sessionId, entry.archiveFileName);
+  if (!file) {
+    console.warn(`[intent-checkpoint] 跳过非法 archiveFileName: ${JSON.stringify(entry.archiveFileName)}`);
+    return;
+  }
+  try {
+    await fs.unlink(file);
+  } catch {
+    /* already gone */
   }
 }
 

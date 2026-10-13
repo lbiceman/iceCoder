@@ -29,6 +29,7 @@ import {
 } from '../memory/file-memory/session-memory.js';
 import { bumpSessionContextWriteEpoch } from './session-context-write-gate.js';
 import { deleteAgentRecordsForMessages } from './agents/agent-store.js';
+import { ProjectCheckpointStore } from './project-checkpoint-store.js';
 
 function isAlsoNoteUiMessage(message: UiChatMessage): boolean {
   return message.role === 'user' && message.alsoNote === true;
@@ -300,7 +301,7 @@ function stripResumeCheckpointMessages(messages: UnifiedMessage[]): UnifiedMessa
 }
 
 async function clearActiveTaskCheckpoint(sessionDir: string, sessionId: string): Promise<void> {
-  await fs.unlink(path.join(sessionDir, `${sessionId}.checkpoint.json`)).catch(() => {});
+  await new ProjectCheckpointStore({ sessionDir, sessionId }).clear();
 }
 
 async function readStructuredMessages(

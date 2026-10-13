@@ -4,14 +4,16 @@
  */
 
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-
 import {
   loadIntentCheckpoint,
   saveIntentCheckpoint,
 } from './intent-checkpoint-store.js';
 import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
-import { remapPathToWorkspace, remapSnapshotToWorkspace } from './workspace-snapshot.js';
+import {
+  remapPathToWorkspace,
+  remapSnapshotToWorkspace,
+  resolveInsideWorkspace,
+} from './workspace-snapshot.js';
 
 const WRITE_TOOLS = new Set([
   'write_file',
@@ -73,8 +75,8 @@ async function readWorkspaceFileOrNull(
   workspaceRoot: string,
   relPath: string,
 ): Promise<string | null> {
-  const rel = remapPathToWorkspace(workspaceRoot, relPath) ?? relPath.replace(/\\/g, '/');
-  const abs = path.resolve(path.resolve(workspaceRoot), rel);
+  const abs = resolveInsideWorkspace(workspaceRoot, relPath);
+  if (!abs) return null;
   try {
     const stat = await fs.stat(abs);
     if (!stat.isFile()) return null;

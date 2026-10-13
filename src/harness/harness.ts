@@ -867,7 +867,11 @@ export class Harness {
         }
 
         const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
-        const response = timeSync('post_salvage', () => resolveSalvagedLlmResponse(rawResponse), prep.round);
+        const response = timeSync(
+          'post_salvage',
+          () => resolveSalvagedLlmResponse(rawResponse, new Set(toolsForLlm.map(t => t.name))),
+          prep.round,
+        );
         if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
           console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
         }

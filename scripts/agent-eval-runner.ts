@@ -64,13 +64,15 @@ export async function runAgentEvalCase(
   testCase: AgentEvalCase,
   options: RunAgentEvalCaseOptions,
 ): Promise<CaseResult> {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), `ice-agent-eval-${testCase.id}-`));
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), `ice-agent-eval-${testCase.id}-`));
+  const workspace = testCase.workspaceLock ? path.join(sandbox, 'project') : sandbox;
   const sessionDir = path.join(workspace, '.icecoder', 'sessions');
   const memoryDir = path.join(workspace, '.icecoder', 'memory-files');
   const initialFiles = new Map<string, string>();
   const events: HarnessStepEvent[] = [];
 
   try {
+    await fs.mkdir(workspace, { recursive: true });
     await writeCaseFiles(workspace, testCase.files, initialFiles);
     if (testCase.memoryFiles) {
       await writeCaseFiles(memoryDir, testCase.memoryFiles);
@@ -119,6 +121,7 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
+      ...(testCase.workspaceLock ? { workspaceLock: { lockedRoot: workspace, referenceReads: [] } } : {}),
     };
 
     if (testCase.subAgents) {
@@ -175,7 +178,7 @@ export async function runAgentEvalCase(
     };
   } finally {
     if (!options.keepWorkspace) {
-      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(sandbox, { recursive: true, force: true });
     }
   }
 }
@@ -410,6 +413,10 @@ async function scoreCase(args: {
   }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
+  }
+  for (const relativePath of testCase.expected.outsideWorkspaceAbsent ?? []) {
+    const exists = await fs.access(path.resolve(workspace, relativePath)).then(() => true, () => false);
+    if (exists) failures.push(`file escaped the workspace: ${relativePath}`);
   }
   if (
     testCase.expected.completionStatus

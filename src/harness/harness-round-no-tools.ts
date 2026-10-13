@@ -57,10 +57,10 @@ import {
 } from './verification-state.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import {
-  containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
 } from './text-tool-call-salvage.js';
+import { containsExecutableEmbeddedToolCalls } from './text-format-tool-call-parsers.js';
 
 function buildNoToolExecutionRecoveryPrompt(): string {
   return '[System] The user requested an executable action, but no tool was invoked. Continue with the relevant available tools through native function-calling; do not embed tool syntax in plain text.';
@@ -138,7 +138,7 @@ export async function handleNoToolCalls(
   const rawTextForEmbedded =
     (typeof rawAssistantContent === 'string' ? rawAssistantContent : '')
     || (typeof response.content === 'string' ? response.content : '');
-  const hasEmbeddedToolText = containsEmbeddedToolCalls(rawTextForEmbedded);
+  const hasEmbeddedToolText = containsExecutableEmbeddedToolCalls(rawTextForEmbedded);
 
   // 模型在 API tool_calls 之后又用正文输出工具（各厂商格式不同）→ 必须继续，不能 model_done / 空响应退出
   if (

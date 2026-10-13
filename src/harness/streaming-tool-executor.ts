@@ -82,7 +82,7 @@ export class StreamingToolExecutor {
 
       let result: ToolResult;
       try {
-        result = await this.toolExecutor.executeTool(toolCall, outputCallback);
+        result = await this.toolExecutor.executeTool(toolCall, outputCallback, this.abortSignal);
       } catch (err) {
         // 兜底：ToolExecutor 内部异常不应该发生，但防御性处理
         result = {

@@ -67,6 +67,56 @@ function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage
   return start > 0 ? recent.slice(start) : recent;
 }
 
+/**
+ * 切割点不能落在 tool 消息上，否则 tool_result 与它的 assistant(tool_calls) 会被拆到两侧。
+ * 优先向前退到 assistant（整组保留）；退到头仍无可丢弃消息时，向后越过这组 tool（整组丢弃）。
+ */
+function alignSplitOutsideToolResults(
+  messages: UnifiedMessage[],
+  splitAt: number,
+  contentStart: number,
+): number {
+  let back = splitAt;
+  while (back > contentStart && messages[back]?.role === 'tool') back--;
+  if (back > contentStart) return back;
+  let forward = splitAt;
+  while (forward < messages.length && messages[forward]?.role === 'tool') forward++;
+  return forward;
+}
+
+/** microcompact 后仍保留的参数：说明「对什么做了什么」，摘要与续跑依赖它们。 */
+const MICROCOMPACT_KEPT_ARG_KEYS = [
+  'path', 'file_path', 'paths', 'old_path', 'new_path', 'source', 'destination',
+  'command', 'cwd', 'pattern', 'query', 'url', 'task_id', 'action',
+] as const;
+const MICROCOMPACT_KEPT_ARG_MAX_CHARS = 200;
+const MICROCOMPACT_KEPT_ARRAY_MAX_ITEMS = 10;
+
+function truncateKeptArg(value: string): string {
+  return value.length > MICROCOMPACT_KEPT_ARG_MAX_CHARS
+    ? `${value.slice(0, MICROCOMPACT_KEPT_ARG_MAX_CHARS)}…`
+    : value;
+}
+
+function keepIdentifyingToolArgs(args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  if (!args) return kept;
+  for (const key of MICROCOMPACT_KEPT_ARG_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string') {
+      kept[key] = truncateKeptArg(value);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      kept[key] = value;
+    } else if (Array.isArray(value)) {
+      kept[key] = value
+        .filter((item): item is string => typeof item === 'string')
+        .slice(0, MICROCOMPACT_KEPT_ARRAY_MAX_ITEMS)
+        .map(truncateKeptArg);
+    }
+  }
+  return kept;
+}
+
 /** 压缩判定时可选的双轨占用输入 */
 export interface CompactionUsageOptions {
   lastApiPromptTokens?: number;
@@ -412,7 +462,10 @@ export class ContextCompactor {
       return split;
     }
 
-    const splitAt = compacted.length - minRecent;
+    const splitAt = alignSplitOutsideToolResults(compacted, compacted.length - minRecent, contentStart);
+    if (splitAt <= contentStart || splitAt >= compacted.length) {
+      return split;
+    }
     return {
       systemMessages,
       droppedMessages: compacted.slice(contentStart, splitAt),
@@ -976,7 +1029,7 @@ Continue the conversation from where it left off without asking the user any fur
     return messages.map((msg, idx) => {
       if (idx >= recentStart) return msg;
 
-      // 压缩旧的 assistant tool_calls（保留工具名，清除参数）
+      // 压缩旧的 assistant tool_calls（保留工具名与标识性参数，清除大段内容参数）
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
         const cleaned = prepareAssistantContentForHistory(
           typeof msg.content === 'string' ? msg.content : '',
@@ -984,7 +1037,7 @@ Continue the conversation from where it left off without asking the user any fur
         return {
           ...msg,
           content: cleaned,
-          toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: {} })),
+          toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: keepIdentifyingToolArgs(tc.arguments) })),
         };
       }
 
