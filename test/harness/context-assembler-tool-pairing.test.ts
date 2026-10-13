@@ -71,7 +71,7 @@ describe('coalesceToolResultsAfterAssistants', () => {
     expect(out[2]?.toolCallId).toBe('tc-1');
   });
 
-  it('normalizeMessages repairs assistant → user → tool for API', () => {
+  it('buildMessagesForLlm repairs assistant → user → tool for API', () => {
     const input: UnifiedMessage[] = [
       {
         role: 'assistant',
@@ -82,7 +82,7 @@ describe('coalesceToolResultsAfterAssistants', () => {
       { role: 'tool', toolCallId: 'tc-2', content: 'ok' },
     ];
 
-    const out = normalizeMessages(input);
+    const out = buildMessagesForLlm(normalizeMessages(input));
     const assistantIdx = out.findIndex(m => m.role === 'assistant' && m.toolCalls?.length);
     expect(assistantIdx).toBeGreaterThanOrEqual(0);
     expect(out[assistantIdx + 1]?.role).toBe('tool');

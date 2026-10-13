@@ -109,16 +109,6 @@ import {
 /** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
 const APPROX_LINES_PER_FILE_CHANGE = 60;
 
-/** 统计任务图中仍为 pending 或 running 的节点数，供 ExecutionMode 决策与图状态上报使用。 */
-function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
-  if (!snapshot) return 0;
-  let count = 0;
-  for (const node of Object.values(snapshot.nodes)) {
-    if (node.status === 'pending' || node.status === 'running') count++;
-  }
-  return count;
-}
-
 /**
  * run() 内各子模块共享的运行时依赖（由 Harness.buildRunDeps 从实例字段组装）。
  */
@@ -323,13 +313,16 @@ export class Harness {
     // W2: OFF 模式不应让 evaluate 产生任何副作用（不 submit signals、不写 state、不动 gates）。
     if (!policy.modeDecisionEngineEnabled) return;
 
-    this.submitGraphModeSignals(deps, state);
-    const graphSnapshot = deps.graphExecutor?.toSnapshot() ?? null;
-    const pendingStepCount = countPendingGraphSteps(graphSnapshot);
+    const modeSnapshot = deps.graphExecutor?.readModeSnapshot() ?? {
+      snapshot: null,
+      pendingStepCount: 0,
+      hasPendingImplementNode: false,
+    };
+    this.submitGraphModeSignals(state, modeSnapshot.snapshot, modeSnapshot.pendingStepCount);
     const graphState = {
-      active: deps.graphExecutor?.hasGraph() ?? false,
-      pendingStepCount,
-      activeGraphHasImplementNode: deps.graphExecutor?.hasPendingImplementNode() ?? false,
+      active: modeSnapshot.snapshot != null,
+      pendingStepCount: modeSnapshot.pendingStepCount,
+      activeGraphHasImplementNode: modeSnapshot.hasPendingImplementNode,
     };
     // W1: 真实派生 RuntimeExecutionState 字段，不再硬编码 stub。
     const recoveryPending = (state.pendingModeSignals ?? []).includes('recovery_pending')
@@ -418,14 +411,14 @@ export class Harness {
   }
 
   /** 若当前存在任务图，向模式决策提交 task_graph_active / pending_steps 等图相关信号。 */
-  private submitGraphModeSignals(deps: HarnessRunDeps, state: HarnessRunState): void {
-    if (!deps.graphExecutor?.hasGraph()) return;
+  private submitGraphModeSignals(
+    state: HarnessRunState,
+    snapshot: TaskGraphSnapshot | null,
+    pendingStepCount: number,
+  ): void {
+    if (!snapshot) return;
     state.submitModeSignal?.('graph_executor', 'task_graph_active');
-    const snapshot = deps.graphExecutor.toSnapshot();
-    const hasPendingNode = snapshot
-      ? Object.values(snapshot.nodes).some(node => node.status === 'pending' || node.status === 'running')
-      : false;
-    if (hasPendingNode) {
+    if (pendingStepCount > 0) {
       state.submitModeSignal?.('graph_executor', 'pending_steps');
     }
   }

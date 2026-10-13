@@ -226,10 +226,18 @@ export class CheckpointEngine {
   }
 
   /**
+   * 把已经 stage 过的 v2 状态叠进一份即将落盘的 aggregate，不再单独写文件。
+   */
+  overlayOnto(project: ProjectCheckpointV3, input: CheckpointSaveInput): ProjectCheckpointV3 {
+    return this.materializeAggregate(project, input);
+  }
+
+  /**
    * 合并保存：把 v2 附加字段写回到现有 checkpoint 文件。
    *
    * **不会清空** TaskCheckpointManager.save() 写入的 v1 字段；
    * 如果文件还不存在（v1 尚未写过），自动建立一个最小占位（只含 runtimeV2）。
+   * 与 TaskCheckpoint 同轮收尾时优先走 overlayOnto，避免双写。
    */
   async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
     this.applyInput(input);
@@ -247,6 +255,15 @@ export class CheckpointEngine {
       projectId: this.checkpointPath,
       capturedAt: this.v2State.v2UpdatedAt,
     });
+    await this.projectStore.save(this.materializeAggregate(aggregate, input));
+
+    return cloneV2(this.v2State);
+  }
+
+  private materializeAggregate(
+    aggregate: ProjectCheckpointV3,
+    input: CheckpointSaveInput,
+  ): ProjectCheckpointV3 {
     const next = cloneProjectCheckpointV3(aggregate);
     next.migration = null;
     next.snapshotMeta.capturedAt = this.v2State.v2UpdatedAt;
@@ -265,9 +282,7 @@ export class CheckpointEngine {
     if (input.taskGraphSnapshot !== undefined) next.extensions.taskGraph = input.taskGraphSnapshot;
     if (input.graphMetrics !== undefined) next.extensions.graphMetrics = input.graphMetrics;
     if (input.graphSession !== undefined) next.extensions.graphSession = input.graphSession;
-    await this.projectStore.save(next);
-
-    return cloneV2(this.v2State);
+    return next;
   }
 
   /**

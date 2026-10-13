@@ -21,6 +21,7 @@ import {
   advanceCursor,
   markGraphDone,
   markGraphFailed,
+  snapshotForMode,
   toSnapshot,
   applySnapshot,
   switchToFallbackBranch,
@@ -302,6 +303,18 @@ export class GraphExecutor {
   toSnapshot(): TaskGraphSnapshot | null {
     if (!this.graph) return null;
     return toSnapshot(this.graph);
+  }
+
+  /** 模式决策用：一次遍历同时给出快照、未完成步数和 implement 节点。 */
+  readModeSnapshot(): {
+    snapshot: TaskGraphSnapshot | null;
+    pendingStepCount: number;
+    hasPendingImplementNode: boolean;
+  } {
+    if (!this.graph) {
+      return { snapshot: null, pendingStepCount: 0, hasPendingImplementNode: false };
+    }
+    return snapshotForMode(this.graph);
   }
 
   applySnapshot(snapshot: TaskGraphSnapshot): void {

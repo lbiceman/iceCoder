@@ -48,11 +48,62 @@ function readMainConfigSync(): IceCoderConfigFile | null {
   }
 }
 
-function readDefaultProviderFromConfig(): ProviderCompactionHint | null {
+/** 配置文件同步读取的短缓存。环境变量或配置路径变化时立即失效。 */
+const CONTEXT_WINDOW_CACHE_TTL_MS = 5_000;
+
+interface CachedContextWindows {
+  at: number;
+  env: string;
+  configPath: string;
+  effective: number;
+  compaction: number;
+}
+
+let cachedContextWindows: CachedContextWindows | null = null;
+
+function computeContextWindows(): { effective: number; compaction: number } {
+  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
+  if (Number.isFinite(env) && env > 0) {
+    return { effective: env, compaction: env };
+  }
+
   const config = readMainConfigSync();
-  if (!config) return null;
-  const defaultProvider = config.providers?.find(p => p.isDefault);
-  return defaultProvider ?? null;
+  let effective = DEFAULT_EFFECTIVE_CONTEXT_WINDOW;
+  let provider: ProviderCompactionHint | null = null;
+  if (config) {
+    const defaultProvider = config.providers?.find(p => p.isDefault);
+    provider = defaultProvider ?? null;
+    if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
+      effective = defaultProvider.maxContextTokens;
+    } else {
+      let maxCtx = 0;
+      for (const p of config.providers ?? []) {
+        if (p.maxContextTokens && p.maxContextTokens > maxCtx) maxCtx = p.maxContextTokens;
+      }
+      if (maxCtx > 0) effective = maxCtx;
+    }
+  }
+
+  const cap = provider ? providerCompactionCapForProvider(provider) : null;
+  const compaction = cap == null ? effective : Math.min(effective, cap);
+  return { effective, compaction };
+}
+
+function readCachedContextWindows(): { effective: number; compaction: number } {
+  const env = process.env.ICE_CONTEXT_WINDOW || '';
+  const configPath = resolveEffectiveConfigPath();
+  const now = Date.now();
+  if (
+    cachedContextWindows
+    && now - cachedContextWindows.at < CONTEXT_WINDOW_CACHE_TTL_MS
+    && cachedContextWindows.env === env
+    && cachedContextWindows.configPath === configPath
+  ) {
+    return cachedContextWindows;
+  }
+  const computed = computeContextWindows();
+  cachedContextWindows = { at: now, env, configPath, ...computed };
+  return cachedContextWindows;
 }
 
 /** S：≤128K（含） */
@@ -86,25 +137,7 @@ export function tierFromMaxContextTokens(tokens: number): ContextWindowTier {
  * 4. DEFAULT_EFFECTIVE_CONTEXT_WINDOW
  */
 export function readEffectiveContextWindowTokens(): number {
-  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-  if (Number.isFinite(env) && env > 0) return env;
-
-  const config = readMainConfigSync();
-  if (config) {
-    const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
-    if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
-      return defaultProvider.maxContextTokens;
-    }
-    let maxCtx = 0;
-    for (const p of config.providers ?? []) {
-      if (p.maxContextTokens && p.maxContextTokens > maxCtx) {
-        maxCtx = p.maxContextTokens;
-      }
-    }
-    if (maxCtx > 0) return maxCtx;
-  }
-
-  return DEFAULT_EFFECTIVE_CONTEXT_WINDOW;
+  return readCachedContextWindows().effective;
 }
 
 /**
@@ -113,15 +146,7 @@ export function readEffectiveContextWindowTokens(): number {
  * - 否则 min(生效窗口, provider 保守 cap)，如 MiniMax → 128K
  */
 export function readCompactionContextWindowTokens(): number {
-  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-  if (Number.isFinite(env) && env > 0) return env;
-
-  const effective = readEffectiveContextWindowTokens();
-  const provider = readDefaultProviderFromConfig();
-  if (!provider) return effective;
-  const cap = providerCompactionCapForProvider(provider);
-  if (cap == null) return effective;
-  return Math.min(effective, cap);
+  return readCachedContextWindows().compaction;
 }
 
 /** 当前进程生效窗口对应的 S/M/L/XL（供 Harness / 记忆预算等按档位查表） */

@@ -109,7 +109,10 @@ export class TaskCheckpointManager {
     this.store.setPersistBlocked(blocked);
   }
 
-  async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
+  async save(
+    update: TaskCheckpointUpdate,
+    decorate?: (project: ProjectCheckpointV3) => ProjectCheckpointV3,
+  ): Promise<TaskCheckpoint> {
     const existingProject = await this.store.load();
     const now = new Date().toISOString();
     const completionFacts = CompletionFactsView.fromCompletionSnapshot({
@@ -119,7 +122,7 @@ export class TaskCheckpointManager {
         ?? [],
     });
     const view = toTaskCheckpointView(update, existingProject, now, completionFacts);
-    const projectCheckpoint = buildNativeProjectCheckpoint(
+    const built = buildNativeProjectCheckpoint(
       update,
       existingProject,
       view,
@@ -127,6 +130,7 @@ export class TaskCheckpointManager {
       now,
       completionFacts,
     );
+    const projectCheckpoint = decorate ? decorate(built) : built;
     if (!this.store.isPersistBlocked()) {
       await this.store.save(projectCheckpoint);
     }

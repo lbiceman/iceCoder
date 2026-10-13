@@ -333,6 +333,17 @@ const EMBEDDED_TOOL_PARSERS: ReadonlyArray<{
   { parse: parseFencedJsonBlocks, explicitMarkup: false },
 ];
 
+/** 正文里是否出现工具标记。只做正则，不解析。 */
+export function contentMightContainEmbeddedToolCalls(content: string): boolean {
+  COMPACT_TOOL_SUMMARY_RE.lastIndex = 0;
+  return TOOL_JSON_KEY_HINT.test(content)
+    || /<tool[_-]?call>/i.test(content)
+    || /<invoke\b/i.test(content)
+    || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
+    || /\[<[a-zA-Z_][\w.-]*>/i.test(content)
+    || COMPACT_TOOL_SUMMARY_RE.test(content);
+}
+
 function collectEmbeddedToolCalls(text: string): EmbeddedToolCallMatch[] {
   const matches: EmbeddedToolCallMatch[] = [];
   const overlaps = (a: TextSpan, b: TextSpan): boolean =>
@@ -351,13 +362,25 @@ function collectEmbeddedToolCalls(text: string): EmbeddedToolCallMatch[] {
   return matches;
 }
 
+/** 一次扫描的结果，供执行过滤和剥离复用，避免对同一正文重复跑全部解析器。 */
+export interface EmbeddedToolCallInspection {
+  matches: EmbeddedToolCallMatch[];
+}
+
+export function inspectEmbeddedToolCalls(text: string): EmbeddedToolCallInspection {
+  return { matches: collectEmbeddedToolCalls(text) };
+}
+
+function callsFromInspection(inspection: EmbeddedToolCallInspection): ParsedEmbeddedToolCalls {
+  return {
+    calls: inspection.matches.map(m => m.call),
+    spans: mergeSpans(inspection.matches.map(m => m.span)),
+  };
+}
+
 /** 从正文中解析所有可识别的嵌入工具调用（去重重叠区间）。 */
 export function parseEmbeddedToolCallsFromText(text: string): ParsedEmbeddedToolCalls {
-  const matches = collectEmbeddedToolCalls(text);
-  return {
-    calls: matches.map(m => m.call),
-    spans: mergeSpans(matches.map(m => m.span)),
-  };
+  return callsFromInspection(inspectEmbeddedToolCalls(text));
 }
 
 /**
@@ -383,11 +406,12 @@ function proseOutsideSpans(text: string, spans: TextSpan[]): string {
  * - 裸 JSON / fenced JSON 仅在正文几乎只有工具块时采信；
  * - 传入 allowedToolNames 时，丢弃不在本轮工具列表中的名字。
  */
-export function parseEmbeddedToolCallsForExecution(
+export function executableCallsFromInspection(
   text: string,
+  inspection: EmbeddedToolCallInspection,
   allowedToolNames?: ReadonlySet<string>,
 ): ToolCall[] {
-  const matches = collectEmbeddedToolCalls(text);
+  const matches = inspection.matches;
   if (matches.length === 0) return [];
   const proseLength = proseOutsideSpans(text, matches.map(m => m.span)).length;
   const jsonAllowed = proseLength <= JSON_TOOL_CALL_MAX_SURROUNDING_PROSE;
@@ -395,6 +419,13 @@ export function parseEmbeddedToolCallsForExecution(
     .filter(m => m.explicitMarkup || jsonAllowed)
     .filter(m => !allowedToolNames || allowedToolNames.has(m.call.name))
     .map(m => m.call);
+}
+
+export function parseEmbeddedToolCallsForExecution(
+  text: string,
+  allowedToolNames?: ReadonlySet<string>,
+): ToolCall[] {
+  return executableCallsFromInspection(text, inspectEmbeddedToolCalls(text), allowedToolNames);
 }
 
 /** 解析失败的工具标记外，正文（去空白）超过该长度即视为在讲解格式，不触发恢复。 */
@@ -428,18 +459,17 @@ export function containsExecutableEmbeddedToolCalls(content: string | undefined)
 /** 正文是否含可识别的嵌入工具调用。 */
 export function containsEmbeddedToolCalls(content: string | undefined): boolean {
   if (!content?.trim()) return false;
-  return parseEmbeddedToolCallsFromText(content).calls.length > 0
-    || TOOL_JSON_KEY_HINT.test(content)
-    || /<tool[_-]?call>/i.test(content)
-    || /<invoke\b/i.test(content)
-    || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
-    || /\[<[a-zA-Z_][\w.-]*>/i.test(content)
-    || COMPACT_TOOL_SUMMARY_RE.test(content);
+  return contentMightContainEmbeddedToolCalls(content);
 }
 
-/** 移除正文中所有嵌入工具调用片段。 */
-export function stripEmbeddedToolCalls(content: string): string {
-  const { spans } = parseEmbeddedToolCallsFromText(content);
+/** 移除正文中所有嵌入工具调用片段。传入已有扫描结果时不再解析。 */
+export function stripEmbeddedToolCalls(
+  content: string,
+  inspection?: EmbeddedToolCallInspection,
+): string {
+  const spans = inspection
+    ? mergeSpans(inspection.matches.map(m => m.span))
+    : parseEmbeddedToolCallsFromText(content).spans;
   if (spans.length === 0) {
     // 启发式：去掉像 tool JSON 的对象（即使 parse 失败）
     return stripLikelyToolJsonObjects(content).trim();

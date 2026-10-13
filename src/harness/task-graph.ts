@@ -468,31 +468,50 @@ export function needsRecovery(graph: TaskGraphData): GraphRecoverySignal | null 
 // Snapshot (Checkpoint persistence)
 // ═══════════════════════════════════════════════
 
-export function toSnapshot(graph: TaskGraphData): TaskGraphSnapshot {
+/** 一次遍历节点：快照、未完成步数、是否还有 implement 节点。 */
+export function snapshotForMode(graph: TaskGraphData): {
+  snapshot: TaskGraphSnapshot;
+  pendingStepCount: number;
+  hasPendingImplementNode: boolean;
+} {
   const nodes: TaskGraphSnapshot['nodes'] = {};
+  let pendingStepCount = 0;
+  let hasPendingImplementNode = false;
   for (const [id, node] of Object.entries(graph.nodes)) {
     nodes[id] = { status: node.status, retryCount: node.retryCount, error: node.error };
+    if (node.status === 'pending' || node.status === 'running') {
+      pendingStepCount++;
+      if (node.type === 'edit') hasPendingImplementNode = true;
+    }
   }
 
   return {
-    version: TASK_GRAPH_SCHEMA_VERSION,
-    graphId: graph.graphId,
-    goal: graph.goal,
-    intent: graph.intent,
-    status: graph.status,
-    progress: graph.progress,
-    cursor: {
-      branchId: graph.cursor.branchId,
-      nodeId: graph.cursor.nodeId,
-      nodeIndex: graph.cursor.nodeIndex,
-      completedNodeIds: [...graph.cursor.completedNodeIds],
-      skippedNodeIds: [...graph.cursor.skippedNodeIds],
+    pendingStepCount,
+    hasPendingImplementNode,
+    snapshot: {
+      version: TASK_GRAPH_SCHEMA_VERSION,
+      graphId: graph.graphId,
+      goal: graph.goal,
+      intent: graph.intent,
+      status: graph.status,
+      progress: graph.progress,
+      cursor: {
+        branchId: graph.cursor.branchId,
+        nodeId: graph.cursor.nodeId,
+        nodeIndex: graph.cursor.nodeIndex,
+        completedNodeIds: [...graph.cursor.completedNodeIds],
+        skippedNodeIds: [...graph.cursor.skippedNodeIds],
+      },
+      nodes,
+      nodeHistory: graph.nodeHistory.map(h => ({ ...h })),
+      branchHistory: graph.branchHistory.map(h => ({ ...h })),
+      updatedAt: graph.updatedAt,
     },
-    nodes,
-    nodeHistory: graph.nodeHistory.map(h => ({ ...h })),
-    branchHistory: graph.branchHistory.map(h => ({ ...h })),
-    updatedAt: graph.updatedAt,
   };
+}
+
+export function toSnapshot(graph: TaskGraphData): TaskGraphSnapshot {
+  return snapshotForMode(graph).snapshot;
 }
 
 export function applySnapshot(graph: TaskGraphData, snapshot: TaskGraphSnapshot): void {

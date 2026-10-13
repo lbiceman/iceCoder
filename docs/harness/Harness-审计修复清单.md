@@ -259,14 +259,31 @@
 
 ## P2 性能
 
-- [ ] **48. 每条 shell 命令前后全仓扫描 + 哈希**：`harness-tool-executor.ts:633-642`、`:736-738` → `workspace-command-touch.ts:149-210`。改为 mtime/size 差分，或仅扫描命令可能写入的子树。
-- [ ] **49. 每轮 checkpoint 双写 pretty JSON**：`checkpoint.ts:112-132` + `checkpoint-engine.ts:233-267` + `project-checkpoint-store.ts:322`（`null, 2`）。合并为单次持久化，默认 compact JSON。
-- [ ] **50. 压缩判定重复估算 + 同步读配置**：`harness-compaction.ts:135-138`；`context-compactor.ts:294-311`、`:359-366`、`:1325-1327`；`context-window-tier.ts:42-48`、`:88-107`。单次 usage 快照下传；窗口值短 TTL 缓存；split 用累计估算。
-- [ ] **51. `finalizeMessagesForApi` 执行两次**：`harness-api-messages.ts:41` + `context-assembler.ts:290`、`:305-308`。只保留外层一次。
-- [ ] **52. 文本抢救对同一正文解析最多 4 次**：`text-tool-call-salvage.ts:63-100`；`text-format-tool-call-parsers.ts:349-365`。解析一次复用结果。
-- [ ] **53. ToolExecutor 对永久错误也重试 3 次**：`src/tools/tool-executor.ts:21-26`、`:82-116`。区分可重试错误；abort 时立即停止。
-- [ ] **54. 轮询与同步 IO**：`agents/agent-spawner.ts:444-455`（100ms `setInterval`）改为事件唤醒；`task-graph-builder.ts:50-107`（`discoverRepoShape` 同步 fs）改异步。
-- [ ] **55. 每轮两次遍历图节点**：`harness.ts:113-120`（`countPendingGraphSteps`）与 `:420-430`（`submitGraphModeSignals`）各调一次 `toSnapshot()` 并遍历。合并成一次。
+> 回归：`test/eval/harness-audit-p2-eval.test.ts`（`npx vitest --run test/eval`）。
+
+- [x] **48. 每条 shell 命令前后全仓扫描 + 哈希**
+  - **修复说明**：能从命令里抽出写入路径时只扫描这些路径。未知写入（如 `npm test`）仍全树遍历，但 size/mtime/ctime 与上一份清单一致时复用 contentHash，不再读文件。mtime 变了仍会哈希，避免把「只改时间戳、内容没变」算成改动。
+
+- [x] **49. 每轮 checkpoint 双写 pretty JSON**
+  - **修复说明**：`step_completed` / `verification_failed` / `final_draft` 与任务 checkpoint 叠进同一次 `ProjectCheckpointStore.save`。落盘改为紧凑 JSON（不再 `null, 2`）。free 段本来就不落 `step_completed` 的行为保持不变。单独的 `tool_failed` / `compaction` 仍各自写一次。
+
+- [x] **50. 压缩判定重复估算 + 同步读配置**
+  - **修复说明**：`maybeCompact` 先算一次 usage 和窗口，再传给微压缩 / 硬压缩判定。窗口值按环境变量 + 配置路径缓存 5 秒。split 与续跑收缩按消息对象累计 token，同一条消息不重复扫正文。
+
+- [x] **51. `finalizeMessagesForApi` 执行两次**
+  - **修复说明**：`normalizeMessages` 不再调用 `finalizeMessagesForApi`。发送管道只在 `buildMessagesForLlm` 做一次配对。
+
+- [x] **52. 文本抢救对同一正文解析最多 4 次**
+  - **修复说明**：`inspectEmbeddedToolCalls` 扫描一次，执行过滤和剥离共用这次结果。思考块吸收后正文没变就不再解析第二遍。
+
+- [x] **53. ToolExecutor 对永久错误也重试 3 次**
+  - **修复说明**：只有网络类 / `EBUSY` / 超时文案才重试。`TypeError`、参数错误、`ENOENT` 等立刻失败。重试等待可被 abort 打断，下一轮不再发起调用。
+
+- [x] **54. 轮询与同步 IO**
+  - **修复说明**：`check_agent` 的等待改为子 Agent 结束时唤醒，到点仍按 `waitMs` 返回。`discoverRepoShape` 改为 `fs.promises`；`buildGraph` 不再同步读仓库，需要形态时由调用方先 `await discoverRepoShape()`。
+
+- [x] **55. 每轮两次遍历图节点**
+  - **修复说明**：`snapshotForMode` 一次遍历同时产出快照、未完成步数和 implement 节点。模式评估只调 `GraphExecutor.readModeSnapshot()`。
 
 ---
 

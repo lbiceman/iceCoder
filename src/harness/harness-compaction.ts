@@ -130,9 +130,14 @@ export async function maybeCompact(
 
   deps.contextCompactor.resetMicroCompactRound();
 
-  const usageOptions = buildUsageOptions(args);
+  const contextWindowTokens = readEffectiveContextWindowTokens();
+  const usageOptions: CompactionUsageOptions = {
+    ...buildUsageOptions(args),
+    contextWindowTokens,
+  };
   const tools = usageOptions.tools;
   const usage = resolveCompactionUsage({ messages, ...usageOptions });
+  usageOptions.usage = usage;
 
   const needsHard = deps.contextCompactor.needsCompaction(messages, usageOptions);
   const needsMicro = deps.contextCompactor.needsMicroCompaction(messages, usageOptions);

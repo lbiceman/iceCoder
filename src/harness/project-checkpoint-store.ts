@@ -390,7 +390,7 @@ export class ProjectCheckpointStore {
    */
   private async recoverableReplace(checkpoint: ProjectCheckpointV3): Promise<string> {
     const tmp = `${this.checkpointPath}.${randomUUID()}.tmp`;
-    const serialized = `${JSON.stringify(checkpoint, null, 2)}\n`;
+    const serialized = `${JSON.stringify(checkpoint)}\n`;
     const expectedHash = sha256(serialized);
     try {
       await fs.writeFile(tmp, serialized, { encoding: 'utf-8', flag: 'wx' });

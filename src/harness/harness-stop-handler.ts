@@ -4,7 +4,6 @@ import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint
 import { buildLlmRoundLogFields } from './harness-llm-log.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
-import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
@@ -74,8 +73,8 @@ export async function handleHarnessStop(
     messages,
     runtimeState,
     reason,
+    'final_draft',
   );
-  await resilienceSaveCheckpoint(deps, 'final_draft', runtimeState, reason);
   if (runtimeState) {
     recordTelemetrySummary(deps, reason, runtimeState, {
       status: completionStatus,

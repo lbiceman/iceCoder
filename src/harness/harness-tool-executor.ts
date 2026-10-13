@@ -45,6 +45,7 @@ import {
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 import {
   diffInventoryTouchedPaths,
+  extractLikelyWritePathsFromCommand,
   isShellWorkspaceTouchTool,
   listWorkspaceFileInventory,
   rememberBackgroundCommandInventory,
@@ -236,6 +237,15 @@ export interface ToolExecutionStats {
 
 const taskStateInventoryScopes = new WeakMap<TaskState, string>();
 let taskStateInventoryScopeSequence = 0;
+
+/** 命令里能看出写入目标时只扫描这些路径；npm test 这类未知写入仍全树扫描。 */
+function inventoryScopeForToolCall(tc: ToolCall): string[] | undefined {
+  if (tc.name !== 'run_command' && tc.name !== 'shell_exec') return undefined;
+  const command = extractRunCommand(tc.arguments);
+  if (!command) return undefined;
+  const paths = extractLikelyWritePathsFromCommand(command);
+  return paths.length > 0 ? paths : undefined;
+}
 
 function commandInventoryScopeFor(
   deps: ToolExecutorDeps,
@@ -683,7 +693,9 @@ export async function executeToolCallsStreaming(
       rememberPreCommandInventory(
         commandInventoryScope,
         tc.id,
-        await listWorkspaceFileInventory(deps.workspaceRoot),
+        await listWorkspaceFileInventory(deps.workspaceRoot, {
+          scopeRelPaths: inventoryScopeForToolCall(tc),
+        }),
       );
     }
 
@@ -777,7 +789,10 @@ export async function executeToolCallsStreaming(
     const inventoryBefore = preInv ?? backgroundInv;
     let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
     if (inventoryBefore) {
-      const after = await listWorkspaceFileInventory(deps.workspaceRoot);
+      const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
+        baseline: inventoryBefore,
+        scopeRelPaths: inventoryBefore.scopeRelPaths,
+      });
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
       const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;

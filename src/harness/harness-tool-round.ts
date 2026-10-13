@@ -668,8 +668,15 @@ export async function runHarnessToolRound(
     syncExecutionModeLoopState(deps.loopController, state);
   }
 
-  await saveTaskCheckpoint(deps, 'running', resolveCheckpointUserGoal(state, userMessage), msgs, state);
-  await resilienceSaveCheckpoint(deps, 'step_completed', state);
+  await saveTaskCheckpoint(
+    deps,
+    'running',
+    resolveCheckpointUserGoal(state, userMessage),
+    msgs,
+    state,
+    undefined,
+    'step_completed',
+  );
 
   onStep?.({
     type: 'context_usage',

@@ -312,6 +312,7 @@ export class AgentSpawner {
   private readonly maxPerRun: number;
   private readonly leases: WriteLeaseRegistry;
   private readonly runs = new Map<string, AgentRun>();
+  private readonly agentTerminalWaiters = new Map<string, Array<() => void>>();
   private readonly outcomes = new Map<string, PendingOutcome>();
   private readonly finishedViews = new Map<string, AgentView>();
   private readonly backgroundHub: AgentBackgroundHub;
@@ -449,15 +450,32 @@ export class AgentSpawner {
   private waitForAgentTerminal(agentId: string, waitMs: number): Promise<void> {
     if (!this.runs.has(agentId)) return Promise.resolve();
     return new Promise<void>((resolve) => {
-      // 用真实时钟轮询；后台子 Agent 同一进程内跑完即从 runs 移除。
-      const startedAt = Date.now();
-      const timer = setInterval(() => {
-        if (!this.runs.has(agentId) || Date.now() - startedAt >= waitMs) {
-          clearInterval(timer);
-          resolve();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const current = this.agentTerminalWaiters.get(agentId);
+        if (current) {
+          const index = current.indexOf(finish);
+          if (index >= 0) current.splice(index, 1);
+          if (current.length === 0) this.agentTerminalWaiters.delete(agentId);
         }
-      }, 100);
+        resolve();
+      };
+      const waiters = this.agentTerminalWaiters.get(agentId) ?? [];
+      waiters.push(finish);
+      this.agentTerminalWaiters.set(agentId, waiters);
+      const timer = setTimeout(finish, waitMs);
+      if (!this.runs.has(agentId)) finish();
     });
+  }
+
+  private notifyAgentTerminal(agentId: string): void {
+    const waiters = this.agentTerminalWaiters.get(agentId);
+    if (!waiters?.length) return;
+    this.agentTerminalWaiters.delete(agentId);
+    for (const wake of [...waiters]) wake();
   }
 
   private finishedOutput(agentId: string, view: AgentView): string {
@@ -585,6 +603,7 @@ export class AgentSpawner {
         this.leases.releaseAgent(agentId);
         if (run.updateTimer) clearTimeout(run.updateTimer);
         this.runs.delete(agentId);
+        this.notifyAgentTerminal(agentId);
       }
     };
 

@@ -1,5 +1,7 @@
 import type { UnifiedMessage } from '../llm/types.js';
+import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
 import type { TaskCheckpointManager, TaskCheckpointStatus, TaskCheckpointUpdate } from './checkpoint.js';
+import type { CheckpointEngine, CheckpointSaveInput } from './checkpoint-engine.js';
 import type { LoopController } from './loop-controller.js';
 import type { RepoContext } from './repo-context.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
@@ -17,9 +19,11 @@ import type {
 import type { VerificationPlanResolution } from './verification-plan.js';
 import type { VerificationRuntimeState } from './verification-state.js';
 import { isVerificationFresh } from './verification-state.js';
+import { buildExecutionModeCheckpointState } from './harness-resilience.js';
 
 export interface CheckpointDeps {
   checkpointManager?: TaskCheckpointManager;
+  checkpointEngine?: CheckpointEngine;
   loopController: LoopController;
   runtimeTelemetry?: RuntimeTelemetry;
   enqueueCheckpointPersist: <T>(task: () => Promise<T>) => Promise<T>;
@@ -47,11 +51,13 @@ export async function saveTaskCheckpoint(
   messages: UnifiedMessage[],
   runtimeState: CheckpointRuntimeState | undefined,
   stopReason?: StopReason,
+  resilienceTrigger?: CheckpointSaveTrigger,
 ): Promise<void> {
   if (!deps.checkpointManager || !runtimeState) return;
 
   await deps.enqueueCheckpointPersist(async () => {
     try {
+      const resilienceInput = resilienceOverlayInput(deps, runtimeState, stopReason, resilienceTrigger);
       const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
         .filter(([, count]) => count > 0)
         .map(([signature, count]) => `${signature} (x${count})`);
@@ -89,11 +95,38 @@ export async function saveTaskCheckpoint(
           failedToolCallSignatures: Object.fromEntries(runtimeState.failedToolCallSignatures),
         },
       };
-      await deps.checkpointManager!.save(checkpointSave);
+      await deps.checkpointManager!.save(
+        checkpointSave,
+        resilienceInput
+          ? (project) => deps.checkpointEngine!.overlayOnto(project, resilienceInput)
+          : undefined,
+      );
     } catch (err) {
       console.warn('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
     }
   });
+}
+
+function resilienceOverlayInput(
+  deps: CheckpointDeps,
+  runtimeState: CheckpointRuntimeState,
+  stopReason: StopReason | undefined,
+  trigger: CheckpointSaveTrigger | undefined,
+): CheckpointSaveInput | undefined {
+  const engine = deps.checkpointEngine;
+  if (!trigger || !engine || !engine.shouldPersistOnTrigger(trigger)) return undefined;
+  const run = runtimeState as HarnessRunState;
+  const input: CheckpointSaveInput = {
+    trigger,
+    branchBudget: runtimeState.branchBudget,
+    executionModeState: buildExecutionModeCheckpointState(run),
+    verificationOutputTail: run.verificationOutputBuffer?.snapshot(),
+    rebuildEscalationInjections: run.rebuildEscalationInjections ?? 0,
+    parallelBudgetBlockHintInjected: run.parallelBudgetBlockHintInjected ?? false,
+    lastStopReason: stopReason,
+  };
+  engine.stage(input);
+  return input;
 }
 
 export function recordTelemetrySummary(

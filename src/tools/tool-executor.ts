@@ -20,6 +20,58 @@ import {
 
 const TOOL_ABORTED_MESSAGE = '工具执行已中止 (aborted)';
 
+const RETRYABLE_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EAGAIN',
+  'EBUSY',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EADDRINUSE',
+  'ENOTFOUND',
+]);
+
+const PERMANENT_ERROR_CODES = new Set([
+  'ENOENT',
+  'EACCES',
+  'EPERM',
+  'EISDIR',
+  'ENOTDIR',
+  'EINVAL',
+  'EEXIST',
+  'ERR_INVALID_ARG_TYPE',
+]);
+
+/**
+ * 只有暂时性故障才重试。参数错误、路径错误、类型错误立刻失败。
+ * 未归类的异常默认不重试，避免永久错误打满 maxRetries。
+ */
+export function isRetryableToolError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string') {
+    if (PERMANENT_ERROR_CODES.has(code)) return false;
+    if (RETRYABLE_ERROR_CODES.has(code)) return true;
+  }
+  if (
+    error instanceof TypeError
+    || error instanceof SyntaxError
+    || error instanceof ReferenceError
+    || error instanceof RangeError
+  ) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (/must be of type|Unknown tool|Input validation failed|ENOENT|EACCES|EPERM|no such file|not found|invalid argument/i.test(message)) {
+    return false;
+  }
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|network|timeout|timed out|\b429\b|\b502\b|\b503\b|\b504\b|temporar|EAGAIN|EBUSY/i.test(message);
+}
+
 /** 超时或外部中止：不可重试，直接返回失败。 */
 class ToolInterruptedError extends Error {}
 
@@ -122,13 +174,12 @@ export class ToolExecutor {
           lastError = `${lastError} — Likely parameter name mismatch. Tool "${toolCall.name}" accepts: [${expectedParams.join(', ')}]. Received: [${receivedParams.join(', ') || '(none)'}].`;
         }
 
-        if (attempt < this.config.maxRetries) {
-          const delay = Math.min(
-            this.config.retryBaseDelay * Math.pow(2, attempt),
-            this.config.retryMaxDelay,
-          );
-          await this.sleep(delay);
-        }
+        if (!isRetryableToolError(error) || attempt >= this.config.maxRetries) break;
+        const delay = Math.min(
+          this.config.retryBaseDelay * Math.pow(2, attempt),
+          this.config.retryMaxDelay,
+        );
+        await this.sleep(delay, signal);
       }
     }
 
@@ -167,7 +218,17 @@ export class ToolExecutor {
     }
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0 || signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(finish, ms);
+      const onAbort = () => finish();
+      function finish(): void {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }

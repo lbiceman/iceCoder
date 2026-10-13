@@ -18,7 +18,6 @@ import {
   isReasoningOnlyResponse,
 } from './incomplete-completion.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
-import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
@@ -494,8 +493,9 @@ export async function handleNoToolCalls(
         resolveCheckpointUserGoal(state, userMessage),
         msgs,
         state,
+        undefined,
+        'verification_failed',
       );
-      await resilienceSaveCheckpoint(deps, 'verification_failed', state);
       state.transition = 'no_tool_execution_recovery';
       return { action: 'continue' };
     }
@@ -652,12 +652,7 @@ async function finishNoToolRound(
     state.messages,
     state,
     terminal.stopReason,
-  );
-  await resilienceSaveCheckpoint(
-    deps,
     'final_draft',
-    state,
-    terminal.stopReason,
   );
   recordTelemetrySummary(deps, terminal.stopReason, state, {
     status: terminal.status,

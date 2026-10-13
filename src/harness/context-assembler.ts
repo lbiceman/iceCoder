@@ -286,8 +286,8 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
     result.push(msg);
   }
 
-  // 第二遍：收拢 tool 结果到 assistant 后，再兜底配对（避免 resume 块等 user 插在中间 → 各厂商 400/2013）
-  return finalizeMessagesForApi(result);
+  // tool 配对由发送管道外层的 finalizeMessagesForApi 做一次，这里不再重复。
+  return result;
 }
 
 /** 剥离 assistant 上的 reasoningContent（旧 checkpoint / 结构化会话兼容；思考链仅当轮流式 UI）。 */

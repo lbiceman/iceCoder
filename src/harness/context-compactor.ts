@@ -27,7 +27,12 @@
 import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
-import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
+import {
+  estimateMessageTokens,
+  estimateMessagesTokens,
+  resolveCompactionUsage,
+  type CompactionUsageSnapshot,
+} from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import { CompletionFactsView } from './completion-facts-view.js';
@@ -117,10 +122,33 @@ function keepIdentifyingToolArgs(args: Record<string, unknown> | undefined): Rec
   return kept;
 }
 
+/** 同一批消息只估算一次，split / 收缩循环按对象身份复用。 */
+class MessageTokenCache {
+  private readonly values = new WeakMap<UnifiedMessage, number>();
+
+  tokens(message: UnifiedMessage): number {
+    const cached = this.values.get(message);
+    if (cached !== undefined) return cached;
+    const estimated = estimateMessageTokens(message);
+    this.values.set(message, estimated);
+    return estimated;
+  }
+
+  sum(messages: readonly UnifiedMessage[]): number {
+    let total = 0;
+    for (const message of messages) total += this.tokens(message);
+    return total;
+  }
+}
+
 /** 压缩判定时可选的双轨占用输入 */
 export interface CompactionUsageOptions {
   lastApiPromptTokens?: number;
   tools?: ToolDefinition[];
+  /** 调用方已经算好的占用，避免同一轮重复估算。 */
+  usage?: CompactionUsageSnapshot;
+  /** 调用方已经读到的上下文窗口，避免重复同步读配置。 */
+  contextWindowTokens?: number;
 }
 
 /** {@link compact} / {@link compactWithSessionMemory} 运行时选项 */
@@ -370,11 +398,16 @@ export class ContextCompactor {
   }
 
   private resolveEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    if (options?.usage) return options.usage.effectiveUsed;
     return resolveCompactionUsage({
       messages,
       tools: options?.tools,
       lastApiPromptTokens: options?.lastApiPromptTokens,
     }).effectiveUsed;
+  }
+
+  private resolveContextWindow(options?: CompactionUsageOptions): number {
+    return options?.contextWindowTokens ?? getContextWindow();
   }
 
   /**
@@ -383,7 +416,7 @@ export class ContextCompactor {
    */
   needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     if (!this.canMicroCompact()) return false;
-    const ctxWindow = getContextWindow();
+    const ctxWindow = this.resolveContextWindow(options);
     const effectiveUsed = this.resolveEffectiveUsed(messages, options);
     const microThreshold = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
     return effectiveUsed >= microThreshold;
@@ -435,7 +468,7 @@ export class ContextCompactor {
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
   needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
-    const ctxWindow = getContextWindow();
+    const ctxWindow = this.resolveContextWindow(options);
     const effectiveUsed = this.resolveEffectiveUsed(messages, options);
     const remaining = ctxWindow - effectiveUsed;
     const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
@@ -551,12 +584,15 @@ export class ContextCompactor {
       ...recent,
     ];
 
+    const tokenCache = new MessageTokenCache();
     let result = assemble();
+    let resultTokens = tokenCache.sum(result);
     let shrinkPass = 0;
-    while (estimateTokens(result) > targetTokens && recent.length > 8 && shrinkPass < 12) {
+    while (resultTokens > targetTokens && recent.length > 8 && shrinkPass < 12) {
       const drop = Math.max(4, Math.ceil(recent.length * 0.12));
       recent = trimLeadingOrphanToolMessages(recent.slice(drop));
       result = assemble();
+      resultTokens = tokenCache.sum(result);
       shrinkPass++;
     }
 
@@ -1165,7 +1201,8 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 计算初始切割点（token 预算优先，≥10K token, ≥5 条消息, ≤40K token）
-    let splitAt = this.findSplitByTokenBudget(messages, contentStart);
+    const tokenCache = new MessageTokenCache();
+    let splitAt = this.findSplitByTokenBudget(messages, contentStart, tokenCache);
 
     // 保护长篇分析文本（assistant 无 toolCalls 且 content > 500 字符），
     // 这类消息通常是分析报告，压缩后会丢失关键上下文导致重复分析。
@@ -1368,7 +1405,11 @@ Continue the conversation from where it left off without asking the user any fur
    *
    * 同时受 keepRecent（消息数上限）约束。
    */
-  private findSplitByTokenBudget(messages: UnifiedMessage[], contentStart: number): number {
+  private findSplitByTokenBudget(
+    messages: UnifiedMessage[],
+    contentStart: number,
+    tokenCache: MessageTokenCache,
+  ): number {
     let tokenCount = 0;
     let messageCount = 0;
     const minTokens = this.config.keepRecentMinTokens;
@@ -1376,9 +1417,9 @@ Continue the conversation from where it left off without asking the user any fur
     const minMessages = this.config.keepRecentMinMessages;
     const maxMessages = this.config.keepRecent;
 
-    // 从末尾向前扫描
+    // 从末尾向前累计单条估算，同一条消息不重复扫描正文。
     for (let i = messages.length - 1; i >= contentStart; i--) {
-      const msgTokens = estimateTokens([messages[i]]);
+      const msgTokens = tokenCache.tokens(messages[i]!);
       tokenCount += msgTokens;
       messageCount++;
 

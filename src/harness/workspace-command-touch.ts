@@ -39,10 +39,25 @@ const SKIP_DIRS = new Set([
 export interface WorkspaceFileInventory extends Map<string, {
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
   contentHash: string;
 }> {
   /** false 表示扫描期间至少一个目录或候选文件无法读取。 */
   complete: boolean;
+  /** 本次扫描实际读取文件内容的次数。元数据未变时为 0。 */
+  contentReads: number;
+  /**
+   * 非空时清单只覆盖这些相对路径（命令能解析出的写入目标）。
+   * 未设置表示全树扫描。前后两次对比必须使用同一范围。
+   */
+  scopeRelPaths?: string[];
+}
+
+export interface ListWorkspaceInventoryOptions {
+  /** 元数据（size/mtime/ctime）未变时复用 contentHash，不再读文件。 */
+  baseline?: WorkspaceFileInventory;
+  /** 只扫描这些相对路径；为空则全树。 */
+  scopeRelPaths?: readonly string[];
 }
 
 const preCommandInventories = new Map<string, WorkspaceFileInventory>();
@@ -65,6 +80,9 @@ const contentHashCache = new Map<string, {
   ctimeMs: number;
   contentHash: string;
 }>();
+
+/** 最近一次完整扫描，供下一条命令跳过未变化文件的内容读取。只保留一个工作区。 */
+let lastFullInventory: { root: string; inventory: WorkspaceFileInventory } | null = null;
 
 function inventoryKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
@@ -146,16 +164,105 @@ export function isShellWorkspaceTouchTool(
   return true;
 }
 
-export async function listWorkspaceFileInventory(workspaceRoot: string): Promise<WorkspaceFileInventory> {
-  const out = Object.assign(new Map(), { complete: true }) as WorkspaceFileInventory;
-  const root = path.resolve(workspaceRoot);
-  const files: Array<{ abs: string; rel: string }> = [];
+function emptyInventory(scopeRelPaths?: string[]): WorkspaceFileInventory {
+  return Object.assign(new Map(), {
+    complete: true,
+    contentReads: 0,
+    scopeRelPaths,
+  }) as WorkspaceFileInventory;
+}
 
-  const walk = async (dir: string): Promise<void> => {
+function cloneInventory(source: WorkspaceFileInventory): WorkspaceFileInventory {
+  const copy = emptyInventory(source.scopeRelPaths ? [...source.scopeRelPaths] : undefined);
+  copy.complete = source.complete;
+  for (const [rel, info] of source) copy.set(rel, { ...info });
+  return copy;
+}
+
+function isEnoent(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { code?: string }).code === 'ENOENT';
+}
+
+function resolveScopePaths(root: string, relPaths: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of relPaths) {
+    const normalized = raw.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalized || normalized.includes('\0')) continue;
+    const abs = path.resolve(root, normalized);
+    const rel = path.relative(root, abs);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    const posix = rel.split(path.sep).join('/');
+    if (seen.has(posix)) continue;
+    seen.add(posix);
+    out.push(posix);
+  }
+  return out;
+}
+
+async function recordInventoryFile(
+  abs: string,
+  rel: string,
+  out: WorkspaceFileInventory,
+  baseline: WorkspaceFileInventory | undefined,
+  reads: { n: number },
+  missingOk: boolean,
+): Promise<void> {
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fs.stat(abs);
+  } catch (error) {
+    if (missingOk && isEnoent(error)) return;
+    out.complete = false;
+    return;
+  }
+  if (!stat.isFile()) return;
+  const prev = baseline?.get(rel);
+  let contentHash: string;
+  if (
+    prev
+    && prev.size === stat.size
+    && prev.mtimeMs === stat.mtimeMs
+    && prev.ctimeMs === stat.ctimeMs
+  ) {
+    contentHash = prev.contentHash;
+  } else if (stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES) {
+    contentHash = `metadata:${stat.size}:${stat.mtimeMs}`;
+  } else {
+    const cached = takeCachedContentHash(abs, stat);
+    if (cached) {
+      contentHash = cached;
+    } else {
+      reads.n += 1;
+      contentHash = createHash('sha256').update(await fs.readFile(abs)).digest('hex');
+    }
+    rememberCachedContentHash(abs, {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      contentHash,
+    });
+  }
+  out.set(rel, {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    contentHash,
+  });
+}
+
+async function collectInventoryFiles(
+  root: string,
+  dir: string,
+  out: WorkspaceFileInventory,
+): Promise<Array<{ abs: string; rel: string }>> {
+  const files: Array<{ abs: string; rel: string }> = [];
+  const walk = async (current: string): Promise<void> => {
     let entries: import('node:fs').Dirent[];
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if (isEnoent(error)) return;
       out.complete = false;
       return;
     }
@@ -163,7 +270,7 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
       if (entry.name.startsWith('.') && entry.name !== '.env' && entry.name !== '.gitignore') {
         if (entry.isDirectory()) continue;
       }
-      const abs = path.join(dir, entry.name);
+      const abs = path.join(current, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
         await walk(abs);
@@ -175,38 +282,74 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
       files.push({ abs, rel });
     }
   };
+  await walk(dir);
+  return files;
+}
 
-  await walk(root);
+async function fillInventoryFiles(
+  files: Array<{ abs: string; rel: string }>,
+  out: WorkspaceFileInventory,
+  baseline: WorkspaceFileInventory | undefined,
+  reads: { n: number },
+  missingOk: boolean,
+): Promise<void> {
   let nextIndex = 0;
   const workers = Array.from(
-    { length: Math.min(32, files.length) },
+    { length: Math.min(32, Math.max(1, files.length)) },
     async () => {
       while (nextIndex < files.length) {
         const file = files[nextIndex++]!;
-        try {
-          const stat = await fs.stat(file.abs);
-          const cached = takeCachedContentHash(file.abs, stat);
-          const contentHash = stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES
-            ? `metadata:${stat.size}:${stat.mtimeMs}`
-            : cached ?? createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
-          rememberCachedContentHash(file.abs, {
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            ctimeMs: stat.ctimeMs,
-            contentHash,
-          });
-          out.set(file.rel, {
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            contentHash,
-          });
-        } catch {
-          out.complete = false;
-        }
+        await recordInventoryFile(file.abs, file.rel, out, baseline, reads, missingOk);
       }
     },
   );
   await Promise.all(workers);
+}
+
+/**
+ * 工作区文件清单。
+ * 能解析出写入路径时只扫描这些路径；否则全树遍历，但 size/mtime/ctime 未变的文件不读内容。
+ */
+export async function listWorkspaceFileInventory(
+  workspaceRoot: string,
+  options?: ListWorkspaceInventoryOptions,
+): Promise<WorkspaceFileInventory> {
+  const root = path.resolve(workspaceRoot);
+  const resolvedScope = options?.scopeRelPaths?.length
+    ? resolveScopePaths(root, options.scopeRelPaths)
+    : [];
+  const scope = resolvedScope.length > 0 ? resolvedScope : undefined;
+  const baseline = options?.baseline
+    ?? (!scope && lastFullInventory?.root === root ? lastFullInventory.inventory : undefined);
+  const out = emptyInventory(scope);
+  const reads = { n: 0 };
+
+  if (scope) {
+    const files: Array<{ abs: string; rel: string }> = [];
+    for (const rel of scope) {
+      const abs = path.join(root, ...rel.split('/'));
+      let stat: import('node:fs').Stats;
+      try {
+        stat = await fs.stat(abs);
+      } catch (error) {
+        if (isEnoent(error)) continue;
+        out.complete = false;
+        continue;
+      }
+      if (stat.isDirectory()) {
+        files.push(...await collectInventoryFiles(root, abs, out));
+      } else if (stat.isFile()) {
+        files.push({ abs, rel });
+      }
+    }
+    await fillInventoryFiles(files, out, baseline, reads, true);
+  } else {
+    const files = await collectInventoryFiles(root, root, out);
+    await fillInventoryFiles(files, out, baseline, reads, false);
+    if (out.complete) lastFullInventory = { root, inventory: cloneInventory(out) };
+  }
+
+  out.contentReads = reads.n;
   return out;
 }
 
