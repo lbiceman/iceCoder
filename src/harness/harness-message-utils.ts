@@ -48,27 +48,44 @@ export function getLastAssistantText(messages: UnifiedMessage[]): string {
 
 /**
  * 识别「非真人用户」的 user 前缀。
- * 压缩切分和真实用户文本查找共用这一份规则。
+ * 压缩切分、目标锚点、记忆召回和任务切换共用这一份规则。
+ * 运行时诊断（失败证据、自检、验收摘要）也算注入：它们一旦被当成新用户任务，
+ * 模型会丢掉当前目标，再把自己刚打出的工具调用解释成新任务。
  */
+const SYSTEM_INJECTED_USER_PREFIXES = [
+  '<system-context>',
+  '<system-reminder>',
+  '<session-notes>',
+  '<context-summary>',
+  '<compact_boundary',
+  '<recent-dialogue-focus',
+  '<runtime-recovery-context>',
+  '<recent-file-contents>',
+  '<resume-checkpoint>',
+  '[Background Task Status]',
+  '[Background Agents]',
+  '[System Runtime State]',
+  '[Workspace Anchor]',
+  '[System / Workspace Change]',
+  '[System',
+  '[Runtime Tool Planner]',
+  '[Runtime Self-Review]',
+  '[Failure Evidence',
+  '[Verification digest]',
+  '[Build digest]',
+  '[ToolGate]',
+  '[Tool skipped]',
+  '[Harness /',
+  '[Contract]',
+  '[TaskGraph]',
+  '[Agent Result]',
+  'Please provide a final summary answer based on the tool call results above.',
+  'Continue directly',
+] as const;
+
 export function isSystemInjectedUserContent(content: string): boolean {
   const trimmed = content.trim();
-  return trimmed.startsWith('<system-context>')
-    || trimmed.startsWith('<system-reminder>')
-    || trimmed.startsWith('<session-notes>')
-    || trimmed.startsWith('<context-summary>')
-    || trimmed.startsWith('<compact_boundary')
-    || trimmed.startsWith('<recent-dialogue-focus')
-    || trimmed.startsWith('<runtime-recovery-context>')
-    || trimmed.startsWith('<recent-file-contents>')
-    || trimmed.startsWith('<resume-checkpoint>')
-    || trimmed.startsWith('[Background Task Status]')
-    || trimmed.startsWith('[System Runtime State]')
-    || trimmed.startsWith('[Workspace Anchor]')
-    || trimmed.startsWith('[System / Workspace Change]')
-    || trimmed.startsWith('[System')
-    || trimmed.startsWith('[Runtime Tool Planner]')
-    || trimmed.startsWith('Please provide a final summary answer based on the tool call results above.')
-    || trimmed.startsWith('Continue directly');
+  return SYSTEM_INJECTED_USER_PREFIXES.some(prefix => trimmed.startsWith(prefix));
 }
 
 /** 统计真实用户消息条数（不含 system 注入块）。 */
@@ -86,7 +103,7 @@ export function isAlsoNoteMessage(msg: UnifiedMessage): boolean {
   return msg.alsoNote === true;
 }
 
-/** 任务切换检测用：跳过 /also 备注，避免误触发「新任务」提示。 */
+/** 跳过 /also 备注和系统注入，取最近一条真人用户文本。任务切换不用它，只看本轮 userMessage。 */
 export function getLatestUserTextForTaskSwitch(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];

@@ -12,8 +12,8 @@ import {
   getLastAssistantText,
   getLatestRealUserText,
   getPreviousRealUserText,
-  getLatestUserTextForTaskSwitch,
   isActionableToolRequest,
+  isSystemInjectedUserContent,
 } from './harness-message-utils.js';
 import { appendQueuedAlsoNotesToMessages } from '../session/pending-note.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
@@ -98,6 +98,33 @@ export function resolveRecallInjectMode(args: {
   if (args.casual) return 'casual_light';
   if (args.asksMemory || args.topicShifted) return 'default';
   return 'coarse_pre_llm';
+}
+
+const TASK_SWITCH_NOTICE_EXCERPT_CHARS = 400;
+
+/**
+ * 只拿本轮用户原文和上一条助手回复比。
+ * 历史里后写入的失败证据、自检、验收摘要不能变成「新任务」。
+ */
+export function shouldInjectUnrelatedTaskNotice(
+  userMessage: string,
+  lastAssistantText: string,
+): boolean {
+  const latest = userMessage.trim();
+  if (!latest || !lastAssistantText.trim()) return false;
+  if (isSystemInjectedUserContent(latest)) return false;
+  if (isResumeContinuationMessage(latest)) return false;
+  return bigramJaccard(latest, lastAssistantText) < TASK_SWITCH_JACCARD_THRESHOLD;
+}
+
+/** 点明本轮用户原文。没有可引用的用户句子时，不得把工具调用或诊断块当成新任务。 */
+export function buildUnrelatedTaskNotice(userMessage: string): string {
+  const excerpt = userMessage.trim().replace(/\s+/g, ' ').slice(0, TASK_SWITCH_NOTICE_EXCERPT_CHARS);
+  return [
+    '[System: The user message that started this run does not overlap the previous assistant reply. Follow that user message. Do not invent a different task.]',
+    `User message: ${excerpt}`,
+    'Runtime diagnostics, tool failures, and your own earlier tool calls are not a new request. If this user message still refers to the current work, continue that work.',
+  ].join('\n');
 }
 
 /**
@@ -274,23 +301,12 @@ export async function prepareHarnessRound(
     );
   }
 
-  if (!state.taskSwitchInjected) {
-    const latestUserContent = getLatestUserTextForTaskSwitch(msgs, userMessage);
-    const lastAssistantText = getLastAssistantText(msgs);
-    if (
-      latestUserContent
-      && lastAssistantText
-      && !isResumeContinuationMessage(latestUserContent)
-    ) {
-      const similarity = bigramJaccard(latestUserContent, lastAssistantText);
-      if (similarity < TASK_SWITCH_JACCARD_THRESHOLD) {
-        msgs.push({
-          role: 'user',
-          content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
-        });
-        state.taskSwitchInjected = true;
-      }
-    }
+  if (!state.taskSwitchInjected && shouldInjectUnrelatedTaskNotice(userMessage, getLastAssistantText(msgs))) {
+    msgs.push({
+      role: 'user',
+      content: buildUnrelatedTaskNotice(userMessage),
+    });
+    state.taskSwitchInjected = true;
   }
 
   const normalizedMsgs = timeSync('prep_build_msgs', () =>
