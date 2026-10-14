@@ -2,7 +2,6 @@
  * chat-ws 会话持久化：structured 缓存刷盘、UI 消息追加、记忆初始化。
  */
 
-import { promises as fsPromises } from 'node:fs';
 import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import {
   loadCheckpointIndex,
@@ -17,6 +16,7 @@ import {
   readStructuredMessagesFile,
   writeStructuredMessagesFile,
 } from './session-structured-io.js';
+import { enqueueFileWrite, readJsonArrayFile, writeJsonArrayAtomic } from './session-json-file.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { AssembledPrompt } from '../prompts/types.js';
@@ -244,14 +244,29 @@ export async function appendMessages(
 ): Promise<boolean> {
   if (isSessionTombstoned(sessionId)) return true;
   if (msgs.length === 0) return true;
+  return appendMessagesAtPath(getSessionFile(sessionId), msgs);
+}
+
+/** 把消息合并进指定 JSON 文件。损坏的文件原样留下，不写入。同一路径的保存串行执行。 */
+export async function appendMessagesAtPath(
+  file: string,
+  msgs: AppendableSessionMessage[],
+): Promise<boolean> {
+  if (msgs.length === 0) return true;
+  return enqueueFileWrite(file, () => mergeAppendMessages(file, msgs));
+}
+
+async function mergeAppendMessages(
+  file: string,
+  msgs: AppendableSessionMessage[],
+): Promise<boolean> {
   try {
-    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    const file = getSessionFile(sessionId);
-    let existing: any[] = [];
-    try {
-      const data = await fsPromises.readFile(file, 'utf-8');
-      existing = JSON.parse(data);
-    } catch { /* file doesn't exist yet */ }
+    const loaded = await readJsonArrayFile(file);
+    if (loaded.status === 'corrupt') {
+      console.error(`[chat-ws] appendMessages 拒绝写入，会话文件已损坏: ${file}`);
+      return false;
+    }
+    const existing: any[] = loaded.status === 'ok' ? loaded.value : [];
     const now = Date.now();
     const stamped = msgs.map((msg) => {
       if (msg.role === 'user' && msg.sentAt == null) {
@@ -297,7 +312,7 @@ export async function appendMessages(
         existing.push(msg);
       }
     }
-    await fsPromises.writeFile(file, JSON.stringify(existing), 'utf-8');
+    await writeJsonArrayAtomic(file, existing);
     return true;
   } catch (err) {
     console.error('[chat-ws] appendMessages failed:', err);

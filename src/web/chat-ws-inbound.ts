@@ -2,7 +2,6 @@
  * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /plan /next /open）。
  */
 
-import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
@@ -20,6 +19,7 @@ import { clearSessionBgTasks } from '../session/bg-tasks-store.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { updateSessionMetadataAfterMessageDelete } from './session-title.js';
 import { writeStructuredMessagesFile } from './session-structured-io.js';
+import { enqueueFileWrite, writeJsonArrayAtomic } from './session-json-file.js';
 import { clearHarnessRuntimeState } from '../harness/harness-runtime-registry.js';
 import { loadCheckpointMessageIds } from '../harness/intent-checkpoint-store.js';
 import {
@@ -135,12 +135,9 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           broadcastSessionRunState({ type: 'session_run_state', sessionId: sid, phase: 'idle' });
           clearRunningTurn(sid);
           setCachedMessages(sid, []);
-          await writeStructuredMessagesFile(SESSIONS_DIR, sid, []);
-          await fsPromises.writeFile(
-            path.join(SESSIONS_DIR, `${sid}.json`),
-            '[]',
-            'utf-8',
-          );
+          await writeStructuredMessagesFile(SESSIONS_DIR, sid, [], { replaceCorrupt: true });
+          const uiFile = path.join(SESSIONS_DIR, `${sid}.json`);
+          await enqueueFileWrite(uiFile, () => writeJsonArrayAtomic(uiFile, [], { replaceCorrupt: true }));
           await getTaskQueueManager(SESSIONS_DIR).clearSession(sid);
           clearPendingNotesForSession(sid);
           await clearSessionBgTasks(SESSIONS_DIR, sid);

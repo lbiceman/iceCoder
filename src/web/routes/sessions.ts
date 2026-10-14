@@ -19,6 +19,7 @@ import {
   resolveSessionImageFile,
 } from '../images-cache.js';
 import { readStructuredMessagesFile } from '../session-structured-io.js';
+import { enqueueFileWrite, writeJsonArrayAtomic } from '../session-json-file.js';
 import {
   collectWorkspaceRoots,
   readToolTraceDiffIndex,
@@ -284,7 +285,7 @@ export async function createSessionRecord(title: string): Promise<SessionMeta> {
   await mutateSessionIndex(async (index) => {
     index.unshift(meta);
     await ensureDir();
-    await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+    await writeJsonArrayAtomic(path.join(SESSIONS_DIR, `${id}.json`), []);
     return index;
   });
   sessionListLiveSync?.notifyIndexUpdated();
@@ -718,8 +719,12 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
     if (rejectUnsafeSessionId(res, sessionId)) return;
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
     const { messages } = req.body as { messages: ChatMessage[] };
+    if (!Array.isArray(messages)) {
+      res.status(400).json({ success: false, error: 'messages 必须是数组' });
+      return;
+    }
     await ensureDir();
-    await fs.writeFile(file, JSON.stringify(messages || []), 'utf-8');
+    await enqueueFileWrite(file, () => writeJsonArrayAtomic(file, messages, { replaceCorrupt: true }));
     res.json({ success: true });
   });
 

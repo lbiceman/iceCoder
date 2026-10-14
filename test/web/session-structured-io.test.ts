@@ -48,6 +48,15 @@ describe('session-structured-io', () => {
     expect(b?.[0]?.content).toBe('2');
   });
 
+  it('does not replace a corrupt structured file with an empty array', async () => {
+    const file = structuredSessionPath(tempDir, 'torn');
+    const torn = '[{"role":"user","content":"history"';
+    await fs.writeFile(file, torn, 'utf-8');
+    await writeStructuredMessagesFile(tempDir, 'torn', []);
+    expect(await fs.readFile(file, 'utf-8')).toBe(torn);
+    expect(await readStructuredMessagesFile(tempDir, 'torn')).toBeUndefined();
+  });
+
   it('returns undefined for missing or empty structured file', async () => {
     expect(await readStructuredMessagesFile(tempDir, 'missing')).toBeUndefined();
     await fs.mkdir(tempDir, { recursive: true });

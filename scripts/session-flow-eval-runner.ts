@@ -48,10 +48,17 @@ import {
 import { buildMcpRuntimeContext } from '../src/mcp/mcp-runtime-context.js';
 import type { MCPManager } from '../src/mcp/mcp-manager.js';
 import type { MCPServerInfo } from '../src/mcp/types.js';
+import { appendMessagesAtPath } from '../src/web/chat-ws-persist.js';
+import {
+  readStructuredMessagesFile,
+  structuredSessionPath,
+  writeStructuredMessagesFile,
+} from '../src/web/session-structured-io.js';
+import { setJsonArrayFileBeforeReadForTests } from '../src/web/session-json-file.js';
 
 export interface SessionFlowEvalCaseResult {
   id: string;
-  category: 'delete' | 'restore' | 'also' | 'next' | 'isolation' | 'mcp';
+  category: 'delete' | 'restore' | 'also' | 'next' | 'isolation' | 'mcp' | 'persist';
   passed: boolean;
   durationMs: number;
   failures: string[];
@@ -491,6 +498,55 @@ const cases: EvalCase[] = [
       assert(/puppeteer: ready \(1 tools\)/.test(ctx.mcpServers ?? ''), 'puppeteer ready line must keep original format');
       assert(!(ctx.mcpServers ?? '').includes('puppeteer: ready (process'), 'puppeteer must not get process/session suffix');
       assert((ctx.mcpRetryHint ?? '').includes('browser session is detached'), 'detached retry hint missing');
+    },
+  },
+  {
+    id: 'persist-corrupt-ui-json-is-kept',
+    category: 'persist',
+    async run(caseDir) {
+      const file = path.join(caseDir, 'torn.json');
+      const torn = '[{"role":"user","id":"u1","content":"keep-me"}';
+      await fs.mkdir(caseDir, { recursive: true });
+      await fs.writeFile(file, torn, 'utf-8');
+      const ok = await appendMessagesAtPath(file, [{ role: 'user', id: 'u2', content: 'new' }]);
+      assert(ok === false, 'append must refuse a torn session file');
+      assert(await fs.readFile(file, 'utf-8') === torn, 'torn session file was overwritten');
+    },
+  },
+  {
+    id: 'persist-concurrent-appends-keep-both',
+    category: 'persist',
+    async run(caseDir) {
+      const file = path.join(caseDir, 'race.json');
+      await fs.mkdir(caseDir, { recursive: true });
+      setJsonArrayFileBeforeReadForTests(() => new Promise((resolve) => setTimeout(resolve, 30)));
+      try {
+        const [first, second] = await Promise.all([
+          appendMessagesAtPath(file, [{ role: 'user', id: 'a', content: 'one' }]),
+          appendMessagesAtPath(file, [{ role: 'user', id: 'b', content: 'two' }]),
+        ]);
+        assert(first && second, 'both appends must succeed');
+        const saved = JSON.parse(await fs.readFile(file, 'utf-8')) as Array<{ id: string }>;
+        assert(saved.map((item) => item.id).sort().join(',') === 'a,b', `lost a concurrent append: ${saved.map((item) => item.id).join(',')}`);
+      } finally {
+        setJsonArrayFileBeforeReadForTests(null);
+      }
+    },
+  },
+  {
+    id: 'persist-empty-structured-does-not-cover-corrupt',
+    category: 'persist',
+    async run(caseDir) {
+      const sessionId = 'structured-torn';
+      const file = structuredSessionPath(caseDir, sessionId);
+      const torn = '[{"role":"user","content":"history"';
+      await fs.mkdir(caseDir, { recursive: true });
+      await fs.writeFile(file, torn, 'utf-8');
+      await writeStructuredMessagesFile(caseDir, sessionId, []);
+      assert(await fs.readFile(file, 'utf-8') === torn, 'empty structured write covered a corrupt file');
+      assert(await readStructuredMessagesFile(caseDir, sessionId) === undefined, 'corrupt structured file should read as no history');
+      await writeStructuredMessagesFile(caseDir, sessionId, [], { replaceCorrupt: true });
+      assert(await fs.readFile(file, 'utf-8') === '[]', 'explicit clear must replace a corrupt structured file');
     },
   },
 ];
