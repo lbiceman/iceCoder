@@ -8,6 +8,7 @@ import {
   FAILURE_EVIDENCE_THRESHOLD_START,
   LIGHT_HINT_FAILURE_THRESHOLD_END,
   LIGHT_HINT_FAILURE_THRESHOLD_START,
+  READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT,
   STRONG_WARNING_FAILURE_THRESHOLD,
 } from './harness-constants.js';
 import {
@@ -692,10 +693,10 @@ export async function runHarnessToolRound(
     state.consecutiveReadOnlyRounds = 0;
   } else if (executableToolCalls.length) {
     state.consecutiveReadOnlyRounds++;
-    if (state.consecutiveReadOnlyRounds === 5) {
+    if (state.consecutiveReadOnlyRounds === READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT) {
       msgs.push({
         role: 'user',
-        content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
+        content: `[System] You have been reading/analyzing for ${READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT} rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.`,
         preserveOnCompaction: true,
       });
     }

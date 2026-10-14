@@ -199,7 +199,13 @@ export const ChatSessionSidebar = (() => {
     btn.setAttribute('data-mode', mode);
     const labelEl = btn.querySelector('.chat-sidebar-control-label');
     if (labelEl) labelEl.textContent = label;
-    btn.title = `监管模式：${label}（点击切换）`;
+    const summaries = {
+      off: '不切换执行档，不建任务图',
+      adaptive: '按进展在自由和强制之间切换，并收紧写预算；不建任务图，强制时不按步骤拦工具',
+      strict: '保持强制。工程任务会建任务图，不合当前步骤的工具会被拦住',
+    };
+    const summary = summaries[mode] || summaries.adaptive;
+    btn.title = `监管模式：${label}。${summary}（点击切换）`;
   }
 
   function syncShellConnection(state) {

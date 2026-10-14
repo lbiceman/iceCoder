@@ -17,6 +17,10 @@ import { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolResult } from '../../tools/types.js';
 import { normalizeWorkRelPath } from '../../tools/read-before-edit.js';
 import { collectSessionTouchedPaths } from '../intent-checkpoint-store.js';
+import {
+  AGENT_HARD_TIMEOUT_GRACE_MS,
+  AGENT_UPDATE_THROTTLE_MS,
+} from '../harness-constants.js';
 import { evaluateIncompleteTaskStopHook } from '../incomplete-task-stop-hook.js';
 import { classifyRunCommandResult, type RunCommandResultClassification } from '../run-command-result.js';
 import type { StopHookManager } from '../stop-hooks.js';
@@ -159,8 +163,6 @@ const FORWARDED_EVENT_TYPES = new Set<HarnessStepEvent['type']>([
 ]);
 
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'batch_edit_file']);
-const HARD_TIMEOUT_GRACE_MS = 30_000;
-const DEFAULT_UPDATE_THROTTLE_MS = 500;
 
 class Semaphore {
   private active = 0;
@@ -653,7 +655,7 @@ export class AgentSpawner {
 
     const hardTimer = setTimeout(
       () => this.abortRun(run, 'timeout'),
-      limits.timeoutMs + HARD_TIMEOUT_GRACE_MS,
+      limits.timeoutMs + AGENT_HARD_TIMEOUT_GRACE_MS,
     );
     try {
       const result = await harness.run(
@@ -1028,7 +1030,7 @@ export class AgentSpawner {
   }
 
   private emitUpdate(run: AgentRun, parent: AgentParentContext, immediate: boolean): void {
-    const throttle = this.options.updateThrottleMs ?? DEFAULT_UPDATE_THROTTLE_MS;
+    const throttle = this.options.updateThrottleMs ?? AGENT_UPDATE_THROTTLE_MS;
     const send = () => {
       run.lastUpdateAt = this.now();
       run.updateTimer = undefined;

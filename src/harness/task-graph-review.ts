@@ -47,6 +47,10 @@ export class ContractValidator {
     this.contract = contract;
   }
 
+  sameToolRepeatLimit(): number {
+    return this.contract.nodeGuard.maxSameToolRepeat;
+  }
+
   /** 工具调用前检查 */
   checkBeforeToolCall(toolName: string, opts: { track?: boolean } = {}): ContractCheckResult {
     const track = opts.track ?? true;

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { warnHarnessFailure } from './runtime-telemetry.js';
 
 /** 会话目录下完整工具输出落盘路径（不写入用户仓库）。 */
 export function toolOutputSpillFile(
@@ -24,7 +25,13 @@ export async function spillToolOutputToSession(opts: {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, opts.content, 'utf8');
     return file;
-  } catch {
+  } catch (err) {
+    await warnHarnessFailure({
+      source: 'tool_output_spill',
+      message: err instanceof Error ? err.message : String(err),
+      sessionId: opts.sessionId,
+      sessionDir: opts.sessionDir,
+    });
     return null;
   }
 }

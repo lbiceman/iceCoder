@@ -11,7 +11,7 @@ import { Harness } from '../src/harness/harness.js';
 import { AgentSpawner } from '../src/harness/agents/agent-spawner.js';
 import { listAgentMetas } from '../src/harness/agents/agent-store.js';
 import type { ChatFunction, HarnessConfig, HarnessResult, HarnessStepEvent } from '../src/harness/types.js';
-import type { RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
+import { runtimeTelemetryFile, type RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
 import { initializeToolSystem } from '../src/tools/index.js';
 import type { LLMResponse } from '../src/llm/types.js';
 import type { AgentEvalCase, AgentEvalScriptedTurn } from './agent-eval-cases.js';
@@ -156,7 +156,7 @@ export async function runAgentEvalCase(
     );
 
     const judgeResults = await runJudgeCommands(workspace, testCase.verifyCommands);
-    const telemetry = await readTelemetryEvents(path.join(workspace, '.icecoder', 'runtime', 'telemetry.jsonl'));
+    const telemetry = await readTelemetryEvents(runtimeTelemetryFile(sessionDir, testCase.id));
     const caseResult = await scoreCase({
       testCase,
       workspace,

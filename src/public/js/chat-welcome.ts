@@ -62,10 +62,11 @@ export const ChatWelcome = (() => {
     return labels[mode] || mode || '自适应';
   }
 
+  // 与 src/harness/supervisor/supervisor-mode-contract.ts 的 summary 保持一致。
   function getSubtitle(mode) {
-    if (mode === 'off') return '自由模式下，Agent 可自主执行任务';
-    if (mode === 'strict') return '严格监管下，重要操作需你确认';
-    return '自适应监管，在关键节点向你确认';
+    if (mode === 'off') return '不切换执行档，不建任务图';
+    if (mode === 'strict') return '保持强制。工程任务会建任务图，不合当前步骤的工具会被拦住';
+    return '按进展在自由和强制之间切换，并收紧写预算；不建任务图，强制时不按步骤拦工具';
   }
 
   function statIconSvg(name) {

@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 
@@ -60,10 +61,45 @@ export interface ListWorkspaceInventoryOptions {
   scopeRelPaths?: readonly string[];
 }
 
-const preCommandInventories = new Map<string, WorkspaceFileInventory>();
 interface BackgroundInventoryEntry {
   inventory: WorkspaceFileInventory;
   expiresAt: number;
+}
+
+interface ContentHashEntry {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  contentHash: string;
+}
+
+interface WorkspaceTouchState {
+  preCommandInventories: Map<string, WorkspaceFileInventory>;
+  backgroundCommandInventories: Map<string, BackgroundInventoryEntry>;
+  contentHashCache: Map<string, ContentHashEntry>;
+  lastFullInventory: { root: string; inventory: WorkspaceFileInventory } | null;
+}
+
+function emptyWorkspaceTouchState(): WorkspaceTouchState {
+  return {
+    preCommandInventories: new Map(),
+    backgroundCommandInventories: new Map(),
+    contentHashCache: new Map(),
+    lastFullInventory: null,
+  };
+}
+
+const workspaceTouchStorage = new AsyncLocalStorage<WorkspaceTouchState>();
+/** 没有 run 作用域时的回退，给直接扫清单的测试用。 */
+const fallbackWorkspaceTouch = emptyWorkspaceTouchState();
+
+function currentWorkspaceTouch(): WorkspaceTouchState {
+  return workspaceTouchStorage.getStore() ?? fallbackWorkspaceTouch;
+}
+
+/** 包住一次 run，命令清单和内容哈希不再跟其他会话共用。 */
+export function runWithWorkspaceTouchScope<T>(fn: () => T): T {
+  return workspaceTouchStorage.run(emptyWorkspaceTouchState(), fn);
 }
 
 export const WORKSPACE_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024;
@@ -72,17 +108,6 @@ export const BACKGROUND_INVENTORY_LIMIT = 128;
 /** 同一轮并行的 shell 类工具调用远少于此；超出说明有调用没走到 take（异常路径），按最旧淘汰。 */
 export const PRE_COMMAND_INVENTORY_LIMIT = 32;
 export const BACKGROUND_INVENTORY_TTL_MS = 5 * 60_000;
-
-const backgroundCommandInventories = new Map<string, BackgroundInventoryEntry>();
-const contentHashCache = new Map<string, {
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  contentHash: string;
-}>();
-
-/** 最近一次完整扫描，供下一条命令跳过未变化文件的内容读取。只保留一个工作区。 */
-let lastFullInventory: { root: string; inventory: WorkspaceFileInventory } | null = null;
 
 function inventoryKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
@@ -319,8 +344,9 @@ export async function listWorkspaceFileInventory(
     ? resolveScopePaths(root, options.scopeRelPaths)
     : [];
   const scope = resolvedScope.length > 0 ? resolvedScope : undefined;
+  const touch = currentWorkspaceTouch();
   const baseline = options?.baseline
-    ?? (!scope && lastFullInventory?.root === root ? lastFullInventory.inventory : undefined);
+    ?? (!scope && touch.lastFullInventory?.root === root ? touch.lastFullInventory.inventory : undefined);
   const out = emptyInventory(scope);
   const reads = { n: 0 };
 
@@ -346,7 +372,7 @@ export async function listWorkspaceFileInventory(
   } else {
     const files = await collectInventoryFiles(root, root, out);
     await fillInventoryFiles(files, out, baseline, reads, false);
-    if (out.complete) lastFullInventory = { root, inventory: cloneInventory(out) };
+    if (out.complete) touch.lastFullInventory = { root, inventory: cloneInventory(out) };
   }
 
   out.contentReads = reads.n;
@@ -357,7 +383,8 @@ function takeCachedContentHash(
   filePath: string,
   stat: Pick<import('node:fs').Stats, 'size' | 'mtimeMs' | 'ctimeMs'>,
 ): string | null {
-  const cached = contentHashCache.get(filePath);
+  const cache = currentWorkspaceTouch().contentHashCache;
+  const cached = cache.get(filePath);
   if (
     !cached
     || cached.size !== stat.size
@@ -366,8 +393,8 @@ function takeCachedContentHash(
   ) {
     return null;
   }
-  contentHashCache.delete(filePath);
-  contentHashCache.set(filePath, cached);
+  cache.delete(filePath);
+  cache.set(filePath, cached);
   return cached.contentHash;
 }
 
@@ -380,12 +407,13 @@ function rememberCachedContentHash(
     contentHash: string;
   },
 ): void {
-  contentHashCache.delete(filePath);
-  contentHashCache.set(filePath, entry);
-  while (contentHashCache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
-    const oldest = contentHashCache.keys().next().value as string | undefined;
+  const cache = currentWorkspaceTouch().contentHashCache;
+  cache.delete(filePath);
+  cache.set(filePath, entry);
+  while (cache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value as string | undefined;
     if (!oldest) break;
-    contentHashCache.delete(oldest);
+    cache.delete(oldest);
   }
 }
 
@@ -395,20 +423,22 @@ export function rememberPreCommandInventory(
   inventory: WorkspaceFileInventory,
 ): void {
   if (!sessionId || !toolCallId) return;
+  const inventories = currentWorkspaceTouch().preCommandInventories;
   const key = inventoryKey(sessionId, toolCallId);
-  preCommandInventories.delete(key);
-  while (preCommandInventories.size >= PRE_COMMAND_INVENTORY_LIMIT) {
-    const oldest = preCommandInventories.keys().next().value as string | undefined;
+  inventories.delete(key);
+  while (inventories.size >= PRE_COMMAND_INVENTORY_LIMIT) {
+    const oldest = inventories.keys().next().value as string | undefined;
     if (!oldest) break;
-    preCommandInventories.delete(oldest);
+    inventories.delete(oldest);
   }
-  preCommandInventories.set(key, inventory);
+  inventories.set(key, inventory);
 }
 
 /** 中断 / 异常时丢弃未被 take 的命令前快照。 */
 export function discardPreCommandInventories(sessionId: string, toolCallIds: Iterable<string>): void {
   if (!sessionId) return;
-  for (const id of toolCallIds) preCommandInventories.delete(inventoryKey(sessionId, id));
+  const inventories = currentWorkspaceTouch().preCommandInventories;
+  for (const id of toolCallIds) inventories.delete(inventoryKey(sessionId, id));
 }
 
 export function takePreCommandInventory(
@@ -416,8 +446,9 @@ export function takePreCommandInventory(
   toolCallId: string,
 ): WorkspaceFileInventory | undefined {
   const key = inventoryKey(sessionId, toolCallId);
-  const inv = preCommandInventories.get(key);
-  preCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().preCommandInventories;
+  const inv = inventories.get(key);
+  inventories.delete(key);
   return inv;
 }
 
@@ -429,14 +460,15 @@ export function rememberBackgroundCommandInventory(
 ): void {
   if (!sessionId || !taskId) return;
   purgeExpiredBackgroundInventories(nowMs);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
   const key = backgroundInventoryKey(sessionId, taskId);
-  backgroundCommandInventories.delete(key);
-  while (backgroundCommandInventories.size >= BACKGROUND_INVENTORY_LIMIT) {
-    const oldest = backgroundCommandInventories.keys().next().value as string | undefined;
+  inventories.delete(key);
+  while (inventories.size >= BACKGROUND_INVENTORY_LIMIT) {
+    const oldest = inventories.keys().next().value as string | undefined;
     if (!oldest) break;
-    backgroundCommandInventories.delete(oldest);
+    inventories.delete(oldest);
   }
-  backgroundCommandInventories.set(key, {
+  inventories.set(key, {
     inventory,
     expiresAt: nowMs + BACKGROUND_INVENTORY_TTL_MS,
   });
@@ -449,14 +481,16 @@ export function takeBackgroundCommandInventory(
 ): WorkspaceFileInventory | undefined {
   purgeExpiredBackgroundInventories(nowMs);
   const key = backgroundInventoryKey(sessionId, taskId);
-  const entry = backgroundCommandInventories.get(key);
-  backgroundCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
+  const entry = inventories.get(key);
+  inventories.delete(key);
   return entry?.inventory;
 }
 
 function purgeExpiredBackgroundInventories(nowMs: number): void {
-  for (const [key, entry] of backgroundCommandInventories) {
-    if (entry.expiresAt <= nowMs) backgroundCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
+  for (const [key, entry] of inventories) {
+    if (entry.expiresAt <= nowMs) inventories.delete(key);
   }
 }
 
@@ -465,10 +499,11 @@ export function getWorkspaceInventoryDiagnostics(): {
   backgroundInventorySize: number;
   preCommandInventorySize: number;
 } {
+  const touch = currentWorkspaceTouch();
   return {
-    contentHashCacheSize: contentHashCache.size,
-    backgroundInventorySize: backgroundCommandInventories.size,
-    preCommandInventorySize: preCommandInventories.size,
+    contentHashCacheSize: touch.contentHashCache.size,
+    backgroundInventorySize: touch.backgroundCommandInventories.size,
+    preCommandInventorySize: touch.preCommandInventories.size,
   };
 }
 

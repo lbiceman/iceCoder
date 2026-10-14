@@ -369,44 +369,42 @@
 
 ## P4 需完善（架构 / 配置 / 测试）
 
+> #83、#84 已移除：`harness-memory.ts` 与 `context-compactor.ts` 保持现状，不拆。
+
 ### 架构
 
-- [ ] **83. 拆分 `harness-memory.ts`（84KB）**
-
-  | 新文件 | 职责 |
-  |---|---|
-  | `harness-memory-recall.ts` | 召回、rerank、冷却与去重 |
-  | `harness-memory-extract.ts` | 提取门控、`_doExtract`、主代理互斥、游标 |
-  | `harness-memory-session-notes.ts` | `maybeUpdateSessionMemory`、compact 读笔记 |
-  | `harness-memory-feedback.ts` | `detectFeedback`、置信度调整 |
-  | `harness-memory.ts` | 薄门面：构造、`onLoopStart/End`、`dispose`、委托 |
-
-- [ ] **84. 拆分 `context-compactor.ts`（52KB）**：split + 配对修正 / recovery + reinject / 五层 pipeline。
-- [ ] **85. `runScoped` 初始化逻辑抽离**：`harness.ts:451-795` 约 350 行会话初始化 / 工作区锁 / checkpoint 恢复 / 记忆 hydrate，抽成 `restoreRunState()`；`isFreshQueryMessage` 重复计算（`:556`、`:722`）合并。
-- [ ] **86. `HarnessRunDeps` 上帝对象**：`harness.ts:125-130` 是 `RoundPrepDeps & ToolExecutorDeps & ToolRoundDeps & ...` 的交叉。按阶段只注入所需依赖，降低测试构造成本。
-- [ ] **87. 明确 supervisor 产品语义**：CLI / Web 默认 `adaptive`（`supervisor-config.ts:42-46`、`main-config-supervisor-mode.ts:11`）会做 ExecutionMode + BranchBudget；任务图只在 `strict` 构建（`harness-round-prep.ts:161-163`），adaptive 下 forced 时 ToolGate 近乎透传。在文档 / UI 写清，或 adaptive 进入 forced 后懒建图。
-- [ ] **88. 全局可变状态按会话隔离**
-  - `harness-timing.ts:16` 进程级 `samples`
-  - `runtime-telemetry.ts:84-88`、`:128-131` 所有会话追加同一 `telemetry.jsonl`
-  - `workspace-command-touch.ts:48-67` `preCommandInventories` / `contentHashCache`
-  - `verification-exempt-config.ts:33-48`、`:101-108` 作用域外 `set*` 污染 `globalRuntime`（无 ALS store 时应抛错或 no-op + 告警）
-- [ ] **89. 任务图环检测**：`task-graph.ts:639-645` 无环检测 / 拓扑排序，自定义 edges 时会静默坏掉；`createTaskGraph` 加 DFS 环检。
+- [x] **85. `runScoped` 初始化逻辑抽离**：`harness.ts` 里会话初始化 / 工作区锁 / checkpoint 恢复 / 记忆 hydrate，抽成 `restoreRunState()`；`isFreshQueryMessage` 重复计算合并。
+  - **修复说明**：`runScoped` 先 `await this.restoreRunState()`，循环只消费恢复好的 state。是否沿用旧任务收成一次 `resumePersistedTask`，目标锚点和 V3 恢复共用。回归：`test/eval/harness-audit-p4b-eval.test.ts`。
+- [x] **86. `HarnessRunDeps` 上帝对象**：`harness.ts` 里 `RoundPrepDeps & ToolExecutorDeps & ToolRoundDeps & ...` 的交叉。按阶段只注入所需依赖，降低测试构造成本。
+  - **修复说明**：删掉导出的交叉类型。`buildPhaseDeps()` 仍填一份字段，但交出去的是 `prep` / `llm` / `tools` / `noTools` 四个视图，循环只把对应视图传给该阶段。工作区锁写在 `tools` 视图上，因为几份视图指向同一对象。回归：`test/eval/harness-audit-p4c-eval.test.ts`。
+- [x] **87. 明确 supervisor 产品语义**：CLI / Web 默认 `adaptive` 会做 ExecutionMode + BranchBudget；任务图只在 `strict` 构建，adaptive 下 forced 时 ToolGate 近乎透传。在文档 / UI 写清，或 adaptive 进入 forced 后懒建图。
+  - **修复说明**：不改成懒建图。三档约定放在 `supervisor-mode-contract.ts`：off 不切模式、不建图；adaptive 切 free/forced 并收紧写预算，不建图，forced 时工具门不按步骤拦；strict 保持 forced，工程任务建图并按步骤拦。建图判断改走 `supervisorModeBuildsTaskGraph`。欢迎页和侧栏提示与这份文案一致。回归：`test/eval/harness-audit-p4b-eval.test.ts`。
+- [x] **88. 全局可变状态按会话隔离**
+  - `harness-timing.ts` 进程级 `samples`
+  - `runtime-telemetry.ts` 所有会话追加同一 `telemetry.jsonl`
+  - `workspace-command-touch.ts` `preCommandInventories` / `contentHashCache`
+  - `verification-exempt-config.ts` 作用域外 `set*` 污染 `globalRuntime`（无 ALS store 时应抛错或 no-op + 告警）
+  - **修复说明**：计时样本和命令清单 / 内容哈希放进每次 `run()` 的 AsyncLocalStorage，并发会话互不可见。遥测改写 `sessionDir/<sessionId>.telemetry.jsonl`。没有验收豁免作用域时 `setVerificationExemptRuntime` 只告警、不写进程配置。监管事件接口仍会读旧的汇总文件，并扫会话目录里的新文件。回归：`test/eval/harness-audit-p4c-eval.test.ts`。
+- [x] **89. 任务图环检测**【先做】：`createTaskGraph`（`task-graph.ts`）接受自定义 `edges` 时无环检测 / 拓扑排序，成环会静默坏掉；加 DFS 环检。
+  - **修复说明**：`createTaskGraph` 在落边前做 DFS 三色标记，成环抛 `TaskGraphCycleError`（含环路径）。端点不在节点表里也拒绝。默认链式边仍可通过。回归：`test/task-graph.test.ts`。
 
 ### 魔法数字收拢到 `harness-constants.ts` 或配置
 
-- [ ] **90.**
-  - `harness.ts:761`：`existingMessages.length >= 60`、`* 0.5`
-  - `harness.ts:110`：`APPROX_LINES_PER_FILE_CHANGE = 60`
-  - `harness-tool-round.ts:695`：只读 5 轮提示
-  - `harness-tool-truncation-recovery.ts:43,59`：`0.98`、`500`
-  - `harness-round-no-tools.ts:491`：`tryConsumeVerificationContinuation(..., 1)`
-  - `harness-stop-verification.ts:73-76`：poll `60` / `500ms` / `2000ms`
+- [x] **90.**
+  - `harness.ts`：checkpoint resume fork 的 `60`、`* 0.5`；`APPROX_LINES_PER_FILE_CHANGE = 60`
+  - `harness-tool-round.ts`：只读 5 轮提示
+  - `harness-tool-truncation-recovery.ts`：`0.98`、`500`
+  - `harness-round-no-tools.ts`：验收续轮上限（原字面量 `1`）
+  - `harness-stop-verification.ts`：poll `60` / `500ms` / `2000ms`
   - `context-compactor`：`SHORT_USER_MSG_MAX_LENGTH=50`、`MIN_USER_MSG_LENGTH_TO_PRESERVE=200`
-  - `harness-memory`：`emptyRecallCooldown=3`
-  - `agent-spawner.ts:159-160`：`HARD_TIMEOUT_GRACE_MS`、`DEFAULT_UPDATE_THROTTLE_MS`
-  - `task-graph-executor.ts:194` vs `:343`：`maxSameToolRepeat` 3 与 5 不一致
-- [ ] **91. TokenBudget 两套语义**：`token-budget.ts:20-24` 默认 `500000` vs `token-budget-config.ts:30` 成本护栏 `1e9`，命名区分或合并。
-- [ ] **92. 静默失败补日志**：`context-compactor.ts:1299-1301`（`llmSummarize`）、`tool-output-spill.ts:27-28`、checkpoint save 失败等从 `console.debug` 升到 `warn` + telemetry。
+  - `harness-memory`：空召回冷却 `3`
+  - `agent-spawner.ts`：`HARD_TIMEOUT_GRACE_MS`、`DEFAULT_UPDATE_THROTTLE_MS`
+  - `task-graph-executor.ts`：`maxSameToolRepeat` 3 与 5 不一致
+  - **修复说明**：上述数字收进 `harness-constants.ts`，调用点改读常量。验收续轮上限仍由 `RECOVERY_BUDGET.verificationContinuation.max` 提供，常量只是别名。`maxSameToolRepeat` 统一为 `MAX_SAME_TOOL_REPEAT = 5`：合约与偏离检测都读节点合约上的这个值，不再另写 3。回归：`test/eval/harness-audit-p4-eval.test.ts`。
+- [x] **91. TokenBudget 两套语义**：`token-budget.ts` 默认 `500000` vs `token-budget-config.ts` 成本护栏 `1e9`，命名区分或合并。
+  - **修复说明**：不合并数值。`DEFAULT_TOKEN_TRACKER_BUDGET`（50 万）只是 `TokenBudgetTracker` 没收到 totalBudget 时的本地默认；`DEFAULT_HARNESS_RUN_TOKEN_BUDGET`（1e9）是单次 run 的成本护栏，`LoopController` 靠它停。旧名 `DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL` 保留为别名。Harness 构造时仍把 run 预算传进 tracker。回归：`test/eval/harness-audit-p4-eval.test.ts`。
+- [x] **92. 静默失败补日志**【最简单】：`context-compactor.ts` 的 `llmSummarize` 空 `catch`、`tool-output-spill.ts` 写盘失败、checkpoint save 失败等从静默 / `console.debug` 升到 `warn` + telemetry。
+  - **修复说明**：这三处失败打 `console.warn`，并追加 `type: 'failure'` telemetry（来源 `llm_summarize` / `tool_output_spill` / `checkpoint_save`）。LLM 摘要失败仍回退结构化摘要，工具输出落盘失败仍返回 null。摘要统计会计 `failures`。回归：`test/harness/audit-p4-fixes.test.ts`、`test/harness/audit-p1-persistence.test.ts`。
 
 ### 测试缺口（按 P0/P1 对应）
 
@@ -433,8 +431,9 @@
 2. **第二批（压缩正确性）**：#6、#7、#44、#45，配合 #98。
 3. **第三批（完成判定）**：#10–#18，先定产品契约再改测试。
 4. **第四批（精简）**：#57 去掉恒真开关 → #56、#58–#74 删死代码 → #75 合并 checkpoint 写入。
-5. **第五批（结构）**：#83–#86 拆大文件与 deps。
+5. **第五批（P4）**：#85–#92、#89、#93–#106 已完成。#83、#84 不拆，已从清单移除。
 
 ## 已排除的误报
 
 - **write-lease「TOCTOU 竞态可双写」**：`agent-spawner.ts:762-785` 从 `holderOf` 到 `acquire` 之间是纯同步代码，单线程 JS 不会插队，不构成竞态。仅作为精简项保留（#78）。
+- **#83 / #84 拆大文件**：`harness-memory.ts`、`context-compactor.ts` 的结构保持现状，不再拆成多个模块。

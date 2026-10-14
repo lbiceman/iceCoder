@@ -29,6 +29,7 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import { shouldUseTaskGraph } from './task-graph-config.js';
+import { supervisorModeBuildsTaskGraph } from './supervisor/supervisor-mode-contract.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import {
@@ -157,7 +158,8 @@ export async function prepareHarnessRound(
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
-    const shouldInit = deps.globalPolicy?.supervisorMode === 'strict'
+    // 只有 strict 建任务图。adaptive 也会进 forced，但没有图，ToolGate 不按步骤拦工具。
+    const shouldInit = supervisorModeBuildsTaskGraph(deps.globalPolicy?.supervisorMode)
       && shouldUseTaskGraph(taskSnapshot.intent);
     if (shouldInit) {
       try {

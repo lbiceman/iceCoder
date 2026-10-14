@@ -16,6 +16,7 @@ import {
 } from '../../src/harness/session-workspace-store.js';
 import { ProjectCheckpointStore } from '../../src/harness/project-checkpoint-store.js';
 import { saveTaskCheckpoint, type CheckpointDeps } from '../../src/harness/harness-checkpoint.js';
+import { RuntimeTelemetry } from '../../src/harness/runtime-telemetry.js';
 import { TaskCheckpointManager } from '../../src/harness/checkpoint.js';
 import { captureIntentCheckpoint } from '../../src/harness/intent-checkpoint-capture.js';
 import {
@@ -261,11 +262,15 @@ describe('#26 损坏 / schema 不合法的 checkpoint 不再静默当作「没�
   });
 
   it('saveTaskCheckpoint 落盘失败以 warn 级别记录', async () => {
+    const prevRuntimeDir = process.env.ICE_RUNTIME_DIR;
+    delete process.env.ICE_RUNTIME_DIR;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sessionDir = path.join(tmp, 'sessions');
     const deps = {
       checkpointManager: { save: async () => { throw new Error('disk full'); } },
       loopController: { getState: () => ({}) },
       enqueueCheckpointPersist: <T>(task: () => Promise<T>) => task(),
+      runtimeTelemetry: new RuntimeTelemetry(sessionDir, 's-fail'),
     } as unknown as CheckpointDeps;
     const runtimeState = {
       taskState: new TaskState('goal'),
@@ -273,9 +278,21 @@ describe('#26 损坏 / schema 不合法的 checkpoint 不再静默当作「没�
       failedToolCallSignatures: new Map<string, number>(),
     };
 
-    await saveTaskCheckpoint(deps, 'running', 'goal', [], runtimeState as never);
+    try {
+      await saveTaskCheckpoint(deps, 'running', 'goal', [], runtimeState as never);
 
-    expect(warn).toHaveBeenCalledWith('[harness] checkpoint save failed:', 'disk full');
+      expect(warn).toHaveBeenCalledWith('[harness] checkpoint save failed:', 'disk full');
+      const raw = await fs.readFile(path.join(sessionDir, 's-fail.telemetry.jsonl'), 'utf8');
+      expect(JSON.parse(raw)).toMatchObject({
+        type: 'failure',
+        sessionId: 's-fail',
+        source: 'checkpoint_save',
+        message: 'disk full',
+      });
+    } finally {
+      if (prevRuntimeDir === undefined) delete process.env.ICE_RUNTIME_DIR;
+      else process.env.ICE_RUNTIME_DIR = prevRuntimeDir;
+    }
   });
 });
 

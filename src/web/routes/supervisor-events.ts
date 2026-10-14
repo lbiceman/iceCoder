@@ -226,13 +226,30 @@ export function aggregateExecutionModeSeries(
   return buckets;
 }
 
+/** 旧的汇总文件，加上每个会话自己的 *.telemetry.jsonl。 */
+async function readHarnessTelemetryLines(days: number): Promise<JsonlLine[]> {
+  const dataDir = getRuntimeDataDir();
+  const legacy = await readJsonlFile(path.join(dataDir, DEFAULT_RUNTIME_TELEMETRY_LOG), days);
+  const sessionsDir = process.env.ICE_SESSIONS_DIR
+    ? path.resolve(process.env.ICE_SESSIONS_DIR)
+    : path.join(dataDir, 'sessions');
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(sessionsDir);
+  } catch {
+    return legacy;
+  }
+  const files = names.filter(name => name.endsWith('.telemetry.jsonl'));
+  const chunks = await Promise.all(files.map(name => readJsonlFile(path.join(sessionsDir, name), days)));
+  return [...legacy, ...chunks.flat()];
+}
+
 export function createSupervisorEventsRouter(): Router {
   const router = Router();
   router.get('/', async (req: Request, res: Response): Promise<void> => {
     const parsedDays = Number.parseInt(req.query.days as string, 10);
     const days = Number.isFinite(parsedDays) ? Math.min(Math.max(parsedDays, 1), 90) : 7;
-    const runtimePath = path.join(getRuntimeDataDir(), DEFAULT_RUNTIME_TELEMETRY_LOG);
-    const events = extractExecutionModeEvents(await readJsonlFile(runtimePath, days));
+    const events = extractExecutionModeEvents(await readHarnessTelemetryLines(days));
 
     // ~supervisor 命令要文本报告；统计页不带 format，继续走下面的 JSON。
     if (String(req.query.format || '') === 'text') {

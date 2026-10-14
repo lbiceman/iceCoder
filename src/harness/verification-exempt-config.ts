@@ -27,10 +27,8 @@ interface ExemptRuntime {
   workspaceRoot: string | undefined;
 }
 
-/**
- * 进程级回退运行时（无活跃作用域时使用，兼容直接调用方与测试）。
- */
-const globalRuntime: ExemptRuntime = { prefixes: [], workspaceRoot: undefined };
+/** 没有作用域时的只读空配置。set 不会写进这里。 */
+const EMPTY_RUNTIME: ExemptRuntime = { prefixes: [], workspaceRoot: undefined };
 
 /**
  * 每次 Harness.run 建立独立作用域，使并发会话各自隔离，
@@ -39,7 +37,7 @@ const globalRuntime: ExemptRuntime = { prefixes: [], workspaceRoot: undefined };
 const exemptStorage = new AsyncLocalStorage<ExemptRuntime>();
 
 function currentRuntime(): ExemptRuntime {
-  return exemptStorage.getStore() ?? globalRuntime;
+  return exemptStorage.getStore() ?? EMPTY_RUNTIME;
 }
 
 /** 在独立的验收豁免作用域内执行 fn（ALS 跨 await 自动传播）。 */
@@ -97,18 +95,23 @@ export function getVerificationExemptWorkspaceRoot(): string | undefined {
   return currentRuntime().workspaceRoot;
 }
 
-/** 供 Harness 每轮 run 注入；测试可调用 resetVerificationExemptRuntime 清理。 */
+/** 供 Harness 每轮 run 注入。没有作用域时不写进程级配置，只告警。 */
 export function setVerificationExemptRuntime(options: {
   workspaceRoot?: string;
   prefixes: readonly string[];
 }): void {
-  const rt = currentRuntime();
+  const rt = exemptStorage.getStore();
+  if (!rt) {
+    console.warn('[verification-exempt] setVerificationExemptRuntime ignored: no active scope');
+    return;
+  }
   rt.workspaceRoot = options.workspaceRoot?.trim() || undefined;
   rt.prefixes = normalizeVerificationExemptPrefixes(options.prefixes);
 }
 
 export function resetVerificationExemptRuntime(): void {
-  const rt = currentRuntime();
+  const rt = exemptStorage.getStore();
+  if (!rt) return;
   rt.prefixes = [];
   rt.workspaceRoot = undefined;
 }

@@ -24,10 +24,16 @@ export const DEFAULT_LONG_RUNNING_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_LONG_RUNNING_MAX_ROUNDS = 5000;
 
 /**
- * 单次 run 的累计 token 上限（`LoopController` 中 inputTokens+outputTokens 累加）。
- * 1e9 量级：在默认 5000 轮、压缩与中等单轮用量下足够支撑长跑；仍可作为异常刷量保险丝。
+ * 单次 run 的成本护栏：`LoopController` 把 input+output 累加，达到此值就以 `token_budget` 停止。
+ * 1e9 量级，撑得住默认 5000 轮；异常刷量时仍会停。
+ *
+ * 这不是 {@link TokenBudgetTracker} 的本地默认（那是 50 万，只在没传入 totalBudget 时使用）。
+ * Harness 会把本值传进 tracker，所以正式 run 里两边看到的是同一个 run 预算。
  */
-export const DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL = 1_000_000_000;
+export const DEFAULT_HARNESS_RUN_TOKEN_BUDGET = 1_000_000_000;
+
+/** @deprecated 与 {@link DEFAULT_HARNESS_RUN_TOKEN_BUDGET} 相同，保留给已有导入。 */
+export const DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL = DEFAULT_HARNESS_RUN_TOKEN_BUDGET;
 
 /**
  * Harness 单次 `run()` 的墙钟超时。
@@ -41,9 +47,9 @@ export function getHarnessMaxRoundsFromEnv(defaultRounds = DEFAULT_LONG_RUNNING_
   return readPositiveIntEnv('ICE_HARNESS_MAX_ROUNDS') ?? defaultRounds;
 }
 
-/** 返回固定的累计 token 上限（见 {@link DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL}）。 */
+/** 返回单次 run 的成本护栏（见 {@link DEFAULT_HARNESS_RUN_TOKEN_BUDGET}）。 */
 export function getHarnessTokenBudget(): number {
-  return DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL;
+  return DEFAULT_HARNESS_RUN_TOKEN_BUDGET;
 }
 
 /**

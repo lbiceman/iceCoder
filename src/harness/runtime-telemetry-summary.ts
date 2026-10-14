@@ -16,6 +16,7 @@ export interface RuntimeTelemetrySessionSummary {
   tokensPerSuccessfulTask: number;
   compactionSavedTokens: number;
   hostGuardBlocks: number;
+  failures: number;
 }
 
 export interface RuntimeTelemetrySummary {
@@ -32,6 +33,7 @@ export interface RuntimeTelemetrySummary {
   tokensPerSuccessfulTask: number;
   compactionSavedTokens: number;
   hostGuardBlocks: number;
+  failures: number;
   permissionDecisions: Record<string, number>;
   sessionsDetail: RuntimeTelemetrySessionSummary[];
 }
@@ -49,6 +51,7 @@ interface MutableSessionStats {
   compactionEventSavedTokens: number;
   summaryCompactionSavedTokens: number;
   hostGuardBlocks: number;
+  failures: number;
 }
 
 function emptySessionStats(sessionId: string): MutableSessionStats {
@@ -65,6 +68,7 @@ function emptySessionStats(sessionId: string): MutableSessionStats {
     compactionEventSavedTokens: 0,
     summaryCompactionSavedTokens: 0,
     hostGuardBlocks: 0,
+    failures: 0,
   };
 }
 
@@ -131,6 +135,9 @@ export function aggregateRuntimeTelemetry(
       case 'host_guard_block':
         session.hostGuardBlocks++;
         break;
+      case 'failure':
+        session.failures++;
+        break;
       case 'summary':
         session.summaries++;
         session.verificationRateTotal += event.verificationRate || 0;
@@ -162,6 +169,7 @@ export function aggregateRuntimeTelemetry(
         : 0,
       compactionSavedTokens: Math.max(s.compactionEventSavedTokens, s.summaryCompactionSavedTokens),
       hostGuardBlocks: s.hostGuardBlocks,
+      failures: s.failures,
     }))
     .sort((a, b) => b.rounds - a.rounds || a.sessionId.localeCompare(b.sessionId));
 
@@ -189,6 +197,7 @@ export function aggregateRuntimeTelemetry(
       : 0,
     compactionSavedTokens: sessionsDetail.reduce((sum, s) => sum + s.compactionSavedTokens, 0),
     hostGuardBlocks: sessionsDetail.reduce((sum, s) => sum + s.hostGuardBlocks, 0),
+    failures: sessionsDetail.reduce((sum, s) => sum + s.failures, 0),
     permissionDecisions,
     sessionsDetail,
   };
@@ -220,6 +229,7 @@ export function formatRuntimeTelemetryMarkdown(summary: RuntimeTelemetrySummary)
     `- tokens_per_successful_task: ${roundMetric(summary.tokensPerSuccessfulTask)}`,
     `- compaction_saved_tokens: ${Math.round(summary.compactionSavedTokens)}`,
     `- host_guard_blocks: ${summary.hostGuardBlocks}`,
+    `- failures: ${summary.failures}`,
     '',
     '## Permission Decisions',
     '',

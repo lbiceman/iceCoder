@@ -40,6 +40,7 @@ export const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
   readonlyToolNames: ['read_file', 'glob', 'grep', 'list_dir'],
 };
 
+/** CLI / Web 未单独写档时的默认：adaptive。含义见 supervisor-mode-contract.ts。 */
 export function defaultSupervisorConfig(): SupervisorConfigFile {
   return {
     mode: 'adaptive',

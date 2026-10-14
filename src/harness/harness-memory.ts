@@ -34,6 +34,10 @@ import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.j
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { scheduleAutoDream } from '../memory/file-memory/memory-dream-runner.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
+import {
+  EMPTY_RECALL_COOLDOWN_ROUNDS,
+  EMPTY_RECALL_STREAK_BEFORE_COOLDOWN,
+} from './harness-constants.js';
 import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
@@ -927,13 +931,15 @@ export class HarnessMemoryIntegration {
         this.emptyRecallCooldown = 0;
       } else {
         await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
-        // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
+        // 空召回 → 累计计数，连续多次空召回后冷却若干轮
         emitMemoryStep(onStep, 'recall_empty', '未找到可注入的相关记忆');
         this.consecutiveEmptyRecalls++;
-        if (this.consecutiveEmptyRecalls >= 3) {
-          this.emptyRecallCooldown = 3;
+        if (this.consecutiveEmptyRecalls >= EMPTY_RECALL_STREAK_BEFORE_COOLDOWN) {
+          this.emptyRecallCooldown = EMPTY_RECALL_COOLDOWN_ROUNDS;
           this.consecutiveEmptyRecalls = 0;
-          console.debug('[harness-memory] 连续空召回，冷却 3 轮');
+          console.debug(
+            `[harness-memory] 连续空召回，冷却 ${EMPTY_RECALL_COOLDOWN_ROUNDS} 轮`,
+          );
         }
       }
     } catch (err) {

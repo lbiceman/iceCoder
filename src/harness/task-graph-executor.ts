@@ -13,6 +13,7 @@ import type { TaskGraph as TaskGraphData, NodeContract, OutputSignal, TaskNode }
 import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
 import { buildGraph } from './task-graph-builder.js';
 import { isNeutralAgentTool } from './agents/task-tool.js';
+import { MAX_SAME_TOOL_REPEAT } from './harness-constants.js';
 import {
   createTaskGraph,
   getCurrentNode,
@@ -187,7 +188,7 @@ export class GraphExecutor {
         toolNames: [...this.currentRoundToolNames],
         allowedTools: node.suggestedTools ?? [],
         nodePhase: node.phase,
-        nodeGuard: { maxSameToolRepeat: 3 },
+        nodeGuard: { maxSameToolRepeat: this.sameToolRepeatLimit() },
       });
       if (devResult.deviated && devResult.severity === 'hard') {
         const hint = 'message' in devResult.correction ? devResult.correction.message : devResult.description;
@@ -225,7 +226,7 @@ export class GraphExecutor {
         toolNames: [...this.currentRoundToolNames],
         allowedTools: node.suggestedTools ?? [],
         nodePhase: node.phase,
-        nodeGuard: { maxSameToolRepeat: 3 },
+        nodeGuard: { maxSameToolRepeat: this.sameToolRepeatLimit() },
       });
 
       if (!devResult.deviated) {
@@ -322,6 +323,10 @@ export class GraphExecutor {
   // Internals
   // ═══════════════════════════════════════════════
 
+  private sameToolRepeatLimit(): number {
+    return this.contractValidator?.sameToolRepeatLimit() ?? MAX_SAME_TOOL_REPEAT;
+  }
+
   private resetNodeState(): void {
     this.contractValidator = null;
     this.escalationManager.reset();
@@ -344,7 +349,7 @@ export class GraphExecutor {
       nodeGuard: {
         maxIdleRounds: 3,
         maxToolsPerRound: 8,
-        maxSameToolRepeat: 5,
+        maxSameToolRepeat: MAX_SAME_TOOL_REPEAT,
         enforceToolBoundary: false,
         deviationTolerance: 'soft',
       },

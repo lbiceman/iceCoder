@@ -34,6 +34,11 @@ import {
   type CompactionUsageSnapshot,
 } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
+import { warnHarnessFailure } from './runtime-telemetry.js';
+import {
+  MIN_USER_MSG_LENGTH_TO_PRESERVE,
+  SHORT_USER_MSG_MAX_LENGTH,
+} from './harness-constants.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
@@ -186,10 +191,9 @@ export interface CompactionConfig {
   maxRuntimeRecoveryTokens: number;
   /** 会话 id，用于压缩截断提示中的 session-notes 路径 */
   sessionId?: string;
+  /** 会话目录。LLM 摘要失败时，failure telemetry 与该会话的 runtime 日志写在同一处。 */
+  sessionDir?: string;
 }
-
-/** 用户消息内容长度超过此阈值时视为任务描述，硬压缩时保留最近一条 */
-const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
 
 function isLongTaskUserMessage(msg: UnifiedMessage): boolean {
   return msg.role === 'user'
@@ -219,9 +223,6 @@ function splitKeepingTaskAnchor(
   }
   return { droppedMessages, recentMessages };
 }
-
-/** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
-const SHORT_USER_MSG_MAX_LENGTH = 50;
 
 /** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe） */
 const MIN_REAL_USERS_IN_SUFFIX = 2;
@@ -1372,11 +1373,22 @@ Continue the conversation from where it left off without asking the user any fur
       if (response.content && response.content.length > 0) {
         return response.content;
       }
-    } catch {
-      // LLM 摘要失败，回退到结构化摘要
+      await this.reportSummarizeFailure('empty summary');
+    } catch (err) {
+      await this.reportSummarizeFailure(err instanceof Error ? err.message : String(err));
     }
 
     return structuralSummary;
+  }
+
+  /** LLM 精炼失败时保留结构化摘要，但把原因写进 warn 和 failure telemetry。 */
+  private async reportSummarizeFailure(message: string): Promise<void> {
+    await warnHarnessFailure({
+      source: 'llm_summarize',
+      message,
+      sessionId: this.config.sessionId,
+      sessionDir: this.config.sessionDir,
+    });
   }
 
   /**

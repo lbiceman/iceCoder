@@ -69,9 +69,22 @@ export const DEFAULT_GRAPH_COMPACTION: GraphCompactionConfig = {
   pruneDeadFallbacks: true,
 };
 
+/** 自定义 edges 成环时抛出，避免游标在环上静默打转。 */
+export class TaskGraphCycleError extends Error {
+  readonly cycle: readonly string[];
+
+  constructor(cycle: readonly string[]) {
+    super(`Task graph contains a cycle: ${cycle.join(' -> ')}`);
+    this.name = 'TaskGraphCycleError';
+    this.cycle = cycle;
+  }
+}
+
 export function createTaskGraph(opts: TaskGraphOptions): TaskGraphData {
   const now = opts.now ?? (() => Date.now());
   const graphId = opts.graphId ?? randomUUID();
+  const edges = opts.edges ?? buildDefaultEdges(opts.nodes);
+  assertAcyclicTaskEdges(opts.nodes, edges);
   const nodeMap = nodesToMap(opts.nodes);
   const mainBranch: ExecutionBranch = {
     id: `branch-main-${graphId}`,
@@ -105,7 +118,7 @@ export function createTaskGraph(opts: TaskGraphOptions): TaskGraphData {
     goal: opts.goal,
     intent: opts.intent,
     nodes: nodeMap,
-    edges: opts.edges ?? buildDefaultEdges(opts.nodes),
+    edges,
     mainBranch,
     fallbackBranches,
     cursor,
@@ -600,6 +613,47 @@ function nodesToMap(nodes: TaskNode[]): Record<string, TaskNode> {
     map[node.id] = { ...node };
   }
   return map;
+}
+
+/**
+ * 对边做 DFS 三色标记。灰色节点被再次走到即成环。
+ * 端点不在节点表里时直接拒绝，否则环可能绕过未知 id 检测不到。
+ */
+function assertAcyclicTaskEdges(nodes: readonly TaskNode[], edges: readonly TaskEdge[]): void {
+  const ids = new Set(nodes.map(node => node.id));
+  const outgoing = new Map<string, string[]>();
+  for (const id of ids) outgoing.set(id, []);
+
+  for (const edge of edges) {
+    if (!ids.has(edge.from) || !ids.has(edge.to)) {
+      throw new Error(`Task graph edge references an unknown node: ${edge.from} -> ${edge.to}`);
+    }
+    outgoing.get(edge.from)!.push(edge.to);
+  }
+
+  const color = new Map<string, 0 | 1 | 2>();
+  for (const id of ids) color.set(id, 0);
+  const stack: string[] = [];
+
+  const visit = (id: string): void => {
+    color.set(id, 1);
+    stack.push(id);
+    for (const next of outgoing.get(id) ?? []) {
+      const state = color.get(next) ?? 0;
+      if (state === 1) {
+        const start = stack.indexOf(next);
+        const cycle = (start >= 0 ? stack.slice(start) : [next]).concat(next);
+        throw new TaskGraphCycleError(cycle);
+      }
+      if (state === 0) visit(next);
+    }
+    stack.pop();
+    color.set(id, 2);
+  };
+
+  for (const id of ids) {
+    if (color.get(id) === 0) visit(id);
+  }
 }
 
 function buildDefaultEdges(nodes: TaskNode[]): TaskEdge[] {

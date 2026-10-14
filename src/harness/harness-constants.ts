@@ -48,3 +48,48 @@ export const MAX_EMERGENCY_COMPACTS_PER_RUN = 3;
 // ─── 默认压缩配置 ───
 export const DEFAULT_COMPACTION_THRESHOLD = 40;
 export const DEFAULT_COMPACTION_KEEP_RECENT = 15;
+
+/** 验收失败后，同一计划、同一工作区版本最多再续的轮数。数字在 RECOVERY_BUDGET。 */
+export const VERIFICATION_CONTINUATION_MAX = RECOVERY_BUDGET.verificationContinuation.max;
+
+/** RepoContext 新增文件数折成 diff 行数，只给 large_diff 信号用。 */
+export const APPROX_LINES_PER_FILE_CHANGE = 60;
+
+/** 恢复 checkpoint 时，已有消息达到此条数就 fork 压缩。 */
+export const CHECKPOINT_RESUME_FORK_MIN_MESSAGES = 60;
+/** 恢复 checkpoint 时，估算 token 超过窗口的这个比例就 fork 压缩。 */
+export const CHECKPOINT_RESUME_FORK_TOKEN_RATIO = 0.5;
+
+/** 连续只读工具轮达到此次数后，提示开始改文件。 */
+export const READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT = 5;
+
+/** 输出 token 达到单次上限的这个比例，视为已经顶满。 */
+export const OUTPUT_TOKEN_CEILING_RATIO = 0.98;
+/** 写工具 content 至少这么长且缺 path，才按截断恢复。 */
+export const TRUNCATED_WRITE_CONTENT_MIN_CHARS = 500;
+
+/** 停手验收轮询：间隔、退避上限、最多轮询次数。 */
+export const STOP_VERIFICATION_POLL_INTERVAL_MS = 500;
+export const STOP_VERIFICATION_MAX_POLL_INTERVAL_MS = 2_000;
+export const STOP_VERIFICATION_MAX_POLL_ATTEMPTS = 60;
+
+/** 短确认消息，轻量压缩可以丢掉。 */
+export const SHORT_USER_MSG_MAX_LENGTH = 50;
+/** 超过这个长度的 user 消息视为任务描述，硬压缩时保留最近一条。 */
+export const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
+
+/** 连续空召回达到此次数后进入冷却。 */
+export const EMPTY_RECALL_STREAK_BEFORE_COOLDOWN = 3;
+/** 空召回冷却持续的轮数。 */
+export const EMPTY_RECALL_COOLDOWN_ROUNDS = 3;
+
+/** 子 Agent 硬超时之后再等多久才 abort。 */
+export const AGENT_HARD_TIMEOUT_GRACE_MS = 30_000;
+/** 子 Agent 进度更新的默认节流。 */
+export const AGENT_UPDATE_THROTTLE_MS = 500;
+
+/**
+ * 任务图节点上同一工具的连续调用上限。
+ * 偏离检测里的只读蔓延也用这个数，避免合约 5、检测 3 两套阈值。
+ */
+export const MAX_SAME_TOOL_REPEAT = 5;

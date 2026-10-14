@@ -69,17 +69,19 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import {
+  APPROX_LINES_PER_FILE_CHANGE,
+  CHECKPOINT_RESUME_FORK_MIN_MESSAGES,
+  CHECKPOINT_RESUME_FORK_TOKEN_RATIO,
   DEFAULT_COMPACTION_KEEP_RECENT,
   DEFAULT_COMPACTION_THRESHOLD,
 } from './harness-constants.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import { callHarnessLlm } from './harness-llm-call.js';
-import { prepareHarnessRound } from './harness-round-prep.js';
-import { handleNoToolCalls } from './harness-round-no-tools.js';
-import { runHarnessToolRound } from './harness-tool-round.js';
+import { callHarnessLlm, type LlmCallDeps } from './harness-llm-call.js';
+import { prepareHarnessRound, type RoundPrepDeps } from './harness-round-prep.js';
+import { handleNoToolCalls, type NoToolRoundDeps } from './harness-round-no-tools.js';
+import { runHarnessToolRound, type ToolRoundDeps } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
-import type { RoundPrepDeps } from './harness-round-prep.js';
-import type { ToolExecutorDeps } from './harness-tool-executor.js';
+import { runWithWorkspaceTouchScope } from './workspace-command-touch.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
 import {
   resolveVerificationExemptDirPrefixes,
@@ -100,22 +102,23 @@ import {
   endTiming,
   markTimingStart,
   resetHarnessTiming,
+  runWithHarnessTimingScope,
   timeAsync,
   timeSync,
 } from './harness-timing.js';
 
-/** 把 RepoContext 新增文件数粗略折算成 diff 行数，只用于 large_diff 信号阈值。 */
-const APPROX_LINES_PER_FILE_CHANGE = 60;
-
 /**
- * run() 内各子模块共享的运行时依赖（由 Harness.buildRunDeps 从实例字段组装）。
+ * 一次 run 里各阶段看到的依赖。底层是同一份字段，类型按阶段收窄，
+ * 调用方不用再凑一个交叉类型。
  */
-export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
-  stopHookManager: StopHookManager;
-  tokenBudgetTracker?: TokenBudgetTracker;
-  /** 定时任务跳过收尾硬状态门禁。 */
-  skipCompletionGate?: boolean;
-};
+interface HarnessPhaseDeps {
+  prep: RoundPrepDeps;
+  llm: LlmCallDeps;
+  tools: ToolRoundDeps;
+  noTools: NoToolRoundDeps;
+}
+
+type SharedRunDeps = RoundPrepDeps & LlmCallDeps & ToolRoundDeps & NoToolRoundDeps;
 
 /**
  * Harness 是带工具调用的 LLM 迭代循环引擎。
@@ -181,6 +184,7 @@ export class Harness {
       keepRecent: config.compactionKeepRecent ?? DEFAULT_COMPACTION_KEEP_RECENT,
       enableLLMSummary: config.compactionEnableLLMSummary,
       sessionId: this.sessionId,
+      sessionDir: config.sessionDir,
     };
     if (config.compactionMaxReinjectFiles != null) {
       compactionPartial.maxReinjectFiles = config.compactionMaxReinjectFiles;
@@ -232,9 +236,9 @@ export class Harness {
     }
   }
 
-  /** 把本实例上的子模块引用打包成一次 run() 内各轮共用的依赖对象（prep / LLM / 工具 / 停止等）。 */
-  private buildRunDeps(): HarnessRunDeps {
-    return {
+  /** 把本实例上的子模块引用按阶段视图交出去。各视图指向同一对象，工作区锁改动能一起看见。 */
+  private buildPhaseDeps(): HarnessPhaseDeps {
+    const shared: SharedRunDeps = {
       loopController: this.loopController,
       contextCompactor: this.contextCompactor,
       memoryIntegration: this.memoryIntegration,
@@ -265,6 +269,7 @@ export class Harness {
       checkpointOwner: this.config.checkpointOwner,
       agentScope: this.config.agentScope,
     };
+    return { prep: shared, llm: shared, tools: shared, noTools: shared };
   }
 
   /**
@@ -290,7 +295,7 @@ export class Harness {
    * modeDecisionEngineEnabled 为 false 时直接返回（OFF 模式无副作用）。
    */
   private evaluateExecutionModeBeforeLlm(
-    deps: HarnessRunDeps,
+    deps: RoundPrepDeps,
     state: HarnessRunState,
     round: number,
     onStep?: (event: HarnessStepEvent) => void,
@@ -430,7 +435,11 @@ export class Harness {
     // 每次 run 建立独立的「验收豁免」运行时作用域（AsyncLocalStorage），
     // 使并发会话各自隔离，互不覆盖（P1-10）。
     return runWithVerificationExemptScope(() =>
-      this.runScoped(userMessage, chatFn, onStep, existingMessages, streamFn, userContentBlocks),
+      runWithHarnessTimingScope(() =>
+        runWithWorkspaceTouchScope(() =>
+          this.runScoped(userMessage, chatFn, onStep, existingMessages, streamFn, userContentBlocks),
+        ),
+      ),
     );
   }
 
@@ -442,6 +451,173 @@ export class Harness {
     streamFn?: StreamFunction,
     userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
+    const { logger, phases, state, memoryActive, runStartedAt } = await this.restoreRunState(
+      userMessage,
+      chatFn,
+      onStep,
+      existingMessages,
+      streamFn,
+      userContentBlocks,
+    );
+
+    try {
+      this.loopController.resetForNewRun();
+      syncExecutionModeLoopState(this.loopController, state);
+      endTiming('run_init', runStartedAt);
+      while (true) {
+        const roundStartedAt = markTimingStart();
+        const prep = await timeAsync('round_prep', () => prepareHarnessRound(phases.prep, {
+          state,
+          userMessage,
+          chatFn,
+          logger,
+          onStep,
+          streamFn,
+        }));
+        if (prep.action === 'stop') {
+          endTiming('round_wall', roundStartedAt);
+          return prep.result;
+        }
+        emitLightweightSnapshotBoundary({
+          boundary: 'round_started',
+          sessionId: this.sessionId,
+          round: prep.round,
+        });
+
+        timeSync('mode_eval', () => {
+          this.evaluateExecutionModeBeforeLlm(phases.prep, state, prep.round, onStep);
+        }, prep.round);
+
+        timeSync('context_usage', () => {
+          onStep?.({
+            type: 'context_usage',
+            iteration: prep.round,
+            totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
+              lastInputTokens: phases.llm.loopController.getState().lastInputTokens,
+              lastOutputTokens: phases.llm.loopController.getState().lastOutputTokens,
+            }),
+          });
+        }, prep.round);
+
+        const toolsForLlm = state.tools;
+
+        const llm = await callHarnessLlm(phases.llm, {
+          state,
+          normalizedMsgs: prep.normalizedMsgs,
+          currentTools: toolsForLlm,
+          round: prep.round,
+          chatFn,
+          streamFn,
+          logger,
+          onStep,
+        });
+        if (llm.action === 'retry') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          continue;
+        }
+        if (llm.action === 'abort') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return handleHarnessStop(phases.prep, {
+            reason: 'user_abort',
+            messages: state.messages,
+            chatFn,
+            tools: state.tools,
+            logger,
+            onStep,
+            streamFn,
+            runtimeState: state,
+          });
+        }
+        if (llm.action === 'error') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return llm.result;
+        }
+
+        const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
+        const response = timeSync(
+          'post_salvage',
+          () => resolveSalvagedLlmResponse(rawResponse, new Set(toolsForLlm.map(t => t.name))),
+          prep.round,
+        );
+        if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
+          console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
+        }
+        const hasToolCalls = !!response.toolCalls?.length;
+
+        if (!hasToolCalls) {
+          logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
+          const noTools = await timeAsync('post_no_tools', () => handleNoToolCalls(phases.noTools, {
+            state,
+            response,
+            rawAssistantContent: rawResponse.content,
+            userMessage,
+            currentTools: state.tools,
+            tokenUsage,
+            logger,
+            onStep,
+          }), prep.round);
+          if (noTools.action === 'continue') {
+            endTiming('round_wall', roundStartedAt, prep.round);
+            continue;
+          }
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return noTools.result;
+        }
+
+        logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
+        const toolRound = await timeAsync('tool_round', () => runHarnessToolRound(phases.tools, {
+          state,
+          response,
+          userMessage,
+          currentTools: state.tools,
+          round: prep.round,
+          tokenUsage,
+          chatFn,
+          logger,
+          onStep,
+          streamFn,
+        }), prep.round);
+        endTiming('round_wall', roundStartedAt, prep.round);
+        if (toolRound.action === 'return') return toolRound.result;
+
+        // 工具轮后不 graph-stop：让下一轮 LLM 生成正文，再由 D′ 统一收尾。
+      }
+    } finally {
+      endTiming('run_total', runStartedAt);
+      dumpHarnessTiming();
+      if (memoryActive) {
+        this.memoryIntegration.onLoopEnd(
+          state.messages,
+          state.turnCount,
+          this.loopController.getState().totalInputTokens,
+          { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
+          { stopReason: this.loopController.getState().stopReason },
+        ).catch(err => {
+          console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
+        });
+      }
+    }
+  }
+
+
+  /**
+   * 一次 run 开始前的会话恢复：消息、工作区锁、checkpoint / 记忆 hydrate。
+   * 是否沿用旧任务只判断一次，避免锚点和 V3 恢复各算一遍。
+   */
+  private async restoreRunState(
+    userMessage: string,
+    chatFn: ChatFunction,
+    onStep: ((event: HarnessStepEvent) => void) | undefined,
+    existingMessages: UnifiedMessage[] | undefined,
+    streamFn: StreamFunction | undefined,
+    userContentBlocks: import('../llm/types.js').ContentBlock[] | undefined,
+  ): Promise<{
+    logger: HarnessLogger;
+    phases: HarnessPhaseDeps;
+    state: HarnessRunState;
+    memoryActive: boolean;
+    runStartedAt: number;
+  }> {
     const logger = new HarnessLogger();
     resetHarnessTiming();
     const runStartedAt = markTimingStart();
@@ -507,17 +683,17 @@ export class Harness {
       prefixes: exemptPrefixes,
     });
 
-    const deps = this.buildRunDeps();
-    deps.workspaceRoot = workspaceRoot;
-    deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
-    deps.referenceReads = referenceReads;
+    const phases = this.buildPhaseDeps();
+    phases.tools.workspaceRoot = workspaceRoot;
+    phases.tools.lockedWorkspaceRoot = lockedWorkspaceRoot;
+    phases.tools.referenceReads = referenceReads;
     const spawner = this.config.agentSpawner;
     if (spawner) {
       spawner.beginParentRun();
       const parentToolExecutor = this.toolExecutor;
       const timeout = this.config.loop.timeout;
       const deadline = timeout && timeout > 0 ? Date.now() + timeout : undefined;
-      deps.toolExecutor = new AgentAwareToolExecutor(
+      phases.tools.toolExecutor = new AgentAwareToolExecutor(
         parentToolExecutor,
         (toolCall) =>
           spawner.runTask(toolCall, {
@@ -532,14 +708,15 @@ export class Harness {
           }),
         (toolCall) => spawner.runCheckAgent(toolCall),
       );
-      deps.agentSpawner = spawner;
+      phases.tools.agentSpawner = spawner;
     }
 
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
-    const persistedGoalForAnchor = projectCheckpoint
-      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal)
+    const resumePersistedTask = projectCheckpoint != null
+      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal);
+    const persistedGoalForAnchor = resumePersistedTask && projectCheckpoint
       ? projectCheckpoint.execution.taskState.goal
       : activeCheckpoint?.userGoal;
     const sessionGoalAnchor = resolveSessionGoalAnchor(
@@ -700,10 +877,7 @@ export class Harness {
 
     // V3 is the authoritative runtime snapshot. Session notes above remain a legacy,
     // read-only source for narrative/repo continuity and cannot replace V3 completion.
-    if (
-      projectCheckpoint
-      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal)
-    ) {
+    if (resumePersistedTask && projectCheckpoint) {
       const completion = CompletionFactsView.fromCompletionSnapshot(projectCheckpoint.completion);
       state.taskState.applySnapshot(projectCheckpoint.execution.taskState);
       state.repoContext.applySnapshot(projectCheckpoint.workspace.repoContext);
@@ -739,15 +913,17 @@ export class Harness {
       state.activeCheckpointResumeSummary = resumeSummary;
       if (existingMessages && existingMessages.length > 0) {
         const est = this.contextCompactor.getEstimatedTokens(messages);
-        const forkThreshold = Math.floor(readCompactionContextWindowTokens() * 0.5);
-        if (existingMessages.length >= 60 || est > forkThreshold) {
+        const forkThreshold = Math.floor(
+          readCompactionContextWindowTokens() * CHECKPOINT_RESUME_FORK_TOKEN_RATIO,
+        );
+        if (existingMessages.length >= CHECKPOINT_RESUME_FORK_MIN_MESSAGES || est > forkThreshold) {
           const fork = applyCheckpointResumeFork(this.contextCompactor, messages, resumeSummary);
           state.checkpointResumeForkApplied = true;
           console.log(
             `[harness] checkpoint resume fork: ${fork.beforeMessages}→${fork.afterMessages} msgs | `
             + `~estCtxTok ${fork.beforeTokens}→${fork.afterTokens}`,
           );
-          deps.runtimeTelemetry?.recordCompaction({
+          phases.prep.runtimeTelemetry?.recordCompaction({
             beforeMessages: fork.beforeMessages,
             afterMessages: fork.afterMessages,
             beforeTokens: fork.beforeTokens,
@@ -775,143 +951,7 @@ export class Harness {
       }
     }
 
-    try {
-      this.loopController.resetForNewRun();
-      syncExecutionModeLoopState(this.loopController, state);
-      endTiming('run_init', runStartedAt);
-      while (true) {
-        const roundStartedAt = markTimingStart();
-        const prep = await timeAsync('round_prep', () => prepareHarnessRound(deps, {
-          state,
-          userMessage,
-          chatFn,
-          logger,
-          onStep,
-          streamFn,
-        }));
-        if (prep.action === 'stop') {
-          endTiming('round_wall', roundStartedAt);
-          return prep.result;
-        }
-        emitLightweightSnapshotBoundary({
-          boundary: 'round_started',
-          sessionId: this.sessionId,
-          round: prep.round,
-        });
-
-        timeSync('mode_eval', () => {
-          this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
-        }, prep.round);
-
-        timeSync('context_usage', () => {
-          onStep?.({
-            type: 'context_usage',
-            iteration: prep.round,
-            totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
-              lastInputTokens: deps.loopController.getState().lastInputTokens,
-              lastOutputTokens: deps.loopController.getState().lastOutputTokens,
-            }),
-          });
-        }, prep.round);
-
-        const toolsForLlm = state.tools;
-
-        const llm = await callHarnessLlm(deps, {
-          state,
-          normalizedMsgs: prep.normalizedMsgs,
-          currentTools: toolsForLlm,
-          round: prep.round,
-          chatFn,
-          streamFn,
-          logger,
-          onStep,
-        });
-        if (llm.action === 'retry') {
-          endTiming('round_wall', roundStartedAt, prep.round);
-          continue;
-        }
-        if (llm.action === 'abort') {
-          endTiming('round_wall', roundStartedAt, prep.round);
-          return handleHarnessStop(deps, {
-            reason: 'user_abort',
-            messages: state.messages,
-            chatFn,
-            tools: state.tools,
-            logger,
-            onStep,
-            streamFn,
-            runtimeState: state,
-          });
-        }
-        if (llm.action === 'error') {
-          endTiming('round_wall', roundStartedAt, prep.round);
-          return llm.result;
-        }
-
-        const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
-        const response = timeSync(
-          'post_salvage',
-          () => resolveSalvagedLlmResponse(rawResponse, new Set(toolsForLlm.map(t => t.name))),
-          prep.round,
-        );
-        if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
-          console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
-        }
-        const hasToolCalls = !!response.toolCalls?.length;
-
-        if (!hasToolCalls) {
-          logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
-          const noTools = await timeAsync('post_no_tools', () => handleNoToolCalls(deps, {
-            state,
-            response,
-            rawAssistantContent: rawResponse.content,
-            userMessage,
-            currentTools: state.tools,
-            tokenUsage,
-            logger,
-            onStep,
-          }), prep.round);
-          if (noTools.action === 'continue') {
-            endTiming('round_wall', roundStartedAt, prep.round);
-            continue;
-          }
-          endTiming('round_wall', roundStartedAt, prep.round);
-          return noTools.result;
-        }
-
-        logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
-        const toolRound = await timeAsync('tool_round', () => runHarnessToolRound(deps, {
-          state,
-          response,
-          userMessage,
-          currentTools: state.tools,
-          round: prep.round,
-          tokenUsage,
-          chatFn,
-          logger,
-          onStep,
-          streamFn,
-        }), prep.round);
-        endTiming('round_wall', roundStartedAt, prep.round);
-        if (toolRound.action === 'return') return toolRound.result;
-
-        // 工具轮后不 graph-stop：让下一轮 LLM 生成正文，再由 D′ 统一收尾。
-      }
-    } finally {
-      endTiming('run_total', runStartedAt);
-      dumpHarnessTiming();
-      if (memoryActive) {
-        this.memoryIntegration.onLoopEnd(
-          state.messages,
-          state.turnCount,
-          this.loopController.getState().totalInputTokens,
-          { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
-          { stopReason: this.loopController.getState().stopReason },
-        ).catch(err => {
-          console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
-        });
-      }
-    }
+    return { logger, phases, state, memoryActive, runStartedAt };
   }
 
   /** 返回 LoopController 的累计轮次、token 用量等统计，供外部 UI 或测试观测。 */

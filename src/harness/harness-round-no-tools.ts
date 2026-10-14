@@ -9,6 +9,7 @@ import {
   MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
+  VERIFICATION_CONTINUATION_MAX,
 } from './harness-constants.js';
 import { RECOVERY_BUDGET } from './recovery-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
@@ -482,7 +483,7 @@ export async function handleNoToolCalls(
   if (stopVerification.status === 'failed') {
     if (tryConsumeVerificationContinuation(
       state.verificationState,
-      RECOVERY_BUDGET.verificationContinuation.max,
+      VERIFICATION_CONTINUATION_MAX,
       plan.fingerprint,
     )) {
       injectContinuationUserMessage(

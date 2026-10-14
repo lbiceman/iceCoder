@@ -99,7 +99,9 @@ export async function saveTaskCheckpoint(
           : undefined,
       );
     } catch (err) {
-      console.warn('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[harness] checkpoint save failed:', message);
+      await deps.runtimeTelemetry?.recordFailure({ source: 'checkpoint_save', message });
     }
   });
 }

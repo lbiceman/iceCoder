@@ -11,6 +11,11 @@ import {
   type VerificationPlanCommand,
 } from './verification-plan.js';
 import {
+  STOP_VERIFICATION_MAX_POLL_ATTEMPTS,
+  STOP_VERIFICATION_MAX_POLL_INTERVAL_MS,
+  STOP_VERIFICATION_POLL_INTERVAL_MS,
+} from './harness-constants.js';
+import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
@@ -81,9 +86,9 @@ interface SettledCommandResult {
   outputTail?: string;
 }
 
-const DEFAULT_POLL_INTERVAL_MS = 500;
-const DEFAULT_MAX_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_MAX_POLL_ATTEMPTS = 60;
+const DEFAULT_POLL_INTERVAL_MS = STOP_VERIFICATION_POLL_INTERVAL_MS;
+const DEFAULT_MAX_POLL_INTERVAL_MS = STOP_VERIFICATION_MAX_POLL_INTERVAL_MS;
+const DEFAULT_MAX_POLL_ATTEMPTS = STOP_VERIFICATION_MAX_POLL_ATTEMPTS;
 const DEFAULT_OUTPUT_TAIL_CHARS = 2_000;
 
 /**

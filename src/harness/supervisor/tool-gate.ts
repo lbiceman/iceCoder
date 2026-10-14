@@ -43,6 +43,7 @@ export interface ToolGateExecutionResult {
 
 class DefaultToolGate implements ToolGate {
   decide(calls: ToolCall[], ctx: GateContext): ToolGatePlan {
+    // free 直接放行。forced 只在有任务图提示时才拦；adaptive 不建图，所以这里等于透传。
     if (ctx.executionMode !== 'forced') {
       return { entries: calls.map(tc => ({ toolCallId: tc.id, action: 'execute' })) };
     }
