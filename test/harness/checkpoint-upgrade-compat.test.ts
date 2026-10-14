@@ -271,9 +271,16 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
+    expect(onDisk.storage).toBe('blobs-v1');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
-    expect(onDisk.projectCheckpoint.execution.taskState.goal).toBe('Implement the remaining editor feature without losing session history');
-    expect(onDisk.workspaceFiles['src/b.ts']).toBeNull();
+    expect(onDisk.workspaceFiles).toBeUndefined();
+    expect(onDisk.workspaceFileRefs['src/b.ts']).toBeNull();
+    const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');
+    expect(hydrated?.projectCheckpoint?.execution.taskState.goal).toBe(
+      'Implement the remaining editor feature without losing session history',
+    );
+    expect(hydrated?.workspaceFiles['src/b.ts']).toBeNull();
+    expect(hydrated?.combinedCheckpoint).toMatchObject({ taskId: 'task-legacy' });
   });
 
   it('does not drop combinedCheckpoint when finalizing a pre-V3 turn snapshot', async () => {
@@ -287,8 +294,12 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
+    expect(onDisk.storage).toBe('blobs-v1');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
-    expect(onDisk.uiMessages).toHaveLength(3);
+    expect(onDisk.uiMessages).toBeUndefined();
+    const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');
+    expect(hydrated?.uiMessages).toHaveLength(3);
+    expect(hydrated?.workspaceFiles['src/a.ts']).toBe('mid');
   });
 });
 

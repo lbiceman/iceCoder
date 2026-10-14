@@ -41,7 +41,11 @@ export interface UiChatMessage {
   alsoNote?: boolean;
 }
 
-/** 单条 Intent Checkpoint 归档 */
+/**
+ * 单条 Intent Checkpoint 的内存形态。
+ * 落盘时文件正文、消息、笔记、tool trace 和 projectCheckpoint 按内容哈希去重；
+ * loadIntentCheckpoint 会展开回这些字段。旧的内联归档仍按本结构直接读取。
+ */
 export interface IntentCheckpointArchive {
   version: typeof INTENT_CHECKPOINT_VERSION;
   messageId: string;

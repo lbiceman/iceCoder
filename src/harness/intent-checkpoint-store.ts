@@ -3,6 +3,9 @@
  *
  * 每条 User Message 对应 `{sessionId}/checkpoints/{messageId}.intent.json`。
  * 索引文件：`{sessionId}.checkpoint-index.json`
+ *
+ * 新写入的归档把文件正文、消息、笔记和 tool trace 按内容哈希放进
+ * `{sessionId}/checkpoints/blobs/`。相同内容只存一份；读取时展开回完整快照。
  */
 
 import { promises as fs } from 'node:fs';
@@ -22,6 +25,15 @@ import {
 import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 import { extractLikelyWritePathsFromCommand } from './workspace-command-touch.js';
+import {
+  absentWorkspacePathsFromArchive,
+  externalizeIntentCheckpoint,
+  IntentCheckpointCorruptError,
+  materializeIntentCheckpoint,
+  sweepUnreferencedIntentBlobs,
+} from './intent-checkpoint-blobs.js';
+
+export { IntentCheckpointCorruptError } from './intent-checkpoint-blobs.js';
 
 function indexPath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.checkpoint-index.json`);
@@ -151,19 +163,40 @@ export async function loadIntentCheckpoint(
   sessionId: string,
   messageId: string,
 ): Promise<IntentCheckpointArchive | null> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(archivePath(sessionDir, sessionId, messageId), 'utf-8');
-    const parsed = JSON.parse(raw) as IntentCheckpointArchive;
-    if (parsed?.version === INTENT_CHECKPOINT_VERSION && parsed.messageId === messageId) {
-      return {
-        ...parsed,
-        projectCheckpoint: resolveProjectCheckpoint(parsed, sessionId),
-      };
-    }
+    raw = await fs.readFile(archivePath(sessionDir, sessionId, messageId), 'utf-8');
   } catch {
-    /* missing */
+    return null;
   }
-  return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const header = parsed as { version?: unknown; messageId?: unknown };
+  if (header.version !== INTENT_CHECKPOINT_VERSION || header.messageId !== messageId) return null;
+  try {
+    const archive = await materializeIntentCheckpoint(sessionDir, sessionId, parsed);
+    if (archive.messageId !== messageId) return null;
+    return {
+      ...archive,
+      projectCheckpoint: resolveProjectCheckpoint(archive, sessionId),
+    };
+  } catch (err) {
+    if (err instanceof IntentCheckpointCorruptError) {
+      console.warn(`[intent-checkpoint] ${err.message}`);
+      throw err;
+    }
+    const wrapped = new IntentCheckpointCorruptError(
+      `检查点 ${messageId} 内容无法展开。`,
+      { cause: err },
+    );
+    console.warn(`[intent-checkpoint] ${wrapped.message}`);
+    throw wrapped;
+  }
 }
 
 /** 仅重写已有归档内容，不改变 checkpoint 索引顺序或 cursor。 */
@@ -174,7 +207,13 @@ export async function rewriteIntentCheckpoint(
 ): Promise<void> {
   const archiveToWrite = withoutLegacyRuntime(archive);
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
-  await writeFileAtomic(dest, JSON.stringify(archiveToWrite, null, 2));
+  await withCheckpointIndexLock(sessionDir, sessionId, async () => {
+    try {
+      await writeExternalizedArchive(sessionDir, sessionId, dest, archiveToWrite);
+    } finally {
+      await sweepIntentBlobsQuietly(sessionDir, sessionId);
+    }
+  });
 }
 
 export interface SaveIntentCheckpointInput {
@@ -183,32 +222,36 @@ export interface SaveIntentCheckpointInput {
   archive: IntentCheckpointArchive;
 }
 
-/** 保存 Intent Checkpoint 并更新索引 cursor（不覆盖已有同 messageId 条目）。 */
+/** 保存 Intent Checkpoint 并更新索引 cursor（不覆盖已有同 messageId 条目的位置）。 */
 export async function saveIntentCheckpoint(input: SaveIntentCheckpointInput): Promise<void> {
   const { sessionDir, sessionId, archive } = input;
   const archiveToWrite = withoutLegacyRuntime(archive);
   const fileName = `${archive.messageId}.intent.json`;
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
-  await writeFileAtomic(dest, JSON.stringify(archiveToWrite, null, 2));
 
   await withCheckpointIndexLock(sessionDir, sessionId, async () => {
-    const index = await loadCheckpointIndex(sessionDir, sessionId);
-    const existingIdx = index.entries.findIndex((e) => e.messageId === archive.messageId);
-    const entry: CheckpointIndexEntry = {
-      messageId: archive.messageId,
-      archiveFileName: fileName,
-      createdAt: archive.createdAt,
-      userMessageTime: archive.userMessageTime,
-    };
-    if (existingIdx >= 0) {
-      index.entries[existingIdx] = entry;
-    } else {
-      index.entries.push(entry);
+    try {
+      await writeExternalizedArchive(sessionDir, sessionId, dest, archiveToWrite);
+      const index = await loadCheckpointIndex(sessionDir, sessionId);
+      const existingIdx = index.entries.findIndex((e) => e.messageId === archive.messageId);
+      const entry: CheckpointIndexEntry = {
+        messageId: archive.messageId,
+        archiveFileName: fileName,
+        createdAt: archive.createdAt,
+        userMessageTime: archive.userMessageTime,
+      };
+      if (existingIdx >= 0) {
+        index.entries[existingIdx] = entry;
+      } else {
+        index.entries.push(entry);
+      }
+      index.cursorMessageId = archive.messageId;
+      index.cursorRestored = false;
+      // 不把归档 trackedPaths（含用户提示路径）并进 live manifest，避免会话修改列表掺未写入文件。
+      await saveCheckpointIndex(sessionDir, sessionId, index);
+    } finally {
+      await sweepIntentBlobsQuietly(sessionDir, sessionId);
     }
-    index.cursorMessageId = archive.messageId;
-    index.cursorRestored = false;
-    // 不把归档 trackedPaths（含用户提示路径）并进 live manifest，避免会话修改列表掺未写入文件。
-    await saveCheckpointIndex(sessionDir, sessionId, index);
   });
 }
 
@@ -329,11 +372,8 @@ export async function collectTrackedPathsAfterMessage(
   const paths = new Set<string>();
   for (let i = targetIdx + 1; i < index.entries.length; i++) {
     const entry = index.entries[i];
-    const archive = await loadIntentCheckpoint(sessionDir, sessionId, entry.messageId);
-    if (!archive) continue;
-    const files = archive.workspaceFiles ?? {};
-    for (const [p, content] of Object.entries(files)) {
-      if (content === null) paths.add(p);
+    for (const absent of await absentWorkspacePaths(sessionDir, sessionId, entry.messageId)) {
+      paths.add(absent);
     }
   }
   return [...paths];
@@ -359,11 +399,11 @@ export async function truncateCheckpointsFrom(
     index.cursorRestored = false;
     await syncTouchedPathsToCursorArchive(sessionDir, sessionId, index);
     await saveCheckpointIndex(sessionDir, sessionId, index);
+    for (const entry of toRemove) {
+      await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
+    }
+    await sweepIntentBlobsQuietly(sessionDir, sessionId);
   });
-
-  for (const entry of toRemove) {
-    await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
-  }
 }
 
 /** 删除单个 checkpoint 条目与归档，保留其后的 checkpoint。不回滚工作区，故不改 live manifest。 */
@@ -386,10 +426,9 @@ export async function removeCheckpoint(
       index.cursorRestored = false;
     }
     await saveCheckpointIndex(sessionDir, sessionId, index);
+    if (removed) await unlinkArchiveFromIndex(sessionDir, sessionId, removed);
+    await sweepIntentBlobsQuietly(sessionDir, sessionId);
   });
-
-  if (!removed) return;
-  await unlinkArchiveFromIndex(sessionDir, sessionId, removed);
 }
 
 /** 删除 cursor 之后的 checkpoint 条目与归档（Restore 后截断时间线）。 */
@@ -410,11 +449,64 @@ export async function truncateCheckpointsAfter(
     index.cursorRestored = true;
     await syncTouchedPathsToCursorArchive(sessionDir, sessionId, index);
     await saveCheckpointIndex(sessionDir, sessionId, index);
+    for (const entry of toRemove) {
+      await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
+    }
+    await sweepIntentBlobsQuietly(sessionDir, sessionId);
   });
+}
 
-  for (const entry of toRemove) {
-    await unlinkArchiveFromIndex(sessionDir, sessionId, entry);
+async function writeExternalizedArchive(
+  sessionDir: string,
+  sessionId: string,
+  dest: string,
+  archive: IntentCheckpointArchive,
+): Promise<void> {
+  const stored = await externalizeIntentCheckpoint(sessionDir, sessionId, archive);
+  await writeFileAtomic(dest, JSON.stringify(stored));
+}
+
+async function sweepIntentBlobsQuietly(sessionDir: string, sessionId: string): Promise<void> {
+  try {
+    await sweepUnreferencedIntentBlobs(sessionDir, sessionId);
+  } catch (err) {
+    console.warn(
+      '[intent-checkpoint] blob 回收失败:',
+      err instanceof Error ? err.message : err,
+    );
   }
+}
+
+/** 后续归档里 content === null 的路径。不展开文件正文。格式损坏时抛出，避免回滚漏删。 */
+async function absentWorkspacePaths(
+  sessionDir: string,
+  sessionId: string,
+  messageId: string,
+): Promise<string[]> {
+  if (!isSafeIntentMessageId(messageId)) return [];
+  let raw: string;
+  try {
+    raw = await fs.readFile(archivePath(sessionDir, sessionId, messageId), 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (err) {
+    throw new IntentCheckpointCorruptError(
+      `检查点 ${messageId} 无法解析，已停止回滚以避免误删文件。`,
+      { cause: err },
+    );
+  }
+  const absent = absentWorkspacePathsFromArchive(parsed);
+  if (absent === null) {
+    throw new IntentCheckpointCorruptError(
+      `检查点 ${messageId} 格式无法识别，已停止回滚以避免误删文件。`,
+    );
+  }
+  return absent;
 }
 
 async function unlinkArchiveFromIndex(
