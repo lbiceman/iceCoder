@@ -6,6 +6,13 @@
 
 /* exported ChatWebSocket */
 
+import {
+  enqueueOutboundMessage,
+  flushOutboundMessages,
+  planSocketSend,
+  shouldResetProcessingOnSocketClose,
+} from '../../web/ws-outbound-queue.ts';
+
 export const ChatWebSocket = (() => {
 
   let chatWs = null;
@@ -95,6 +102,7 @@ export const ChatWebSocket = (() => {
   let wsConnectTimeout = null;
 
   let remoteToken = null;
+  let outboundQueue = [];
 
   const handlers = {};
 
@@ -140,6 +148,7 @@ export const ChatWebSocket = (() => {
     chatWs.onopen = () => {
       if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
       wsReconnectAttempts = 0;
+      flushQueuedMessages();
       emit('open', {});
     };
 
@@ -152,8 +161,10 @@ export const ChatWebSocket = (() => {
 
     chatWs.onclose = () => {
       if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
-      processingBySession = {};
-      userStoppedBySession = {};
+      if (shouldResetProcessingOnSocketClose()) {
+        processingBySession = {};
+        userStoppedBySession = {};
+      }
       emit('close', {});
       scheduleReconnect();
     };
@@ -442,12 +453,32 @@ export const ChatWebSocket = (() => {
     }
   }
 
+  function flushQueuedMessages() {
+    if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
+    const batch = flushOutboundMessages(outboundQueue);
+    outboundQueue = batch.rest;
+    for (let i = 0; i < batch.pending.length; i++) {
+      try {
+        chatWs.send(JSON.stringify(batch.pending[i]));
+      } catch (_err) {
+        outboundQueue = batch.pending.slice(i).concat(outboundQueue);
+        break;
+      }
+    }
+  }
+
   function send(msg) {
     if (msg && typeof msg === 'object' && msg.type === 'message') {
       userStoppedBySession[getViewportSessionId()] = false;
     }
-    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+    const socketOpen = !!(chatWs && chatWs.readyState === WebSocket.OPEN);
+    const plan = planSocketSend(socketOpen, msg && msg.type);
+    if (plan === 'send') {
       chatWs.send(JSON.stringify(msg));
+      return true;
+    }
+    if (plan === 'queue') {
+      outboundQueue = enqueueOutboundMessage(outboundQueue, msg);
       return true;
     }
     return false;

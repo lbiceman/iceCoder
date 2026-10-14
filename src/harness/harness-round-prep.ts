@@ -11,20 +11,24 @@ import {
   bigramJaccard,
   getLastAssistantText,
   getLatestRealUserText,
+  getPreviousRealUserText,
   getLatestUserTextForTaskSwitch,
   isActionableToolRequest,
 } from './harness-message-utils.js';
 import { appendQueuedAlsoNotesToMessages } from '../session/pending-note.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
-import type { InjectMemoryMode } from './harness-memory.js';
+import {
+  hasTopicShifted,
+  type HarnessMemoryIntegration,
+  type InjectMemoryMode,
+} from './harness-memory.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
 import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
@@ -74,13 +78,25 @@ export type PrepareHarnessRoundResult =
   | { action: 'continue'; normalizedMsgs: UnifiedMessage[]; round: number }
   | { action: 'stop'; result: HarnessResult };
 
-/** 闲聊走轻量召回；工具轮之后走标准召回；首轮执行任务仍用关键词粗召回避免堵首 token。 */
+/** 用户在问以前记下的约定、偏好或配置。普通「上次测试失败」不算。 */
+export function asksAboutRememberedContext(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return /(记得|还记得|回忆).{0,16}(约定|偏好|配置|规则|习惯|怎么)|上次怎么|以前怎么|我的偏好|项目约定|remember (my|our|the).{0,24}(preference|convention|config)/i.test(trimmed);
+}
+
+/**
+ * 闲聊走轻量召回。执行任务默认关键词，避免精排堵住下一轮主模型。
+ * 话题切换或明确在问记忆时才走标准召回。
+ */
 export function resolveRecallInjectMode(args: {
   casual: boolean;
   hadToolRoundThisRun: boolean;
+  topicShifted?: boolean;
+  asksMemory?: boolean;
 }): InjectMemoryMode {
   if (args.casual) return 'casual_light';
-  if (args.hadToolRoundThisRun) return 'default';
+  if (args.asksMemory || args.topicShifted) return 'default';
   return 'coarse_pre_llm';
 }
 
@@ -232,9 +248,12 @@ export async function prepareHarnessRound(
     const intent = state.taskState.snapshot().intent;
     const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
     if (!skipMemoryRecall) {
+      const latestUser = getLatestRealUserText(msgs, userMessage);
       const memoryMode = resolveRecallInjectMode({
         casual: shouldApplyCasualHarness(intent),
         hadToolRoundThisRun: state.hadToolRoundThisRun === true,
+        topicShifted: hasTopicShifted(getPreviousRealUserText(msgs, latestUser), latestUser),
+        asksMemory: asksAboutRememberedContext(latestUser),
       });
       await timeAsync('prep_memory', () =>
         deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep }),

@@ -112,6 +112,24 @@ export function getLatestRealUserText(messages: UnifiedMessage[], fallback = '')
   return fallback;
 }
 
+/** 最近一条真实用户话之前的那一条。同一句重复出现时只跳过最后一次。 */
+export function getPreviousRealUserText(messages: UnifiedMessage[], latest: string): string {
+  let skippedLatest = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    const text = extractUserMessageText(msg.content);
+    if (!text.trim()) continue;
+    if (isSystemInjectedUserContent(text)) continue;
+    if (!skippedLatest && text === latest) {
+      skippedLatest = true;
+      continue;
+    }
+    return text;
+  }
+  return '';
+}
+
 /** 是否已有 assistant 带 `toolCalls` 的轮次（任意位置）。 */
 export function hasAssistantToolCallAttempt(messages: UnifiedMessage[]): boolean {
   return messages.some(m => m.role === 'assistant' && !!m.toolCalls?.length);

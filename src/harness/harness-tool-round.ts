@@ -702,8 +702,7 @@ export async function runHarnessToolRound(
     }
   }
 
-  // 工具轮后不在这里同步标准召回（会堵住 2–30s）。
-  // 下一轮 prep 见过 hadToolRoundThisRun 后改走 default（标准召回）。
+  // 工具轮后不在这里做标准召回。下一轮仍走关键词，除非话题切换或在问约定。
 
   const nextStop = deps.loopController.shouldContinue();
   if (nextStop) {

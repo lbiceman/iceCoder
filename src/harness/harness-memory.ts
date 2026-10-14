@@ -28,7 +28,7 @@ import type { FileMemoryManager } from '../memory/file-memory/file-memory-manage
 import type { MemoryHeader } from '../memory/file-memory/types.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
-import { recallRelevantMemories, filterByContextRelevance, filterByBudget, invalidateRescueCache } from '../memory/file-memory/memory-recall.js';
+import { recallRelevantMemories, filterByContextRelevance, filterByBudget, invalidateRescueCache, LLM_RECALL_TIMEOUT_MS } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
@@ -239,6 +239,34 @@ export interface HarnessMemoryConfig {
 /** 记忆注入模式 */
 export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
 
+/** 标准召回里的精排 / 救援最长等待。超时后用关键词结果，不再堵住主模型。 */
+export const MEMORY_SIDE_QUERY_TIMEOUT_MS = LLM_RECALL_TIMEOUT_MS;
+
+/** 侧边模型调用：到点返回 fallback，并中止尚未结束的请求。 */
+export async function raceMemorySideQuery<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  fallback: T,
+  timeoutMs = MEMORY_SIDE_QUERY_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(controller.signal),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(fallback);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ─── 主代理写入检测 ───
 
 /** 提取游标：仅统计 user/assistant（与 _doExtract 切片轴一致，勿用 messages.length） */
@@ -340,7 +368,7 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
  * 支持中英文混合：英文按空格分词，中文用 bigram 滑动窗口。
  * 不需要额外 LLM 调用，纯本地计算。
  */
-function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
+export function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
   if (!previousMessage || !currentMessage) return false;
 
   // minWordLength: 2 — 中文词通常 2 个字（如"前端"、"组件"）
@@ -838,7 +866,7 @@ export class HarnessMemoryIntegration {
         coarseK,
         prefetchedPaths,
         topicSwitched,
-        { workspaceRoot: this.workspaceRoot },
+        { workspaceRoot: this.workspaceRoot, sideQueryTimeoutMs: MEMORY_SIDE_QUERY_TIMEOUT_MS },
       );
 
       if (recallResult.memories.length > 0) {
@@ -865,6 +893,7 @@ export class HarnessMemoryIntegration {
           this.llmAdapter,
           relevanceGateCfg,
           topicSwitched,
+          MEMORY_SIDE_QUERY_TIMEOUT_MS,
         );
 
         selectedMemories = filterMemoriesForExecutionIntent(latestUserMsg, selectedMemories);
@@ -961,7 +990,7 @@ export class HarnessMemoryIntegration {
 
   /**
    * 每轮 LLM 前：仅关键词召回 top-K，不调用侧边 LLM。
-   * 不设置 injectedForCurrentMessage；工具轮之后由下一轮 prep 走标准召回。
+   * 不设置 injectedForCurrentMessage。工具轮之后仍走关键词，除非话题切换或在问约定。
    */
   private async injectCoarseKeywordRecall(
     messages: UnifiedMessage[],
@@ -1082,13 +1111,17 @@ Return ONLY a JSON object: {"selected": [1, 3, 7, ...]} with the numbers of your
 ${candidateList}`;
 
     try {
-      const response = await this.llmAdapter.chat(
-        [
-          { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
-          { role: 'user', content: rerankPrompt },
-        ],
-        { tools: [], usageSource: 'memory_recall' },
+      const response = await raceMemorySideQuery(
+        (signal) => this.llmAdapter!.chat(
+          [
+            { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
+            { role: 'user', content: rerankPrompt },
+          ],
+          { tools: [], usageSource: 'memory_recall', signal },
+        ),
+        null,
       );
+      if (!response) return candidates.slice(0, fallbackK);
 
       const content = response.content.trim();
       // Parse JSON response
