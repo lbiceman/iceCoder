@@ -868,6 +868,7 @@
     pointer-events: auto;
   }
 
+  .message.user .msg-reuse-btn,
   .message.user .msg-delete-btn,
   .message.user .msg-restore-btn {
     min-width: 32px;
@@ -879,6 +880,7 @@
   }
 }
 
+.message.user .msg-reuse-btn,
 .message.user .msg-delete-btn,
 .message.user .msg-restore-btn {
   display: inline-flex;
@@ -894,6 +896,7 @@
   flex-shrink: 0;
 }
 
+.message.user .msg-reuse-btn .msg-reuse-icon,
 .message.user .msg-restore-btn .msg-restore-icon,
 .message.user .msg-delete-btn .msg-delete-icon {
   display: block;
@@ -910,6 +913,7 @@
   opacity: 0.55;
 }
 
+.message.user .msg-reuse-btn:hover:not(:disabled) .msg-reuse-icon,
 .message.user .msg-delete-btn:hover:not(:disabled) .msg-delete-icon,
 .message.user .msg-restore-btn.msg-restore-btn--ready:hover:not(:disabled) .msg-restore-icon {
   opacity: 1;

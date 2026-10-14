@@ -159,6 +159,17 @@ export const ChatSession = (() => {
     if (Array.isArray(m.referencePaths) && m.referencePaths.length) {
       o.referencePaths = m.referencePaths.slice();
     }
+    if (Array.isArray(m.attachedFiles) && m.attachedFiles.length) {
+      const files = [];
+      for (let fi = 0; fi < m.attachedFiles.length; fi++) {
+        const f = m.attachedFiles[fi];
+        if (!f || !f.fileId) continue;
+        const item = { fileId: String(f.fileId), filename: String(f.filename || 'file') };
+        if (typeof f.size === 'number' && isFinite(f.size)) item.size = f.size;
+        files.push(item);
+      }
+      if (files.length) o.attachedFiles = files;
+    }
     if (m.turnTokenUsage && typeof m.turnTokenUsage === 'object') {
       o.turnTokenUsage = {
         inputTokens: m.turnTokenUsage.inputTokens || 0,
@@ -190,6 +201,17 @@ export const ChatSession = (() => {
     if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
     if (Array.isArray(raw.referencePaths) && raw.referencePaths.length) {
       o.referencePaths = raw.referencePaths.slice();
+    }
+    if (Array.isArray(raw.attachedFiles) && raw.attachedFiles.length) {
+      const files = [];
+      for (let fi = 0; fi < raw.attachedFiles.length; fi++) {
+        const f = raw.attachedFiles[fi];
+        if (!f || !f.fileId) continue;
+        const item = { fileId: String(f.fileId), filename: String(f.filename || 'file') };
+        if (typeof f.size === 'number' && isFinite(f.size)) item.size = f.size;
+        files.push(item);
+      }
+      if (files.length) o.attachedFiles = files;
     }
     if (raw.turnTokenUsage && typeof raw.turnTokenUsage === 'object') {
       o.turnTokenUsage = {
@@ -796,6 +818,11 @@ export const ChatSession = (() => {
       }
       if (!merged.openCommand && local.openCommand) {
         merged.openCommand = local.openCommand;
+        patched = true;
+      }
+      if ((!merged.attachedFiles || !merged.attachedFiles.length)
+          && local.attachedFiles && local.attachedFiles.length) {
+        merged.attachedFiles = local.attachedFiles.slice();
         patched = true;
       }
       if (patched) serverMsgs[i] = enrichUserMessageForDisplay(merged);

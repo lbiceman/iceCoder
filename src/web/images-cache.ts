@@ -155,7 +155,7 @@ export function buildUserMessageWithImages(params: BuildUserMessageWithImagesPar
 } {
   const { userText, filePaths, imageAbsolutePaths, imageDataUrls, supportsVision } = params;
 
-  const baseText = userText || (imageDataUrls.length > 0 || imageAbsolutePaths.length > 0 ? '请分析这些图片' : '');
+  const baseText = userText;
 
   const fileHint = filePaths.length > 0
     ? '请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。'
@@ -171,7 +171,8 @@ export function buildUserMessageWithImages(params: BuildUserMessageWithImagesPar
   }
 
   if (supportsVision) {
-    const blocks: ContentBlock[] = [{ type: 'text', text: textParts }];
+    const blocks: ContentBlock[] = [];
+    if (textParts) blocks.push({ type: 'text', text: textParts });
     for (const dataUrl of imageDataUrls) {
       blocks.push({ type: 'image', imageUrl: dataUrl });
     }

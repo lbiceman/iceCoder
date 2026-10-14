@@ -1898,7 +1898,7 @@ export const ChatUI = (() => {
   }
 
   const restoreUiState = { canRestore: true, checkpointIds: {}, cursorMessageId: '', cursorRestored: false };
-  const messageActionHandlers = { onDelete: null, onRestore: null };
+  const messageActionHandlers = { onDelete: null, onRestore: null, onReuse: null };
 
   function rebindExistingMessageActionButtons() {
     if (!elMessages) return;
@@ -1912,12 +1912,18 @@ export const ChatUI = (() => {
       const res = restoreBtns[j];
       if (!res._actionBound) bindMessageActionButton(res, 'restore', res.dataset.messageId || '');
     }
+    const reuseBtns = elMessages.querySelectorAll('.msg-reuse-btn');
+    for (let k = 0; k < reuseBtns.length; k++) {
+      const reuse = reuseBtns[k];
+      if (!reuse._actionBound) bindMessageActionButton(reuse, 'reuse', reuse.dataset.messageId || '');
+    }
   }
 
   function setMessageActionHandlers(handlers) {
     handlers = handlers || {};
     messageActionHandlers.onDelete = typeof handlers.onDelete === 'function' ? handlers.onDelete : null;
     messageActionHandlers.onRestore = typeof handlers.onRestore === 'function' ? handlers.onRestore : null;
+    messageActionHandlers.onReuse = typeof handlers.onReuse === 'function' ? handlers.onReuse : null;
     rebindExistingMessageActionButtons();
   }
 
@@ -1935,7 +1941,9 @@ export const ChatUI = (() => {
       const now = Date.now();
       if (now - lastInvokeAt < 350) return;
       lastInvokeAt = now;
-      const fn = type === 'delete' ? messageActionHandlers.onDelete : messageActionHandlers.onRestore;
+      const fn = type === 'delete'
+        ? messageActionHandlers.onDelete
+        : (type === 'reuse' ? messageActionHandlers.onReuse : messageActionHandlers.onRestore);
       if (typeof fn === 'function') fn(messageId, btn);
     }
 
@@ -1960,6 +1968,10 @@ export const ChatUI = (() => {
     return window.AppIcon ? window.AppIcon.html('trash', { width: 12, className: 'msg-delete-icon' }) : '';
   }
 
+  function reuseButtonIconSvg() {
+    return window.AppIcon ? window.AppIcon.html('reinput', { width: 12, className: 'msg-reuse-icon' }) : '';
+  }
+
   function createRestoreButton(messageId, sentAt) {
     const restoreBtn = document.createElement('button');
     restoreBtn.type = 'button';
@@ -1972,6 +1984,20 @@ export const ChatUI = (() => {
     bindMessageActionButton(restoreBtn, 'restore', messageId);
     applyRestoreButtonState(restoreBtn);
     return restoreBtn;
+  }
+
+  function createReuseButton(messageId, sentAt) {
+    const reuseBtn = document.createElement('button');
+    reuseBtn.type = 'button';
+    reuseBtn.className = 'msg-reuse-btn';
+    reuseBtn.innerHTML = reuseButtonIconSvg();
+    if (window.AppIcon) window.AppIcon.hydrate(reuseBtn);
+    reuseBtn.dataset.messageId = messageId;
+    if (sentAt) reuseBtn.dataset.sentAt = String(sentAt);
+    reuseBtn.setAttribute('aria-label', '放回输入框');
+    reuseBtn.title = '把这条消息的内容、图片和文件放回输入框';
+    bindMessageActionButton(reuseBtn, 'reuse', messageId);
+    return reuseBtn;
   }
 
   function createDeleteButton(messageId, sentAt) {
@@ -1991,6 +2017,7 @@ export const ChatUI = (() => {
   function createUserMessageActions(messageId, sentAt) {
     const actions = document.createElement('div');
     actions.className = 'msg-label-actions';
+    actions.appendChild(createReuseButton(messageId, sentAt));
     actions.appendChild(createDeleteButton(messageId, sentAt));
     actions.appendChild(createRestoreButton(messageId, sentAt));
     return actions;
@@ -2005,7 +2032,15 @@ export const ChatUI = (() => {
       if (!mid) continue;
       const row = el.querySelector('.msg-label-row');
       if (!row) continue;
-      if (row.querySelector('.msg-label-actions')) continue;
+      const existingActions = row.querySelector('.msg-label-actions');
+      if (existingActions) {
+        if (!existingActions.querySelector('.msg-reuse-btn')) {
+          const timeEl = row.querySelector('.msg-time');
+          const sentAt = timeEl && timeEl.dateTime ? Date.parse(timeEl.dateTime) : null;
+          existingActions.insertBefore(createReuseButton(mid, sentAt), existingActions.firstChild);
+        }
+        continue;
+      }
       const looseDelete = row.querySelector('.msg-delete-btn');
       const looseRestore = row.querySelector('.msg-restore-btn');
       if (looseDelete) looseDelete.remove();

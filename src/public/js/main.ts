@@ -44,6 +44,7 @@ import './chat-agent-cards.ts';
 import './chat-agent-session-drawer.ts';
 import './chat-skills.ts';
 import './chat-file-ref.ts';
+import './composer-reuse.ts';
 import './shell/mobile-session-drawer.ts';
 import './shell/mobile-composer-host.ts';
 import './shell/mobile-shell.ts';
