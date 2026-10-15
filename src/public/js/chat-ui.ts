@@ -1802,6 +1802,22 @@ export const ChatUI = (() => {
     });
   }
 
+  /** 滚到目标后闪一下该行，方便在一串工具里认出刚点中的那条。 */
+  function flashLocatedToolRow(block) {
+    if (!block || !block.querySelector) return;
+    const row = block.querySelector('.tool-action') || block;
+    if (!row.classList) return;
+    row.classList.remove('is-tool-locate');
+    void row.offsetWidth;
+    row.classList.add('is-tool-locate');
+    const clear = () => {
+      row.classList.remove('is-tool-locate');
+      row.removeEventListener('animationend', clear);
+    };
+    row.addEventListener('animationend', clear);
+    setTimeout(clear, 1400);
+  }
+
   /** 先脱离贴底跟随，再滚到工具行。滚完保持钉住，避免末尾几毫秒贴底/虚拟列表把位置拽偏。 */
   function scrollToToolCall(toolCallId) {
     const block = findToolRowBlockByCallId(toolCallId);
@@ -1814,15 +1830,30 @@ export const ChatUI = (() => {
     suppressScrollSync = true;
     stopPinnedToolScrollWatch();
     const gen = ++toolScrollGen;
+    let flashed = false;
+    const flashOnce = () => {
+      if (flashed || gen !== toolScrollGen) return;
+      flashed = true;
+      flashLocatedToolRow(block);
+    };
     toolScrollEndHandler = function () {
+      flashOnce();
       finishPinnedToolScroll(gen);
     };
     if (elMessages) {
       elMessages.addEventListener('scrollend', toolScrollEndHandler);
     }
     toolScrollFinishTimer = setTimeout(() => {
+      flashOnce();
       finishPinnedToolScroll(gen);
     }, 800);
+    const alreadyVisible = (() => {
+      if (!elMessages || !block.getBoundingClientRect) return false;
+      const view = elMessages.getBoundingClientRect();
+      const rect = block.getBoundingClientRect();
+      if (rect.height < 1 || view.height < 1) return false;
+      return rect.top >= view.top + 8 && rect.bottom <= view.bottom - 8;
+    })();
     requestAnimationFrame(() => {
       if (gen !== toolScrollGen) return;
       try {
@@ -1830,6 +1861,7 @@ export const ChatUI = (() => {
       } catch (_e) {
         try { block.scrollIntoView(true); } catch (_e2) { /* ignore */ }
       }
+      if (alreadyVisible) flashOnce();
     });
     return true;
   }

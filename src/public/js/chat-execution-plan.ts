@@ -408,6 +408,25 @@ export const ChatExecutionPlan = (() => {
     return str.length > 24 ? `${str.slice(0, 23)}…` : str;
   }
 
+  /** 路径过长时只留文件名，短路径原样保留。 */
+  function shortPath(raw) {
+    const s = String(raw || '').replace(/\\/g, '/').trim();
+    if (!s) return '';
+    if (s.length <= 32) return s;
+    const base = s.slice(s.lastIndexOf('/') + 1);
+    return base || clamp24(s);
+  }
+
+  function displayTarget(tool) {
+    const raw = String((tool && (tool.target || tool.detail)) || '').trim();
+    if (!raw) return '';
+    const name = (tool && tool.toolName) || '';
+    if (name === 'run_command' || name === 'grep' || name === 'glob' || name === 'web_search' || name === 'fetch_url' || name === 'task') {
+      return clamp40(raw);
+    }
+    return shortPath(raw);
+  }
+
   // ── 挂载 ──
 
   function minimizeIconHtml() {
@@ -1602,37 +1621,37 @@ export const ChatExecutionPlan = (() => {
 
   function inferToolIntent(tool) {
     const name = tool.toolName || '';
-    const hint = targetHint(tool);
-    if (name === 'read_file') return `读取${hint}了解代码与上下文`;
-    if (name === 'file_info') return `查看文件元信息${hint}`;
-    if (name === 'notebook_read') return `读取 Notebook${hint}`;
-    if (name === 'open_file') return `打开${hint}查看内容`;
-    if (name === 'read_image' || name === 'image_read') return `读取图片${hint}`;
-    if (name === 'parse_document' || name === 'parse_doc_legacy') return `解析文档${hint}提取内容`;
-    if (name === 'parse_pptx_deep') return `深度解析 PPT${hint}`;
-    if (name === 'parse_xmind_deep' || name === 'xmind_parse') return `解析思维导图${hint}`;
-    if (name === 'parse_xlsx_deep' || name === 'xlsx_parse') return `解析表格${hint}`;
-    if (name === 'diff_files') return `对比文件差异${hint}`;
-    if (name === 'browse_directory' || name === 'list_drives') return `浏览目录结构${hint}`;
-    if (name === 'grep') return '搜索代码' + (hint || '中的关键词');
-    if (name === 'glob') return '查找匹配' + (hint || '模式的文件');
-    if (name === 'write_file' || name === 'create_file') return `写入或创建文件${hint}`;
-    if (name === 'edit_file' || name === 'patch_file' || name === 'apply_patch') return `修改文件${hint}`;
-    if (name === 'append_file') return `追加内容到${hint}`;
-    if (name === 'batch_edit_file' || name === 'multi_edit') return '批量修改多个文件';
+    const target = displayTarget(tool);
+    if (name === 'read_file' || name === 'open_file' || name === 'notebook_read' || name === 'file_info') {
+      return target ? `读取 ${target}` : '读取文件';
+    }
+    if (name === 'read_image' || name === 'image_read') return target ? `读取 ${target}` : '读取图片';
+    if (name === 'parse_document' || name === 'parse_doc_legacy' || name === 'parse_pptx_deep' || name === 'parse_xmind_deep' || name === 'xmind_parse' || name === 'parse_xlsx_deep' || name === 'xlsx_parse') {
+      return target ? `解析 ${target}` : '解析文件';
+    }
+    if (name === 'diff_files') return target ? `对比 ${target}` : '对比文件';
+    if (name === 'browse_directory' || name === 'list_drives') return target ? `浏览 ${target}` : '浏览目录';
+    if (name === 'grep') return target ? `搜索 ${target}` : '搜索';
+    if (name === 'glob') return target ? `查找 ${target}` : '查找文件';
+    if (name === 'write_file' || name === 'create_file' || name === 'append_file') {
+      return target ? `写入 ${target}` : '写入文件';
+    }
+    if (name === 'edit_file' || name === 'patch_file' || name === 'apply_patch' || name === 'batch_edit_file' || name === 'multi_edit') {
+      return target ? `修改 ${target}` : '修改文件';
+    }
     if (name === 'fs_operation') return inferFsOperationIntent(tool);
-    if (name === 'undo_edit') return '撤销上一次编辑';
-    if (name === 'run_command') return inferCommandIntent(tool);
-    if (name === 'fetch_url' || name === 'web_search') return `联网查询外部信息${hint}`;
-    if (name === 'git') return `执行 Git 操作${hint}`;
-    if (name === 'task') return `派出子 Agent${hint}`;
-    if (name === 'env_info') return '获取运行环境信息';
+    if (name === 'undo_edit') return '撤销编辑';
+    if (name === 'run_command') return target || '运行命令';
+    if (name === 'fetch_url' || name === 'web_search') return target ? `查询 ${target}` : '联网查询';
+    if (name === 'git') return target ? `git ${target}` : 'git';
+    if (name === 'task') return target ? `派出 ${target}` : '派出子 Agent';
+    if (name === 'env_info') return '查看环境';
     const mcpIntent = inferMcpToolIntent(name);
-    if (mcpIntent) return mcpIntent + hint;
-    if (CONTEXT_READ_TOOLS[name]) return `读取资源${hint}`;
-    if (CONTEXT_SEARCH_TOOLS[name]) return `搜索项目${hint}`;
-    if (CONTEXT_WRITE_TOOLS[name]) return `更新文件${hint}`;
-    return (name ? `调用 ${humanizeToolName(name)}` : '调用工具') + hint;
+    if (mcpIntent) return target ? `${mcpIntent} ${target}` : mcpIntent;
+    if (CONTEXT_READ_TOOLS[name]) return target ? `读取 ${target}` : '读取文件';
+    if (CONTEXT_SEARCH_TOOLS[name]) return target ? `搜索 ${target}` : '搜索';
+    if (CONTEXT_WRITE_TOOLS[name]) return target ? `修改 ${target}` : '修改文件';
+    return target ? `${humanizeToolName(name)} ${target}` : (name ? humanizeToolName(name) : '调用工具');
   }
 
   /** 工具行副标题：仅在 intent 未覆盖时展示路径/命令等细节。 */
@@ -1688,7 +1707,7 @@ export const ChatExecutionPlan = (() => {
   }
 
   function deriveRoundToolIntents(tools) {
-    if (!tools.length) return ['理解用户目标并规划下一步执行'];
+    if (!tools.length) return ['规划下一步'];
     const agentTasks = tools.filter((t) => t.toolName === 'task');
     if (agentTasks.length > 0) {
       const rest = tools.filter((t) => t.toolName !== 'task');
@@ -2319,8 +2338,27 @@ export const ChatExecutionPlan = (() => {
     const actions = document.createElement('ol');
     actions.className = 'etl-round-actions';
     const tools = round.tools || [];
+    const frozenGroups = [];
+    const frozenMap = Object.create(null);
     for (let i = 0; i < tools.length; i++) {
-      actions.appendChild(makeFrozenToolRow(tools[i]));
+      const tool = tools[i];
+      const key = (tool.intent || tool.preview || tool.target || tool.toolName || '');
+      let group = frozenMap[key];
+      if (!group) {
+        group = { tool, count: 0 };
+        frozenMap[key] = group;
+        frozenGroups.push(group);
+      }
+      group.count++;
+      group.tool = tool;
+    }
+    for (let g = 0; g < frozenGroups.length; g++) {
+      const row = makeFrozenToolRow(frozenGroups[g].tool);
+      if (frozenGroups[g].count > 1) {
+        const name = row.querySelector('.etl-round-action-name');
+        if (name) name.textContent = `${name.textContent} ×${frozenGroups[g].count}`;
+      }
+      actions.appendChild(row);
     }
     if (!tools.length && round.isFinal) {
       const complete = document.createElement('div');
@@ -2358,7 +2396,8 @@ export const ChatExecutionPlan = (() => {
     name.className = 'etl-round-action-name';
     name.textContent = tool.intent || tool.toolName || '工具';
     body.appendChild(name);
-    if (tool.preview) {
+    const previewText = tool.preview ? shortPath(tool.preview) : '';
+    if (previewText && name.textContent.indexOf(previewText) < 0) {
       const path = document.createElement('div');
       path.className = 'etl-round-action-target';
       path.textContent = tool.preview;
@@ -3000,25 +3039,21 @@ export const ChatExecutionPlan = (() => {
   }
 
   function deriveRoundReason(record) {
-    if (record.isFinal) {
-      return '模型判断目标已达成，结束本次执行';
-    }
     const parts = [];
-    if (record.signals.length) {
+    if (record.signals && record.signals.length) {
       const labels = record.signals.map((signal) =>  MODE_SIGNAL_LABELS[signal] || signal);
-      parts.push(`监管信号：${labels.join('、')}`);
+      parts.push(labels.join('、'));
     }
-    if (record.branchReasons.length) {
-      parts.push(`执行路径调整：${clamp40(record.branchReasons[record.branchReasons.length - 1])}`);
+    if (record.branchReasons && record.branchReasons.length) {
+      parts.push(clamp40(record.branchReasons[record.branchReasons.length - 1]));
     }
     if (previousRoundFailed(record)) {
-      parts.push('上一轮工具执行失败，需要调整策略并继续验证');
+      parts.push('上一轮失败，改策略');
     }
     if (record.activeTitle) {
-      parts.push(`为完成计划步骤「${clamp40(record.activeTitle)}」`);
-    } else {
-      const toolIntents = deriveRoundToolIntents(getRoundTools(record));
-      for (let ti = 0; ti < toolIntents.length; ti++) parts.push(toolIntents[ti]);
+      const step = clamp40(record.activeTitle);
+      const title = deriveRoundTitle(record);
+      if (step && step !== title && title.indexOf(step) < 0) parts.push(step);
     }
     return parts.join('；');
   }
@@ -3074,21 +3109,29 @@ export const ChatExecutionPlan = (() => {
     if (record.isFinal) return '整理结论';
     const tools = getRoundTools(record);
     if (!tools.length) {
-      return record.activeTitle || '分析目标并规划下一步';
+      return '规划下一步';
     }
-    const command = findFirstToolBy(tools, (t) =>  t.toolName === 'run_command');
-    if (command) {
-      const cmd = command.detail || command.target || '';
-      return cmd ? (`运行命令 ${String(cmd).slice(0, 24)}`) : '运行命令';
+    const commands = tools.filter((t) =>  t.toolName === 'run_command');
+    if (commands.length === tools.length) {
+      return commands.length === 1 ? inferToolIntent(commands[0]) : `运行 ${commands.length} 条命令`;
     }
     const reads = tools.filter((t) =>  CONTEXT_READ_TOOLS[t.toolName]);
-    if (reads.length >= 2) return '读取核心文件理解实现';
-    if (reads.length === 1) return '读取文件了解上下文';
+    if (reads.length === tools.length) {
+      return reads.length === 1 ? inferToolIntent(reads[0]) : `读取 ${reads.length} 个文件`;
+    }
     const writes = tools.filter((t) =>  CONTEXT_WRITE_TOOLS[t.toolName]);
-    if (writes.length) return writes.length > 1 ? '批量修改文件' : '修改文件落实改动';
+    if (writes.length && !reads.length && !commands.length) {
+      return writes.length === 1 ? inferToolIntent(writes[0]) : `修改 ${writes.length} 个文件`;
+    }
     const searches = tools.filter((t) =>  CONTEXT_SEARCH_TOOLS[t.toolName]);
-    if (searches.length >= 2) return '搜索定位相关代码';
-    if (searches.length === 1) return inferToolIntent(searches[0]);
+    if (searches.length === tools.length) {
+      return searches.length === 1 ? inferToolIntent(searches[0]) : `搜索 ${searches.length} 次`;
+    }
+    if (writes.length) return writes.length === 1 ? inferToolIntent(writes[0]) : `修改 ${writes.length} 个文件`;
+    if (commands.length) return inferToolIntent(commands[0]);
+    if (reads.length >= 2) return `读取 ${reads.length} 个文件`;
+    if (reads.length === 1) return inferToolIntent(reads[0]);
+    if (searches.length) return searches.length === 1 ? inferToolIntent(searches[0]) : `搜索 ${searches.length} 次`;
     if (tools.length === 1) return inferToolIntent(tools[0]);
     if (record.activeTitle) return clamp40(record.activeTitle);
     if (record.phase && PHASE_LABELS[record.phase]) return PHASE_LABELS[record.phase];
@@ -3110,7 +3153,7 @@ export const ChatExecutionPlan = (() => {
     for (let k = 0; k < keys.length; k++) {
       const entry = grouped[keys[k]];
       let label = inferToolIntent(entry.tool);
-      if (entry.count > 1) label += ` x ${entry.count}`;
+      if (entry.count > 1) label += ` ×${entry.count}`;
       pills.push({
         label,
         raw: entry.tool.toolName + (entry.tool.detail ? ` · ${entry.tool.detail}` : ''),
@@ -3156,7 +3199,10 @@ export const ChatExecutionPlan = (() => {
   function renderRoundPills(summary, tools, record) {
     if (!summary) return;
     const collapsed = !isRoundExpanded(record);
-    const pills = buildRoundPills(tools, collapsed);
+    const title = deriveRoundTitle(record);
+    const pills = buildRoundPills(tools, collapsed).filter((pill) => {
+      return pill.label && title.indexOf(pill.label) < 0;
+    });
     const host = summary.querySelector('.etl-round-meta') || summary;
     const wrap = host.querySelector('.etl-round-pills');
     if (!pills.length) {
@@ -3206,11 +3252,46 @@ export const ChatExecutionPlan = (() => {
     }
   }
 
-  function makeRoundActionRow(tool) {
+  function actionObjectText(tool, count) {
+    const target = displayTarget(tool);
+    const text = target || inferToolIntent(tool);
+    return count > 1 ? `${text} ×${count}` : text;
+  }
+
+  function groupedRoundTools(tools) {
+    const groups = [];
+    const map = Object.create(null);
+    for (let i = 0; i < tools.length; i++) {
+      const tool = tools[i];
+      const key = displayTarget(tool) || inferToolIntent(tool);
+      let group = map[key];
+      if (!group) {
+        group = { tool, count: 0, ids: [] };
+        map[key] = group;
+        groups.push(group);
+      }
+      group.count++;
+      group.tool = tool;
+      if (tool.toolCallId) group.ids.push(tool.toolCallId);
+    }
+    return groups;
+  }
+
+  function paintGroupedRoundActions(actions, tools) {
+    if (!actions) return;
+    const groups = groupedRoundTools(tools || []);
+    actions.innerHTML = '';
+    for (let i = 0; i < groups.length; i++) {
+      actions.appendChild(makeRoundActionRow(groups[i].tool, groups[i].count, groups[i].ids));
+    }
+  }
+
+  function makeRoundActionRow(tool, count, ids) {
     const status = toolStatusClass(tool.status);
     const row = document.createElement('li');
     row.className = `etl-round-action etl-round-tool status-${status}`;
-    row.dataset.toolCallId = tool.toolCallId;
+    row.dataset.toolCallId = tool.toolCallId || '';
+    if (ids && ids.length) row.dataset.toolIds = ids.join(',');
     row.title = '定位到对话';
     row.dataset.status = tool.status;
     if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
@@ -3222,16 +3303,9 @@ export const ChatExecutionPlan = (() => {
     body.className = 'etl-round-action-body';
     const name = document.createElement('div');
     name.className = 'etl-round-action-name';
-    name.textContent = inferToolIntent(tool);
+    name.textContent = actionObjectText(tool, count || 1);
     name.title = humanizeToolName(tool.toolName);
     body.appendChild(name);
-    const detailLine = toolActionDetailLine(tool);
-    if (detailLine) {
-      const path = document.createElement('div');
-      path.className = 'etl-round-action-target';
-      path.textContent = detailLine;
-      body.appendChild(path);
-    }
     const dur = document.createElement('span');
     dur.className = 'etl-round-action-dur etl-round-tool-duration';
     dur.textContent = formatToolDuration(tool);
@@ -3481,14 +3555,7 @@ export const ChatExecutionPlan = (() => {
       appendRoundDetailElement(roundNode, record);
       const detail = roundNode.querySelector('.etl-round-detail');
       const actions = detail && detail.querySelector('.etl-round-actions');
-      if (actions) {
-        const tools = getRoundTools(record);
-        for (let i = 0; i < tools.length; i++) {
-          if (!actions.querySelector(`[data-tool-call-id="${tools[i].toolCallId}"]`)) {
-            actions.appendChild(makeRoundActionRow(tools[i]));
-          }
-        }
-      }
+      if (actions) paintGroupedRoundActions(actions, getRoundTools(record));
       patchRoundReason(roundNode, record);
     } else {
       syncRoundToolsPreview(roundNode, record);
@@ -3574,12 +3641,8 @@ export const ChatExecutionPlan = (() => {
     if (!detail) return;
     const actions = detail.querySelector('.etl-round-actions');
     if (!actions) return;
-    if (!actions.querySelector(`[data-tool-call-id="${tool.toolCallId}"]`)) {
-      actions.appendChild(makeRoundActionRow(tool));
-      while (actions.children.length > MAX_TOOLS_PER_ROUND_DOM) {
-        actions.removeChild(actions.firstElementChild);
-      }
-    }
+    const record = roundRecordByIteration[roundNode.dataset.iteration];
+    paintGroupedRoundActions(actions, record ? getRoundTools(record) : [tool]);
   }
 
   function syncRoundFinalDetail(roundNode, record) {
@@ -3702,9 +3765,42 @@ export const ChatExecutionPlan = (() => {
   function patchRoundReason(roundNode, record) {
     const detail = roundNode.querySelector('.etl-round-detail');
     if (!detail) return;
-    const reasons = detail.querySelectorAll('.etl-round-reason');
-    const reason = reasons.length ? reasons[reasons.length - 1] : null;
-    if (reason) reason.textContent = deriveRoundReason(record);
+    syncRoundReasonBlock(detail, record);
+  }
+
+  function syncRoundReasonBlock(detail, record) {
+    if (!detail) return;
+    const text = deriveRoundReason(record);
+    const labels = detail.querySelectorAll('.etl-round-section-label');
+    let label = null;
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i].textContent === '为什么这么做') {
+        label = labels[i];
+        break;
+      }
+    }
+    const reason = label && label.nextElementSibling && label.nextElementSibling.classList.contains('etl-round-reason')
+      ? label.nextElementSibling
+      : null;
+    if (!text) {
+      if (reason) reason.parentNode.removeChild(reason);
+      if (label) label.parentNode.removeChild(label);
+      return;
+    }
+    let reasonEl = reason;
+    if (!label) {
+      label = document.createElement('div');
+      label.className = 'etl-round-section-label';
+      label.textContent = '为什么这么做';
+      detail.appendChild(label);
+    }
+    if (!reasonEl) {
+      reasonEl = document.createElement('div');
+      reasonEl.className = 'etl-round-reason';
+      if (label.nextSibling) detail.insertBefore(reasonEl, label.nextSibling);
+      else detail.appendChild(reasonEl);
+    }
+    reasonEl.textContent = text;
   }
 
   function rebuildRoundDetailBody(detail, record) {
@@ -3716,9 +3812,7 @@ export const ChatExecutionPlan = (() => {
     if (tools.length) {
       const actionList = document.createElement('ul');
       actionList.className = 'etl-round-actions';
-      for (let i = 0; i < tools.length; i++) {
-        actionList.appendChild(makeRoundActionRow(tools[i]));
-      }
+      paintGroupedRoundActions(actionList, tools);
       detail.appendChild(actionList);
     } else if (record.isFinal) {
       const completion = document.createElement('div');
@@ -3728,17 +3822,10 @@ export const ChatExecutionPlan = (() => {
     } else {
       const planning = document.createElement('div');
       planning.className = 'etl-round-reason';
-      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      planning.textContent = '规划下一步';
       detail.appendChild(planning);
     }
-    const reasonLabel = document.createElement('div');
-    reasonLabel.className = 'etl-round-section-label';
-    reasonLabel.textContent = '为什么这么做';
-    const reason = document.createElement('div');
-    reason.className = 'etl-round-reason';
-    reason.textContent = deriveRoundReason(record);
-    detail.appendChild(reasonLabel);
-    detail.appendChild(reason);
+    syncRoundReasonBlock(detail, record);
   }
 
   function appendRoundDetailElement(item, record) {
@@ -3755,9 +3842,7 @@ export const ChatExecutionPlan = (() => {
     if (tools.length) {
       const actionList = document.createElement('ul');
       actionList.className = 'etl-round-actions';
-      for (let i = 0; i < tools.length; i++) {
-        actionList.appendChild(makeRoundActionRow(tools[i]));
-      }
+      paintGroupedRoundActions(actionList, tools);
       detail.appendChild(actionList);
     } else if (record.isFinal) {
       const completion = document.createElement('div');
@@ -3767,18 +3852,11 @@ export const ChatExecutionPlan = (() => {
     } else {
       const planning = document.createElement('div');
       planning.className = 'etl-round-reason';
-      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      planning.textContent = '规划下一步';
       detail.appendChild(planning);
     }
 
-    const reasonLabel = document.createElement('div');
-    reasonLabel.className = 'etl-round-section-label';
-    reasonLabel.textContent = '为什么这么做';
-    const reason = document.createElement('div');
-    reason.className = 'etl-round-reason';
-    reason.textContent = deriveRoundReason(record);
-    detail.appendChild(reasonLabel);
-    detail.appendChild(reason);
+    syncRoundReasonBlock(detail, record);
     item.appendChild(detail);
   }
 
@@ -3801,6 +3879,13 @@ export const ChatExecutionPlan = (() => {
     if (roundTimelineEl) {
       const matches = roundTimelineEl.querySelectorAll(`[data-tool-call-id="${tool.toolCallId}"]`);
       Array.prototype.forEach.call(matches, (row) => { rows.push(row); });
+    }
+    if (!rows.length && tool && tool.toolCallId && roundTimelineEl) {
+      const grouped = roundTimelineEl.querySelectorAll('[data-tool-ids]');
+      for (let g = 0; g < grouped.length; g++) {
+        const ids = (grouped[g].dataset.toolIds || '').split(',');
+        if (ids.indexOf(tool.toolCallId) >= 0) rows.push(grouped[g]);
+      }
     }
     if (!rows.length) return false;
     for (let i = 0; i < rows.length; i++) patchRoundToolRow(rows[i], tool);

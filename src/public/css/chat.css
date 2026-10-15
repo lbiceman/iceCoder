@@ -2167,6 +2167,32 @@
   font-weight: 600;
   color: var(--text-secondary);
 }
+.tool-action.is-tool-locate {
+  animation: tool-locate-flash 1.15s ease;
+}
+.tool-action.is-tool-locate .tool-name {
+  animation: tool-locate-name 1.15s ease;
+}
+@keyframes tool-locate-flash {
+  0%, 42% { background-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+  22%, 100% { background-color: transparent; }
+}
+@keyframes tool-locate-name {
+  0%, 42% { color: var(--accent); }
+  100% { color: var(--text-secondary); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-action.is-tool-locate,
+  .tool-action.is-tool-locate .tool-name {
+    animation: none;
+  }
+  .tool-action.is-tool-locate {
+    background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .tool-action.is-tool-locate .tool-name {
+    color: var(--accent);
+  }
+}
 .tool-action .tool-detail {
   color: var(--text-muted);
   white-space: nowrap;

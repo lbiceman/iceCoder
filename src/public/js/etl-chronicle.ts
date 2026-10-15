@@ -118,12 +118,6 @@ export const EtlChronicle = (() => {
     }
   }
 
-  function basename(p) {
-    const s = String(p || '').replace(/\\/g, '/');
-    const idx = s.lastIndexOf('/');
-    return idx >= 0 ? s.slice(idx + 1) : s;
-  }
-
   function extractToolTarget(toolName, args) {
     args = parseArgs(args);
     if (toolName === 'run_command') return String(args.command || '');
@@ -144,24 +138,20 @@ export const EtlChronicle = (() => {
   }
 
   function inferToolIntent(toolName, target) {
-    const hint = target ? `「${clamp(basename(target), 24)}」` : '';
-    if (toolName === 'read_file') return `读取${hint}了解代码与上下文`;
-    if (toolName === 'grep') return '搜索代码' + (hint || '中的关键词');
-    if (toolName === 'glob') return '查找匹配' + (hint || '模式的文件');
-    if (toolName === 'write_file' || toolName === 'create_file') return `写入或创建文件${hint}`;
-    if (toolName === 'edit_file' || toolName === 'patch_file' || toolName === 'apply_patch') {
-      return `修改文件${hint}`;
+    const shown = target ? clamp(String(target).replace(/\\/g, '/'), 32) : '';
+    if (toolName === 'read_file' || READ_TOOLS[toolName]) return shown ? `读取 ${shown}` : '读取文件';
+    if (toolName === 'grep') return shown ? `搜索 ${shown}` : '搜索';
+    if (toolName === 'glob') return shown ? `查找 ${shown}` : '查找文件';
+    if (toolName === 'write_file' || toolName === 'create_file' || toolName === 'append_file') {
+      return shown ? `写入 ${shown}` : '写入文件';
     }
-    if (toolName === 'append_file') return `追加内容到${hint}`;
-    if (toolName === 'batch_edit_file' || toolName === 'multi_edit') return '批量修改多个文件';
-    if (toolName === 'run_command') {
-      const cmd = String(target || '');
-      return cmd ? `运行命令 ${clamp(cmd, 24)}` : '运行命令';
+    if (toolName === 'edit_file' || toolName === 'patch_file' || toolName === 'apply_patch' || toolName === 'batch_edit_file' || toolName === 'multi_edit') {
+      return shown ? `修改 ${shown}` : '修改文件';
     }
-    if (READ_TOOLS[toolName]) return `读取资源${hint}`;
-    if (SEARCH_TOOLS[toolName]) return `搜索项目${hint}`;
-    if (WRITE_TOOLS[toolName]) return `更新文件${hint}`;
-    return (toolName ? `调用 ${toolName.replace(/_/g, ' ')}` : '调用工具') + hint;
+    if (toolName === 'run_command') return shown ? clamp(shown, 40) : '运行命令';
+    if (SEARCH_TOOLS[toolName]) return shown ? `搜索 ${shown}` : '搜索';
+    if (WRITE_TOOLS[toolName]) return shown ? `修改 ${shown}` : '修改文件';
+    return shown ? `${toolName || '工具'} ${shown}` : (toolName || '工具');
   }
 
   function toolStatus(raw) {
