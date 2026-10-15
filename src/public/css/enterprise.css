@@ -234,23 +234,6 @@ select:focus-visible,
   color: var(--danger);
 }
 
-.chat-sidebar-connection {
-  flex-basis: 34px;
-  border-color: transparent !important;
-}
-
-.chat-sidebar-connection[data-state="connected"] {
-  color: var(--success);
-}
-
-.chat-sidebar-connection[data-state="connecting"] {
-  color: var(--warning);
-}
-
-.chat-sidebar-connection[data-state="disconnected"] {
-  color: var(--danger);
-}
-
 /* ===== Workbench ===== */
 .chat-main,
 .chat-page {

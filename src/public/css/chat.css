@@ -2946,7 +2946,7 @@ body.pane-resizing * {
   background: rgba(239, 68, 68, 0.12);
 }
 
-/* === Sidebar Footer: 控制按钮行（监管模式 / 设置 / 连接状态） === */
+/* === Sidebar Footer: 控制按钮行（监管模式 / 设置） === */
 .chat-sidebar-footer {
   flex-shrink: 0;
   display: flex;
@@ -2994,14 +2994,6 @@ body.pane-resizing * {
   opacity: 0.85;
 }
 
-.chat-sidebar-connection {
-  flex: 0 0 30px;              /* 固定 30px 宽，覆盖父级 flex: 1，只显示图标 */
-  justify-content: center;
-  align-items: center;
-  cursor: default;
-  pointer-events: none;
-}
-
 .chat-sidebar-control-icon {
   display: inline-flex;
   align-items: flex-end;
@@ -3025,20 +3017,6 @@ body.pane-resizing * {
   border-color: var(--accent-border);
   color: var(--text-primary);
   background: var(--accent-light);
-}
-
-/* 连接状态配色 */
-.chat-sidebar-connection[data-state="connected"] {
-  color: var(--success);
-  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
-}
-.chat-sidebar-connection[data-state="connecting"] {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-}
-.chat-sidebar-connection[data-state="disconnected"] {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 .chat-sidebar-rename-input {
