@@ -37,6 +37,7 @@ import {
   harnessOverlayToContextFields,
 } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
+import { applyUseWindowsToolOffering } from '../../tools/windows/windows-actions.js';
 import {
   selectToolsForOffering,
   recordCliDeferredToolCall,
@@ -427,6 +428,7 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      toolDefs = await applyUseWindowsToolOffering(toolDefs, ctx.paths.configPath);
       const assembled = await loadAssembledPrompt(wsCtx.effectiveWorkspaceRoot);
       const promptToolNames = toolDefs.map((tool) => tool.name);
       // Lazy Tool Offering（CLI）：按信号裁剪文档工具

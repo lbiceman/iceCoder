@@ -12,7 +12,9 @@ import {
   readMainConfigFile,
   resolveEnableSubAgents,
   resolveSkipPermissionChecks,
+  resolveUseWindows,
   writeEnableSubAgentsToMainConfig,
+  writeUseWindowsToMainConfig,
   writeShellBlacklistToMainConfig,
   writeSkipPermissionChecksToMainConfig,
   writeSupervisorModeToMainConfig,
@@ -206,6 +208,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
       let existingEnableSubAgents: IceCoderConfigFile['enableSubAgents'];
+      let existingUseWindows: IceCoderConfigFile['useWindows'];
       let existingShellBlacklist: IceCoderConfigFile['shellBlacklist'];
       let existingIceEtlPrefs: IceCoderConfigFile['iceEtlPrefs'];
       try {
@@ -215,6 +218,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
         existingEnableSubAgents = existing.enableSubAgents;
+        existingUseWindows = existing.useWindows;
         existingShellBlacklist = existing.shellBlacklist;
         existingIceEtlPrefs = existing.iceEtlPrefs;
       } catch { /* 文件不存在，首次保存 */ }
@@ -257,6 +261,9 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
           ...(existingEnableSubAgents !== undefined
             ? { enableSubAgents: existingEnableSubAgents === true }
+            : {}),
+          ...(existingUseWindows !== undefined
+            ? { useWindows: existingUseWindows === true }
             : {}),
           ...(existingShellBlacklist !== undefined ? { shellBlacklist: existingShellBlacklist } : {}),
           ...(existingIceEtlPrefs !== undefined ? { iceEtlPrefs: existingIceEtlPrefs } : {}),
@@ -310,6 +317,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
         enableSubAgents: resolveEnableSubAgents(config.enableSubAgents),
+        useWindows: resolveUseWindows(config.useWindows),
+        useWindowsSupported: process.platform === 'win32',
         shellBlacklist: config.shellBlacklist !== undefined
           ? config.shellBlacklist
           : [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
@@ -325,6 +334,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
           enableSubAgents: true,
+          useWindows: false,
+          useWindowsSupported: process.platform === 'win32',
           shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
           shellBlacklistIsDefault: true,
           iceEtlPrefs: { ...DEFAULT_ICE_ETL_PREFS },
@@ -431,6 +442,28 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `更新子 Agent 设置失败：${message}` });
+    }
+  });
+
+  /**
+   * PATCH /api/config/use-windows — 是否把 Windows 键鼠工具和说明发给模型。
+   */
+  router.patch('/use-windows', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { useWindows?: unknown })?.useWindows;
+      if (typeof raw !== 'boolean') {
+        res.status(400).json({ error: 'useWindows 须为 boolean' });
+        return;
+      }
+      const saved = await writeUseWindowsToMainConfig(configFile, raw);
+      res.json({
+        success: true,
+        useWindows: saved,
+        useWindowsSupported: process.platform === 'win32',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新 Windows 操作设置失败：${message}` });
     }
   });
 

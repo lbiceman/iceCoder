@@ -117,6 +117,28 @@ export async function writeEnableSubAgentsToMainConfig(
   return enableSubAgents;
 }
 
+/** 仅当 config.json 显式 `"useWindows": true` 时开启；缺失视为关闭。 */
+export function resolveUseWindows(value: unknown): boolean {
+  return value === true;
+}
+
+/** 读取 config.json 中的 useWindows；缺失时返回 false。 */
+export async function readUseWindowsFromMainConfig(configPath: string): Promise<boolean> {
+  const config = await readMainConfigFile(configPath);
+  return resolveUseWindows(config.useWindows);
+}
+
+export async function writeUseWindowsToMainConfig(
+  configPath: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const useWindows = enabled === true;
+  const config = await readMainConfigFile(configPath);
+  config.useWindows = useWindows;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  return useWindows;
+}
+
 export async function writeShellBlacklistToMainConfig(
   configPath: string,
   patterns: string[],

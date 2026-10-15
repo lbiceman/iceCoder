@@ -119,6 +119,27 @@ export const SettingsPage = (() => {
             '</div>' +
           '</div>' +
         '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-use-windows-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">Windows 操作</h2>' +
+            '<span class="config-badge is-starting">实验性</span>' +
+          '</div>' +
+          '<p class="settings-section-desc">打开后，才会把鼠标、键盘、截屏工具和它们的使用说明发给模型。关闭后这些内容不再注入。能做到哪一步，取决于模型能力</p>' +
+          '<div class="settings-card" id="settings-use-windows-card" hidden>' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">启用 Windows 操作</span>' +
+                '<p class="settings-card-desc" id="settings-use-windows-desc">实验性功能。开启后，模型可以移动鼠标、点击、敲键盘，并截取主屏幕。定时任务不会注入这些工具。实际效果取决于模型能力，下一条消息生效</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="启用 Windows 操作">' +
+                  '<input type="checkbox" id="settings-use-windows-input" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
           '<div class="settings-section-head">' +
             '<h2 class="settings-section-title">执行透明层</h2>' +
@@ -611,15 +632,18 @@ export const SettingsPage = (() => {
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
         const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
+        const windowsCard = parentEl.querySelector('#settings-use-windows-card');
         if (loading) loading.hidden = true;
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
         if (subAgentCard) subAgentCard.hidden = false;
+        if (windowsCard) windowsCard.hidden = false;
 
         const skipEnabled = data && data.skipPermissionChecks === true;
         syncSkipPermissionUi(parentEl, skipEnabled);
         const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
         if (subAgentInput) subAgentInput.checked = !data || data.enableSubAgents !== false;
+        syncUseWindowsUi(parentEl, data);
 
         const patterns = (data && Array.isArray(data.shellBlacklist)) ? data.shellBlacklist : [];
         const textarea = parentEl.querySelector('#settings-blacklist-textarea');
@@ -636,6 +660,7 @@ export const SettingsPage = (() => {
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
         const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
+        const windowsCard = parentEl.querySelector('#settings-use-windows-card');
         if (loading) {
           loading.textContent = '加载失败';
           loading.classList.add('is-error');
@@ -643,14 +668,71 @@ export const SettingsPage = (() => {
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
         if (subAgentCard) subAgentCard.hidden = false;
+        if (windowsCard) windowsCard.hidden = false;
         bindGeneralSecurityEvents(parentEl);
         if (window.Notification) window.Notification.error('无法加载安全设置');
       });
   }
 
+  function syncUseWindowsUi(parentEl, data) {
+    const input = parentEl.querySelector('#settings-use-windows-input');
+    const desc = parentEl.querySelector('#settings-use-windows-desc');
+    const supported = !data || data.useWindowsSupported !== false;
+    if (input) {
+      input.checked = !!(data && data.useWindows === true);
+      input.disabled = !supported;
+      input.dataset.supported = supported ? '1' : '0';
+    }
+    if (desc && !supported) {
+      desc.textContent = '当前系统不是 Windows，不会向模型注入键鼠和截屏工具。';
+    }
+  }
+
   function bindGeneralSecurityEvents(parentEl) {
     if (parentEl._securityBound) return;
     parentEl._securityBound = true;
+
+    const windowsInput = parentEl.querySelector('#settings-use-windows-input');
+    if (windowsInput) {
+      windowsInput.addEventListener('change', () => {
+        if (windowsInput.dataset.supported === '0') {
+          windowsInput.checked = false;
+          return;
+        }
+        const next = windowsInput.checked;
+        windowsInput.disabled = true;
+        fetch('/api/config/use-windows', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ useWindows: next }),
+        })
+          .then((res) => { return res.json().then((body) => ({ ok: res.ok, body })); })
+          .then((result) => {
+            if (result.ok && result.body.success) {
+              windowsInput.checked = result.body.useWindows === true;
+              if (window.Notification) {
+                window.Notification.success(
+                  windowsInput.checked
+                    ? '已开启 Windows 操作（下一条消息生效）'
+                    : '已关闭 Windows 操作（下一条消息不再注入这些工具）'
+                );
+              }
+            } else {
+              windowsInput.checked = !next;
+              if (window.Notification) {
+                window.Notification.error((result.body && result.body.error) || '更新失败');
+              }
+            }
+          })
+          .catch(() => {
+            windowsInput.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => {
+            windowsInput.disabled = windowsInput.dataset.supported === '0';
+          });
+      });
+    }
 
     const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
     if (subAgentInput) {

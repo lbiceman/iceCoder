@@ -314,6 +314,46 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 20_000,
     tags: [],
   },
+  windows_mouse: {
+    name: 'windows_mouse',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 2000,
+    tags: [],
+  },
+  windows_keyboard: {
+    name: 'windows_keyboard',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 2000,
+    tags: [],
+  },
+  windows_screenshot: {
+    name: 'windows_screenshot',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 4000,
+    tags: ['file_read'],
+  },
+  windows_find: {
+    name: 'windows_find',
+    isConcurrencySafe: false,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 8000,
+    tags: [],
+  },
+  windows_ocr: {
+    name: 'windows_ocr',
+    isConcurrencySafe: false,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 16_000,
+    tags: ['file_read'],
+  },
 };
 
 /**

@@ -31,6 +31,7 @@ import { createImageReadTool } from './builtin/image-read-tool.js';
 import { createNotebookReadTool } from './builtin/notebook-read-tool.js';
 import { createEnvInfoTool } from './builtin/env-info-tool.js';
 import { createUndoEditTool } from './builtin/undo-edit-tool.js';
+import { createWindowsDesktopTools } from './windows/windows-desktop-tools.js';
 import type { FileParser } from '../parser/file-parser.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { ToolExecutorConfig } from './types.js';
@@ -142,6 +143,11 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
 
   // 注册撤销编辑工具
   registry.register(createUndoEditTool());
+
+  // Windows 键鼠与截屏。是否发给模型由 useWindows 开关决定，这里只负责能执行。
+  for (const tool of createWindowsDesktopTools()) {
+    registry.register(tool);
+  }
 
   // 初始化验证器（必须在 ToolExecutor 之前创建）
   const validator = new ToolValidator();

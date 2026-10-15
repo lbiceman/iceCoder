@@ -100,6 +100,11 @@ export interface IceCoderConfigFile {
    */
   enableSubAgents?: boolean;
   /**
+   * 是否把 Windows 键鼠/截屏工具和使用说明发给模型。
+   * 缺失或非 `true` 时不注入。仅 Windows 会真正注册这些工具。
+   */
+  useWindows?: boolean;
+  /**
    * Shell 协作强制确认规则（字符串正则，不含首尾 `/`）。
    * 缺失时使用内置默认；空数组 `[]` 表示仅保留不可配置的 hard block / 宿主保护。
    * 字段名为兼容既有配置暂保留 shellBlacklist。

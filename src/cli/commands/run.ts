@@ -36,6 +36,7 @@ import {
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
+import { applyUseWindowsToolOffering } from '../../tools/windows/windows-actions.js';
 import {
   selectToolsForOffering,
   recordCliDeferredToolCall,
@@ -86,6 +87,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+    toolDefs = await applyUseWindowsToolOffering(toolDefs, ctx.paths.configPath);
     const assembled = await loadAssembledChatPrompt({
       logPrefix: '[run]',
       workspaceRoot: wsCtx.effectiveWorkspaceRoot,

@@ -177,6 +177,35 @@ function hasMcpTools(toolNames?: readonly string[]): boolean {
   return toolNames.some((name) => name.startsWith('mcp_'));
 }
 
+function windowsDesktopPrompt(has: (name: string) => boolean): string {
+  // 中文说明：弱模型会自己写 OCR 脚本或猜坐标。这里要求先用定位工具拿到屏幕中心点再点。
+  const lines = [
+    '## Windows desktop',
+    'These tools operate the real Windows desktop. Use them only when the user wants that.',
+    '- Do not guess click coordinates. Do not write OCR, screenshot, or UI-automation scripts.',
+  ];
+  if (has('windows_find')) {
+    lines.push('- windows_find: a named control such as a taskbar icon, window, or button. Click its center with windows_mouse.');
+  }
+  if (has('windows_ocr')) {
+    lines.push('- windows_ocr: text drawn by an app, such as a chat name. Pass query and click the center of the matching line. If there is no match, the target is not visible; do not click a nearby guess.');
+  }
+  if (has('windows_screenshot')) {
+    lines.push('- windows_screenshot confirms what is on screen. Add its origin to an image pixel to get a screen coordinate. The pointer may be on another monitor.');
+  }
+  if (has('windows_mouse')) {
+    lines.push('- windows_mouse uses screen coordinates from windows_find or windows_ocr. Actions: move, click, drag, scroll.');
+  }
+  if (has('windows_keyboard')) {
+    lines.push('- windows_keyboard action type sends message text. action press sends Enter or a chord such as ctrl+l.');
+  }
+  if (has('windows_find') || has('windows_ocr')) {
+    lines.push('- After a click, look again with windows_find or windows_ocr before typing.');
+  }
+  lines.push('- Prefer a file, shell, or git tool when it can do the job without the desktop.');
+  return lines.join('\n');
+}
+
 function buildMcpToolUsageBlock(): string {
   // 中文说明：MCP 由用户配置，提示词只描述通用调用规则，不点名任何具体服务器。
   return [
@@ -239,6 +268,10 @@ ${has('git') ? '- git: Git operations.' : ''}`
     available === null || [...available].some((name) => /^(parse_|notebook_read|image_read)/.test(name))
       ? `## Documents
 Document tools are available only when present in the current tool definitions. If none is present, ask the user to upload or reference the file instead of inventing a call.`
+      : '',
+    // 中文说明：只有本轮工具列表里真有 windows_* 才写这段。开关关闭时这些名字不会出现。
+    hasAny('windows_mouse', 'windows_keyboard', 'windows_screenshot', 'windows_find', 'windows_ocr')
+      ? windowsDesktopPrompt(has)
       : '',
   ].filter(Boolean);
 

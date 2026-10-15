@@ -42,6 +42,11 @@ import {
   readEnableSubAgentsFromMainConfig,
   readSkipPermissionChecksFromMainConfig,
 } from '../config/main-config-supervisor-mode.js';
+import { isSessionUnattended } from './chat-ws-confirm.js';
+import {
+  applyUseWindowsToolOffering,
+  windowsDesktopUnattendedDenyRule,
+} from '../tools/windows/windows-actions.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
 import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
@@ -478,6 +483,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   });
   toolDefs = sessionToolCtx.toolDefs;
   const runtimeToolsDisabled = shouldDisableRuntimeTools();
+  const unattended = isSessionUnattended(runSessionId);
+  toolDefs = await applyUseWindowsToolOffering(toolDefs, MAIN_CONFIG_PATH, { unattended });
   const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
@@ -555,6 +562,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     },
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
+      ...(unattended ? [windowsDesktopUnattendedDenyRule()] : []),
     ],
     skipPermissionChecks,
     compactionThreshold: 40,

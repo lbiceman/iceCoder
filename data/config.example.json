@@ -1,5 +1,6 @@
 {
   "supervisorMode": "adaptive",
+  "useWindows": false,
   "iceEtlPrefs": {
     "panelDefaultExpanded": true,
     "panelWidth": 320,

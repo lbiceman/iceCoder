@@ -41,6 +41,7 @@ export function findAgentType(name: string): AgentTypeDefinition | undefined {
 /**
  * 任何子 Agent 都不能拿到的工具。request_analysis 是已删除的旧只读分析工具名，避免残留定义被交下去；
  * scheduled_task 会留下长期运行的任务，只由主 Agent 按用户要求创建。
+ * windows_* 直接操作本机键鼠，只留给主 Agent，避免子 Agent 同时抢输入。
  */
 const EXCLUDED_FOR_ALL_AGENTS = new Set(['task', 'check_agent', 'request_analysis', 'scheduled_task']);
 
@@ -49,6 +50,7 @@ const EXCLUDED_FOR_ALL_PATTERNS: readonly RegExp[] = [
   /^(?:mcp_[a-z0-9-]+_)?(?:memory_|remember)/i,
   /^(?:mcp_[a-z0-9-]+_)?(?:ask_|request_user_input$)/i,
   /^(?:mcp_[a-z0-9-]+_)?(?:enter|exit|switch|toggle)_[a-z_]*mode$/i,
+  /^windows_/i,
 ];
 
 const EXPLORE_ALLOWED_TOOLS = new Set([
