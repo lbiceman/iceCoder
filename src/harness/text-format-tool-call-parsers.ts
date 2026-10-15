@@ -315,41 +315,28 @@ function parseFencedJsonBlocks(text: string): ParsedEmbeddedToolCalls {
   return { calls, spans };
 }
 
-/** 从正文中解析所有可识别的嵌入工具调用（去重重叠区间）。 */
-export function parseEmbeddedToolCallsFromText(text: string): ParsedEmbeddedToolCalls {
-  const parsers = [
-    parseXmlToolBlocks,
-    parseDelimitedToolInvocationRegions,
-    parseBracketChannelToolFragment,
-    parseJsonToolObjects,
-    parseFencedJsonBlocks,
-  ];
-  const calls: ToolCall[] = [];
-  const spans: TextSpan[] = [];
-
-  const overlaps = (a: TextSpan, b: TextSpan): boolean =>
-    !(a.end <= b.start || a.start >= b.end);
-
-  for (const parse of parsers) {
-    const part = parse(text);
-    for (let i = 0; i < part.calls.length; i++) {
-      const span = part.spans[i];
-      const call = part.calls[i];
-      if (!span || !call) continue;
-      if (spans.some(existing => overlaps(existing, span))) continue;
-      calls.push(call);
-      spans.push(span);
-    }
-  }
-
-  return { calls, spans: mergeSpans(spans) };
+interface EmbeddedToolCallMatch {
+  call: ToolCall;
+  span: TextSpan;
+  /** XML / 通道分隔符等专用工具标记；裸 JSON 与 fenced JSON 为 false。 */
+  explicitMarkup: boolean;
 }
 
-/** 正文是否含可识别的嵌入工具调用。 */
-export function containsEmbeddedToolCalls(content: string | undefined): boolean {
-  if (!content?.trim()) return false;
-  return parseEmbeddedToolCallsFromText(content).calls.length > 0
-    || TOOL_JSON_KEY_HINT.test(content)
+const EMBEDDED_TOOL_PARSERS: ReadonlyArray<{
+  parse: (text: string) => ParsedEmbeddedToolCalls;
+  explicitMarkup: boolean;
+}> = [
+  { parse: parseXmlToolBlocks, explicitMarkup: true },
+  { parse: parseDelimitedToolInvocationRegions, explicitMarkup: true },
+  { parse: parseBracketChannelToolFragment, explicitMarkup: true },
+  { parse: parseJsonToolObjects, explicitMarkup: false },
+  { parse: parseFencedJsonBlocks, explicitMarkup: false },
+];
+
+/** 正文里是否出现工具标记。只做正则，不解析。 */
+export function contentMightContainEmbeddedToolCalls(content: string): boolean {
+  COMPACT_TOOL_SUMMARY_RE.lastIndex = 0;
+  return TOOL_JSON_KEY_HINT.test(content)
     || /<tool[_-]?call>/i.test(content)
     || /<invoke\b/i.test(content)
     || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
@@ -357,9 +344,132 @@ export function containsEmbeddedToolCalls(content: string | undefined): boolean 
     || COMPACT_TOOL_SUMMARY_RE.test(content);
 }
 
-/** 移除正文中所有嵌入工具调用片段。 */
-export function stripEmbeddedToolCalls(content: string): string {
-  const { spans } = parseEmbeddedToolCallsFromText(content);
+function collectEmbeddedToolCalls(text: string): EmbeddedToolCallMatch[] {
+  const matches: EmbeddedToolCallMatch[] = [];
+  const overlaps = (a: TextSpan, b: TextSpan): boolean =>
+    !(a.end <= b.start || a.start >= b.end);
+
+  for (const { parse, explicitMarkup } of EMBEDDED_TOOL_PARSERS) {
+    const part = parse(text);
+    for (let i = 0; i < part.calls.length; i++) {
+      const span = part.spans[i];
+      const call = part.calls[i];
+      if (!span || !call) continue;
+      if (matches.some(existing => overlaps(existing.span, span))) continue;
+      matches.push({ call, span, explicitMarkup });
+    }
+  }
+  return matches;
+}
+
+/** 一次扫描的结果，供执行过滤和剥离复用，避免对同一正文重复跑全部解析器。 */
+export interface EmbeddedToolCallInspection {
+  matches: EmbeddedToolCallMatch[];
+}
+
+export function inspectEmbeddedToolCalls(text: string): EmbeddedToolCallInspection {
+  return { matches: collectEmbeddedToolCalls(text) };
+}
+
+function callsFromInspection(inspection: EmbeddedToolCallInspection): ParsedEmbeddedToolCalls {
+  return {
+    calls: inspection.matches.map(m => m.call),
+    spans: mergeSpans(inspection.matches.map(m => m.span)),
+  };
+}
+
+/** 从正文中解析所有可识别的嵌入工具调用（去重重叠区间）。 */
+export function parseEmbeddedToolCallsFromText(text: string): ParsedEmbeddedToolCalls {
+  return callsFromInspection(inspectEmbeddedToolCalls(text));
+}
+
+/**
+ * 裸 JSON / fenced JSON 之外的说明文字超过该长度（去空白后）时，
+ * 视为模型在讲解示例，而不是在发起调用。
+ */
+export const JSON_TOOL_CALL_MAX_SURROUNDING_PROSE = 120;
+
+function proseOutsideSpans(text: string, spans: TextSpan[]): string {
+  let out = '';
+  let cursor = 0;
+  for (const span of mergeSpans(spans)) {
+    out += text.slice(cursor, span.start);
+    cursor = span.end;
+  }
+  out += text.slice(cursor);
+  return out.replace(/```[\w-]*/g, '').replace(/\s+/g, '');
+}
+
+/**
+ * 可以真正执行的嵌入工具调用：
+ * - 专用工具标记（XML / 通道分隔符）总是采信；
+ * - 裸 JSON / fenced JSON 仅在正文几乎只有工具块时采信；
+ * - 传入 allowedToolNames 时，丢弃不在本轮工具列表中的名字。
+ */
+export function executableCallsFromInspection(
+  text: string,
+  inspection: EmbeddedToolCallInspection,
+  allowedToolNames?: ReadonlySet<string>,
+): ToolCall[] {
+  const matches = inspection.matches;
+  if (matches.length === 0) return [];
+  const proseLength = proseOutsideSpans(text, matches.map(m => m.span)).length;
+  const jsonAllowed = proseLength <= JSON_TOOL_CALL_MAX_SURROUNDING_PROSE;
+  return matches
+    .filter(m => m.explicitMarkup || jsonAllowed)
+    .filter(m => !allowedToolNames || allowedToolNames.has(m.call.name))
+    .map(m => m.call);
+}
+
+export function parseEmbeddedToolCallsForExecution(
+  text: string,
+  allowedToolNames?: ReadonlySet<string>,
+): ToolCall[] {
+  return executableCallsFromInspection(text, inspectEmbeddedToolCalls(text), allowedToolNames);
+}
+
+/** 解析失败的工具标记外，正文（去空白）超过该长度即视为在讲解格式，不触发恢复。 */
+const UNPARSED_MARKUP_MAX_SURROUNDING_PROSE = 40;
+
+const EXPLICIT_TOOL_MARKUP_HINT =
+  /<tool[_-]?call>|<invoke\b|<\][a-zA-Z][\w.-]*\[>|\[<[a-zA-Z_][\w.-]*>|\[调用工具:\s*[\w.,\s-]+\]/i;
+
+function proseAroundToolMarkup(text: string): string {
+  return text
+    .replace(/<tool[_-]?call>[\s\S]*?<\/tool[_-]?call>/gi, '')
+    .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, '')
+    .replace(/<\/?(?:tool[_-]?call|invoke|parameter)\b[^>]*>/gi, '')
+    .replace(/\[调用工具:[^\]]*\]/g, '')
+    .replace(/(?:<\][a-zA-Z]|\[<[a-zA-Z_])[^\n]*/g, '')
+    .replace(/\s+/g, '');
+}
+
+/**
+ * 正文是否像「本该走 API 却写成文本」的工具调用（驱动 no-tool 恢复）。
+ * 只认能解析出的调用；解析失败的专用标记仅在正文几乎只有标记时才算，
+ * 讲解型 JSON 示例、正文里顺带提到 `<invoke>` 都不算。
+ */
+export function containsExecutableEmbeddedToolCalls(content: string | undefined): boolean {
+  if (!content?.trim()) return false;
+  if (parseEmbeddedToolCallsForExecution(content).length > 0) return true;
+  return EXPLICIT_TOOL_MARKUP_HINT.test(content)
+    && proseAroundToolMarkup(content).length <= UNPARSED_MARKUP_MAX_SURROUNDING_PROSE;
+}
+
+/** 正文是否含可识别的嵌入工具调用。 */
+export function containsEmbeddedToolCalls(content: string | undefined): boolean {
+  if (!content?.trim()) return false;
+  return contentMightContainEmbeddedToolCalls(content);
+}
+
+/** 移除正文中所有嵌入工具调用片段。传入已有扫描结果时不再解析。 */
+export function stripEmbeddedToolCalls(
+  content: string,
+  inspection?: EmbeddedToolCallInspection,
+): string {
+  const spans = inspection
+    ? mergeSpans(inspection.matches.map(m => m.span))
+    : parseEmbeddedToolCallsFromText(content).spans;
   if (spans.length === 0) {
     // 启发式：去掉像 tool JSON 的对象（即使 parse 失败）
     return stripLikelyToolJsonObjects(content).trim();

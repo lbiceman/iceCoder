@@ -27,7 +27,7 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import {
   extractRunCommand,
   extractToolTargetPath,
-} from './branch-budget-tool-path.js';
+} from './branch-budget-path.js';
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
@@ -45,6 +45,7 @@ import {
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 import {
   diffInventoryTouchedPaths,
+  extractLikelyWritePathsFromCommand,
   isShellWorkspaceTouchTool,
   listWorkspaceFileInventory,
   rememberBackgroundCommandInventory,
@@ -66,7 +67,7 @@ export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
   loopController: LoopController;
   permissionRules: ToolPermissionRule[];
-  /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
+  /** 为 true 时跳过 confirm / onConfirm；显式 deny 规则仍生效 */
   skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** Shell 协作 mandatory confirm；不可被 skipPermissionChecks 跳过 */
@@ -129,11 +130,14 @@ interface PolicyBlockContext {
   verificationOutputBuffer?: VerificationOutputBuffer;
   countAsMissingFile?: boolean;
   budgetBlockPath?: string;
+  outcome?: Extract<import('./types.js').ToolOutcome, 'policy_block' | 'user_denied'>;
 }
 
+/** 工具未执行的统一出口：写 tool 结果、计入 policyBlockedSignatures，不算进展也不算执行失败。 */
 function emitHarnessPolicyBlock(
   ctx: PolicyBlockContext,
 ): void {
+  const outcome = ctx.outcome ?? 'policy_block';
   let blockMessage = ctx.baseMessage;
   if (ctx.enrichWithVerification) {
     blockMessage = appendVerificationEvidenceToBranchBlock(
@@ -163,7 +167,7 @@ function emitHarnessPolicyBlock(
     round: ctx.iteration,
     toolName: ctx.tc.name,
     success: false,
-    outcome: 'policy_block',
+    outcome,
     policyReason: ctx.policyReason ?? ctx.errorLabel,
     outputLength: blockMessage.length,
   });
@@ -181,7 +185,7 @@ function emitHarnessPolicyBlock(
     toolCallId: ctx.tc.id,
     toolName: ctx.tc.name,
     toolSuccess: false,
-    toolOutcome: 'policy_block',
+    toolOutcome: outcome,
     toolOutput: stepToolOutputPreview(ctx.tc.name, blockMessage),
     toolError: ctx.policyReason ?? ctx.errorLabel,
     toolArgs: observableToolArgs(ctx.tc),
@@ -233,6 +237,15 @@ export interface ToolExecutionStats {
 
 const taskStateInventoryScopes = new WeakMap<TaskState, string>();
 let taskStateInventoryScopeSequence = 0;
+
+/** 命令里能看出写入目标时只扫描这些路径；npm test 这类未知写入仍全树扫描。 */
+function inventoryScopeForToolCall(tc: ToolCall): string[] | undefined {
+  if (tc.name !== 'run_command' && tc.name !== 'shell_exec') return undefined;
+  const command = extractRunCommand(tc.arguments);
+  if (!command) return undefined;
+  const paths = extractLikelyWritePathsFromCommand(command);
+  return paths.length > 0 ? paths : undefined;
+}
 
 function commandInventoryScopeFor(
   deps: ToolExecutorDeps,
@@ -444,14 +457,21 @@ export async function executeToolCallsStreaming(
           }
 
           if (!deps.onShellMandatoryConfirm) {
-            const reason = 'Shell mandatory confirmation required but no handler is configured';
-            logger.toolResult(tc.name, false, 0, reason);
-            onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-            messages.push({
-              role: 'tool',
-              content: `Tool ${tc.name} requires shell mandatory confirmation but no handler is configured.`,
-              toolCallId: tc.id,
+            emitHarnessPolicyBlock({
+              deps,
+              tc,
+              iteration,
+              baseMessage: `Tool ${tc.name} requires shell mandatory confirmation but no handler is configured.`,
+              errorLabel: 'Shell mandatory confirmation required but no handler is configured',
+              policyReason: 'shell_mandatory_confirm_no_handler',
+              messages,
+              onStep,
+              logger,
+              taskState,
+              repoContext,
+              policyBlockedSignatures,
             });
+            directTotalCount++;
             submittedIds.add(tc.id);
             continue;
           }
@@ -466,14 +486,23 @@ export async function executeToolCallsStreaming(
           const allowed = await deps.onShellMandatoryConfirm(req);
           if (!allowed) {
             shellMandatoryConfirmDenials?.add(denialKey);
-            logger.toolResult(tc.name, false, 0, 'Shell mandatory confirmation denied or timed out');
-            onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-            messages.push({
-              role: 'tool',
-              content: `User denied shell command or confirmation timed out (confirmation_timeout). `
+            emitHarnessPolicyBlock({
+              deps,
+              tc,
+              iteration,
+              baseMessage: `User denied shell command or confirmation timed out (confirmation_timeout). `
                 + commandNotExecutedHint,
-              toolCallId: tc.id,
+              errorLabel: 'Shell mandatory confirmation denied or timed out',
+              policyReason: 'shell_mandatory_confirm_denied',
+              outcome: 'user_denied',
+              messages,
+              onStep,
+              logger,
+              taskState,
+              repoContext,
+              policyBlockedSignatures,
             });
+            directTotalCount++;
             submittedIds.add(tc.id);
             continue;
           }
@@ -483,37 +512,54 @@ export async function executeToolCallsStreaming(
 
     // Shell 文件工具走 permission confirm；Shell 模式不受 skipPermissionChecks 影响。
     // Shell 命令工具（shell_exec 等）未命中 mandatory 时也不进入普通 permission。
-    const runPermissionChecks = !isShellCommandTool
-      && (isShellFileTool || !deps.skipPermissionChecks);
+    // skipPermissionChecks 只跳过 confirm，显式 deny 规则仍生效。
+    const runPermissionChecks = !isShellCommandTool;
+    const runConfirmChecks = isShellFileTool || !deps.skipPermissionChecks;
     if (runPermissionChecks) {
       const permission = resolveToolPermission(tc, deps.permissionRules);
       if (permission.permission === 'deny') {
-        logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
-        onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-        messages.push({
-          role: 'tool',
-          content: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-          toolCallId: tc.id,
+        emitHarnessPolicyBlock({
+          deps,
+          tc,
+          iteration,
+          baseMessage: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
+          errorLabel: permission.reason ?? 'Tool denied by policy',
+          policyReason: 'permission_deny',
+          messages,
+          onStep,
+          logger,
+          taskState,
+          repoContext,
+          policyBlockedSignatures,
         });
+        directTotalCount++;
         submittedIds.add(tc.id);
         continue;
       }
 
-      if (permission.permission === 'confirm' && !deps.onConfirm) {
-        const reason = permission.reason ?? 'Confirmation required but no confirmation handler is configured';
-        logger.toolResult(tc.name, false, 0, reason);
-        onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-        messages.push({
-          role: 'tool',
-          content: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-          toolCallId: tc.id,
+      if (runConfirmChecks && permission.permission === 'confirm' && !deps.onConfirm) {
+        emitHarnessPolicyBlock({
+          deps,
+          tc,
+          iteration,
+          baseMessage: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
+          errorLabel: permission.reason ?? 'Confirmation required but no confirmation handler is configured',
+          policyReason: 'permission_confirm_no_handler',
+          messages,
+          onStep,
+          logger,
+          taskState,
+          repoContext,
+          policyBlockedSignatures,
         });
+        directTotalCount++;
         submittedIds.add(tc.id);
         continue;
       }
 
       if (
-        permission.permission === 'confirm'
+        runConfirmChecks
+        && permission.permission === 'confirm'
         && deps.onConfirm
         && !(shellMandatoryConfirmApproved && tc.name === 'run_command')
       ) {
@@ -521,13 +567,22 @@ export async function executeToolCallsStreaming(
         onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: observableToolArgs(tc) });
         const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
         if (!allowed) {
-          logger.toolResult(tc.name, false, 0, 'User denied execution');
-          onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-          messages.push({
-            role: 'tool',
-            content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
-            toolCallId: tc.id,
+          emitHarnessPolicyBlock({
+            deps,
+            tc,
+            iteration,
+            baseMessage: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
+            errorLabel: 'User denied execution',
+            policyReason: 'user_denied',
+            outcome: 'user_denied',
+            messages,
+            onStep,
+            logger,
+            taskState,
+            repoContext,
+            policyBlockedSignatures,
           });
+          directTotalCount++;
           submittedIds.add(tc.id);
           continue;
         }
@@ -638,7 +693,9 @@ export async function executeToolCallsStreaming(
       rememberPreCommandInventory(
         commandInventoryScope,
         tc.id,
-        await listWorkspaceFileInventory(deps.workspaceRoot),
+        await listWorkspaceFileInventory(deps.workspaceRoot, {
+          scopeRelPaths: inventoryScopeForToolCall(tc),
+        }),
       );
     }
 
@@ -670,10 +727,8 @@ export async function executeToolCallsStreaming(
   let failedCount = directFailedCount;
   const failedSignatures: string[] = [...directFailedSignatures];
 
+  // 中断时 flush 只返回已跑完的工具；这些副作用已发生，照常写结果并记账，未完成的才补 interrupted。
   for (const sr of results) {
-    // 中断后跳过剩余结果处理
-    if (deps.loopController.isAborted()) break;
-
     const { toolCall: tc, result } = sr;
     const output = result.success
       ? result.output
@@ -734,7 +789,10 @@ export async function executeToolCallsStreaming(
     const inventoryBefore = preInv ?? backgroundInv;
     let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
     if (inventoryBefore) {
-      const after = await listWorkspaceFileInventory(deps.workspaceRoot);
+      const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
+        baseline: inventoryBefore,
+        scopeRelPaths: inventoryBefore.scopeRelPaths,
+      });
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
       const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
@@ -776,8 +834,11 @@ export async function executeToolCallsStreaming(
         // 命令里写明的删除/改写路径已由 collectSessionTouchedPaths 覆盖。
       }
       if (touchedPaths.length) {
-        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch(() => {
-          /* ignore */
+        await touchSessionTouchedPaths(checkpointSessionDir, checkpointSessionId, touchedPaths).catch((err) => {
+          console.debug(
+            '[harness] touch session paths failed:',
+            err instanceof Error ? err.message : err,
+          );
         });
       }
     }
@@ -837,9 +898,6 @@ export async function executeToolCallsStreaming(
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);
-    if (taskState && repoContext) {
-      // currentPlanTracker.onToolResult removed (Phase 11)
-    }
 
     processedIds.add(tc.id);
     deps.loopController.recordToolCalls(1);

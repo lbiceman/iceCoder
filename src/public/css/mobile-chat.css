@@ -91,6 +91,7 @@
   pointer-events: auto !important;
 }
 
+[data-shell="mobile"] .message.user .msg-reuse-btn,
 [data-shell="mobile"] .message.user .msg-delete-btn,
 [data-shell="mobile"] .message.user .msg-restore-btn {
   min-width: 32px;

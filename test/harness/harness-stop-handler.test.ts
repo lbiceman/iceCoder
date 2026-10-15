@@ -11,7 +11,6 @@ function makeDeps() {
   return {
     loopController,
     enqueueCheckpointPersist: async <T>(task: () => Promise<T>) => task(),
-    resilienceV2Enabled: false,
   };
 }
 

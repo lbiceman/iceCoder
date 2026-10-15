@@ -646,11 +646,22 @@ export const ChatPage = (() => {
       const userMsg = {
         role: 'user',
         id: userMessageId,
-        content: displayParts.join('\n') || (msgImages.length > 0 ? '(图片)' : ''),
+        content: displayParts.join('\n'),
         images: msgImages.length > 0 ? msgImages : undefined,
       };
       if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
       if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
+      if (uploadedFiles.length > 0) {
+        const attached = [];
+        for (let ai = 0; ai < uploadedFiles.length; ai++) {
+          const uf = uploadedFiles[ai];
+          if (!uf || !uf.fileId) continue;
+          const item = { fileId: uf.fileId, filename: uf.filename || 'file' };
+          if (typeof uf.size === 'number' && isFinite(uf.size)) item.size = uf.size;
+          attached.push(item);
+        }
+        if (attached.length) userMsg.attachedFiles = attached;
+      }
       userMsg._pendingServerAck = true;
       Session.appendMessage(userMsg);
       newTurnMeta = { messageId: userMessageId };
@@ -755,8 +766,6 @@ export const ChatPage = (() => {
     try {
       if (!WS || typeof WS.sendMessage !== 'function') {
         sent = false;
-      } else if (msgImages.length > 0) {
-        sent = WS.sendMessage(msgText || '请分析这些图片', sendOpts);
       } else {
         sent = WS.sendMessage(msgText, sendOpts);
       }
@@ -1513,6 +1522,249 @@ export const ChatPage = (() => {
     });
   }
 
+  function reuseApi() {
+    return window.ComposerReuse || null;
+  }
+
+  function findUserMessageByActionId(messageId) {
+    if (!messageId || !Session || typeof Session.getMessages !== 'function') return null;
+    const msgs = Session.getMessages();
+    let byPrev = null;
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (!m || m.role !== 'user') continue;
+      if (m.id === messageId) return m;
+      if (m._prevId === messageId) byPrev = m;
+    }
+    return byPrev;
+  }
+
+  function messageFromReuseButton(btn) {
+    if (!btn || typeof btn.closest !== 'function') return null;
+    const root = btn.closest('.message');
+    if (!root) return null;
+    const contentEl = root.querySelector('.msg-content');
+    const images = [];
+    const imgNodes = root.querySelectorAll('.msg-image-thumb');
+    for (let i = 0; i < imgNodes.length; i++) {
+      const src = imgNodes[i].getAttribute('src') || imgNodes[i].src || '';
+      if (src) images.push(src);
+    }
+    const skills = [];
+    const skillNodes = root.querySelectorAll('.msg-skill-chip');
+    for (let s = 0; s < skillNodes.length; s++) {
+      const title = skillNodes[s].getAttribute('title') || '';
+      skills.push(title || skillNodes[s].textContent || '');
+    }
+    const referencePaths = [];
+    const fileNodes = root.querySelectorAll('.msg-file-ref-chip');
+    for (let f = 0; f < fileNodes.length; f++) {
+      const title = fileNodes[f].getAttribute('title') || '';
+      if (title) referencePaths.push(title);
+    }
+    const cmdEl = root.querySelector('.msg-shell-command-chip-label');
+    const cmd = cmdEl ? String(cmdEl.textContent || '').trim() : '';
+    const msg = {
+      content: contentEl ? (contentEl.textContent || '') : '',
+      images,
+      skills,
+      referencePaths,
+      alsoNote: root.classList.contains('also-note'),
+    };
+    if (cmd === '/shell' || cmd.indexOf('/shell') === 0) msg.shellCommand = '/shell';
+    else if (cmd === '/plan' || cmd.indexOf('/plan') === 0) msg.planCommand = '/plan';
+    else if (cmd === '/open' || cmd.indexOf('/open') === 0) msg.openCommand = '/open';
+    return msg;
+  }
+
+  function reusePayloadFromMessage(msg) {
+    const api = reuseApi();
+    if (!api || typeof api.build !== 'function') return null;
+    const display = Session && typeof Session.prepareUserMessageForDisplay === 'function'
+      ? Session.prepareUserMessageForDisplay(msg)
+      : msg;
+    return api.build(display);
+  }
+
+  function composerHasDraft() {
+    if (getComposerBody()) return true;
+    if (Skills && typeof Skills.getSelectedSkills === 'function' && Skills.getSelectedSkills().length) return true;
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function' && FileRef.getSelectedRefs().length) return true;
+    if (File && typeof File.getPendingImages === 'function' && File.getPendingImages().length) return true;
+    if (File && typeof File.getUploadedFiles === 'function' && File.getUploadedFiles().length) return true;
+    if (File && typeof File.hasPendingUploads === 'function' && File.hasPendingUploads()) return true;
+    return false;
+  }
+
+  function toComposerUploadedEntries(files) {
+    const out = [];
+    for (let i = 0; i < (files || []).length; i++) {
+      const f = files[i];
+      if (!f || !f.fileId) continue;
+      const entry = {
+        localId: `reuse-${f.fileId}`,
+        fileId: f.fileId,
+        filename: f.filename || 'file',
+        status: 'ready',
+      };
+      if (typeof f.size === 'number' && isFinite(f.size)) entry.size = f.size;
+      out.push(entry);
+    }
+    return out;
+  }
+
+  function toComposerImageEntries(urls) {
+    const out = [];
+    for (let i = 0; i < (urls || []).length; i++) {
+      if (!urls[i]) continue;
+      out.push({ dataUrl: urls[i], file: null });
+    }
+    return out;
+  }
+
+  function unionSkills(current, incoming) {
+    const out = Array.isArray(current) ? current.slice() : [];
+    const seen = {};
+    for (let i = 0; i < out.length; i++) seen[String(out[i]).replace(/^#/, '').toLowerCase()] = true;
+    for (let j = 0; j < (incoming || []).length; j++) {
+      const name = String(incoming[j] || '').replace(/^#/, '');
+      const key = name.toLowerCase();
+      if (!name || seen[key]) continue;
+      seen[key] = true;
+      out.push(name);
+    }
+    return out;
+  }
+
+  function unionPaths(current, incoming) {
+    const out = Array.isArray(current) ? current.slice() : [];
+    const seen = {};
+    for (let i = 0; i < out.length; i++) {
+      seen[String(out[i]).replace(/\//g, '\\').toLowerCase()] = true;
+    }
+    for (let j = 0; j < (incoming || []).length; j++) {
+      const p = incoming[j];
+      const key = String(p || '').replace(/\//g, '\\').toLowerCase();
+      if (!p || seen[key]) continue;
+      seen[key] = true;
+      out.push(p);
+    }
+    return out;
+  }
+
+  function mergeUploaded(existing, incoming) {
+    const out = Array.isArray(existing) ? existing.slice() : [];
+    const seen = {};
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] && out[i].fileId) seen[out[i].fileId] = true;
+    }
+    const extra = toComposerUploadedEntries(incoming);
+    for (let j = 0; j < extra.length; j++) {
+      if (seen[extra[j].fileId]) continue;
+      seen[extra[j].fileId] = true;
+      out.push(extra[j]);
+    }
+    return out;
+  }
+
+  function mergeImages(existing, incoming) {
+    const out = Array.isArray(existing) ? existing.slice() : [];
+    const seen = {};
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] && out[i].dataUrl) seen[out[i].dataUrl] = true;
+    }
+    const extra = toComposerImageEntries(incoming);
+    for (let j = 0; j < extra.length; j++) {
+      if (seen[extra[j].dataUrl]) continue;
+      seen[extra[j].dataUrl] = true;
+      out.push(extra[j]);
+    }
+    return out;
+  }
+
+  function applyComposerReusePayload(payload) {
+    refreshComposerModules();
+    const merge = composerHasDraft();
+    if (elInput) {
+      const incoming = payload && payload.text ? payload.text : '';
+      if (!merge) {
+        elInput.value = incoming;
+      } else if (incoming) {
+        const trimmed = String(elInput.value || '').replace(/\u00A0/g, ' ').trim();
+        const alreadyThere = trimmed === incoming || trimmed.endsWith(`\n${incoming}`);
+        if (!trimmed) elInput.value = incoming;
+        else if (!alreadyThere) elInput.value = `${trimmed}\n${incoming}`;
+      }
+    }
+    if (Skills && typeof Skills.setSelectedSkills === 'function') {
+      const current = merge && typeof Skills.getSelectedSkills === 'function' ? Skills.getSelectedSkills() : [];
+      Skills.setSelectedSkills(merge ? unionSkills(current, payload.skills || []) : (payload.skills || []).slice());
+    }
+    if (FileRef && typeof FileRef.setSelectedRefs === 'function') {
+      const current = merge && typeof FileRef.getSelectedRefs === 'function' ? FileRef.getSelectedRefs() : [];
+      FileRef.setSelectedRefs(merge ? unionPaths(current, payload.fileRefs || []) : (payload.fileRefs || []).slice());
+    }
+    if (File && typeof File.setComposerSnapshot === 'function') {
+      const snap = merge && typeof File.getComposerSnapshot === 'function'
+        ? File.getComposerSnapshot()
+        : { uploadedFiles: [], pendingImages: [] };
+      File.setComposerSnapshot({
+        uploadedFiles: merge
+          ? mergeUploaded(snap.uploadedFiles, payload.uploadedFiles || [])
+          : toComposerUploadedEntries(payload.uploadedFiles || []),
+        pendingImages: merge
+          ? mergeImages(snap.pendingImages, payload.images || [])
+          : toComposerImageEntries(payload.images || []),
+      });
+    }
+    closeComposerOverlays();
+    if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+    if (elInput) {
+      elInput.focus();
+      const len = elInput.value.length;
+      if (typeof elInput.setSelectionRange === 'function') {
+        try { elInput.setSelectionRange(len, len); } catch (_e) { /* ignore */ }
+      }
+    }
+    syncComposerActionState();
+  }
+
+  const reuseClickGuard = { id: '', at: 0 };
+
+  function handleMessageReuseAction(messageId, btn) {
+    const now = Date.now();
+    if (messageId && reuseClickGuard.id === messageId && now - reuseClickGuard.at < 400) return;
+    reuseClickGuard.id = messageId || '';
+    reuseClickGuard.at = now;
+
+    refreshComposerModules();
+    const api = reuseApi();
+    function payloadHasContent(payload) {
+      if (api && typeof api.hasContent === 'function') return !!api.hasContent(payload);
+      if (!payload) return false;
+      return !!(
+        payload.text
+        || (payload.skills && payload.skills.length)
+        || (payload.fileRefs && payload.fileRefs.length)
+        || (payload.images && payload.images.length)
+        || (payload.uploadedFiles && payload.uploadedFiles.length)
+      );
+    }
+    let payload = null;
+    const stored = findUserMessageByActionId(messageId);
+    if (stored) payload = reusePayloadFromMessage(stored);
+    if (!payloadHasContent(payload) && btn) {
+      const fromDom = messageFromReuseButton(btn);
+      if (fromDom) payload = reusePayloadFromMessage(fromDom);
+    }
+    if (!payloadHasContent(payload)) {
+      notifyUser('这条消息没有可放回输入框的内容。', 'info', { duration: 2500 });
+      return;
+    }
+    applyComposerReusePayload(payload);
+    notifyUser('已放回输入框', 'success', { duration: 1800 });
+  }
+
   function handleMessageDeleteAction(messageId, btn) {
     if (btn && btn.disabled) {
       notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
@@ -1601,6 +1853,16 @@ export const ChatPage = (() => {
     e.preventDefault();
     e.stopPropagation();
     handleMessageRestoreAction(btn.dataset.messageId, btn);
+  }
+
+  function onReuseButtonClick(e) {
+    const target = e.target && e.target.nodeType === 1 ? e.target : (e.target && e.target.parentElement);
+    if (!target || !target.closest) return;
+    const btn = target.closest('.msg-reuse-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleMessageReuseAction(btn.dataset.messageId, btn);
   }
 
   function onDeleteButtonClick(e) {
@@ -2001,6 +2263,7 @@ export const ChatPage = (() => {
     if (elMessages) {
       elMessages.addEventListener('click', onRestoreButtonClick, true);
       elMessages.addEventListener('click', onDeleteButtonClick, true);
+      elMessages.addEventListener('click', onReuseButtonClick, true);
     }
     if (elSendBtn) elSendBtn.addEventListener('click', handleSend);
     if (elInput) {
@@ -2243,6 +2506,7 @@ export const ChatPage = (() => {
       UI.setMessageActionHandlers({
         onDelete: handleMessageDeleteAction,
         onRestore: handleMessageRestoreAction,
+        onReuse: handleMessageReuseAction,
       });
     }
     wireSnapshotTimelineHandlers();

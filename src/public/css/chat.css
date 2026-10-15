@@ -255,7 +255,9 @@
 .chat-vhistory-slot .message:is(.assistant, .agent) {
   align-self: flex-start;
 }
-.chat-vhistory-slot .tool-trace-group {
+.chat-vhistory-slot .tool-trace-group,
+.chat-vhistory-slot .turn-activity,
+.chat-vhistory-slot .agent-delegation {
   align-self: flex-start;
   max-width: 92%;
 }
@@ -868,6 +870,7 @@
     pointer-events: auto;
   }
 
+  .message.user .msg-reuse-btn,
   .message.user .msg-delete-btn,
   .message.user .msg-restore-btn {
     min-width: 32px;
@@ -879,6 +882,7 @@
   }
 }
 
+.message.user .msg-reuse-btn,
 .message.user .msg-delete-btn,
 .message.user .msg-restore-btn {
   display: inline-flex;
@@ -894,6 +898,7 @@
   flex-shrink: 0;
 }
 
+.message.user .msg-reuse-btn .msg-reuse-icon,
 .message.user .msg-restore-btn .msg-restore-icon,
 .message.user .msg-delete-btn .msg-delete-icon {
   display: block;
@@ -910,6 +915,7 @@
   opacity: 0.55;
 }
 
+.message.user .msg-reuse-btn:hover:not(:disabled) .msg-reuse-icon,
 .message.user .msg-delete-btn:hover:not(:disabled) .msg-delete-icon,
 .message.user .msg-restore-btn.msg-restore-btn--ready:hover:not(:disabled) .msg-restore-icon {
   opacity: 1;
@@ -2161,6 +2167,32 @@
   font-weight: 600;
   color: var(--text-secondary);
 }
+.tool-action.is-tool-locate {
+  animation: tool-locate-flash 1.15s ease;
+}
+.tool-action.is-tool-locate .tool-name {
+  animation: tool-locate-name 1.15s ease;
+}
+@keyframes tool-locate-flash {
+  0%, 42% { background-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+  22%, 100% { background-color: transparent; }
+}
+@keyframes tool-locate-name {
+  0%, 42% { color: var(--accent); }
+  100% { color: var(--text-secondary); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-action.is-tool-locate,
+  .tool-action.is-tool-locate .tool-name {
+    animation: none;
+  }
+  .tool-action.is-tool-locate {
+    background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .tool-action.is-tool-locate .tool-name {
+    color: var(--accent);
+  }
+}
 .tool-action .tool-detail {
   color: var(--text-muted);
   white-space: nowrap;
@@ -2914,7 +2946,7 @@ body.pane-resizing * {
   background: rgba(239, 68, 68, 0.12);
 }
 
-/* === Sidebar Footer: 控制按钮行（监管模式 / 设置 / 连接状态） === */
+/* === Sidebar Footer: 控制按钮行（监管模式 / 设置） === */
 .chat-sidebar-footer {
   flex-shrink: 0;
   display: flex;
@@ -2962,14 +2994,6 @@ body.pane-resizing * {
   opacity: 0.85;
 }
 
-.chat-sidebar-connection {
-  flex: 0 0 30px;              /* 固定 30px 宽，覆盖父级 flex: 1，只显示图标 */
-  justify-content: center;
-  align-items: center;
-  cursor: default;
-  pointer-events: none;
-}
-
 .chat-sidebar-control-icon {
   display: inline-flex;
   align-items: flex-end;
@@ -2993,20 +3017,6 @@ body.pane-resizing * {
   border-color: var(--accent-border);
   color: var(--text-primary);
   background: var(--accent-light);
-}
-
-/* 连接状态配色 */
-.chat-sidebar-connection[data-state="connected"] {
-  color: var(--success);
-  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
-}
-.chat-sidebar-connection[data-state="connecting"] {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-}
-.chat-sidebar-connection[data-state="disconnected"] {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 .chat-sidebar-rename-input {

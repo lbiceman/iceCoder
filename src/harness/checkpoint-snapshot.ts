@@ -11,14 +11,6 @@ export interface CheckpointSnapshotContext {
 }
 
 /**
- * Captures the current aggregate only. Persistence, retention, and history are deliberately
- * outside this boundary.
- */
-export interface CheckpointSnapshotProvider {
-  capture(context?: CheckpointSnapshotContext): CheckpointSnapshot | Promise<CheckpointSnapshot>;
-}
-
-/**
  * Restores one validated aggregate into runtime components. Implementations should replace
  * component state rather than merge it so replaying the same snapshot remains idempotent.
  */
@@ -29,8 +21,7 @@ export interface CheckpointSnapshotRestorer {
   ): void | Promise<void>;
 }
 
-/** Short aliases for adapters that already carry "checkpoint" in their module name. */
-export type SnapshotProvider = CheckpointSnapshotProvider;
+/** Short alias for adapters that already carry "checkpoint" in their module name. */
 export type SnapshotRestorer = CheckpointSnapshotRestorer;
 
 export type CheckpointSnapshotEventType =
@@ -68,16 +59,6 @@ export interface LightweightSnapshotBoundaryEvent {
 export type LightweightSnapshotBoundaryListener = (
   event: LightweightSnapshotBoundaryEvent,
 ) => void;
-
-export interface RoundSnapshotStore {
-  capture(
-    snapshot: CheckpointSnapshot,
-    workspaceMaterial?: unknown,
-  ): void | Promise<void>;
-  get(roundId: string): CheckpointSnapshot | null | Promise<CheckpointSnapshot | null>;
-  restore(roundId: string): CheckpointSnapshot | null | Promise<CheckpointSnapshot | null>;
-  prune(policy?: { keep?: number }): void | Promise<void>;
-}
 
 const lightweightListeners = new Set<LightweightSnapshotBoundaryListener>();
 

@@ -28,7 +28,7 @@ import {
   resetShellBlacklistCache,
   validateShellBlacklistPatterns,
 } from '../../tools/shell-sandbox.js';
-import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
+import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-config.js';
 import {
   readSupervisorSettingsDocument,
   validateSupervisorSettingsDocument,

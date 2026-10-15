@@ -5,6 +5,7 @@
 import type { UnifiedMessage } from '../llm/types.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
+import { isSystemInjectedUserContent } from './harness-message-utils.js';
 
 /** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
 export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
@@ -46,20 +47,9 @@ export function shouldPreserveMessageOnCompaction(msg: UnifiedMessage): boolean 
   return msg.preserveOnCompaction === true;
 }
 
-/** 不参与「真实用户轮次」计数的注入块 */
+/** 不参与「真实用户轮次」计数的注入块。规则与 {@link isSystemInjectedUserContent} 相同。 */
 export function isSyntheticUserBlockContent(content: string): boolean {
-  const c = content.trimStart();
-  return (
-    c.startsWith('<system-reminder>')
-    || c.startsWith('<context-summary>')
-    || c.startsWith('<compact_boundary')
-    || c.startsWith('<recent-dialogue-focus')
-    || c.startsWith('<runtime-recovery-context>')
-    || c.startsWith('<recent-file-contents>')
-    || c.startsWith('<system-context>')
-    || c.startsWith('<resume-checkpoint>')
-    || c.startsWith('[Background Task Status]')
-  );
+  return isSystemInjectedUserContent(content);
 }
 
 export function sessionNotesPathHint(sessionId?: string): string {

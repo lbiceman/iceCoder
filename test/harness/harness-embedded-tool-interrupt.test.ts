@@ -75,7 +75,6 @@ describe('handleNoToolCalls · embedded text after API tools', () => {
       sessionDir: undefined,
       checkpointManager: undefined,
       checkpointEngine: undefined,
-      resilienceV2Enabled: false,
       runtimeTelemetry: undefined,
     };
 
@@ -96,8 +95,7 @@ describe('handleNoToolCalls · embedded text after API tools', () => {
     expect(result.action).toBe('continue');
     expect(
       state.noToolExecutionRecoveryCount
-      + state.emptyResponseRetryCount
-      + state.completionGateContinuationCount,
+      + state.emptyResponseRetryCount,
     ).toBe(1);
   });
 });

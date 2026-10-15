@@ -101,6 +101,16 @@ describe('chat-ws-persist appendMessages', () => {
     }
   });
 
+  it('损坏的会话文件不被新消息覆盖', async () => {
+    const file = getSessionFile(SID);
+    const torn = '[{"role":"user","id":"old","content":"keep"}';
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, torn, 'utf-8');
+    const ok = await appendMessages([{ role: 'user', id: 'new', content: 'nope' }], SID);
+    expect(ok).toBe(false);
+    expect(await fs.readFile(file, 'utf-8')).toBe(torn);
+  });
+
   it('getSessionsDir 与 session 文件路径一致', () => {
     expect(getSessionFile('abc')).toBe(path.join(getSessionsDir(), 'abc.json'));
   });

@@ -147,11 +147,11 @@ export interface LoopState {
   nodeIndex?: number;
   reason?: string;
   message?: string;
-  /** Execution Free/Forced 执行边界；Batch 1 仅提供后续任务承载位，不改变运行逻辑。 */
+  /** Execution Free/Forced 执行边界。 */
   executionMode?: ExecutionMode;
   /** Forced enter 后的防抖锁剩余轮数。 */
   executionModeLockRemaining?: number;
-  /** 上次进入 forced 的触发信号，按 §2.8.8 排序。 */
+  /** 上次进入 forced 的触发信号，按优先级排序。 */
   executionModeEnteredBy?: ModeSignal[];
   /** 上次进入 forced 的主触发信号。 */
   executionModeEnteredByPrimary?: ModeSignal;
@@ -179,11 +179,14 @@ export interface HarnessConfig {
   loop: LoopControlConfig;
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
-  /** 为 true 时跳过 deny/confirm/破坏性确认等全部权限检查 */
+  /**
+   * 为 true 时跳过 confirm 与破坏性操作确认；`permissions` 中显式的 deny 规则仍生效。
+   * Shell 协作文件工具的 confirm 与 Shell mandatory confirm 不受影响。
+   */
   skipPermissionChecks?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
-  /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */
+  /** 硬压缩的 token 阈值；未设置时按当前上下文窗口 × HARD_COMPACTION_RATIO 动态计算 */
   compactionTokenThreshold?: number;
   /** 上下文压缩后保留的最近消息数 */
   compactionKeepRecent?: number;
@@ -216,9 +219,9 @@ export interface HarnessConfig {
   verificationExemptDirs?: string[];
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
-  /** Batch 1：可选注入的全局策略，只读承载位；本批不接入 Harness 主循环。 */
+  /** 可选注入的全局模式策略。 */
   globalPolicy?: GlobalModePolicy;
-  /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
+  /** 可选 supervisor 配置。未传入时按 off 处理。 */
   supervisorConfig?: ResolvedSupervisorConfig;
   /**
    * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；

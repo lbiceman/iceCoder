@@ -39,8 +39,13 @@ export type ToolOutputCallback = (chunk: string) => void;
 /**
  * 工具处理器函数类型。
  * onOutput 可选回调，支持实时输出流。
+ * signal 在超时或用户中止时触发；长时间运行的工具应据此停止子进程 / IO。
  */
-export type ToolHandler = (args: Record<string, any>, onOutput?: ToolOutputCallback) => Promise<ToolResult>;
+export type ToolHandler = (
+  args: Record<string, any>,
+  onOutput?: ToolOutputCallback,
+  signal?: AbortSignal,
+) => Promise<ToolResult>;
 
 /**
  * 已注册的工具，包含定义和处理器。

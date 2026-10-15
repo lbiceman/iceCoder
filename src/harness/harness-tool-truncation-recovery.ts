@@ -5,6 +5,10 @@
 import type { LLMResponse, UnifiedMessage } from '../llm/types.js';
 import type { ToolCall } from '../llm/types.js';
 import { buildWrappedArgumentFormatHint } from '../tools/tool-arguments-normalizer.js';
+import {
+  OUTPUT_TOKEN_CEILING_RATIO,
+  TRUNCATED_WRITE_CONTENT_MIN_CHARS,
+} from './harness-constants.js';
 
 export const TRUNCATION_SENSITIVE_WRITE_TOOLS = new Set([
   'write_file',
@@ -40,7 +44,7 @@ export function writeToolMissingRequiredPath(tc: ToolCall): boolean {
 /** 输出 token 是否顶到单次上限（finishReason 可能仍为 tool_calls）。 */
 export function isOutputAtTokenCeiling(outputTokens: number, maxOutputTokens: number | undefined): boolean {
   if (!maxOutputTokens || maxOutputTokens <= 0 || outputTokens <= 0) return false;
-  return outputTokens >= Math.floor(maxOutputTokens * 0.98);
+  return outputTokens >= Math.floor(maxOutputTokens * OUTPUT_TOKEN_CEILING_RATIO);
 }
 
 export function shouldPlanTruncatedWriteToolRecovery(input: TruncationRecoveryInput): boolean {
@@ -56,7 +60,7 @@ export function shouldPlanTruncatedWriteToolRecovery(input: TruncationRecoveryIn
 
   return missingPath.some((tc) => {
     const content = tc.arguments?.content;
-    return typeof content === 'string' && content.length >= 500;
+    return typeof content === 'string' && content.length >= TRUNCATED_WRITE_CONTENT_MIN_CHARS;
   });
 }
 

@@ -87,7 +87,6 @@ const baseDeps = {
   stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
   checkpointManager: undefined,
   enqueueCheckpointPersist: async (task: () => Promise<unknown>) => task(),
-  resilienceV2Enabled: false,
   checkpointEngine: undefined,
   toolExecutor: new ToolExecutor(new ToolRegistry(), {
     maxRetries: 0,
@@ -158,7 +157,7 @@ describe('prepareHarnessRound · post-fork skip', () => {
     injectSpy.mockRestore();
   });
 
-  it('second round after tools uses standard recall mode', async () => {
+  it('second round after tools stays on keyword recall', async () => {
     const messages = filler(5);
     const state = baseState(messages, { hadToolRoundThisRun: true, turnCount: 1 });
     const injectSpy = vi.spyOn(baseDeps.memoryIntegration, 'injectMemoryContext').mockResolvedValue();
@@ -171,7 +170,7 @@ describe('prepareHarnessRound · post-fork skip', () => {
     });
 
     expect(injectSpy).toHaveBeenCalledOnce();
-    expect(injectSpy.mock.calls[0][1]).toMatchObject({ mode: 'default' });
+    expect(injectSpy.mock.calls[0][1]).toMatchObject({ mode: 'coarse_pre_llm' });
     injectSpy.mockRestore();
   });
 });
@@ -181,6 +180,16 @@ describe('resolveRecallInjectMode', () => {
     expect(resolveRecallInjectMode({ casual: true, hadToolRoundThisRun: false })).toBe('casual_light');
     expect(resolveRecallInjectMode({ casual: true, hadToolRoundThisRun: true })).toBe('casual_light');
     expect(resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: false })).toBe('coarse_pre_llm');
-    expect(resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: true })).toBe('default');
+    expect(resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: true })).toBe('coarse_pre_llm');
+    expect(resolveRecallInjectMode({
+      casual: false,
+      hadToolRoundThisRun: true,
+      asksMemory: true,
+    })).toBe('default');
+    expect(resolveRecallInjectMode({
+      casual: false,
+      hadToolRoundThisRun: true,
+      topicShifted: true,
+    })).toBe('default');
   });
 });

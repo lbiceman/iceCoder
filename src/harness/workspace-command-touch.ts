@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 
@@ -39,16 +40,66 @@ const SKIP_DIRS = new Set([
 export interface WorkspaceFileInventory extends Map<string, {
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
   contentHash: string;
 }> {
   /** false 表示扫描期间至少一个目录或候选文件无法读取。 */
   complete: boolean;
+  /** 本次扫描实际读取文件内容的次数。元数据未变时为 0。 */
+  contentReads: number;
+  /**
+   * 非空时清单只覆盖这些相对路径（命令能解析出的写入目标）。
+   * 未设置表示全树扫描。前后两次对比必须使用同一范围。
+   */
+  scopeRelPaths?: string[];
 }
 
-const preCommandInventories = new Map<string, WorkspaceFileInventory>();
+export interface ListWorkspaceInventoryOptions {
+  /** 元数据（size/mtime/ctime）未变时复用 contentHash，不再读文件。 */
+  baseline?: WorkspaceFileInventory;
+  /** 只扫描这些相对路径；为空则全树。 */
+  scopeRelPaths?: readonly string[];
+}
+
 interface BackgroundInventoryEntry {
   inventory: WorkspaceFileInventory;
   expiresAt: number;
+}
+
+interface ContentHashEntry {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  contentHash: string;
+}
+
+interface WorkspaceTouchState {
+  preCommandInventories: Map<string, WorkspaceFileInventory>;
+  backgroundCommandInventories: Map<string, BackgroundInventoryEntry>;
+  contentHashCache: Map<string, ContentHashEntry>;
+  lastFullInventory: { root: string; inventory: WorkspaceFileInventory } | null;
+}
+
+function emptyWorkspaceTouchState(): WorkspaceTouchState {
+  return {
+    preCommandInventories: new Map(),
+    backgroundCommandInventories: new Map(),
+    contentHashCache: new Map(),
+    lastFullInventory: null,
+  };
+}
+
+const workspaceTouchStorage = new AsyncLocalStorage<WorkspaceTouchState>();
+/** 没有 run 作用域时的回退，给直接扫清单的测试用。 */
+const fallbackWorkspaceTouch = emptyWorkspaceTouchState();
+
+function currentWorkspaceTouch(): WorkspaceTouchState {
+  return workspaceTouchStorage.getStore() ?? fallbackWorkspaceTouch;
+}
+
+/** 包住一次 run，命令清单和内容哈希不再跟其他会话共用。 */
+export function runWithWorkspaceTouchScope<T>(fn: () => T): T {
+  return workspaceTouchStorage.run(emptyWorkspaceTouchState(), fn);
 }
 
 export const WORKSPACE_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024;
@@ -57,14 +108,6 @@ export const BACKGROUND_INVENTORY_LIMIT = 128;
 /** 同一轮并行的 shell 类工具调用远少于此；超出说明有调用没走到 take（异常路径），按最旧淘汰。 */
 export const PRE_COMMAND_INVENTORY_LIMIT = 32;
 export const BACKGROUND_INVENTORY_TTL_MS = 5 * 60_000;
-
-const backgroundCommandInventories = new Map<string, BackgroundInventoryEntry>();
-const contentHashCache = new Map<string, {
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  contentHash: string;
-}>();
 
 function inventoryKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
@@ -146,16 +189,105 @@ export function isShellWorkspaceTouchTool(
   return true;
 }
 
-export async function listWorkspaceFileInventory(workspaceRoot: string): Promise<WorkspaceFileInventory> {
-  const out = Object.assign(new Map(), { complete: true }) as WorkspaceFileInventory;
-  const root = path.resolve(workspaceRoot);
-  const files: Array<{ abs: string; rel: string }> = [];
+function emptyInventory(scopeRelPaths?: string[]): WorkspaceFileInventory {
+  return Object.assign(new Map(), {
+    complete: true,
+    contentReads: 0,
+    scopeRelPaths,
+  }) as WorkspaceFileInventory;
+}
 
-  const walk = async (dir: string): Promise<void> => {
+function cloneInventory(source: WorkspaceFileInventory): WorkspaceFileInventory {
+  const copy = emptyInventory(source.scopeRelPaths ? [...source.scopeRelPaths] : undefined);
+  copy.complete = source.complete;
+  for (const [rel, info] of source) copy.set(rel, { ...info });
+  return copy;
+}
+
+function isEnoent(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { code?: string }).code === 'ENOENT';
+}
+
+function resolveScopePaths(root: string, relPaths: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of relPaths) {
+    const normalized = raw.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalized || normalized.includes('\0')) continue;
+    const abs = path.resolve(root, normalized);
+    const rel = path.relative(root, abs);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    const posix = rel.split(path.sep).join('/');
+    if (seen.has(posix)) continue;
+    seen.add(posix);
+    out.push(posix);
+  }
+  return out;
+}
+
+async function recordInventoryFile(
+  abs: string,
+  rel: string,
+  out: WorkspaceFileInventory,
+  baseline: WorkspaceFileInventory | undefined,
+  reads: { n: number },
+  missingOk: boolean,
+): Promise<void> {
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fs.stat(abs);
+  } catch (error) {
+    if (missingOk && isEnoent(error)) return;
+    out.complete = false;
+    return;
+  }
+  if (!stat.isFile()) return;
+  const prev = baseline?.get(rel);
+  let contentHash: string;
+  if (
+    prev
+    && prev.size === stat.size
+    && prev.mtimeMs === stat.mtimeMs
+    && prev.ctimeMs === stat.ctimeMs
+  ) {
+    contentHash = prev.contentHash;
+  } else if (stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES) {
+    contentHash = `metadata:${stat.size}:${stat.mtimeMs}`;
+  } else {
+    const cached = takeCachedContentHash(abs, stat);
+    if (cached) {
+      contentHash = cached;
+    } else {
+      reads.n += 1;
+      contentHash = createHash('sha256').update(await fs.readFile(abs)).digest('hex');
+    }
+    rememberCachedContentHash(abs, {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      contentHash,
+    });
+  }
+  out.set(rel, {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    contentHash,
+  });
+}
+
+async function collectInventoryFiles(
+  root: string,
+  dir: string,
+  out: WorkspaceFileInventory,
+): Promise<Array<{ abs: string; rel: string }>> {
+  const files: Array<{ abs: string; rel: string }> = [];
+  const walk = async (current: string): Promise<void> => {
     let entries: import('node:fs').Dirent[];
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if (isEnoent(error)) return;
       out.complete = false;
       return;
     }
@@ -163,7 +295,7 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
       if (entry.name.startsWith('.') && entry.name !== '.env' && entry.name !== '.gitignore') {
         if (entry.isDirectory()) continue;
       }
-      const abs = path.join(dir, entry.name);
+      const abs = path.join(current, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
         await walk(abs);
@@ -175,38 +307,75 @@ export async function listWorkspaceFileInventory(workspaceRoot: string): Promise
       files.push({ abs, rel });
     }
   };
+  await walk(dir);
+  return files;
+}
 
-  await walk(root);
+async function fillInventoryFiles(
+  files: Array<{ abs: string; rel: string }>,
+  out: WorkspaceFileInventory,
+  baseline: WorkspaceFileInventory | undefined,
+  reads: { n: number },
+  missingOk: boolean,
+): Promise<void> {
   let nextIndex = 0;
   const workers = Array.from(
-    { length: Math.min(32, files.length) },
+    { length: Math.min(32, Math.max(1, files.length)) },
     async () => {
       while (nextIndex < files.length) {
         const file = files[nextIndex++]!;
-        try {
-          const stat = await fs.stat(file.abs);
-          const cached = takeCachedContentHash(file.abs, stat);
-          const contentHash = stat.size > WORKSPACE_CONTENT_HASH_MAX_BYTES
-            ? `metadata:${stat.size}:${stat.mtimeMs}`
-            : cached ?? createHash('sha256').update(await fs.readFile(file.abs)).digest('hex');
-          rememberCachedContentHash(file.abs, {
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            ctimeMs: stat.ctimeMs,
-            contentHash,
-          });
-          out.set(file.rel, {
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            contentHash,
-          });
-        } catch {
-          out.complete = false;
-        }
+        await recordInventoryFile(file.abs, file.rel, out, baseline, reads, missingOk);
       }
     },
   );
   await Promise.all(workers);
+}
+
+/**
+ * 工作区文件清单。
+ * 能解析出写入路径时只扫描这些路径；否则全树遍历，但 size/mtime/ctime 未变的文件不读内容。
+ */
+export async function listWorkspaceFileInventory(
+  workspaceRoot: string,
+  options?: ListWorkspaceInventoryOptions,
+): Promise<WorkspaceFileInventory> {
+  const root = path.resolve(workspaceRoot);
+  const resolvedScope = options?.scopeRelPaths?.length
+    ? resolveScopePaths(root, options.scopeRelPaths)
+    : [];
+  const scope = resolvedScope.length > 0 ? resolvedScope : undefined;
+  const touch = currentWorkspaceTouch();
+  const baseline = options?.baseline
+    ?? (!scope && touch.lastFullInventory?.root === root ? touch.lastFullInventory.inventory : undefined);
+  const out = emptyInventory(scope);
+  const reads = { n: 0 };
+
+  if (scope) {
+    const files: Array<{ abs: string; rel: string }> = [];
+    for (const rel of scope) {
+      const abs = path.join(root, ...rel.split('/'));
+      let stat: import('node:fs').Stats;
+      try {
+        stat = await fs.stat(abs);
+      } catch (error) {
+        if (isEnoent(error)) continue;
+        out.complete = false;
+        continue;
+      }
+      if (stat.isDirectory()) {
+        files.push(...await collectInventoryFiles(root, abs, out));
+      } else if (stat.isFile()) {
+        files.push({ abs, rel });
+      }
+    }
+    await fillInventoryFiles(files, out, baseline, reads, true);
+  } else {
+    const files = await collectInventoryFiles(root, root, out);
+    await fillInventoryFiles(files, out, baseline, reads, false);
+    if (out.complete) touch.lastFullInventory = { root, inventory: cloneInventory(out) };
+  }
+
+  out.contentReads = reads.n;
   return out;
 }
 
@@ -214,7 +383,8 @@ function takeCachedContentHash(
   filePath: string,
   stat: Pick<import('node:fs').Stats, 'size' | 'mtimeMs' | 'ctimeMs'>,
 ): string | null {
-  const cached = contentHashCache.get(filePath);
+  const cache = currentWorkspaceTouch().contentHashCache;
+  const cached = cache.get(filePath);
   if (
     !cached
     || cached.size !== stat.size
@@ -223,8 +393,8 @@ function takeCachedContentHash(
   ) {
     return null;
   }
-  contentHashCache.delete(filePath);
-  contentHashCache.set(filePath, cached);
+  cache.delete(filePath);
+  cache.set(filePath, cached);
   return cached.contentHash;
 }
 
@@ -237,12 +407,13 @@ function rememberCachedContentHash(
     contentHash: string;
   },
 ): void {
-  contentHashCache.delete(filePath);
-  contentHashCache.set(filePath, entry);
-  while (contentHashCache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
-    const oldest = contentHashCache.keys().next().value as string | undefined;
+  const cache = currentWorkspaceTouch().contentHashCache;
+  cache.delete(filePath);
+  cache.set(filePath, entry);
+  while (cache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value as string | undefined;
     if (!oldest) break;
-    contentHashCache.delete(oldest);
+    cache.delete(oldest);
   }
 }
 
@@ -252,20 +423,22 @@ export function rememberPreCommandInventory(
   inventory: WorkspaceFileInventory,
 ): void {
   if (!sessionId || !toolCallId) return;
+  const inventories = currentWorkspaceTouch().preCommandInventories;
   const key = inventoryKey(sessionId, toolCallId);
-  preCommandInventories.delete(key);
-  while (preCommandInventories.size >= PRE_COMMAND_INVENTORY_LIMIT) {
-    const oldest = preCommandInventories.keys().next().value as string | undefined;
+  inventories.delete(key);
+  while (inventories.size >= PRE_COMMAND_INVENTORY_LIMIT) {
+    const oldest = inventories.keys().next().value as string | undefined;
     if (!oldest) break;
-    preCommandInventories.delete(oldest);
+    inventories.delete(oldest);
   }
-  preCommandInventories.set(key, inventory);
+  inventories.set(key, inventory);
 }
 
 /** 中断 / 异常时丢弃未被 take 的命令前快照。 */
 export function discardPreCommandInventories(sessionId: string, toolCallIds: Iterable<string>): void {
   if (!sessionId) return;
-  for (const id of toolCallIds) preCommandInventories.delete(inventoryKey(sessionId, id));
+  const inventories = currentWorkspaceTouch().preCommandInventories;
+  for (const id of toolCallIds) inventories.delete(inventoryKey(sessionId, id));
 }
 
 export function takePreCommandInventory(
@@ -273,8 +446,9 @@ export function takePreCommandInventory(
   toolCallId: string,
 ): WorkspaceFileInventory | undefined {
   const key = inventoryKey(sessionId, toolCallId);
-  const inv = preCommandInventories.get(key);
-  preCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().preCommandInventories;
+  const inv = inventories.get(key);
+  inventories.delete(key);
   return inv;
 }
 
@@ -286,14 +460,15 @@ export function rememberBackgroundCommandInventory(
 ): void {
   if (!sessionId || !taskId) return;
   purgeExpiredBackgroundInventories(nowMs);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
   const key = backgroundInventoryKey(sessionId, taskId);
-  backgroundCommandInventories.delete(key);
-  while (backgroundCommandInventories.size >= BACKGROUND_INVENTORY_LIMIT) {
-    const oldest = backgroundCommandInventories.keys().next().value as string | undefined;
+  inventories.delete(key);
+  while (inventories.size >= BACKGROUND_INVENTORY_LIMIT) {
+    const oldest = inventories.keys().next().value as string | undefined;
     if (!oldest) break;
-    backgroundCommandInventories.delete(oldest);
+    inventories.delete(oldest);
   }
-  backgroundCommandInventories.set(key, {
+  inventories.set(key, {
     inventory,
     expiresAt: nowMs + BACKGROUND_INVENTORY_TTL_MS,
   });
@@ -306,14 +481,16 @@ export function takeBackgroundCommandInventory(
 ): WorkspaceFileInventory | undefined {
   purgeExpiredBackgroundInventories(nowMs);
   const key = backgroundInventoryKey(sessionId, taskId);
-  const entry = backgroundCommandInventories.get(key);
-  backgroundCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
+  const entry = inventories.get(key);
+  inventories.delete(key);
   return entry?.inventory;
 }
 
 function purgeExpiredBackgroundInventories(nowMs: number): void {
-  for (const [key, entry] of backgroundCommandInventories) {
-    if (entry.expiresAt <= nowMs) backgroundCommandInventories.delete(key);
+  const inventories = currentWorkspaceTouch().backgroundCommandInventories;
+  for (const [key, entry] of inventories) {
+    if (entry.expiresAt <= nowMs) inventories.delete(key);
   }
 }
 
@@ -322,10 +499,11 @@ export function getWorkspaceInventoryDiagnostics(): {
   backgroundInventorySize: number;
   preCommandInventorySize: number;
 } {
+  const touch = currentWorkspaceTouch();
   return {
-    contentHashCacheSize: contentHashCache.size,
-    backgroundInventorySize: backgroundCommandInventories.size,
-    preCommandInventorySize: preCommandInventories.size,
+    contentHashCacheSize: touch.contentHashCache.size,
+    backgroundInventorySize: touch.backgroundCommandInventories.size,
+    preCommandInventorySize: touch.preCommandInventories.size,
   };
 }
 

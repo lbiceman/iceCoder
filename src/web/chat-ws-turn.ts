@@ -6,6 +6,7 @@
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import { isSafeIntentMessageId } from '../harness/intent-checkpoint-store.js';
 import type { WebSocket } from 'ws';
 import { Harness } from '../harness/harness.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
@@ -350,7 +351,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
   const existingMessages = getCachedMessages(runSessionId);
 
-  const userMsgId = clientMessageId ?? randomUUID();
+  const userMsgId = isSafeIntentMessageId(clientMessageId) ? clientMessageId : randomUUID();
   const userSentAt = Date.now();
   const skipUserAppend = options.skipUserMessageAppend ?? false;
   if (!skipUserAppend) {

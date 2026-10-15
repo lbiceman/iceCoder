@@ -24,6 +24,12 @@ describe('session-goal-anchor', () => {
     expect(isPoisonedGoal('[Background Task Status]\n- bg_abc: running\n[/Background Task Status]')).toBe(true);
   });
 
+  it('treats harness diagnostics as poisoned goals', () => {
+    expect(isPoisonedGoal('[Runtime Self-Review] 同一工具调用连续失败 2 次，建议切换策略')).toBe(true);
+    expect(isPoisonedGoal('[Failure Evidence — 4 consecutive all-failed rounds]\nAnalyze the evidence')).toBe(true);
+    expect(isPoisonedGoal('[Verification digest]\nCommand: git status')).toBe(true);
+  });
+
   it('resolveSessionGoalAnchor prefers substantial persisted goal', () => {
     const anchor = resolveSessionGoalAnchor(
       '继续',

@@ -50,12 +50,12 @@ const EVENT_TIME_BOOST = 2.0;
 const MAX_RELATED_EXPAND = 3;
 /** 召回元数据批量写入间隔（毫秒） */
 const RECALL_FLUSH_INTERVAL_MS = 30_000;
-/** LLM 召回超时（毫秒） */
-const LLM_RECALL_TIMEOUT_MS = 30_000;
+/** LLM 召回超时（毫秒）。推理模型经常要十几秒才返回，到点后改用关键词结果。 */
+export const LLM_RECALL_TIMEOUT_MS = 30_000;
 /** LLM 召回最少候选数：候选数不足时直接走关键词回退，避免无意义的 LLM 调用 */
 export const LLM_RECALL_MIN_CANDIDATES = 2;
-/** LLM 召回最大输出 token */
-const LLM_RECALL_MAX_TOKENS = 512;
+/** LLM 召回最大输出 token。推理模型会先花掉这段预算，512 时正文经常是空的。 */
+const LLM_RECALL_MAX_TOKENS = 2048;
 /** Fact 选择上限 */
 const FACT_SELECTION_LIMIT = 30;
 /** 置信度过滤阈值（低于此值的记忆不参与召回） */
@@ -92,6 +92,8 @@ export interface RecallOptions {
   relaxed?: boolean;
   /** 当前工作区；用于丢掉明确属于其它项目的 project/feedback */
   workspaceRoot?: string;
+  /** 侧边精排的最长等待。超时后改用关键词结果。 */
+  sideQueryTimeoutMs?: number;
 }
 
 export interface RecallResult {
@@ -309,11 +311,27 @@ export async function recallRelevantMemories(
     : filteredMemories;
 
   if (llmAdapter && llmCandidatePool.length >= LLM_RECALL_MIN_CANDIDATES) {
+    const timeoutMs = options?.sideQueryTimeoutMs ?? LLM_RECALL_TIMEOUT_MS;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      // LLM 召回带 30 秒超时，防止无限挂起
       const llmResult = await Promise.race([
-        llmSelectAndRankMemories(query, llmCandidatePool, llmAdapter, maxResults, factIndex, timeRange, topicSwitched),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM recall timeout (${LLM_RECALL_TIMEOUT_MS / 1000}s)`)), LLM_RECALL_TIMEOUT_MS)),
+        llmSelectAndRankMemories(
+          query,
+          llmCandidatePool,
+          llmAdapter,
+          maxResults,
+          factIndex,
+          timeRange,
+          topicSwitched,
+          controller.signal,
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`LLM recall timeout (${timeoutMs}ms)`));
+          }, timeoutMs);
+        }),
       ]);
       // ── 关联扩展（1 跳）──
       const expanded = expandRelatedMemories(llmResult.selectedMemories, filteredMemories, alreadySurfaced);
@@ -337,7 +355,9 @@ export async function recallRelevantMemories(
       console.debug('[memory-recall] LLM recall returned empty selection, falling back to keyword');
     } catch (error) {
       console.error('[memory-recall] LLM recall failed, falling back to keyword:', error);
-      // LLM 失败时回退到关键词匹配
+      // LLM 失败或超时后回退到关键词匹配
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -393,6 +413,7 @@ async function llmSelectAndRankMemories(
   factIndex: import('./memory-fact-index.js').FactIndex,
   timeRange: TimeRange | null = null,
   topicSwitched: boolean = false,
+  signal?: AbortSignal,
 ): Promise<LLMSelectResult> {
   const { manifest, factIdMap } = formatManifestWithFactIds(memories, query, factIndex);
   const validFilenames = new Set(memories.map(m => m.filename));
@@ -419,6 +440,7 @@ async function llmSelectAndRankMemories(
     maxTokens: LLM_RECALL_MAX_TOKENS,
     temperature: 0,
     usageSource: 'memory_recall',
+    signal,
   });
 
   // 解析 JSON 响应
@@ -1415,6 +1437,7 @@ async function llmRelevanceCheck(
   contextKeywords: Set<string>,
   llmAdapter: LLMAdapterInterface,
   topicSwitched: boolean = false,
+  signal?: AbortSignal,
 ): Promise<Set<number>> {
   // 构建上下文摘要（只取关键词，节约 token）
   const contextSnippet = Array.from(contextKeywords).slice(0, 50).join(', ');
@@ -1446,7 +1469,7 @@ Return ONLY the JSON object, no other text.`;
         { role: 'system', content: 'You are a relevance filter. Return only JSON.' },
         { role: 'user', content: prompt },
       ],
-      { tools: [], usageSource: 'memory_recall' },
+      { tools: [], usageSource: 'memory_recall', signal },
     );
 
     const content = response.content.trim();
@@ -1466,6 +1489,33 @@ Return ONLY the JSON object, no other text.`;
 
   // Fallback: 全部通过
   return new Set(memories.map((_, i) => i));
+}
+
+async function runRelevanceCheck(
+  memories: MemoryHeader[],
+  contextKeywords: Set<string>,
+  llmAdapter: LLMAdapterInterface,
+  topicSwitched: boolean,
+  sideQueryTimeoutMs?: number,
+): Promise<Set<number>> {
+  if (!sideQueryTimeoutMs || sideQueryTimeoutMs <= 0) {
+    return llmRelevanceCheck(memories, contextKeywords, llmAdapter, topicSwitched);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      llmRelevanceCheck(memories, contextKeywords, llmAdapter, topicSwitched, controller.signal),
+      new Promise<Set<number>>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(new Set());
+        }, sideQueryTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ─── Rescue 优化：缓存 + 短预览匹配 ───
@@ -1576,6 +1626,7 @@ export async function filterByContextRelevance(
   llmAdapter: LLMAdapterInterface | null,
   config: Partial<RelevanceGateConfig> = {},
   topicSwitched: boolean = false,
+  sideQueryTimeoutMs?: number,
 ): Promise<MemoryHeader[]> {
   if (memories.length === 0) return [];
 
@@ -1630,7 +1681,7 @@ export async function filterByContextRelevance(
         return layer1Passed;
       }
       console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed (${(passRate * 100).toFixed(0)}%), triggering LLM rescue`);
-      layer2Indices = await llmRelevanceCheck(layer1Failed, contextKeywords, llmAdapter, topicSwitched);
+      layer2Indices = await runRelevanceCheck(layer1Failed, contextKeywords, llmAdapter, topicSwitched, sideQueryTimeoutMs);
       setRescueCache(cacheKey, layer2Indices);
     }
   }

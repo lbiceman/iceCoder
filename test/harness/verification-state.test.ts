@@ -25,6 +25,7 @@ describe('verification-state', () => {
       attemptedMutationVersion: null,
       attemptedPlanFingerprint: null,
       continuationCount: 0,
+      continuationScope: null,
       blockingSignature: null,
       lastResult: null,
       commandProgress: [],
@@ -227,6 +228,7 @@ describe('verification-state', () => {
       attemptedMutationVersion: null,
       attemptedPlanFingerprint: null,
       continuationCount: 0,
+      continuationScope: null,
       blockingSignature: null,
       lastResult: {
         status: 'failed',
@@ -507,5 +509,24 @@ describe('verification-state', () => {
     expect(tryConsumeVerificationContinuation(state, 1)).toBe(false);
     expect(state.continuationCount).toBe(1);
     expect(tryConsumeVerificationContinuation(state, -1)).toBe(false);
+  });
+
+  it('resets the continuation budget after the workspace changes or the plan changes', () => {
+    const state = createVerificationRuntimeState();
+    const taskState = new TaskState('edit');
+
+    expect(tryConsumeVerificationContinuation(state, 1, 'plan-a')).toBe(true);
+    expect(tryConsumeVerificationContinuation(state, 1, 'plan-a')).toBe(false);
+
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
+    expect(tryConsumeVerificationContinuation(state, 1, 'plan-a')).toBe(true);
+    expect(state.continuationCount).toBe(1);
+    expect(tryConsumeVerificationContinuation(state, 1, 'plan-a')).toBe(false);
+
+    expect(tryConsumeVerificationContinuation(state, 1, 'plan-b')).toBe(true);
+
+    const restored = sanitizeVerificationRuntimeState(JSON.parse(JSON.stringify(state)));
+    expect(tryConsumeVerificationContinuation(restored, 1, 'plan-b')).toBe(false);
   });
 });

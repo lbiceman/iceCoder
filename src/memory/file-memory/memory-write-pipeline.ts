@@ -141,8 +141,9 @@ export function registerLongTermMemoryWriteCap(cap: LongTermMemoryWriteCap | nul
   longTermMemoryWriteCap = cap;
 }
 
-export function getLongTermMemoryWriteCap(): LongTermMemoryWriteCap | null {
-  return longTermMemoryWriteCap;
+/** 仅当全局槽仍指向 cap 时才清空，避免一个 Harness 的 dispose 清掉其他会话刚注册的配额 */
+export function releaseLongTermMemoryWriteCap(cap: LongTermMemoryWriteCap): void {
+  if (longTermMemoryWriteCap === cap) longTermMemoryWriteCap = null;
 }
 
 const sessionWriteCaps = new Map<string, LongTermMemoryWriteCap>();

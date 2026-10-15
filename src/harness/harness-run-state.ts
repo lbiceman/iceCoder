@@ -58,8 +58,12 @@ export interface HarnessRunState {
   consecutiveReadOnlyRounds: number;
   /** 本 run 是否已经跑过至少一轮可执行工具；下一轮 prep 据此改走标准召回 */
   hadToolRoundThisRun?: boolean;
-  /** 执行型任务但模型未调用工具时的自动恢复次数 */
+  /** 正文里嵌入工具语法（未走 native function-calling）时的协议恢复次数 */
   noToolExecutionRecoveryCount: number;
+  /** 本 run 是否已给过「文件交付未产出」的一次性完成自检 */
+  completionSelfCheckIssued?: boolean;
+  /** 本 run 开始时间；早于它的失败 / 拒绝来自旧 checkpoint，不作为收尾硬状态 */
+  runStartedAt?: number;
   /** 本轮是否已注入任务切换提示（防止重复注入） */
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
@@ -84,8 +88,8 @@ export interface HarnessRunState {
   workspaceAnchorHash?: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
-  /** Resilience v2：分支预算 tracker */
-  branchBudget?: BranchBudgetTracker;
+  /** 分支预算 tracker；每次 run 都会创建 */
+  branchBudget: BranchBudgetTracker;
   /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
   branchBudgetWarnedThisRound: boolean;
   /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
@@ -115,15 +119,11 @@ export interface HarnessRunState {
   verificationState: VerificationRuntimeState;
   /** 从 V3 恢复且尚未被本轮 tracker 替代的 completion 条件。 */
   restoredCompletionConditions?: CompletionCondition[];
-  /** 统一收尾门控已注入的有界续轮数。 */
-  completionGateContinuationCount: number;
   /** 上一次阻塞快照；相同快照不得重复注入。 */
   completionGateBlockingSignature?: string;
   /** 最近一次统一收尾裁决，供 checkpoint 原样恢复。 */
   completionStatus?: CompletionStatus;
   completionReason?: CompletionReason;
-  /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
-  consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */
   missingFileAttempts: Map<string, number>;
   /** 本 run 内已被用户拒绝的 Shell mandatory-confirm 键。 */
@@ -142,38 +142,38 @@ export interface HarnessRunState {
   stepReviewedThisRound: boolean;
   /** Resilience v2：最近一次 step review 结果（供启发式参考） */
   lastStepReview?: StepReviewResult;
-  /** Batch 1 承载位：执行边界模式；默认由现有逻辑保持未设置。 */
-  executionMode?: ExecutionMode;
-  /** Batch 1 承载位：forced 进入后的防抖锁。 */
-  executionModeLockRemaining?: number;
-  /** Batch 1 承载位：进入 forced 的有序信号列表。 */
-  executionModeEnteredBy?: ModeSignal[];
-  /** Batch 1 承载位：进入 forced 的主信号。 */
+  /** 执行边界模式。 */
+  executionMode: ExecutionMode;
+  /** forced 进入后的防抖锁剩余轮数。 */
+  executionModeLockRemaining: number;
+  /** 进入 forced 的有序信号列表。 */
+  executionModeEnteredBy: ModeSignal[];
+  /** 进入 forced 的主信号。 */
   executionModeEnteredByPrimary?: ModeSignal;
-  /** Batch 1 承载位：进入 forced 的 round。 */
+  /** 进入 forced 的轮次。 */
   executionModeEnteredAtRound?: number;
-  /** Batch 1 承载位：forced 下当前退化层。 */
+  /** forced 下当前退化层。 */
   forcedDegradedTier?: ForcedDegradedTier;
-  /** Batch 1 承载位：最近一次模式决策。 */
+  /** 最近一次模式决策。 */
   lastModeDecision?: ModeDecision;
-  /** Batch 1 承载位：本轮待评估 mode signals。 */
-  pendingModeSignals?: ModeSignal[];
-  /** Batch 1 承载位：I10 task-bearing round 计数。 */
-  forcedTaskBearingRoundsSinceEntry?: number;
-  /** Batch 4：统一信号提交入口；子模块不得直接写 executionMode。 */
+  /** 本轮待评估的 mode signals。 */
+  pendingModeSignals: ModeSignal[];
+  /** forced 期间的 task-bearing 轮次计数。 */
+  forcedTaskBearingRoundsSinceEntry: number;
+  /** 统一信号提交入口；子模块不得直接写 executionMode。 */
   submitModeSignal?: (
     source: ModeSignalSource,
     signal: ModeSignal,
     payload?: Record<string, unknown>,
   ) => void;
-  /** W4：尚未被有效进展解除的 recovery 标志。仅阻塞 exit，不参与 enter。 */
-  recoveryPendingSticky?: boolean;
+  /** 尚未被有效进展解除的 recovery 标志。只阻塞退出 forced，不参与进入。 */
+  recoveryPendingSticky: boolean;
   /** 最近工具轮是否出现应升级模式的真实失败；验收命令失败不计入。 */
-  lastRoundModeEscalatingFailure?: boolean;
-  /** W1：连续无失败轮次计数（与 consecutiveToolFailures 互斥推进），用于 stableRounds 派生。 */
-  stableRoundsSinceLastFailure?: number;
-  /** W1：本轮开始时 RepoContext.filesChanged 长度的快照，用于派生 accumulatedDiffLines。 */
-  filesChangedAtRoundStart?: number;
-  /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
-  branchSwitchedThisRound?: boolean;
+  lastRoundModeEscalatingFailure: boolean;
+  /** 连续无失败轮次（与 consecutiveToolFailures 互斥推进），用于 stableRounds。 */
+  stableRoundsSinceLastFailure: number;
+  /** 本轮开始时 RepoContext.filesChanged 的长度，用于派生 accumulatedDiffLines。 */
+  filesChangedAtRoundStart: number;
+  /** 本轮是否发生任务图 fallback。由 submitModeSignal('branch_switched') 置位。 */
+  branchSwitchedThisRound: boolean;
 }

@@ -11,6 +11,11 @@ import {
   type VerificationPlanCommand,
 } from './verification-plan.js';
 import {
+  STOP_VERIFICATION_MAX_POLL_ATTEMPTS,
+  STOP_VERIFICATION_MAX_POLL_INTERVAL_MS,
+  STOP_VERIFICATION_POLL_INTERVAL_MS,
+} from './harness-constants.js';
+import {
   markVerificationFailed,
   markVerificationPassed,
   markVerificationUnavailable,
@@ -39,6 +44,12 @@ export interface VerificationToolCallResult {
   operationStatus?: ToolResultStatus;
 }
 
+export interface StopVerificationOptionalFailure {
+  command: string;
+  status: 'failed' | 'unavailable';
+  exitCode?: number;
+}
+
 export interface StopVerificationResult {
   status: StopVerificationStatus;
   reason?: StopVerificationUnavailableReason;
@@ -46,7 +57,12 @@ export interface StopVerificationResult {
   exitCode?: number;
   evidenceRef?: string;
   outputTail?: string;
+  /** `passed` 只代表必选命令全过；没过的可选命令列在这里，收尾时必须告诉用户。 */
+  optionalFailures?: StopVerificationOptionalFailure[];
 }
+
+/** 停时验收合成工具调用的 id 前缀；这些调用的结果由验收路径裁决，不进收尾硬状态。 */
+export const STOP_VERIFICATION_TOOL_CALL_PREFIX = 'stop-verification:';
 
 export interface ExecuteStopVerificationPlanOptions {
   plan: VerificationPlan;
@@ -70,9 +86,9 @@ interface SettledCommandResult {
   outputTail?: string;
 }
 
-const DEFAULT_POLL_INTERVAL_MS = 500;
-const DEFAULT_MAX_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_MAX_POLL_ATTEMPTS = 60;
+const DEFAULT_POLL_INTERVAL_MS = STOP_VERIFICATION_POLL_INTERVAL_MS;
+const DEFAULT_MAX_POLL_INTERVAL_MS = STOP_VERIFICATION_MAX_POLL_INTERVAL_MS;
+const DEFAULT_MAX_POLL_ATTEMPTS = STOP_VERIFICATION_MAX_POLL_ATTEMPTS;
 const DEFAULT_OUTPUT_TAIL_CHARS = 2_000;
 
 /**
@@ -103,8 +119,7 @@ export async function executeStopVerificationPlan(
     syntheticToolCallSequence = syntheticToolCallSequence >= Number.MAX_SAFE_INTEGER
       ? 1
       : syntheticToolCallSequence + 1;
-    return [
-      'stop-verification',
+    return STOP_VERIFICATION_TOOL_CALL_PREFIX + [
       plan.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
       commandIndex,
       phase,
@@ -121,6 +136,7 @@ export async function executeStopVerificationPlan(
 
   let lastCommand: string | undefined;
   let lastEvidenceRef: string | undefined;
+  const optionalFailures: StopVerificationOptionalFailure[] = [];
 
   for (let index = 0; index < plan.commands.length; index++) {
     const command = plan.commands[index]!;
@@ -152,13 +168,18 @@ export async function executeStopVerificationPlan(
         ...(settled.evidenceRef ? { evidenceRef: settled.evidenceRef } : {}),
       });
     }
-    if (settled.status === 'failed') {
-      if (!command.required) continue;
-      return finishFailed(options, command.command, settled);
-    }
-    if (settled.status === 'unavailable') {
-      if (!command.required) continue;
-      return finishUnavailable(options, command.command, settled);
+    if (settled.status === 'failed' || settled.status === 'unavailable') {
+      if (!command.required) {
+        optionalFailures.push({
+          command: command.command,
+          status: settled.status,
+          ...(settled.exitCode !== undefined ? { exitCode: settled.exitCode } : {}),
+        });
+        continue;
+      }
+      return settled.status === 'failed'
+        ? finishFailed(options, command.command, settled)
+        : finishUnavailable(options, command.command, settled);
     }
     if (settled.status === 'aborted') {
       return finishAborted(options, command.command, settled);
@@ -185,6 +206,7 @@ export async function executeStopVerificationPlan(
   return {
     status: 'passed',
     ...(lastEvidenceRef ? { evidenceRef: lastEvidenceRef } : {}),
+    ...(optionalFailures.length > 0 ? { optionalFailures } : {}),
   };
 }
 

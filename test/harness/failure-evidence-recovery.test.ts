@@ -9,7 +9,7 @@ import {
   isFailedToolResultContent,
   purgeEphemeralFailureRecoveryMessages,
   purgeEphemeralFailureRecoveryMessagesInPlace,
-  roundHadSuccessfulVerification,
+  clearResolvedVerificationFailures,
 } from '../../src/harness/failure-evidence-recovery.js';
 
 describe('failure-evidence-recovery', () => {
@@ -78,15 +78,30 @@ describe('failure-evidence-recovery', () => {
     expect(next[0]!.content).toBe('light');
   });
 
-  it('detects successful verification in round', () => {
-    expect(roundHadSuccessfulVerification(
-      [{ id: 't1', name: 'run_command', arguments: { command: 'npm test' } }],
-      [],
-    )).toBe(true);
-    expect(roundHadSuccessfulVerification(
-      [{ id: 't1', name: 'run_command', arguments: { command: 'npm test' } }],
-      ['run_command:{"command":"npm test"}'],
-    )).toBe(false);
+  it('an unrelated successful command keeps the acceptance failure evidence', () => {
+    const buffer = new VerificationOutputBuffer();
+    buffer.recordFailed('npm test', 'FAIL src/a.test.ts');
+    clearResolvedVerificationFailures(buffer, new Map([
+      ['t1', { kind: 'foreground', command: 'git status', foregroundSuccess: true }],
+      ['t2', { kind: 'background_start', command: 'npm test' }],
+      ['t3', { kind: 'foreground', command: 'npm test', foregroundSuccess: false, exitCode: 1 }],
+    ]));
+    expect(buffer.snapshot().map(entry => entry.command)).toEqual(['npm test']);
+  });
+
+  it('a passing rerun of the same command clears only that command', () => {
+    const buffer = new VerificationOutputBuffer();
+    buffer.recordFailed('npm test', 'FAIL src/a.test.ts');
+    buffer.recordFailed('npm run lint', 'lint error');
+    clearResolvedVerificationFailures(buffer, new Map([
+      ['t1', { kind: 'foreground', command: 'cd app && npm  test 2>&1', foregroundSuccess: true }],
+    ]));
+    expect(buffer.snapshot().map(entry => entry.command)).toEqual(['npm run lint']);
+
+    clearResolvedVerificationFailures(buffer, new Map([
+      ['t2', { kind: 'background_completed', command: 'npm test && npm run lint', exitCode: 0 }],
+    ]));
+    expect(buffer.snapshot()).toEqual([]);
   });
 });
 

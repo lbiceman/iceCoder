@@ -3,7 +3,8 @@
  *
  * - 每个子 Agent 是一个完整 Harness 实例（长循环、压缩、恢复、权限、验证计划与停手判断）。
  * - 并发上限与每轮总数上限；超出总数时 task 直接报错。
- * - 写租约：并行子 Agent 不能写同一个文件；run_command 的改动只能事后发现，冲突写进结果。
+ * - 写租约：并行子 Agent 不能写同一个文件；run_command 的改动只能事后发现：
+ *   改到别人租约文件的那次命令按失败返回，冲突写进结果。
  * - 结果汇总只采信系统记录（写工具、命令、清单差异），不采信子 Agent 自述。
  */
 
@@ -16,6 +17,10 @@ import { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolResult } from '../../tools/types.js';
 import { normalizeWorkRelPath } from '../../tools/read-before-edit.js';
 import { collectSessionTouchedPaths } from '../intent-checkpoint-store.js';
+import {
+  AGENT_HARD_TIMEOUT_GRACE_MS,
+  AGENT_UPDATE_THROTTLE_MS,
+} from '../harness-constants.js';
 import { evaluateIncompleteTaskStopHook } from '../incomplete-task-stop-hook.js';
 import { classifyRunCommandResult, type RunCommandResultClassification } from '../run-command-result.js';
 import type { StopHookManager } from '../stop-hooks.js';
@@ -66,9 +71,10 @@ import {
 } from './agent-background-hub.js';
 import { parseCheckAgentInput, parseTaskToolInput } from './task-tool.js';
 import {
-  defaultWriteLeaseRegistry,
+  WriteLeaseRegistry,
+  formatCommandLeaseViolationMessage,
   formatLeaseRejectMessage,
-  type WriteLeaseRegistry,
+  type WriteLeaseHolder,
 } from './write-lease.js';
 
 export interface AgentSource {
@@ -117,6 +123,7 @@ export interface AgentSpawnerOptions {
   ): Promise<boolean>;
   maxConcurrent?: number;
   maxPerRun?: number;
+  /** 缺省为本 spawner 独有的租约表（会话级，不跨会话共享）。 */
   leaseRegistry?: WriteLeaseRegistry;
   /** 卡片进度推送节流（毫秒） */
   updateThrottleMs?: number;
@@ -156,8 +163,6 @@ const FORWARDED_EVENT_TYPES = new Set<HarnessStepEvent['type']>([
 ]);
 
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'batch_edit_file']);
-const HARD_TIMEOUT_GRACE_MS = 30_000;
-const DEFAULT_UPDATE_THROTTLE_MS = 500;
 
 class Semaphore {
   private active = 0;
@@ -201,6 +206,8 @@ interface CommandTracking {
   classification?: RunCommandResultClassification;
   /** 命令结束（含其自身改动）时的全局写序号 */
   writeSeq: number;
+  /** 命令开始前其它 Agent 租约文件的内容（null = 不存在） */
+  foreignLeases: Array<{ absPath: string; content: string | null }>;
 }
 
 interface AgentRun {
@@ -307,6 +314,7 @@ export class AgentSpawner {
   private readonly maxPerRun: number;
   private readonly leases: WriteLeaseRegistry;
   private readonly runs = new Map<string, AgentRun>();
+  private readonly agentTerminalWaiters = new Map<string, Array<() => void>>();
   private readonly outcomes = new Map<string, PendingOutcome>();
   private readonly finishedViews = new Map<string, AgentView>();
   private readonly backgroundHub: AgentBackgroundHub;
@@ -317,7 +325,7 @@ export class AgentSpawner {
   constructor(private readonly options: AgentSpawnerOptions) {
     this.semaphore = new Semaphore(Math.max(1, options.maxConcurrent ?? agentConfig.maxConcurrent));
     this.maxPerRun = Math.max(1, options.maxPerRun ?? agentConfig.maxPerRun);
-    this.leases = options.leaseRegistry ?? defaultWriteLeaseRegistry;
+    this.leases = options.leaseRegistry ?? new WriteLeaseRegistry();
     this.backgroundHub = options.backgroundHub ?? sessionAgentBackgroundHub;
   }
 
@@ -444,15 +452,32 @@ export class AgentSpawner {
   private waitForAgentTerminal(agentId: string, waitMs: number): Promise<void> {
     if (!this.runs.has(agentId)) return Promise.resolve();
     return new Promise<void>((resolve) => {
-      // 用真实时钟轮询；后台子 Agent 同一进程内跑完即从 runs 移除。
-      const startedAt = Date.now();
-      const timer = setInterval(() => {
-        if (!this.runs.has(agentId) || Date.now() - startedAt >= waitMs) {
-          clearInterval(timer);
-          resolve();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const current = this.agentTerminalWaiters.get(agentId);
+        if (current) {
+          const index = current.indexOf(finish);
+          if (index >= 0) current.splice(index, 1);
+          if (current.length === 0) this.agentTerminalWaiters.delete(agentId);
         }
-      }, 100);
+        resolve();
+      };
+      const waiters = this.agentTerminalWaiters.get(agentId) ?? [];
+      waiters.push(finish);
+      this.agentTerminalWaiters.set(agentId, waiters);
+      const timer = setTimeout(finish, waitMs);
+      if (!this.runs.has(agentId)) finish();
     });
+  }
+
+  private notifyAgentTerminal(agentId: string): void {
+    const waiters = this.agentTerminalWaiters.get(agentId);
+    if (!waiters?.length) return;
+    this.agentTerminalWaiters.delete(agentId);
+    for (const wake of [...waiters]) wake();
   }
 
   private finishedOutput(agentId: string, view: AgentView): string {
@@ -580,6 +605,7 @@ export class AgentSpawner {
         this.leases.releaseAgent(agentId);
         if (run.updateTimer) clearTimeout(run.updateTimer);
         this.runs.delete(agentId);
+        this.notifyAgentTerminal(agentId);
       }
     };
 
@@ -629,7 +655,7 @@ export class AgentSpawner {
 
     const hardTimer = setTimeout(
       () => this.abortRun(run, 'timeout'),
-      limits.timeoutMs + HARD_TIMEOUT_GRACE_MS,
+      limits.timeoutMs + AGENT_HARD_TIMEOUT_GRACE_MS,
     );
     try {
       const result = await harness.run(
@@ -679,17 +705,22 @@ export class AgentSpawner {
     const tools = filterToolsForAgentType(run.type, pc.context.tools);
     const source = this.sourceOf(run);
     const signal = run.controller.signal;
+    // 父确认回调可选接收 signal 以撤掉挂着的确认；忽略 signal 的实现由 raceAbort 兜底
+    const parentConfirm: AbortableConfirm<[string, Record<string, any>]> | undefined = pc.onConfirm;
+    const parentShellConfirm: AbortableConfirm<[ShellMandatoryConfirmRequest]> | undefined =
+      pc.onShellMandatoryConfirm;
     const onConfirm = this.options.onConfirm
       ? (toolName: string, args: Record<string, any>) =>
-          raceAbort(this.options.onConfirm!(source, toolName, args, signal), signal)
-      : pc.onConfirm
-        ? (toolName: string, args: Record<string, any>) => raceAbort(pc.onConfirm!(toolName, args), signal)
+          raceAbort(() => this.options.onConfirm!(source, toolName, args, signal), signal)
+      : parentConfirm
+        ? (toolName: string, args: Record<string, any>) =>
+            raceAbort(() => parentConfirm(toolName, args, signal), signal)
         : undefined;
     const onShellMandatoryConfirm = this.options.onShellMandatoryConfirm
       ? (req: ShellMandatoryConfirmRequest) =>
-          raceAbort(this.options.onShellMandatoryConfirm!(source, req, signal), signal)
-      : pc.onShellMandatoryConfirm
-        ? (req: ShellMandatoryConfirmRequest) => raceAbort(pc.onShellMandatoryConfirm!(req), signal)
+          raceAbort(() => this.options.onShellMandatoryConfirm!(source, req, signal), signal)
+      : parentShellConfirm
+        ? (req: ShellMandatoryConfirmRequest) => raceAbort(() => parentShellConfirm(req, signal), signal)
         : undefined;
 
     return {
@@ -762,25 +793,26 @@ export class AgentSpawner {
         const targets = this.writeTargets(run, toolCall);
         if (targets.length === 0) return null;
         const now = this.now();
+        const taken: string[] = [];
         for (const target of targets) {
-          const holder = this.leases.holderOf(run.workspaceRoot, target);
-          if (holder && holder.agentId !== run.agentId) {
-            run.leaseRejects.push({
-              path: target,
-              toolName: toolCall.name,
-              holderAgentId: holder.agentId,
-              holderDescription: holder.description,
-              at: now,
-            });
-            run.view.leaseRejects = run.leaseRejects.length;
-            return { reason: 'agent_write_lease', message: formatLeaseRejectMessage(target, holder) };
-          }
-        }
-        for (const target of targets) {
-          this.leases.acquire(run.workspaceRoot, target, {
+          const acquired = this.leases.acquire(run.workspaceRoot, target, {
             agentId: run.agentId,
             description: run.view.description,
           }, now);
+          if (acquired.ok) {
+            if (!acquired.refreshed) taken.push(target);
+            continue;
+          }
+          for (const path of taken) this.leases.release(run.workspaceRoot, path, run.agentId);
+          run.leaseRejects.push({
+            path: target,
+            toolName: toolCall.name,
+            holderAgentId: acquired.holder.agentId,
+            holderDescription: acquired.holder.description,
+            at: now,
+          });
+          run.view.leaseRejects = run.leaseRejects.length;
+          return { reason: 'agent_write_lease', message: formatLeaseRejectMessage(target, acquired.holder) };
         }
         return null;
       },
@@ -843,11 +875,18 @@ export class AgentSpawner {
       beforeTool: async (toolCall) => {
         if (toolCall.name === 'run_command' || toolCall.name === 'shell_exec') {
           const args = toolCall.arguments ?? {};
+          const foreignLeases = await Promise.all(
+            this.leases.leasesHeldByOthers(run.agentId).map(async ({ absPath }) => ({
+              absPath,
+              content: await readFileOrNull(absPath),
+            })),
+          );
           run.commands.set(toolCall.id, {
             toolCallId: toolCall.id,
             command: String(args.command ?? args.cmd ?? args.action ?? ''),
             startedAt: this.now(),
             writeSeq: this.writeSeq,
+            foreignLeases,
           });
         }
         for (const rel of this.writeTargets(run, toolCall)) {
@@ -856,19 +895,24 @@ export class AgentSpawner {
           }
         }
       },
-      afterTool: (toolCall, result) => {
-        if (toolCall.name === 'run_command') {
+      afterTool: async (toolCall, result) => {
+        if (toolCall.name === 'run_command' || toolCall.name === 'shell_exec') {
           const tracking = run.commands.get(toolCall.id);
-          const output = result.success ? result.output : `${result.error ?? ''}\n${result.output}`;
-          const classification = classifyRunCommandResult(toolCall.arguments, output, result.success);
-          if (tracking && classification) {
-            tracking.classification = classification;
-            tracking.writeSeq = this.writeSeq;
-          } else if (tracking) {
-            run.commands.delete(toolCall.id);
+          const violations = tracking ? await this.commandLeaseViolations(run, tracking) : [];
+          if (toolCall.name === 'run_command') {
+            const output = result.success ? result.output : `${result.error ?? ''}\n${result.output}`;
+            const classification = classifyRunCommandResult(toolCall.arguments, output, result.success);
+            if (tracking && classification) {
+              tracking.classification = classification;
+              tracking.writeSeq = this.writeSeq;
+            } else if (tracking) {
+              run.commands.delete(toolCall.id);
+            }
+            run.view.commands = collectCommandRecords(run).map(c => ({ command: c.command, exitCode: c.exitCode }));
           }
-          run.view.commands = collectCommandRecords(run).map(c => ({ command: c.command, exitCode: c.exitCode }));
-          return;
+          if (violations.length === 0) return;
+          const message = formatCommandLeaseViolationMessage(violations);
+          return { ...result, success: false, error: result.error ? `${message}\n${result.error}` : message };
         }
         if (!result.success) return;
         const targets = this.writeTargets(run, toolCall);
@@ -882,6 +926,22 @@ export class AgentSpawner {
         }
       },
     };
+  }
+
+  /** 命令改动了其它 Agent 在命令开始前就已写过的租约文件。 */
+  private async commandLeaseViolations(
+    run: AgentRun,
+    tracking: CommandTracking,
+  ): Promise<Array<{ path: string; holder: WriteLeaseHolder }>> {
+    const out: Array<{ path: string; holder: WriteLeaseHolder }> = [];
+    for (const snap of tracking.foreignLeases) {
+      const holder = this.leases.holderOf(run.workspaceRoot, snap.absPath);
+      // 租约已释放，或持有者在命令运行期间自己写入：不算本命令的改动
+      if (!holder || holder.agentId === run.agentId || holder.lastWriteAt >= tracking.startedAt) continue;
+      if (await readFileOrNull(snap.absPath) === snap.content) continue;
+      out.push({ path: normalizeWorkRelPath(run.workspaceRoot, snap.absPath), holder });
+    }
+    return out;
   }
 
   private async refreshFileStat(run: AgentRun, rel: string): Promise<void> {
@@ -970,7 +1030,7 @@ export class AgentSpawner {
   }
 
   private emitUpdate(run: AgentRun, parent: AgentParentContext, immediate: boolean): void {
-    const throttle = this.options.updateThrottleMs ?? DEFAULT_UPDATE_THROTTLE_MS;
+    const throttle = this.options.updateThrottleMs ?? AGENT_UPDATE_THROTTLE_MS;
     const send = () => {
       run.lastUpdateAt = this.now();
       run.updateTimer = undefined;
@@ -1108,12 +1168,15 @@ export class AgentSpawner {
   }
 }
 
-function raceAbort(promise: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+type AbortableConfirm<A extends unknown[]> = (...args: [...A, AbortSignal?]) => Promise<boolean>;
+
+/** 已停止时不再发起确认；未响应 signal 的确认在停止后按拒绝处理。 */
+function raceAbort(confirm: () => Promise<boolean>, signal: AbortSignal): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
   return new Promise(resolve => {
     const onAbort = () => resolve(false);
     signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
+    confirm().then(
       value => { signal.removeEventListener('abort', onAbort); resolve(value); },
       () => { signal.removeEventListener('abort', onAbort); resolve(false); },
     );

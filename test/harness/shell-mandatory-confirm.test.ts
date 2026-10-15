@@ -187,7 +187,8 @@ describe('shell mandatory confirm runtime', () => {
 
     expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
     expect(executeTool).not.toHaveBeenCalled();
-    expect(firstStats.policyBlockedSignatures).toHaveLength(0);
+    expect(firstStats.policyBlockedSignatures).toHaveLength(1);
+    expect(firstStats.failedCount).toBe(0);
     expect(secondStats.policyBlockedSignatures).toHaveLength(1);
     expect(secondMessages[0]?.content).toMatch(/already denied/i);
 

@@ -7,13 +7,26 @@
  * 不要在关闭时自行取墙钟再传给 `recordHarnessTiming`。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface HarnessTimingSample {
   name: string;
   ms: number;
   round?: number;
 }
 
-const samples: HarnessTimingSample[] = [];
+const timingStorage = new AsyncLocalStorage<HarnessTimingSample[]>();
+/** 没有 run 作用域时的回退（基准脚本）。并发 run 各自用上面的存储。 */
+const fallbackSamples: HarnessTimingSample[] = [];
+
+function currentTimingSamples(): HarnessTimingSample[] {
+  return timingStorage.getStore() ?? fallbackSamples;
+}
+
+/** 包住一次 run，避免并发会话把计时样本写进同一个数组。 */
+export function runWithHarnessTimingScope<T>(fn: () => T): T {
+  return timingStorage.run([], fn);
+}
 
 export function harnessTimingEnabled(): boolean {
   return process.env.ICE_HARNESS_TIMING === '1';
@@ -21,7 +34,7 @@ export function harnessTimingEnabled(): boolean {
 
 export function resetHarnessTiming(): void {
   if (!harnessTimingEnabled()) return;
-  samples.length = 0;
+  currentTimingSamples().length = 0;
 }
 
 /** 开启时返回 `performance.now()`；关闭时返回 0 且不读时钟。 */
@@ -40,7 +53,7 @@ export function recordHarnessTiming(name: string, ms: number, round?: number): v
   if (!harnessTimingEnabled()) return;
   const sample: HarnessTimingSample = { name, ms };
   if (round != null) sample.round = round;
-  samples.push(sample);
+  currentTimingSamples().push(sample);
   const roundLabel = round != null ? ` r${round}` : '';
   console.log(`[timing] ${name}${roundLabel}: ${ms.toFixed(1)}ms`);
 }
@@ -67,7 +80,7 @@ export async function timeAsync<T>(name: string, fn: () => Promise<T>, round?: n
 
 export function getHarnessTimingSamples(): HarnessTimingSample[] {
   if (!harnessTimingEnabled()) return [];
-  return [...samples];
+  return [...currentTimingSamples()];
 }
 
 /** 本地代码（不含等待 LLM HTTP / 工具执行）相关 phase 名。 */
@@ -118,7 +131,7 @@ export function summarizeHarnessTiming(): {
   // 优先用 HTTP 墙钟：适配器序列化算「代码」而不是「等模型」
   const waitLlmMs = httpMs > 0 ? httpMs : waitMs;
   const waitToolMs = sumByName('tool_round');
-  const codeFromPhases = samples
+  const codeFromPhases = currentTimingSamples()
     .filter((s) => CODE_PHASES.has(s.name))
     .reduce((acc, s) => acc + s.ms, 0);
   const codeMs = roundWallMs > 0
@@ -152,5 +165,5 @@ export function dumpHarnessTiming(): void {
 }
 
 function sumByName(name: string): number {
-  return samples.filter((s) => s.name === name).reduce((acc, s) => acc + s.ms, 0);
+  return currentTimingSamples().filter((s) => s.name === name).reduce((acc, s) => acc + s.ms, 0);
 }

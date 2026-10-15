@@ -16,8 +16,11 @@ describe('branch-budget-path', () => {
     mkdirSync(join(root, 'src', 'scenes'), { recursive: true });
     writeFileSync(abs, 'export {};\n');
 
-    expect(canonicalBudgetPath(root, abs)).toBe('src/scenes/ShopScene.ts');
-    expect(canonicalBudgetPath(root, 'src/scenes/ShopScene.ts')).toBe('src/scenes/ShopScene.ts');
+    const expected = process.platform === 'win32'
+      ? 'src/scenes/shopscene.ts'
+      : 'src/scenes/ShopScene.ts';
+    expect(canonicalBudgetPath(root, abs)).toBe(expected);
+    expect(canonicalBudgetPath(root, 'src/scenes/ShopScene.ts')).toBe(expected);
   });
 
   it('bindWorkspaceRoot merges absolute and relative edit counts', () => {

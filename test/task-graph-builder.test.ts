@@ -21,15 +21,15 @@ import type { RepoShape, TaskComplexity } from '../src/types/task-graph.js';
 // ═══════════════════════════════════════════════
 
 describe('RepoShapeDiscovery', () => {
-  it('发现当前项目为 TypeScript + vitest', () => {
-    const shape = discoverRepoShape(process.cwd());
+  it('发现当前项目为 TypeScript + vitest', async () => {
+    const shape = await discoverRepoShape(process.cwd());
     expect(shape.typeSystem).toBe('typescript');
     expect(shape.testFramework).toBe('vitest');
     expect(shape.packageManager).not.toBe('none');
   });
 
-  it('不存在的目录返回默认 shape', () => {
-    const shape = discoverRepoShape('/nonexistent/path/xyz');
+  it('不存在的目录返回默认 shape', async () => {
+    const shape = await discoverRepoShape('/nonexistent/path/xyz');
     expect(shape.type).toBe('unknown');
     expect(shape.packageManager).toBe('none');
     expect(shape.testFramework).toBe('none');
@@ -251,12 +251,14 @@ describe('GraphBuilder', () => {
     expect(types).toContain('edit');
   });
 
-  it('preflight + 英文长目标 → evidence 注入 context 节点', () => {
+  it('preflight + 英文长目标 → evidence 注入 context 节点', async () => {
+    const repoShape = await discoverRepoShape(process.cwd());
     const graph = buildGraph({
       goal: 'Modify the function in src/harness/task-graph.ts to improve performance',
       intent: 'edit',
       graphId: 'g-b7',
       workspaceRoot: process.cwd(),
+      repoShape,
     });
     const contextNode = graph.mainBranch.nodeIds
       .map(id => graph.nodes[id])

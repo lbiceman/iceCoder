@@ -25,7 +25,11 @@ export class AgentAwareToolExecutor extends ToolExecutor {
     super(new ToolRegistry());
   }
 
-  override async executeTool(toolCall: ToolCall, onOutput?: ToolOutputCallback): Promise<ToolResult> {
+  override async executeTool(
+    toolCall: ToolCall,
+    onOutput?: ToolOutputCallback,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
     const handler = toolCall.name === TASK_TOOL_NAME
       ? this.onTask
       : toolCall.name === CHECK_AGENT_TOOL_NAME ? this.onCheckAgent : undefined;
@@ -40,13 +44,14 @@ export class AgentAwareToolExecutor extends ToolExecutor {
         };
       }
     }
-    return this.inner.executeTool(toolCall, onOutput);
+    return this.inner.executeTool(toolCall, onOutput, signal);
   }
 }
 
 export interface AgentToolRecorder {
   beforeTool(toolCall: ToolCall): Promise<void>;
-  afterTool(toolCall: ToolCall, result: ToolResult): void;
+  /** 返回 ToolResult 时替换原结果交给子 Harness。 */
+  afterTool(toolCall: ToolCall, result: ToolResult): void | ToolResult | Promise<void | ToolResult>;
 }
 
 export class AgentRecordingToolExecutor extends ToolExecutor {
@@ -57,10 +62,13 @@ export class AgentRecordingToolExecutor extends ToolExecutor {
     super(new ToolRegistry());
   }
 
-  override async executeTool(toolCall: ToolCall, onOutput?: ToolOutputCallback): Promise<ToolResult> {
+  override async executeTool(
+    toolCall: ToolCall,
+    onOutput?: ToolOutputCallback,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
     await this.recorder.beforeTool(toolCall);
-    const result = await this.inner.executeTool(toolCall, onOutput);
-    this.recorder.afterTool(toolCall, result);
-    return result;
+    const result = await this.inner.executeTool(toolCall, onOutput, signal);
+    return (await this.recorder.afterTool(toolCall, result)) ?? result;
   }
 }

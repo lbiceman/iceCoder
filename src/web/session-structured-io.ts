@@ -3,9 +3,9 @@
  * 供 chat-ws 刷盘/加载与单测复用。
  */
 
-import { promises as fs } from 'node:fs';
 import path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
+import { enqueueFileWrite, readJsonArrayFile, writeJsonArrayAtomic } from './session-json-file.js';
 
 export function structuredSessionPath(sessionsDir: string, sessionId: string): string {
   return path.join(sessionsDir, `${sessionId}.structured.json`);
@@ -15,9 +15,15 @@ export async function writeStructuredMessagesFile(
   sessionsDir: string,
   sessionId: string,
   messages: UnifiedMessage[],
+  options?: { replaceCorrupt?: boolean },
 ): Promise<void> {
-  await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(structuredSessionPath(sessionsDir, sessionId), JSON.stringify(messages), 'utf-8');
+  const file = structuredSessionPath(sessionsDir, sessionId);
+  await enqueueFileWrite(file, async () => {
+    const outcome = await writeJsonArrayAtomic(file, messages, options);
+    if (outcome === 'skipped-corrupt') {
+      console.error(`[session-structured] 跳过空覆盖，文件已损坏: ${file}`);
+    }
+  });
 }
 
 export async function readStructuredMessagesFile(
@@ -25,12 +31,11 @@ export async function readStructuredMessagesFile(
   sessionId: string,
 ): Promise<UnifiedMessage[] | undefined> {
   try {
-    const data = await fs.readFile(structuredSessionPath(sessionsDir, sessionId), 'utf-8');
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed as UnifiedMessage[];
+    const state = await readJsonArrayFile(structuredSessionPath(sessionsDir, sessionId));
+    if (state.status === 'ok' && state.value.length > 0) {
+      return state.value as UnifiedMessage[];
     }
-  } catch { /* missing or empty */ }
+  } catch { /* 读失败时当作没有历史，不改磁盘 */ }
   return undefined;
 }
 

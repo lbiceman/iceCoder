@@ -1,7 +1,7 @@
 /**
  * TaskGraph Runtime Core — 单元测试
  *
- * 覆盖：create / cursor / branch / snapshot / compaction / recovery / session
+ * 覆盖：create / cursor / branch / snapshot / compaction / recovery
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -9,6 +9,7 @@ import type { TaskNode, TaskEdge } from '../src/types/task-graph.js';
 import { emptyTaskGraphSnapshot } from '../src/types/task-graph.js';
 import {
   createTaskGraph,
+  TaskGraphCycleError,
   getCurrentNode,
   getNode,
   getCurrentBranchNodes,
@@ -32,11 +33,6 @@ import {
   applySnapshot,
   needsRecovery,
   compactGraph,
-  createGraphSession,
-  transitionSession,
-  findActiveSession,
-  getSession,
-  clearSession,
 } from '../src/harness/task-graph.js';
 
 // ─── Helpers ───
@@ -109,6 +105,63 @@ describe('createTaskGraph', () => {
     expect(Object.keys(graph.nodes)).toHaveLength(0);
     expect(graph.mainBranch.nodeIds).toEqual([]);
     expect(graph.cursor.nodeId).toBe('');
+  });
+
+  it('有向无环的自定义 edges 可以建图', () => {
+    const nodes = [
+      makeNode('a', 'inspect', 'A'),
+      makeNode('b', 'search', 'B'),
+      makeNode('c', 'edit', 'C'),
+      makeNode('d', 'verify', 'D'),
+    ];
+    const edges: TaskEdge[] = [
+      { from: 'a', to: 'b', type: 'normal' },
+      { from: 'a', to: 'c', type: 'normal' },
+      { from: 'b', to: 'd', type: 'normal' },
+      { from: 'c', to: 'd', type: 'normal' },
+    ];
+    const graph = createTaskGraph({ goal: 'dag', intent: 'edit', nodes, edges, graphId: 'g-dag' });
+    expect(graph.edges).toEqual(edges);
+  });
+
+  it('自定义 edges 成环时拒绝建图', () => {
+    const nodes = [
+      makeNode('a', 'inspect', 'A'),
+      makeNode('b', 'edit', 'B'),
+      makeNode('c', 'verify', 'C'),
+    ];
+    const edges: TaskEdge[] = [
+      { from: 'a', to: 'b', type: 'normal' },
+      { from: 'b', to: 'c', type: 'normal' },
+      { from: 'c', to: 'a', type: 'fallback' },
+    ];
+    expect(() => createTaskGraph({ goal: 'cycle', intent: 'edit', nodes, edges })).toThrow(TaskGraphCycleError);
+    try {
+      createTaskGraph({ goal: 'cycle', intent: 'edit', nodes, edges });
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskGraphCycleError);
+      expect((err as TaskGraphCycleError).cycle).toEqual(['a', 'b', 'c', 'a']);
+    }
+  });
+
+  it('自环也算环', () => {
+    const nodes = [makeNode('a', 'edit', 'A')];
+    expect(() => createTaskGraph({
+      goal: 'loop',
+      intent: 'edit',
+      nodes,
+      edges: [{ from: 'a', to: 'a', type: 'normal' }],
+    })).toThrow(/cycle: a -> a/);
+  });
+
+  it('边指向未知节点时拒绝建图', () => {
+    const nodes = [makeNode('a', 'edit', 'A')];
+    expect(() => createTaskGraph({
+      goal: 'missing',
+      intent: 'edit',
+      nodes,
+      edges: [{ from: 'a', to: 'ghost', type: 'normal' }],
+    })).toThrow(/unknown node: a -> ghost/);
   });
 });
 
@@ -532,28 +585,5 @@ describe('CompactGraph', () => {
 
     compactGraph(graph, { maxNodeHistoryEntries: 50, maxBranchHistoryEntries: 20, compactErrors: false, pruneDeadFallbacks: true });
     expect(graph.fallbackBranches).toHaveLength(0);
-  });
-});
-
-// ═══════════════════════════════════════════════
-
-describe('GraphSession', () => {
-  it('create → transition → find', () => {
-    const s = createGraphSession('g-sess1', 'task-1', 'fix bug', 0);
-    expect(s.status).toBe('active');
-    expect(s.graphId).toBe('g-sess1');
-
-    const active = findActiveSession();
-    expect(active?.graphId).toBe('g-sess1');
-
-    transitionSession('g-sess1', 'completed');
-    expect(getSession('g-sess1')?.status).toBe('completed');
-    expect(findActiveSession()).toBeUndefined();
-  });
-
-  it('clearSession', () => {
-    createGraphSession('g-sess2', 'task-2', 'refactor', 1);
-    clearSession('g-sess2');
-    expect(getSession('g-sess2')).toBeUndefined();
   });
 });

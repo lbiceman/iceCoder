@@ -194,4 +194,22 @@ describe('aggregateTokenUsageSeries', () => {
     expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].byKind.memory.totalTokens).toBe(6);
     expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].byKind.chat.totalTokens).toBe(0);
   });
+
+  it('counts sub-agent calls separately from the parent session', () => {
+    const now = new Date();
+    now.setMinutes(30, 0, 0);
+    const t = now.getTime();
+    const series = aggregateTokenUsageSeries([
+      { timestamp: t, inputTokens: 10, outputTokens: 2, source: 'chat' },
+      { timestamp: t, inputTokens: 30, outputTokens: 5, source: 'sub_agent', agentId: 'ag1' },
+      { timestamp: t, inputTokens: 4, outputTokens: 1, source: 'chat', agentId: 'ag2' },
+      { timestamp: t, inputTokens: 1, outputTokens: 1, source: 'memory_recall' },
+    ], t);
+    const bucket = series.hourly[TOKEN_USAGE_SERIES_HOURS - 1];
+    expect(bucket.byKind.chat.totalTokens).toBe(12);
+    expect(bucket.byKind.subAgent.totalTokens).toBe(40);
+    expect(bucket.byKind.subAgent.turns).toBe(2);
+    expect(bucket.byKind.memory.totalTokens).toBe(2);
+    expect(bucket.totalTokens).toBe(54);
+  });
 });

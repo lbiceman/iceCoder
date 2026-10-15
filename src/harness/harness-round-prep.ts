@@ -11,24 +11,29 @@ import {
   bigramJaccard,
   getLastAssistantText,
   getLatestRealUserText,
-  getLatestUserTextForTaskSwitch,
+  getPreviousRealUserText,
   isActionableToolRequest,
+  isSystemInjectedUserContent,
 } from './harness-message-utils.js';
 import { appendQueuedAlsoNotesToMessages } from '../session/pending-note.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
-import type { InjectMemoryMode } from './harness-memory.js';
+import {
+  hasTopicShifted,
+  type HarnessMemoryIntegration,
+  type InjectMemoryMode,
+} from './harness-memory.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
 import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import { shouldUseTaskGraph } from './task-graph-config.js';
+import { supervisorModeBuildsTaskGraph } from './supervisor/supervisor-mode-contract.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import {
@@ -50,7 +55,7 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
   globalPolicy?: GlobalModePolicy;
-  /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
+  /** 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
   workspaceRoot?: string;
@@ -73,14 +78,53 @@ export type PrepareHarnessRoundResult =
   | { action: 'continue'; normalizedMsgs: UnifiedMessage[]; round: number }
   | { action: 'stop'; result: HarnessResult };
 
-/** 闲聊走轻量召回；工具轮之后走标准召回；首轮执行任务仍用关键词粗召回避免堵首 token。 */
+/** 用户在问以前记下的约定、偏好或配置。普通「上次测试失败」不算。 */
+export function asksAboutRememberedContext(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return /(记得|还记得|回忆).{0,16}(约定|偏好|配置|规则|习惯|怎么)|上次怎么|以前怎么|我的偏好|项目约定|remember (my|our|the).{0,24}(preference|convention|config)/i.test(trimmed);
+}
+
+/**
+ * 闲聊走轻量召回。执行任务默认关键词，避免精排堵住下一轮主模型。
+ * 话题切换或明确在问记忆时才走标准召回。
+ */
 export function resolveRecallInjectMode(args: {
   casual: boolean;
   hadToolRoundThisRun: boolean;
+  topicShifted?: boolean;
+  asksMemory?: boolean;
 }): InjectMemoryMode {
   if (args.casual) return 'casual_light';
-  if (args.hadToolRoundThisRun) return 'default';
+  if (args.asksMemory || args.topicShifted) return 'default';
   return 'coarse_pre_llm';
+}
+
+const TASK_SWITCH_NOTICE_EXCERPT_CHARS = 400;
+
+/**
+ * 只拿本轮用户原文和上一条助手回复比。
+ * 历史里后写入的失败证据、自检、验收摘要不能变成「新任务」。
+ */
+export function shouldInjectUnrelatedTaskNotice(
+  userMessage: string,
+  lastAssistantText: string,
+): boolean {
+  const latest = userMessage.trim();
+  if (!latest || !lastAssistantText.trim()) return false;
+  if (isSystemInjectedUserContent(latest)) return false;
+  if (isResumeContinuationMessage(latest)) return false;
+  return bigramJaccard(latest, lastAssistantText) < TASK_SWITCH_JACCARD_THRESHOLD;
+}
+
+/** 点明本轮用户原文。没有可引用的用户句子时，不得把工具调用或诊断块当成新任务。 */
+export function buildUnrelatedTaskNotice(userMessage: string): string {
+  const excerpt = userMessage.trim().replace(/\s+/g, ' ').slice(0, TASK_SWITCH_NOTICE_EXCERPT_CHARS);
+  return [
+    '[System: The user message that started this run does not overlap the previous assistant reply. Follow that user message. Do not invent a different task.]',
+    `User message: ${excerpt}`,
+    'Runtime diagnostics, tool failures, and your own earlier tool calls are not a new request. If this user message still refers to the current work, continue that work.',
+  ].join('\n');
 }
 
 /**
@@ -115,8 +159,7 @@ export async function prepareHarnessRound(
 
   deps.loopController.advanceRound();
   state.turnCount++;
-  // W1: 在轮次开始时锚定 filesChanged 基线 + 重置本轮 branchSwitched 标记，
-  // 供 evaluateExecutionModeBeforeLlm 派生 accumulatedDiffLines / branchSwitchedThisRound。
+  // 轮次开始时记下 filesChanged 基线，并清掉上一轮的分支切换标记。
   state.filesChangedAtRoundStart = state.repoContext.snapshot().filesChanged.length;
   state.branchSwitchedThisRound = false;
   const round = deps.loopController.getState().currentRound;
@@ -158,7 +201,8 @@ export async function prepareHarnessRound(
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
-    const shouldInit = deps.globalPolicy?.supervisorMode === 'strict'
+    // 只有 strict 建任务图。adaptive 也会进 forced，但没有图，ToolGate 不按步骤拦工具。
+    const shouldInit = supervisorModeBuildsTaskGraph(deps.globalPolicy?.supervisorMode)
       && shouldUseTaskGraph(taskSnapshot.intent);
     if (shouldInit) {
       try {
@@ -231,9 +275,12 @@ export async function prepareHarnessRound(
     const intent = state.taskState.snapshot().intent;
     const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
     if (!skipMemoryRecall) {
+      const latestUser = getLatestRealUserText(msgs, userMessage);
       const memoryMode = resolveRecallInjectMode({
         casual: shouldApplyCasualHarness(intent),
         hadToolRoundThisRun: state.hadToolRoundThisRun === true,
+        topicShifted: hasTopicShifted(getPreviousRealUserText(msgs, latestUser), latestUser),
+        asksMemory: asksAboutRememberedContext(latestUser),
       });
       await timeAsync('prep_memory', () =>
         deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep }),
@@ -254,23 +301,12 @@ export async function prepareHarnessRound(
     );
   }
 
-  if (!state.taskSwitchInjected) {
-    const latestUserContent = getLatestUserTextForTaskSwitch(msgs, userMessage);
-    const lastAssistantText = getLastAssistantText(msgs);
-    if (
-      latestUserContent
-      && lastAssistantText
-      && !isResumeContinuationMessage(latestUserContent)
-    ) {
-      const similarity = bigramJaccard(latestUserContent, lastAssistantText);
-      if (similarity < TASK_SWITCH_JACCARD_THRESHOLD) {
-        msgs.push({
-          role: 'user',
-          content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
-        });
-        state.taskSwitchInjected = true;
-      }
-    }
+  if (!state.taskSwitchInjected && shouldInjectUnrelatedTaskNotice(userMessage, getLastAssistantText(msgs))) {
+    msgs.push({
+      role: 'user',
+      content: buildUnrelatedTaskNotice(userMessage),
+    });
+    state.taskSwitchInjected = true;
   }
 
   const normalizedMsgs = timeSync('prep_build_msgs', () =>

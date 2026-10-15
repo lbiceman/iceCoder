@@ -1273,7 +1273,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.a.status).toBe('done');
     expect(result.a.callTs).toBeTruthy();
     expect(result.a.resultTs).toBeTruthy();
-    expect(result.a.text).toMatch(/了解代码与上下文|read_file/i);
+    expect(result.a.text).toMatch(/读取/);
     expect(result.b.status).toBe('running');
     expect(result.b.resultTs).toBeUndefined();
     await page.close();
@@ -2136,7 +2136,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.afterFirst.nodes).toBe(1);
     expect(result.afterFirst.tools).toBeGreaterThanOrEqual(1);
     expect(result.afterFirst.status).toBe('running');
-    expect(result.afterFirst.firstName).toMatch(/读|read_file|读取/i);
+    expect(result.afterFirst.firstName).toBe('src/a.ts');
     expect(result.afterSecond.nodes).toBe(1);
     expect(result.afterSecond.tools).toBeGreaterThan(result.afterFirst.tools);
     await page.close();

@@ -61,6 +61,24 @@ export function estimateStringTokens(text: string): number {
 /** 每条消息的固定结构开销（role 标记 + 分隔符） */
 const MESSAGE_OVERHEAD_TOKENS = 4;
 
+/** 单条消息的 token 估算（正文 + 工具参数 + 结构开销）。 */
+export function estimateMessageTokens(msg: UnifiedMessage): number {
+  let tokens = MESSAGE_OVERHEAD_TOKENS;
+  if (typeof msg.content === 'string') {
+    tokens += estimateStringTokens(msg.content);
+  } else if (Array.isArray(msg.content)) {
+    for (const block of msg.content) {
+      if (block.text) tokens += estimateStringTokens(block.text);
+    }
+  }
+  if (msg.toolCalls) {
+    for (const tc of msg.toolCalls) {
+      tokens += estimateStringTokens(tc.name + JSON.stringify(tc.arguments));
+    }
+  }
+  return tokens;
+}
+
 /**
  * 估算消息列表的总 token 数。
  *
@@ -68,24 +86,7 @@ const MESSAGE_OVERHEAD_TOKENS = 4;
  */
 export function estimateMessagesTokens(messages: UnifiedMessage[]): number {
   let tokens = 0;
-  for (const msg of messages) {
-    // 文本内容
-    if (typeof msg.content === 'string') {
-      tokens += estimateStringTokens(msg.content);
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.text) tokens += estimateStringTokens(block.text);
-      }
-    }
-    // 工具调用
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        tokens += estimateStringTokens(tc.name + JSON.stringify(tc.arguments));
-      }
-    }
-    // 消息结构开销
-    tokens += MESSAGE_OVERHEAD_TOKENS;
-  }
+  for (const msg of messages) tokens += estimateMessageTokens(msg);
   return tokens;
 }
 

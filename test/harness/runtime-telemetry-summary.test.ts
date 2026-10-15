@@ -39,6 +39,7 @@ describe('runtime telemetry summary', () => {
     expect(summary.noToolFinalRate).toBe(0.5);
     expect(summary.compactionSavedTokens).toBe(600);
     expect(summary.hostGuardBlocks).toBe(1);
+    expect(summary.failures).toBe(0);
     expect(summary.permissionDecisions).toEqual({ allow: 1, deny: 1 });
 
     const report = formatRuntimeTelemetryMarkdown(summary);

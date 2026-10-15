@@ -27,6 +27,9 @@ describe('session-flow-eval', () => {
         'task-queue-session-isolation',
         'mcp-browser-ext-detach-keeps-process-ready',
         'mcp-runtime-detached-does-not-change-puppeteer-line',
+        'persist-corrupt-ui-json-is-kept',
+        'persist-concurrent-appends-keep-both',
+        'persist-empty-structured-does-not-cover-corrupt',
       ]));
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });

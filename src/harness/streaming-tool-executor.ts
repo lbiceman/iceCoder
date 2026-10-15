@@ -82,7 +82,7 @@ export class StreamingToolExecutor {
 
       let result: ToolResult;
       try {
-        result = await this.toolExecutor.executeTool(toolCall, outputCallback);
+        result = await this.toolExecutor.executeTool(toolCall, outputCallback, this.abortSignal);
       } catch (err) {
         // 兜底：ToolExecutor 内部异常不应该发生，但防御性处理
         result = {
@@ -135,20 +135,6 @@ export class StreamingToolExecutor {
     this.completedResults = [];
     this.pendingResults.clear();
     return results;
-  }
-
-  /**
-   * 获取已完成的结果（不等待未完成的）。
-   */
-  getCompletedResults(): StreamingToolResult[] {
-    return [...this.completedResults];
-  }
-
-  /**
-   * 是否有正在执行的工具。
-   */
-  hasPending(): boolean {
-    return this.pendingResults.size > this.completedResults.length;
   }
 
   /**

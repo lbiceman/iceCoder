@@ -16,6 +16,9 @@ describe('isEligibleLatestUserMessageContent', () => {
     expect(isEligibleLatestUserMessageContent('<system-context>\nx')).toBe(false);
     expect(isEligibleLatestUserMessageContent('<session-notes>\nx')).toBe(false);
     expect(isEligibleLatestUserMessageContent('[System notice]')).toBe(false);
+    expect(isEligibleLatestUserMessageContent('[Failure Evidence — 4 consecutive all-failed rounds]\nedit_file')).toBe(false);
+    expect(isEligibleLatestUserMessageContent('[Runtime Self-Review] 连续失败')).toBe(false);
+    expect(isEligibleLatestUserMessageContent('[Verification digest]\nCommand: npm test')).toBe(false);
   });
 
   it('接受真实用户句', () => {

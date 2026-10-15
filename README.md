@@ -1,6 +1,6 @@
 # iceCoder
 
-**Self-hosted AI coding agent with desktop & mobile UI** — L0/L1/L3 single-axis supervision, MCP tool integration, session checkpoints, and 217+ round verified stability. One-click Windows install, zero dependencies.
+**Self-hosted AI coding agent for desktop and mobile.** Single-axis supervision (L0/L1/L3), sub-agents, scheduled tasks, file memory, and MCP. One-click Windows install, or run from source / CLI on Node.js 22+.
 
 [中文简介](./README.zh-CN.md) · [**Usage & commands**](./docs/使用文档.md) · [Full guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
@@ -8,23 +8,31 @@
 
 ### Desktop
 
-**Work / chat** — left nav is Work / Tasks / Knowledge / Stats, with a multi-session list under Work. The transcript sits in the center, **iceCoder Workbench** on the right, and the `#` / `@` composer at the bottom. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow below; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, and changed files.
+Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings** and the supervision tier (off / adaptive / strict). Under Work, sessions split into **regular** and **task** groups.
+
+**Work / chat** — transcript in the center, **iceCoder Workbench** on the right, `#` / `@` composer at the bottom with model and reasoning pickers. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, and changed files.
 
 ![Desktop — work chat: checkpoint directory and selected-chapter flow](./docs/assets/desktop-work-chat.png)
 
 ![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 
-**Stats** — token usage trend (summed from session bubbles), memory read/write, and supervisor enter/exit; day / week / month ranges:
+**Tasks** — `#/tasks`. A scheduled task sends its prompt, plus any attached skills, images, and files, into its own session. Schedules: interval, daily, weekly, monthly, or once. Run now, enable/disable, edit, or open the session.
+
+**Knowledge** — tabs `#/skills`, `#/memory`, `#/rules`: skills (create, view, edit, delete), a memory graph, and global user rules.
+
+**Stats** — token usage from a per-call JSONL ledger (session vs memory), plus memory read/write and supervisor enter/exit. Day / week / month are rolling 24h / 7d / 30d windows:
 
 ![Desktop — stats: token, memory, and supervisor trends (dark)](./docs/assets/desktop-stats.png)
 
 ![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
 
+**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP, Supervisor. General includes four themes (dark / light / modern / fresh), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
+
 ### Mobile H5
 
-Same bundle as desktop; routes `#/m/*`. Bottom tabs: Work / Tasks / Knowledge / Settings. Knowledge holds Skills, Memory, and Rules.
+Same bundle as desktop; routes `#/m/*`. Bottom tabs: Work / Tasks / Knowledge / Settings. A narrow `/` opens the mobile shell. Desktop and mobile themes are stored separately.
 
-**Work** — chat detail, bottom multi-model picker, and the Ice Bean:
+**Work** — chat detail, model and reasoning pickers, and the Ice Bean:
 
 ![Mobile — work chat (dark theme)](./docs/assets/mobile-work-chat.png)
 
@@ -32,7 +40,7 @@ Same bundle as desktop; routes `#/m/*`. Bottom tabs: Work / Tasks / Knowledge / 
 
 ![Mobile — work chat (light theme)](./docs/assets/mobile-work-chat-light.png)
 
-**Knowledge · Skills** — skill cards with delete and “Use skill”; Memory and Rules are the other tabs:
+**Knowledge · Skills** — skill cards with create, edit, delete, and “Use skill”:
 
 ![Mobile — knowledge, skills tab](./docs/assets/mobile-skills.png)
 
@@ -55,9 +63,11 @@ Pick one: Windows installer (no Node.js) or CLI tarball (Node.js 22+).
 | **[Windows x64 installer](./releases/windows/iceCoder-windows.exe)** | — | Install, then launch iceCoder |
 | **[CLI tgz](./releases/npm/ice-coder.tgz)** | Node.js 22+ | `npm install -g ./ice-coder.tgz` then `iceCoder start` |
 
+Version in `package.json`: **1.0.8**.
+
 ### Windows desktop
 
-The installer bundles the server, Electron shell, and floating Ice Bean. Configure your API key on first launch. Data directory: `~/.iceCoder/`.
+The installer bundles the server, Electron shell, and floating Ice Bean. Configure your API key on first launch. Data directory: `~/.iceCoder/`. Settings can point it at another disk (takes effect after restart; move the old folder yourself).
 
 **Building the desktop app from source:** run `npm run build:desktop`. On Windows, `/shell` requires rebuilding native `node-pty` for Electron — install **VS 2022 “Desktop development with C++”** plus a **Windows 10/11 SDK**. Spectre-mitigated libs are **bypassed by default** in `desktop/scripts/rebuild-server-native.cjs`. Without a C++ toolchain the rebuild is skipped (packaging still succeeds) but `/shell` will not work in the packaged app. See [`docs/使用文档.md` § Desktop build](./docs/使用文档.md#桌面打包electron) (Chinese).
 
@@ -65,7 +75,9 @@ The installer bundles the server, Electron shell, and floating Ice Bean. Configu
 
 Install, configure API keys, start dev/Web/CLI, run one-shot tasks, tests, and coverage — **all commands are in** [`docs/使用文档.md`](./docs/使用文档.md) (not duplicated here).
 
-Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` · Prod: `~/.iceCoder/` — env vars: [`docs/环境变量.md`](./docs/环境变量.md).
+Node.js **22+** (required, matches `engines.node >=22`). The repo `data/` directory holds templates only. `npm run dev` stores runtime data under `ICE_CACHE_ROOT` (code default `E:/my/iceCoderCache` when unset). The installer, `npm start`, and Electron use `~/.iceCoder/`, which Settings can move; that choice is shared with `%APPDATA%/iceCoder/data-directory.json`. Env vars: [`docs/环境变量.md`](./docs/环境变量.md).
+
+`npm run dev` starts API **1024** and Vite **1025** (open the browser on 1025). With `PORT` unset, the source CLI defaults to API **3784**; the installer, `npm start`, and Electron default to **1024**. `VITE_PORT` changes the frontend port.
 
 ---
 
@@ -73,117 +85,152 @@ Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` �
 
 ### Single-axis supervisor (L0 / L1 / L3)
 
-Three layers: **L0** is the supervision tier you pick in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L3** is TaskGraph hard guard (`block` / `force_switch`, or `user_checkpoint` when no fallback).
+Three layers: **L0** is the tier in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L3** is TaskGraph hard guard (`block` / `force_switch`, or `user_checkpoint` when no fallback).
 
 > Legacy **L2** (takeover / PassiveObserver / CorrectionPort / EventTimeline) was removed on 2026-08-31 — see [`docs/L2监管层详解.md`](./docs/L2监管层详解.md).
 
 - **adaptive** (default) balances freedom and enforcement; **strict** stays near forced and builds the graph on round 1 for critical engineering tasks.
 - Tied to **TaskGraph** and **D′ stop-time verification** — engineering edits may run a bounded acceptance plan via `run_command`; supervision does not decide completion.
-- Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only).
+- Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only). The Settings “Supervisor” tab edits the same tier.
+- A sub-agent’s own tier is `off` (no graph, no forced mode). The parent Verification Gate still decides whether the work is done.
 
 ### Harness loop & TaskGraph
 
-**Harness** turns model intent into executed tools: permission rules (allow/confirm/deny), no-tool recovery, repeat-failure detection, micro/hard compaction with runtime re-injection. **TaskGraph** is the **only** structured execution context (replaces the old Execution Plan): enabled for `edit` / `debug` / `test` / `refactor`; `question` / `inspect` stay in free mode without a graph.
+**Harness** turns model intent into executed tools: permission rules (allow/confirm/deny), no-tool recovery, repeat-failure detection, micro/hard compaction with runtime re-injection. **TaskGraph** is the **only** structured execution context (replaces the old Execution Plan): enabled for `edit` / `debug` / `test` / `refactor`; `question` / `inspect` stay in free mode without a graph, on a lighter casual path.
 
 - **TaskState + RepoContext** track intent, phase, touched files, and verification status.
 - **CheckpointEngine v2** adds `runtimeV2` on the same `{sessionId}.checkpoint.json` (tool trail, failures, branch budget, supervisor snapshot).
-- **Sub-agents**: `request_analysis` launches read-only async background analysis; the main thread keeps working and later receives concise Analysis Ready summaries.
+- **Intent checkpoints** snapshot the workspace before each user turn. Rolling back to that turn restores files and deletes sub-agent records from that message onward.
+
+### Sub-agents
+
+In the default mode the parent agent calls **`task`** to run a full child Harness (compaction, recovery, permissions, and stop-time verification included). Several `task` calls in one reply run in parallel. Settings can turn this off; the tool and its prompt section are then omitted. Plan mode and Shell collaboration do not expose `task`.
+
+| Type | What it can do |
+|------|----------------|
+| `general` | Read, edit, run commands, and verify one bounded piece of work |
+| `explore` | Read-only search and tracing; no writes and no workspace-changing commands |
+
+- **`run_in_background: true`** returns an agent id immediately. The parent keeps working, polls with **`check_agent`**, or receives the report on a later round.
+- **Write leases** stop parallel sub-agents from editing the same file. A sub-agent cannot spawn another sub-agent, and cannot run history-changing git (`commit`, `push`, `reset`, `checkout`, and similar).
+- **Delegation cards** sit apart from that turn’s tool list. Collapsed, a card is the title, status, and the current line; the trail, report, and edits are inside. The child transcript opens read-only. Confirm dialogs name the sub-agent that asked.
+- The parent context only receives `[Agent Result]`. The child transcript stays out of it.
+
+### Three session modes
+
+| Mode | Enter with | Behavior |
+|------|------------|----------|
+| **Default** | a normal message | Edit code, spawn sub-agents, create scheduled tasks |
+| **Plan** | `/plan` | Refine a plan document only; no code edits and no `task` |
+| **Shell collaboration** | `/shell` | The whole session is bound to one persistent PTY. The agent reads the terminal; you decide in chat. No embedded terminal window. See [Shell collaboration](./docs/shell协作模式.md) (Chinese). |
+
+`/plan` and `/shell` stick for the session until you leave. Shell collaboration wins over plan mode.
+
+Other `/` commands: `/also` (inject a note while a turn is running), `/next` (queue the next task quietly), `/open` (deterministic drive/directory listing; `~open` still works). The `+` button opens the `~` palette: `~scan`, `~tokens`, `~telemetry`, `~supervisor`.
+
+### Scheduled tasks
+
+Create them on the **Tasks** page or with the **`scheduled_task`** tool. A schedule is an interval, a daily/weekly/monthly clock time, or a single run. Each task owns a session, listed under **task sessions** in the sidebar.
+
+Unattended runs auto-approve every tool confirmation, including deletes and dangerous commands (the page says so). Catastrophic blocks and host-process protection that never open a confirm dialog still apply. If the previous run is still going, the next tick is skipped.
 
 ### Ice Bean (Web session indicator)
 
 Web-only Canvas pet — visual feedback from Harness / Supervisor / TaskGraph events; **does not** drive runtime decisions.
 
-- **L0 eye color** reflects `off` / `adaptive` / `strict` (toggle in the sidebar footer); the welcome dashboard shows Harness and Gate status at a glance.
+- **L0 eye color** reflects `off` / `adaptive` / `strict`.
 - **L1 chip** shows `forced · …` aligned with `execution_mode_enter` reasons.
-- **~20 expressions** plus a token ring; step summary and “round N” sync over WebSocket.
+- **~20 expressions** plus a token ring.
+- Minimizing the desktop window can show the same pet on the desktop. Task completion can raise a system notification. Both toggles are in Settings.
 
 ### File memory (Memory v2)
 
-Long-term facts live as **Markdown** under `data/memory-files/` (no external vector DB).
+Long-term facts live as **Markdown** under `data/memory-files/` (no external vector DB). The Knowledge **Memory** tab is a graph.
 
 - **Structured levels**: `hard_rule` / `project_fact` / `preference` / `observation` / `session_state`, plus `evidenceStrength` for ranking and eviction.
-- **Intent-aware recall**: execute / inspect / question filters; conflicting same-topic memories inject **one side only** (tag-based + code-edit preference heuristic).
-- **Coarse recall (pre-LLM)**: keyword pull, up to 3 snippets — cheap and auditable.
+- **Intent-aware recall**: execute / inspect / question filters; conflicting same-topic memories inject **one side only**.
+- **Coarse recall (pre-LLM)**: keyword pull, up to 3 snippets.
 - **Extract & maintenance (post-tool)**: writes/updates after tools; **Dream** and eviction control size and conflicts.
 - **Session notes** with `icecoder-runtime` blocks cooperate with Harness memory integration.
-- **Eval**: `npm run eval:agent -- --case memory-conflict` guards against old preferences blocking current edit instructions.
+- Export is a ZIP. To import, put the Markdown files back into the memory directory.
 
-### Agent Skills
+### Agent Skills and user rules
 
-Reusable **Markdown skill files** live under `data/skills/` (`ICE_SKILLS_DIR`, same level as user-memory).
+Reusable **Markdown skill files** live under `data/skills/` (`ICE_SKILLS_DIR`).
 
-- **Skills page**: Knowledge nav opens **`#/skills`** (desktop) / **`#/m/skills`** (mobile). Memory (`#/memory`) and Rules (`#/rules`) are sibling tabs — list, preview, delete.
-- **Chat `#` picker**: type `#` in the composer to attach skills as chips; bodies are injected into the prompt at send time.
-- **Layouts**: flat `name.md` or `folder/skill.md` with optional scripts; bundled guide [`data/skills/创建技能.md`](./data/skills/创建技能.md).
-- **API**: `GET/DELETE /api/skills` — agent-created skills must stay under `ICE_SKILLS_DIR` only.
+- **Skills page**: list, preview, create a simple skill, edit, delete. Skills that ship scripts are authored in chat via the bundled “create a skill” guide.
+- **Chat `#` picker**: type `#` to attach skills as chips; bodies are injected at send time.
+- **User rules** (`#/rules`): global prompt text applied to every workspace and every turn, with a total character cap.
+- **API**: `GET/POST/PUT/DELETE /api/skills`. Agent-written skills must stay under `ICE_SKILLS_DIR`.
 
-### Multi-model & vision
+### Multi-model, reasoning, and vision
 
-Each provider can list **multiple models** in **`modelName`** (comma-separated, e.g. `gpt-4o,deepseek-chat`). Switch at the bottom of the chat page (desktop / mobile H5); the choice is stored as **`activeModelName`** in `data/config.json`.
+Each provider can list **multiple models** in **`modelName`** (comma-separated). Switch at the bottom of the chat page; the choice is **`activeModelName`** in `data/config.json`.
 
-- **Provider-level `supportsVision`** (default `true`): send multimodal requests first; if the API rejects image payloads, **strip images and retry once** with an explicit “model does not support vision” notice (session files unchanged).
-- **`supportsVision: false`**: no image blocks — pasted/uploaded images are persisted under `imagesCache` and the model is guided to use **`image_read`** with absolute paths.
-- **`image_read`** always sets `skipVisionFallback` so the tool must receive the original image.
+- **Reasoning effort**: `reasoningEffort` is also a comma-separated list (for example `low,high,max`), switched next to the model. OpenAI-compatible APIs get `reasoning_effort`; Anthropic gets `thinking`. Empty means the field is omitted.
+- **API**: OpenAI-compatible. Default path `/v1/chat/completions`, optional `/v1/responses`.
+- **Provider-level `supportsVision`** (default `true`): send multimodal requests first; if the API rejects image payloads, **strip images and retry once**.
+- **`supportsVision: false`**: images are stored under `imagesCache` and the model is guided to **`image_read`**. That tool does not take the strip-and-retry path.
 
 See [`docs/使用文档.md` §配置](./docs/使用文档.md#配置) for examples.
 
-### Multi-session, mobile H5 & cross-device sync
+### Multi-session, mobile H5, and cross-device sync
 
 Sidebar **CRUD** per session — isolated history, `session-notes`, checkpoints, and per-session **workspace roots**.
 
-- **Mobile H5 Shell**: same bundle as desktop; routes **`#/m/work`**, **`#/m/work/:sessionId`**, **`#/m/tasks`**, **`#/m/skills`**, **`#/m/memory`**, **`#/m/rules`**, **`#/m/config`**. Bottom tabs are Work / Tasks / Knowledge / Settings; session drawer and keep-alive match desktop.
-- **`~scan`**: QR pairs phone and PC on the **same session id** (shared context, not a read-only mirror).
-- Keep-alive + **runningTurn** restores streaming UI after refresh or reconnect.
+- **Mobile H5**: `#/m/work`, `#/m/work/:sessionId`, `#/m/tasks`, `#/m/skills`, `#/m/memory`, `#/m/rules`, `#/m/config`.
+- **`~scan`**: QR pairs phone and PC on the **same session id**.
+- **runningTurn** restores an in-flight stream and sub-agent cards after refresh or reconnect.
 
-### File references & system browser
+### File references and system browser
 
-- **`@` workspace refs**: cascade picker over the session workspace (`/api/workspace/browse`); selected paths become composer chips.
-- **System filesystem tools**: `list_drives`, `browse_directory`, `open_file` — browse/read paths outside the repo (remote/mobile use case).
-- **`~open`**: server-side deterministic directory listing before the model answers (avoids fabricated drive lists).
+- **`@` workspace refs**: cascade picker over the session workspace (`/api/workspace/browse`).
+- **System filesystem tools**: `list_drives`, `browse_directory`, `open_file`.
+- **`/open`**: server-side directory listing before the model answers (`~open` is accepted too).
 
-### Checkpoint, compaction & resume
+### Checkpoint, compaction, and resume
 
-Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervisor snapshot**; writes are serialized via Harness tail to avoid torn files.
+Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervisor snapshot**. Writes are serialized via the Harness tail.
 
-- After **hard compaction**, TaskState + RepoContext are re-injected (goal, changed files, pending verification).
-- **F5 / WS reconnect** uses `runningTurn` + checkpoint replay so half-finished streams are not lost.
+- After **hard compaction**, TaskState + RepoContext are re-injected.
+- **F5 / WS reconnect** uses `runningTurn` + checkpoint replay.
 - Legacy checkpoints without `runtimeV2` remain readable.
 
-### Tools (27 built-in + MCP)
+### Tools (built-in + MCP)
 
-File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem browser**, vision `image_read`, etc.; Harness also exposes async **`request_analysis`**. **MCP** registers external server tools into the same `ToolRegistry`.
+Default mode ships about **30** built-in tools: file read/write/patch, `glob` / `grep`, Git, `run_command`, search and URL fetch, Office / XMind / notebook parse, system filesystem browser, `image_read`, `undo_edit`, `env_info`, plus `task`, `check_agent`, and `scheduled_task`.
 
-- **Shell dual-track**: long `run_command` jobs go background, short ones foreground; soft timeout can escalate.
-- **`/shell` collaboration**: dedicated session with a **persistent PTY** — agent reads the terminal, you decide in chat (SSH, exams, passwords). Send **`/shell` once** per session; no embedded terminal UI. See [**Shell collaboration**](./docs/shell协作模式.md) (Chinese).
-- **Diff viewer** embeds Git-style diffs for edit tools in chat.
-- **confirm** without a UI callback defaults to **deny** for unattended safety.
-- **MCP settings UI**: start/stop servers, browse tools, edit JSON config (desktop `#/config` / mobile `#/m/config`).
+Shell-collaboration sessions add `interactive_shell`, `shell_exec`, `shell_wait`, and `shell_send_keys`. **MCP** registers external server tools into the same `ToolRegistry`. MCP tools that require multi-round `input_required` are rejected with an unsupported-MRTR result.
 
-### Telemetry & observability
+- **Shell dual-track**: long `run_command` jobs go background, short ones stay foreground; a soft timeout can escalate.
+- **Diff viewer** embeds Git-style diffs for edit tools.
+- **confirm** without a UI callback defaults to **deny**. Settings can skip ordinary confirms; commands that match a mandatory shell rule still need a click. Catastrophic blocks and host-process protection always apply.
+- **Lazy document tools**: parse tools are offered when the turn needs them.
 
-Harness rounds, memory ops, and L1 mode changes → `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Legacy L2 `supervisor-events.jsonl` is no longer read.
+### Telemetry and observability
 
-- Web: **`~telemetry`**, **`~supervisor`** (`days=`), **`~memory`**, etc.; type `~` for the command palette.
+Harness rounds, memory ops, and L1 mode changes go to `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Token usage is a separate JSONL ledger. Stats splits the selected range into session, sub-agent, and memory.
+
+- Web: **`~tokens`**, **`~telemetry`**, **`~supervisor`**.
 - HTTP: `GET /api/supervisor/events` returns Execution Mode enter/exit telemetry.
 - Commands and paths: [`docs/使用文档.md`](./docs/使用文档.md).
 
-### Tests & quality baseline
+### Tests and quality baseline
 
-**~2,000** Vitest cases across **~225** files (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
+**410** Vitest files under `test/**/*.test.ts`, covering gates, TaskGraph, sub-agents, scheduled tasks, memory, Web routes, and parts of the UI. Case counts and coverage come from a local run — the old “~2,000 cases / ~78%” figures are retired.
 
-- Covers gates, TaskGraph, dual-mode, memory lifecycle, Web routes, and long-session scenarios.
-- **`npm run eval:agent`**: Agent behavior regression — 7 fixed cases in isolated temp workspaces, real Harness + tools, pass/fail + metrics; `--mode=mock` for no-API smoke. See [`docs/使用文档.md`](./docs/使用文档.md).
-- **`npm run telemetry:runtime`**: summarize runtime telemetry JSONL for long-run debugging.
-- How to run: [`docs/使用文档.md`](./docs/使用文档.md).
+- `npm test` · `npm run test:coverage` · `npm run lint`
+- **`npm run eval:agent`**: agent behavior regression. `--mode=local` runs scripted file-edit cases; `--mode=mock` must not mark those cases passed. See [`docs/harness/收尾策略-模型停手与验收门控-finish.md`](./docs/harness/收尾策略-模型停手与验收门控-finish.md).
+- **`npm run telemetry:runtime`**: summarize runtime telemetry JSONL.
 
 ### Local benchmarks
 
-Blind **same-model** runs vs **Claude Code**; **SR** (acceptance pass) + **Composite (Gate 40 + Judge 60)**, not turn count alone.
+Archived **same-model** runs vs **Claude Code**. Scores are **SR** plus **Composite (Gate 40 + Judge 60)**. The table below is historical, not an automatic result for the current `HEAD`.
 
 - Layers **L1–L8** (billing L4+: 97 files / 19 bugs; fusion L7: 33 probes; **L8 SaaS fusion**: multi-tenant order × supply × approval × billing).
 - How to run: [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md#本地-benchmark) · rubric [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md).
 
-**Read more:** dual-mode → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · L2 → [`docs/L2监管层详解.md`](./docs/L2监管层详解.md) · memory → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · compaction → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
+**Read more:** supervision → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · memory → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · compaction → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案-finish.md`](./docs/requirement/移动端H5-Shell方案-finish.md) · sub-agents → [`docs/requirement/多agent协同.md`](./docs/requirement/多agent协同.md)
 
 ---
 
@@ -213,18 +260,25 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 ## Architecture (compact)
 
 ```text
-CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify, compact)
-  → TaskGraph → Supervisor L0/L1/L3 → Checkpoint + BranchBudget → 27 tools + MCP
+CLI / Web / WS / Mobile H5
+  → memory + skills + user rules
+  → Harness (tools, verify, compact)
+       → child Harness (task: general / explore, optional background)
+  → TaskGraph → Supervisor L0/L1/L3
+  → Checkpoint + write leases
+  → built-in tools + MCP
 ```
 
 | Piece | Role |
 |-------|------|
-| **Harness** | Main agent loop, D′ stop-time verification, compaction, telemetry |
+| **Harness** | Main loop, D′ stop-time verification, compaction, telemetry |
+| **Sub-agents** | `task` / `check_agent`; child Harness writes the same workspace under file leases |
 | **Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard |
-| **TaskGraph** | Structured plan injection |
+| **TaskGraph** | Structured plan injection; it does not schedule agents |
 | **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |
-| **Skills** | Markdown playbooks in `ICE_SKILLS_DIR`; `#` injection + Skills page |
-| **Web / Mobile** | Pet, multi-session, H5 shell, `@`/`#` composer, diff viewer, `~` commands |
+| **Skills / rules** | Markdown skills and global user rules |
+| **Scheduled tasks** | Interval or calendar schedules, each with its own session |
+| **Web / Mobile** | Pet, multi-session, H5 shell, `@`/`#` composer, diff viewer, `/` and `~` commands |
 
 ---
 
@@ -232,19 +286,18 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 
 | Doc | Content |
 |-----|---------|
-| [**使用文档**](./docs/使用文档.md) | **Commands** — install, dev, CLI, tests, benchmark, `~` commands |
-| [**Desktop build / node-pty**](./docs/使用文档.md#桌面打包electron) | Electron packaging, VS 2022, Windows SDK, Spectre bypass (Chinese) |
-| [**Shell collaboration / `/shell`**](./docs/shell协作模式.md) | Persistent PTY sessions, SSH/exam workflows (Chinese) |
-| [PROJECT-GUIDE](./docs/PROJECT-GUIDE.md) | Architecture & modules |
-| [项目介绍](./docs/项目介绍.md) | Chinese full reference |
-| [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 design (no vector DB) |
-| [压缩机制详解](./docs/压缩机制详解.md) | Layered compaction + structured recovery |
-| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L3 single-axis supervisor overview |
-| [L2监管层详解](./docs/L2监管层详解.md) | L2 Runtime Supervisor retirement note |
+| [**使用文档**](./docs/使用文档.md) | **Commands** — install, dev, CLI, tests, benchmark |
+| [**Desktop build / node-pty**](./docs/使用文档.md#桌面打包electron) | Electron packaging, VS 2022, Windows SDK (Chinese) |
+| [**Shell collaboration / `/shell`**](./docs/shell协作模式.md) | Persistent PTY sessions (Chinese) |
+| [**Multi-agent design**](./docs/requirement/多agent协同.md) | `task` child Harness, including custom types and worktree isolation that are not built yet |
+| [PROJECT-GUIDE](./docs/PROJECT-GUIDE.md) | Architecture (some sections still describe the removed `request_analysis` path) |
+| [项目介绍](./docs/项目介绍.md) | Chinese architecture notes (same caveat; prefer this README and the source) |
+| [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 |
+| [压缩机制详解](./docs/压缩机制详解.md) | Layered compaction |
+| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L3 |
+| [L2监管层详解](./docs/L2监管层详解.md) | L2 retirement note |
 | [PACKAGE_USAGE](./PACKAGE_USAGE.md) | `npm pack` install |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Scoring methodology |
-| [debug-billing-settlement](./benchMark/reports/debug-billing-settlement.md) | L4+ 19-bug run (M3, iceCoder vs CC) |
-| [debug-saas-order-supply-approval-fusion-05](./benchMark/reports/debug-saas-order-supply-approval-fusion-05.md) | L8 SaaS fusion (iceCoder vs CC) |
 
 ---
 

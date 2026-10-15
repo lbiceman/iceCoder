@@ -1,7 +1,7 @@
 import type { ExecutionMode, ForcedDegradedTier } from '../../types/supervisor.js';
 
 /**
- * §2.8.11 — Forced 下退化层判定。
+ * Forced 下退化层判定。
  *
  * 输入只能描述本轮可观测事实（不引入 LLM / 用户文本），
  * 且永远不写 executionMode；只回答「该用哪一档 forcedDegradedTier」。

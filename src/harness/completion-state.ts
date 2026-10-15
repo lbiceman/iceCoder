@@ -1,3 +1,4 @@
+import { STOP_VERIFICATION_TOOL_CALL_PREFIX } from './harness-stop-verification.js';
 import type {
   OperationOutcome,
   OperationOutcomeLedger,
@@ -25,6 +26,7 @@ export type CompletionReason =
   | 'timeout'
   | 'max_output_tokens'
   | 'stop_hook'
+  | 'stop_hook_error'
   | 'circuit_breaker'
   | 'error'
   | 'operation_pending'
@@ -50,18 +52,42 @@ export interface CompletionHardStateDecision extends CompletionTerminalDecision 
   outcome: OperationOutcome;
 }
 
+export interface CompletionHardStateOptions {
+  /** 早于此时刻的失败 / 拒绝来自旧 run（checkpoint 恢复），不再拦本 run 收尾。 */
+  since?: number;
+}
+
 /**
  * 返回模型停手前必须服从的确定性操作状态；没有硬状态时返回 null。
  * 验收计划与模型是否已给出正文由 no-tool 主路径另行处理。
+ *
+ * 失败类状态只看「未解决」项：同 scope 后续成功会在账本里覆盖它；
+ * 之后又有一次成功的改动，说明模型已绕开或放弃该操作，也不再拦截。
  */
 export function evaluateCompletionHardState(
   ledger: OperationOutcomeLedger | undefined,
+  options: CompletionHardStateOptions = {},
 ): CompletionHardStateDecision | null {
-  const outcomes = ledger?.list() ?? [];
+  const all = (ledger?.list() ?? []).filter(outcome =>
+    !outcome.toolCallId.startsWith(STOP_VERIFICATION_TOOL_CALL_PREFIX),
+  );
+  const lastProgressAt = all.reduce(
+    (at, outcome) => (isSuccessfulMutation(outcome) ? Math.max(at, outcome.at) : at),
+    Number.NEGATIVE_INFINITY,
+  );
+  const since = options.since ?? Number.NEGATIVE_INFINITY;
+  const unresolved = all.filter(outcome =>
+    outcome.at >= since
+    && (outcome.status !== 'failed' || outcome.at >= lastProgressAt),
+  );
+  const latestOf = (
+    outcomes: OperationOutcome[],
+    predicate: (outcome: OperationOutcome) => boolean,
+  ) => [...outcomes].reverse().find(predicate);
   const latest = (predicate: (outcome: OperationOutcome) => boolean) =>
-    [...outcomes].reverse().find(predicate);
+    latestOf(unresolved, predicate);
 
-  const pending = latest(outcome =>
+  const pending = latestOf(all, outcome =>
     outcome.status === 'pending' || outcome.status === 'awaiting_approval',
   );
   if (pending) {
@@ -126,6 +152,12 @@ export function evaluateCompletionHardState(
   }
 
   return null;
+}
+
+function isSuccessfulMutation(outcome: OperationOutcome): boolean {
+  return outcome.status === 'completed'
+    && outcome.disposition === 'executed'
+    && outcome.effect !== 'observe';
 }
 
 function hasUsableReceipt(outcome: OperationOutcome): boolean {

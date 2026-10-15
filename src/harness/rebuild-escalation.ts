@@ -1,10 +1,10 @@
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { MAX_REBUILD_ESCALATIONS_PER_RUN } from './harness-constants.js';
-import { extractRunCommand } from './branch-budget-tool-path.js';
+import { extractRunCommand } from './branch-budget-path.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { buildVerificationDigest, parseBuildErrorSourcePaths } from './verification-digest.js';
-import { workspaceFileExists } from './workspace-path-guard.js';
+import { workspaceFileExists } from '../shared/path-scope.js';
 import type { VerificationSignal } from './completion-facts-view.js';
 
 function topFileEditFromInspect(

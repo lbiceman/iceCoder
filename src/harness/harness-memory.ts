@@ -28,16 +28,21 @@ import type { FileMemoryManager } from '../memory/file-memory/file-memory-manage
 import type { MemoryHeader } from '../memory/file-memory/types.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
-import { recallRelevantMemories, filterByContextRelevance, filterByBudget, invalidateRescueCache } from '../memory/file-memory/memory-recall.js';
+import { recallRelevantMemories, filterByContextRelevance, filterByBudget, invalidateRescueCache, LLM_RECALL_TIMEOUT_MS } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { scheduleAutoDream } from '../memory/file-memory/memory-dream-runner.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
+import {
+  EMPTY_RECALL_COOLDOWN_ROUNDS,
+  EMPTY_RECALL_STREAK_BEFORE_COOLDOWN,
+} from './harness-constants.js';
 import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import { evaluateMemoryExtractionGate, type MemoryExtractionGateResult } from './memory-extraction-gate.js';
 import {
   isSessionContextWriteStale,
@@ -62,6 +67,7 @@ import {
   resolveMessageForRememberWriteGuard,
   getOrCreateSessionLongTermMemoryWriteCap,
   registerLongTermMemoryWriteCap,
+  releaseLongTermMemoryWriteCap,
   recordLongTermMemoryWriteSuccess,
   type LongTermMemoryWriteCap,
 } from '../memory/file-memory/memory-write-pipeline.js';
@@ -113,8 +119,6 @@ function emitMemoryStep(
 const HARNESS_FILE_CONTENT_TRUNCATE = 2000;
 /** 提取消息分块大小 */
 const EXTRACTION_CHUNK_SIZE = 20;
-/** 提取最大分块数 */
-const EXTRACTION_MAX_CHUNKS = 3;
 /** 粗召回倍数 */
 const COARSE_RECALL_MULTIPLIER = 6;
 /** 回退召回倍数 */
@@ -186,7 +190,6 @@ import {
   buildPlanFence,
   ICECODER_PLAN_FENCE_LANG,
 } from '../memory/file-memory/execution-plan-fence.js';
-// ExecutionPlan type removed (Phase 11)
 
 /**
  * 把 session-notes 文本中所有 `icecoder-plan` fence 移除（用于追加最新 plan 前去重）。
@@ -235,6 +238,34 @@ export interface HarnessMemoryConfig {
 
 /** 记忆注入模式 */
 export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
+
+/** 标准召回里的精排 / 救援最长等待。超时后用关键词结果，不再堵住主模型。 */
+export const MEMORY_SIDE_QUERY_TIMEOUT_MS = LLM_RECALL_TIMEOUT_MS;
+
+/** 侧边模型调用：到点返回 fallback，并中止尚未结束的请求。 */
+export async function raceMemorySideQuery<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  fallback: T,
+  timeoutMs = MEMORY_SIDE_QUERY_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(controller.signal),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(fallback);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 // ─── 主代理写入检测 ───
 
@@ -331,13 +362,13 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
  * 检测两条用户消息之间是否发生了话题切换。
  *
  * 使用 token 重叠度（Jaccard 系数）判断：
- * - 重叠度 < 0.15 → 话题切换（几乎没有共同词汇）
- * - 重叠度 >= 0.15 → 同一话题
+ * - 重叠度 < 0.2 → 话题切换（几乎没有共同词汇）
+ * - 重叠度 >= 0.2 → 同一话题
  *
  * 支持中英文混合：英文按空格分词，中文用 bigram 滑动窗口。
  * 不需要额外 LLM 调用，纯本地计算。
  */
-function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
+export function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
   if (!previousMessage || !currentMessage) return false;
 
   // minWordLength: 2 — 中文词通常 2 个字（如"前端"、"组件"）
@@ -775,10 +806,15 @@ export class HarnessMemoryIntegration {
     }
 
     // ── 空召回冷却机制 ──
-    // 连续多次空召回后暂停几轮，避免无意义的重复扫描
+    // 连续多次空召回后暂停几轮，避免无意义的重复扫描；话题切换后旧的空召回不再说明问题
     if (this.emptyRecallCooldown > 0) {
-      this.emptyRecallCooldown--;
-      return;
+      if (hasTopicShifted(this.lastInjectionUserMessage, latestUserMsg)) {
+        this.emptyRecallCooldown = 0;
+        this.consecutiveEmptyRecalls = 0;
+      } else {
+        this.emptyRecallCooldown--;
+        return;
+      }
     }
 
     const recallCfg = getRecallConfig();
@@ -830,7 +866,7 @@ export class HarnessMemoryIntegration {
         coarseK,
         prefetchedPaths,
         topicSwitched,
-        { workspaceRoot: this.workspaceRoot },
+        { workspaceRoot: this.workspaceRoot, sideQueryTimeoutMs: MEMORY_SIDE_QUERY_TIMEOUT_MS },
       );
 
       if (recallResult.memories.length > 0) {
@@ -857,6 +893,7 @@ export class HarnessMemoryIntegration {
           this.llmAdapter,
           relevanceGateCfg,
           topicSwitched,
+          MEMORY_SIDE_QUERY_TIMEOUT_MS,
         );
 
         selectedMemories = filterMemoriesForExecutionIntent(latestUserMsg, selectedMemories);
@@ -923,13 +960,15 @@ export class HarnessMemoryIntegration {
         this.emptyRecallCooldown = 0;
       } else {
         await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
-        // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
+        // 空召回 → 累计计数，连续多次空召回后冷却若干轮
         emitMemoryStep(onStep, 'recall_empty', '未找到可注入的相关记忆');
         this.consecutiveEmptyRecalls++;
-        if (this.consecutiveEmptyRecalls >= 3) {
-          this.emptyRecallCooldown = 3;
+        if (this.consecutiveEmptyRecalls >= EMPTY_RECALL_STREAK_BEFORE_COOLDOWN) {
+          this.emptyRecallCooldown = EMPTY_RECALL_COOLDOWN_ROUNDS;
           this.consecutiveEmptyRecalls = 0;
-          console.debug('[harness-memory] 连续空召回，冷却 3 轮');
+          console.debug(
+            `[harness-memory] 连续空召回，冷却 ${EMPTY_RECALL_COOLDOWN_ROUNDS} 轮`,
+          );
         }
       }
     } catch (err) {
@@ -951,7 +990,7 @@ export class HarnessMemoryIntegration {
 
   /**
    * 每轮 LLM 前：仅关键词召回 top-K，不调用侧边 LLM。
-   * 不设置 injectedForCurrentMessage；工具轮之后由下一轮 prep 走标准召回。
+   * 不设置 injectedForCurrentMessage。工具轮之后仍走关键词，除非话题切换或在问约定。
    */
   private async injectCoarseKeywordRecall(
     messages: UnifiedMessage[],
@@ -1072,13 +1111,17 @@ Return ONLY a JSON object: {"selected": [1, 3, 7, ...]} with the numbers of your
 ${candidateList}`;
 
     try {
-      const response = await this.llmAdapter.chat(
-        [
-          { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
-          { role: 'user', content: rerankPrompt },
-        ],
-        { tools: [], usageSource: 'memory_recall' },
+      const response = await raceMemorySideQuery(
+        (signal) => this.llmAdapter!.chat(
+          [
+            { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
+            { role: 'user', content: rerankPrompt },
+          ],
+          { tools: [], usageSource: 'memory_recall', signal },
+        ),
+        null,
       );
+      if (!response) return candidates.slice(0, fallbackK);
 
       const content = response.content.trim();
       // Parse JSON response
@@ -1296,7 +1339,7 @@ ${candidateList}`;
    */
   dispose(): void {
     registerAgentMemoryWriteGuard(null, this.sessionId);
-    registerLongTermMemoryWriteCap(null);
+    releaseLongTermMemoryWriteCap(this.sessionMemoryWriteCap);
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
@@ -1507,14 +1550,9 @@ ${candidateList}`;
     });
   }
 
-  /**
-   * 估算模型上下文窗口大小。
-   * 优先从环境变量读取，否则使用默认 128k。
-   */
+  /** 与压缩器同源的生效上下文窗口（ICE_CONTEXT_WINDOW → 默认 provider → 128K） */
   private estimateContextWindow(): number {
-    const envWindow = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-    if (Number.isFinite(envWindow) && envWindow > 0) return envWindow;
-    return 128_000;
+    return readEffectiveContextWindowTokens();
   }
 
   /**
@@ -2048,6 +2086,9 @@ ${candidateList}`;
           }
           const { promises: fsPromises } = await import('node:fs');
           await fsPromises.writeFile(this.sessionMemoryState.notesPath, finalNotes, 'utf-8');
+          // 只有写盘成功才推进游标；失败时靠 backoff 节流，之后仍会重新覆盖这段消息。
+          this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
+          this.sessionMemoryState.lastProcessedIndex = messages.length;
           await this.telemetry.logSessionMemory({
             wrote: true,
             evidenceAnchored: !!pkg,
@@ -2091,9 +2132,6 @@ ${candidateList}`;
           retried: sessionRetried,
         }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
       }
-
-      this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
-      this.sessionMemoryState.lastProcessedIndex = messages.length;
     } catch (err) {
       console.debug('[harness-memory] session memory update failed:', err instanceof Error ? err.message : err);
     } finally {

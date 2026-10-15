@@ -3,14 +3,16 @@
  */
 
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-
 import type { IntentCheckpointArchive, UiChatMessage } from '../types/intent-checkpoint.js';
 import { readUiSessionMessages } from './intent-checkpoint-capture.js';
 import { loadCheckpointIndex, loadIntentCheckpoint } from './intent-checkpoint-store.js';
 import { extractUnifiedDiffFromText } from '../web/tool-display-extract.js';
 import { readToolTraceDiffIndex } from '../web/session-tool-trace-diffs.js';
-import { remapPathToWorkspace, remapSnapshotToWorkspace } from './workspace-snapshot.js';
+import {
+  remapPathToWorkspace,
+  remapSnapshotToWorkspace,
+  resolveInsideWorkspace,
+} from './workspace-snapshot.js';
 
 const WRITE_TOOLS = new Set([
   'write_file',
@@ -201,7 +203,8 @@ async function readWorkspaceFileText(
   workspaceRoot: string,
   relPath: string,
 ): Promise<string | null> {
-  const abs = path.resolve(path.resolve(workspaceRoot), remapPathToWorkspace(workspaceRoot, relPath) ?? relPath);
+  const abs = resolveInsideWorkspace(workspaceRoot, relPath);
+  if (!abs) return null;
   try {
     return await fs.readFile(abs, 'utf-8');
   } catch {

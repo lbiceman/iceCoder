@@ -1,7 +1,7 @@
 /**
  * TaskGraph — 任务图核心数据结构与操作。
  *
- * 提供图 CRUD、游标推进、分支切换、快照持久化、图压缩、会话管理等。
+ * 提供图 CRUD、游标推进、分支切换、快照持久化、图压缩等。
  * 纯函数/纯数据结构，不依赖 LLM、不依赖 Harness 内部状态。
  *
  * 设计文档：docs/任务图规划-设计文档.md §5, §8, §9, §25, §28
@@ -21,8 +21,6 @@ import type {
   BranchHistoryEntry,
   TaskGraphSnapshot,
   GraphRecoverySignal,
-  GraphSession,
-  GraphSessionStatus,
 } from '../types/task-graph.js';
 import { TASK_GRAPH_SCHEMA_VERSION } from '../types/task-graph.js';
 import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
@@ -71,9 +69,22 @@ export const DEFAULT_GRAPH_COMPACTION: GraphCompactionConfig = {
   pruneDeadFallbacks: true,
 };
 
+/** 自定义 edges 成环时抛出，避免游标在环上静默打转。 */
+export class TaskGraphCycleError extends Error {
+  readonly cycle: readonly string[];
+
+  constructor(cycle: readonly string[]) {
+    super(`Task graph contains a cycle: ${cycle.join(' -> ')}`);
+    this.name = 'TaskGraphCycleError';
+    this.cycle = cycle;
+  }
+}
+
 export function createTaskGraph(opts: TaskGraphOptions): TaskGraphData {
   const now = opts.now ?? (() => Date.now());
   const graphId = opts.graphId ?? randomUUID();
+  const edges = opts.edges ?? buildDefaultEdges(opts.nodes);
+  assertAcyclicTaskEdges(opts.nodes, edges);
   const nodeMap = nodesToMap(opts.nodes);
   const mainBranch: ExecutionBranch = {
     id: `branch-main-${graphId}`,
@@ -107,7 +118,7 @@ export function createTaskGraph(opts: TaskGraphOptions): TaskGraphData {
     goal: opts.goal,
     intent: opts.intent,
     nodes: nodeMap,
-    edges: opts.edges ?? buildDefaultEdges(opts.nodes),
+    edges,
     mainBranch,
     fallbackBranches,
     cursor,
@@ -468,31 +479,50 @@ export function needsRecovery(graph: TaskGraphData): GraphRecoverySignal | null 
 // Snapshot (Checkpoint persistence)
 // ═══════════════════════════════════════════════
 
-export function toSnapshot(graph: TaskGraphData): TaskGraphSnapshot {
+/** 一次遍历节点：快照、未完成步数、是否还有 implement 节点。 */
+export function snapshotForMode(graph: TaskGraphData): {
+  snapshot: TaskGraphSnapshot;
+  pendingStepCount: number;
+  hasPendingImplementNode: boolean;
+} {
   const nodes: TaskGraphSnapshot['nodes'] = {};
+  let pendingStepCount = 0;
+  let hasPendingImplementNode = false;
   for (const [id, node] of Object.entries(graph.nodes)) {
     nodes[id] = { status: node.status, retryCount: node.retryCount, error: node.error };
+    if (node.status === 'pending' || node.status === 'running') {
+      pendingStepCount++;
+      if (node.type === 'edit') hasPendingImplementNode = true;
+    }
   }
 
   return {
-    version: TASK_GRAPH_SCHEMA_VERSION,
-    graphId: graph.graphId,
-    goal: graph.goal,
-    intent: graph.intent,
-    status: graph.status,
-    progress: graph.progress,
-    cursor: {
-      branchId: graph.cursor.branchId,
-      nodeId: graph.cursor.nodeId,
-      nodeIndex: graph.cursor.nodeIndex,
-      completedNodeIds: [...graph.cursor.completedNodeIds],
-      skippedNodeIds: [...graph.cursor.skippedNodeIds],
+    pendingStepCount,
+    hasPendingImplementNode,
+    snapshot: {
+      version: TASK_GRAPH_SCHEMA_VERSION,
+      graphId: graph.graphId,
+      goal: graph.goal,
+      intent: graph.intent,
+      status: graph.status,
+      progress: graph.progress,
+      cursor: {
+        branchId: graph.cursor.branchId,
+        nodeId: graph.cursor.nodeId,
+        nodeIndex: graph.cursor.nodeIndex,
+        completedNodeIds: [...graph.cursor.completedNodeIds],
+        skippedNodeIds: [...graph.cursor.skippedNodeIds],
+      },
+      nodes,
+      nodeHistory: graph.nodeHistory.map(h => ({ ...h })),
+      branchHistory: graph.branchHistory.map(h => ({ ...h })),
+      updatedAt: graph.updatedAt,
     },
-    nodes,
-    nodeHistory: graph.nodeHistory.map(h => ({ ...h })),
-    branchHistory: graph.branchHistory.map(h => ({ ...h })),
-    updatedAt: graph.updatedAt,
   };
+}
+
+export function toSnapshot(graph: TaskGraphData): TaskGraphSnapshot {
+  return snapshotForMode(graph).snapshot;
 }
 
 export function applySnapshot(graph: TaskGraphData, snapshot: TaskGraphSnapshot): void {
@@ -564,57 +594,6 @@ export function compactGraph(
 }
 
 // ═══════════════════════════════════════════════
-// Graph Session Management
-// ═══════════════════════════════════════════════
-
-const graphSessions = new Map<string, GraphSession>();
-
-export function createGraphSession(
-  graphId: string,
-  taskId: string,
-  goal: string,
-  sessionIndex: number,
-): GraphSession {
-  const session: GraphSession = {
-    graphId,
-    taskId,
-    status: 'active',
-    goal,
-    createdAt: Date.now(),
-    lastActiveAt: Date.now(),
-    sessionIndex,
-  };
-  graphSessions.set(graphId, session);
-  return session;
-}
-
-export function transitionSession(
-  graphId: string,
-  status: GraphSessionStatus,
-): GraphSession | undefined {
-  const session = graphSessions.get(graphId);
-  if (!session) return undefined;
-  session.status = status;
-  session.lastActiveAt = Date.now();
-  return session;
-}
-
-export function findActiveSession(): GraphSession | undefined {
-  for (const session of graphSessions.values()) {
-    if (session.status === 'active') return session;
-  }
-  return undefined;
-}
-
-export function getSession(graphId: string): GraphSession | undefined {
-  return graphSessions.get(graphId);
-}
-
-export function clearSession(graphId: string): void {
-  graphSessions.delete(graphId);
-}
-
-// ═══════════════════════════════════════════════
 // Internal Helpers
 // ═══════════════════════════════════════════════
 
@@ -634,6 +613,47 @@ function nodesToMap(nodes: TaskNode[]): Record<string, TaskNode> {
     map[node.id] = { ...node };
   }
   return map;
+}
+
+/**
+ * 对边做 DFS 三色标记。灰色节点被再次走到即成环。
+ * 端点不在节点表里时直接拒绝，否则环可能绕过未知 id 检测不到。
+ */
+function assertAcyclicTaskEdges(nodes: readonly TaskNode[], edges: readonly TaskEdge[]): void {
+  const ids = new Set(nodes.map(node => node.id));
+  const outgoing = new Map<string, string[]>();
+  for (const id of ids) outgoing.set(id, []);
+
+  for (const edge of edges) {
+    if (!ids.has(edge.from) || !ids.has(edge.to)) {
+      throw new Error(`Task graph edge references an unknown node: ${edge.from} -> ${edge.to}`);
+    }
+    outgoing.get(edge.from)!.push(edge.to);
+  }
+
+  const color = new Map<string, 0 | 1 | 2>();
+  for (const id of ids) color.set(id, 0);
+  const stack: string[] = [];
+
+  const visit = (id: string): void => {
+    color.set(id, 1);
+    stack.push(id);
+    for (const next of outgoing.get(id) ?? []) {
+      const state = color.get(next) ?? 0;
+      if (state === 1) {
+        const start = stack.indexOf(next);
+        const cycle = (start >= 0 ? stack.slice(start) : [next]).concat(next);
+        throw new TaskGraphCycleError(cycle);
+      }
+      if (state === 0) visit(next);
+    }
+    stack.pop();
+    color.set(id, 2);
+  };
+
+  for (const id of ids) {
+    if (color.get(id) === 0) visit(id);
+  }
 }
 
 function buildDefaultEdges(nodes: TaskNode[]): TaskEdge[] {

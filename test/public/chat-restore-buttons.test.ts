@@ -302,4 +302,39 @@ describe('聊天气泡回滚按钮', () => {
     ]);
     await page.close();
   });
+
+  it('用户消息可把内容放回输入框', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadChatUi(page);
+
+    const result = await page.evaluate(() => {
+      const ui = (window as any).ChatUI;
+      const clicked: string[] = [];
+      ui.setMessageActionHandlers({
+        onReuse: (id: string) => { clicked.push(id); },
+      });
+      ui.renderMessagesOnly([
+        { role: 'user', id: 'bubble-9', content: '继续刚才的修改', sentAt: 3_000 },
+      ], {}, (t: string) => t, false, {});
+      const btn = document.querySelector('.msg-reuse-btn') as HTMLButtonElement | null;
+      const actions = document.querySelector('.msg-label-actions');
+      const order = actions
+        ? Array.from(actions.children).map((node) => (node as HTMLElement).className)
+        : [];
+      btn?.click();
+      return {
+        label: btn ? btn.getAttribute('aria-label') : '',
+        disabled: btn ? btn.disabled : true,
+        order,
+        clicked,
+      };
+    });
+
+    expect(result.label).toBe('放回输入框');
+    expect(result.disabled).toBe(false);
+    expect(result.order[0]).toContain('msg-reuse-btn');
+    expect(result.clicked).toEqual(['bubble-9']);
+    await page.close();
+  });
 });

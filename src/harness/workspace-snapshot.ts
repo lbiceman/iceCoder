@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import type { CombinedCheckpointFile } from './checkpoint-engine.js';
 import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
 
@@ -66,10 +67,20 @@ export function remapSnapshotToWorkspace(
   return out;
 }
 
-function absInWorkspace(workspaceRoot: string, storedPath: string): string {
-  const rel = remapPathToWorkspace(workspaceRoot, storedPath)
-    ?? storedPath.replace(/\\/g, '/');
-  return path.resolve(path.resolve(workspaceRoot), rel);
+/**
+ * 把存储路径解析为工作区内的绝对路径；`../`、跨盘绝对路径等落在工作区外时返回 null。
+ * 所有对工作区文件的读写删都必须经过这里。
+ */
+export function resolveInsideWorkspace(workspaceRoot: string, storedPath: string): string | null {
+  const root = path.resolve(workspaceRoot);
+  const rel = remapPathToWorkspace(root, storedPath);
+  if (!rel) return null;
+  const abs = path.resolve(root, rel);
+  return toPosixRel(root, abs) ? abs : null;
+}
+
+function warnOutsideWorkspace(action: string, storedPath: string): void {
+  console.warn(`[workspace-snapshot] 跳过工作区外路径 (${action}): ${storedPath}`);
 }
 
 export function collectTrackedPathsFromCheckpoint(
@@ -121,7 +132,11 @@ export async function captureWorkspaceFileSnapshot(
 
   for (const rel of trackedPaths) {
     const key = remapPathToWorkspace(workspaceRoot, rel) ?? rel.replace(/\\/g, '/');
-    const abs = absInWorkspace(workspaceRoot, key);
+    const abs = resolveInsideWorkspace(workspaceRoot, key);
+    if (!abs) {
+      warnOutsideWorkspace('capture', rel);
+      continue;
+    }
     try {
       const stat = await fs.stat(abs);
       if (stat.isFile()) {
@@ -136,17 +151,35 @@ export async function captureWorkspaceFileSnapshot(
   return snapshot;
 }
 
+export class RestoreFailedError extends Error {
+  readonly code = 'RESTORE_FAILED';
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'RestoreFailedError';
+    if (cause instanceof Error) this.cause = cause;
+  }
+}
+
+/**
+ * 每个文件走 tmp + rename，单个文件不会写出半截内容。
+ * 某个文件失败不中断其余文件，全部处理完后抛 RestoreFailedError，由调用方整体回滚。
+ */
 export async function applyWorkspaceFileSnapshot(
   workspaceRoot: string,
   snapshot: Record<string, string | null>,
   pathsToDelete: string[] = [],
 ): Promise<void> {
+  const failures: Array<{ rel: string; error: unknown }> = [];
   const unlinkRel = async (rel: string) => {
-    const abs = absInWorkspace(workspaceRoot, rel);
+    const abs = resolveInsideWorkspace(workspaceRoot, rel);
+    if (!abs) {
+      warnOutsideWorkspace('delete', rel);
+      return;
+    }
     try {
       await fs.unlink(abs);
-    } catch {
-      /* may not exist */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failures.push({ rel, error });
     }
   };
 
@@ -156,13 +189,35 @@ export async function applyWorkspaceFileSnapshot(
 
   const remapped = remapSnapshotToWorkspace(workspaceRoot, snapshot);
   for (const [rel, content] of Object.entries(remapped)) {
-    const abs = absInWorkspace(workspaceRoot, rel);
     if (content === null) {
       await unlinkRel(rel);
       continue;
     }
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf-8');
+    const abs = resolveInsideWorkspace(workspaceRoot, rel);
+    if (!abs) {
+      warnOutsideWorkspace('write', rel);
+      continue;
+    }
+    try {
+      // rename 换掉的是新 inode，原文件的权限位（如脚本的 +x）要手动带过去。
+      const previousMode = await fs.stat(abs).then((s) => s.mode & 0o7777, () => undefined);
+      await writeFileAtomic(abs, content);
+      if (previousMode !== undefined && process.platform !== 'win32') {
+        await fs.chmod(abs, previousMode);
+      }
+    } catch (error) {
+      failures.push({ rel, error });
+    }
+  }
+
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ rel, error }) => `${rel}: ${error instanceof Error ? error.message : String(error)}`)
+      .join('; ');
+    throw new RestoreFailedError(
+      `工作区文件写回失败（${failures.length} 个）：${detail}`,
+      failures[0].error,
+    );
   }
 }
 

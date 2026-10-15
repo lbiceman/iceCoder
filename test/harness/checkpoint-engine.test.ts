@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { CheckpointEngine, isResilienceV2Enabled } from '../../src/harness/checkpoint-engine.js';
+import { CheckpointEngine } from '../../src/harness/checkpoint-engine.js';
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
   type RuntimeCheckpointV2,
@@ -48,12 +48,6 @@ function buildV1Checkpoint(): TaskCheckpoint {
     updatedAt: '2026-01-01T00:00:00.000Z',
   };
 }
-
-describe('isResilienceV2Enabled', () => {
-  it('硬编码为始终开启（不再读取 ICE_ENABLE_RESILIENCE_V2）', () => {
-    expect(isResilienceV2Enabled()).toBe(true);
-  });
-});
 
 describe('CheckpointEngine - save', () => {
   let tmp: string;

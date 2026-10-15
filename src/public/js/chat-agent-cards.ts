@@ -7,8 +7,8 @@
  * - 运行中快照：runningTurn.agents（刷新 / 扫码后恢复）
  * - 历史：带 agentId 的 tool_trace（工具轨迹）+ GET /api/sessions/:id/agents（标题行与结果）
  *
- * 卡片挂在 `task` 工具行所在的 .tool-action-row-block 内，按 parentToolCallId 关联。
- * 同一轮里相邻的多个 task 行合成并行分组，在第一张卡片上方显示分组计数。
+ * `task` 工具行只作锚点（隐藏），卡片放进该轮回复旁的 .agent-delegation，不跟在工具轨迹里。
+ * 同一轮的多张卡片合成一组，标题为「N 个 Agent · M 个运行中」。收起时只显示标题和当前一句。
  * 依赖：window.ChatUI（工具行渲染）、window.ChatSession、window.ChatWebSocket、window.ChatAgentDrawer。
  * 暴露：window.ChatAgentCards。
  */
@@ -29,6 +29,21 @@ export const ChatAgentCards = (() => {
     timeout: '超时',
     max_rounds: '达到轮次上限',
     cancelled: '已取消',
+  };
+  const TYPE_LABEL = { general: '实现', explore: '探索' };
+  const ACTIVITY_VERB = {
+    read_file: '正在读取',
+    write_file: '正在写入',
+    append_file: '正在追加',
+    edit_file: '正在编辑',
+    batch_edit_file: '正在编辑',
+    patch_file: '正在修改',
+    grep: '正在搜索',
+    glob: '正在查找',
+    run_command: '正在运行',
+    fs_operation: '正在查看',
+    fetch_url: '正在打开',
+    web_search: '正在搜索',
   };
   const TERMINAL = { completed: 1, failed: 1, timeout: 1, max_rounds: 1, cancelled: 1 };
 
@@ -115,20 +130,32 @@ export const ChatAgentCards = (() => {
     return STATUS_LABEL[view.status] || view.status;
   }
 
+  function typeLabel(type) {
+    const key = String(type || 'general');
+    return TYPE_LABEL[key] || key;
+  }
+
   function headMetaParts(view) {
     const parts = [];
     if (view.background) parts.push('后台');
     parts.push(statusText(view));
     const elapsed = elapsedOf(view);
     if (elapsed > 0) parts.push(formatElapsed(elapsed));
-    parts.push(`${view.toolCalls || 0} 次工具调用`);
+    const files = (view.filesChanged || []).length;
+    if (files) parts.push(`改了 ${files} 个文件`);
     if (isTerminal(view)) {
-      const files = (view.filesChanged || []).length;
-      if (files) parts.push(`改了 ${files} 个文件`);
       const cmd = commandSummary(view);
       if (cmd) parts.push(cmd);
     }
     return parts;
+  }
+
+  function rowActivity(row) {
+    if (!row) return '';
+    const verb = ACTIVITY_VERB[row.toolName] || row.toolName || '';
+    const detail = String(row.detail || '').trim();
+    if (!verb) return detail;
+    return detail ? `${verb} ${detail}` : verb;
   }
 
   /** 流式输出的最近一句，用作“当前在做什么” */
@@ -181,8 +208,16 @@ export const ChatAgentCards = (() => {
     head.appendChild(el('span', 'agent-card__chevron', '▾'));
     card.appendChild(head);
 
+    const now = el('div', 'agent-card__now');
+    now.hidden = true;
+    card.appendChild(now);
+    now.addEventListener('click', () => onHeadClick(card));
+
     const body = el('div', 'agent-card__body');
     const activity = el('div', 'agent-card__activity');
+    const process = el('div', 'agent-card__section-title agent-card__process', '过程');
+    process.hidden = true;
+    activity.appendChild(process);
     const olderToggle = el('button', 'agent-card__older-toggle');
     olderToggle.type = 'button';
     olderToggle.hidden = true;
@@ -193,7 +228,6 @@ export const ChatAgentCards = (() => {
     activity.appendChild(older);
     activity.appendChild(recent);
     body.appendChild(activity);
-    body.appendChild(el('div', 'agent-card__now'));
     body.appendChild(el('div', 'agent-card__result'));
     card.appendChild(body);
 
@@ -261,10 +295,12 @@ export const ChatAgentCards = (() => {
     return list.length ? list[list.length - 1] : null;
   }
 
-  /** ChatUI 创建 task 工具行时调用：挂卡片（尚无状态时先按工具参数显示占位标题） */
+  /** ChatUI 创建 task 工具行时调用：工具行只留作锚点，卡片稍后归入委派组 */
   function decorateTaskBlock(block, parentToolCallId, detail) {
     if (!block || !parentToolCallId) return;
-    block.classList.add('has-agent-card');
+    block.classList.add('has-agent-card', 'is-agent-anchor');
+    const toolRow = block.querySelector(':scope > .tool-action');
+    if (toolRow) toolRow.hidden = true;
     let card = block.querySelector('.agent-card');
     if (!card) {
       card = buildCardSkeleton(parentToolCallId);
@@ -275,7 +311,7 @@ export const ChatAgentCards = (() => {
       renderCard(card, agents[agentId]);
     } else {
       const parsed = parseTaskDetail(detail);
-      card.querySelector('.agent-card__type').textContent = parsed.type;
+      card.querySelector('.agent-card__type').textContent = typeLabel(parsed.type);
       card.querySelector('.agent-card__desc').textContent = parsed.description;
       card.querySelector('.agent-card__meta').textContent = '准备中';
       card.setAttribute('data-status', 'queued');
@@ -309,7 +345,7 @@ export const ChatAgentCards = (() => {
     if (!view) return;
     card.setAttribute('data-agent-id', state.agentId);
     card.setAttribute('data-status', view.interrupted ? 'failed' : view.status);
-    card.querySelector('.agent-card__type').textContent = view.type || 'general';
+    card.querySelector('.agent-card__type').textContent = typeLabel(view.type);
     card.querySelector('.agent-card__desc').textContent = view.description || '';
     card.querySelector('.agent-card__meta').textContent = headMetaParts(view).join(' · ');
 
@@ -326,7 +362,7 @@ export const ChatAgentCards = (() => {
       stop.textContent = '■ 停止';
     }
 
-    const expanded = state.expanded !== null ? state.expanded : !isTerminal(view);
+    const expanded = state.expanded === true;
     card.classList.toggle('is-expanded', expanded);
 
     syncRows(card, state);
@@ -373,6 +409,8 @@ export const ChatAgentCards = (() => {
       older.appendChild(recent.firstChild);
     }
     refreshOlderToggle(card);
+    const process = card.querySelector('.agent-card__process');
+    if (process) process.hidden = state.rows.length === 0;
   }
 
   function setRowStatus(block, status) {
@@ -396,8 +434,11 @@ export const ChatAgentCards = (() => {
     const now = card.querySelector('.agent-card__now');
     const view = state.view;
     const running = view && (view.status === 'running' || view.status === 'queued');
-    const text = running ? (lastSentence(state.streamText) || view.currentActivity || '') : '';
-    now.textContent = text ? `… ${text}` : '';
+    const row = state.rows.length ? state.rows[state.rows.length - 1] : null;
+    const text = running
+      ? (lastSentence(state.streamText) || view.currentActivity || rowActivity(row) || '')
+      : '';
+    now.textContent = text;
     now.hidden = !text;
   }
 
@@ -545,47 +586,110 @@ export const ChatAgentCards = (() => {
     return agentId ? agents[agentId] : null;
   }
 
+  function ancestorWithClass(node, className) {
+    let cur = node;
+    while (cur) {
+      if (cur.classList && cur.classList.contains(className)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  function ensureHostAfter(node) {
+    const next = node.nextElementSibling;
+    if (next && next.classList && next.classList.contains('agent-delegation')) return next;
+    const host = el('section', 'agent-delegation');
+    host.setAttribute('aria-label', '子 Agent');
+    if (node.parentElement) node.parentElement.insertBefore(host, next);
+    return host;
+  }
+
+  /** 把还留在工具组或平铺列表里的 task 锚点收进委派组 */
+  function hoistAnchors() {
+    const anchors = document.querySelectorAll('.tool-action-row-block.has-agent-card');
+    const byGroup = new Map();
+    const loose = [];
+    for (let i = 0; i < anchors.length; i++) {
+      const block = anchors[i];
+      if (ancestorWithClass(block.parentElement, 'agent-delegation')) continue;
+      if (ancestorWithClass(block, 'agent-card')) continue;
+      const group = ancestorWithClass(block, 'tool-trace-group');
+      if (group) {
+        const list = byGroup.get(group) || [];
+        list.push(block);
+        byGroup.set(group, list);
+      } else if (block.parentElement) {
+        loose.push(block);
+      }
+    }
+    byGroup.forEach((blocks, group) => {
+      const host = ensureHostAfter(group);
+      for (let i = 0; i < blocks.length; i++) host.appendChild(blocks[i]);
+    });
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      const host = el('section', 'agent-delegation');
+      host.setAttribute('aria-label', '子 Agent');
+      const parent = run[0].parentElement;
+      if (parent) parent.insertBefore(host, run[0]);
+      for (let i = 0; i < run.length; i++) host.appendChild(run[i]);
+      run = [];
+    };
+    for (let i = 0; i < loose.length; i++) {
+      const block = loose[i];
+      const prev = run.length ? run[run.length - 1] : null;
+      if (prev && block.previousElementSibling !== prev) flush();
+      run.push(block);
+    }
+    flush();
+  }
+
+  function delegationLabel(anchors) {
+    let runningCount = 0;
+    let doneCount = 0;
+    let failedCount = 0;
+    for (let i = 0; i < anchors.length; i++) {
+      const st = blockAgentState(anchors[i]);
+      const status = st && st.view ? st.view.status : 'queued';
+      if (status === 'running' || status === 'queued') runningCount++;
+      else if (status === 'completed') doneCount++;
+      else failedCount++;
+    }
+    const parts = [`${anchors.length} 个 Agent`];
+    if (runningCount) parts.push(`${runningCount} 个运行中`);
+    if (doneCount) parts.push(`${doneCount} 个已完成`);
+    if (failedCount) parts.push(`${failedCount} 个未完成`);
+    return parts.join(' · ');
+  }
+
   function refreshGroups() {
-    const blocks = document.querySelectorAll('.tool-action-row-block.has-agent-card');
-    const seen = new Set();
-    for (let i = 0; i < blocks.length; i++) {
-      const first = blocks[i];
-      if (seen.has(first)) continue;
-      const prev = first.previousElementSibling;
-      if (prev && prev.classList.contains('has-agent-card')) continue;
-      const run = [first];
-      let next = first.nextElementSibling;
-      while (next && next.classList && next.classList.contains('has-agent-card')) {
-        run.push(next);
-        next = next.nextElementSibling;
+    hoistAnchors();
+    const hosts = document.querySelectorAll('.agent-delegation');
+    for (let i = 0; i < hosts.length; i++) {
+      const host = hosts[i];
+      const anchors = [];
+      for (let c = 0; c < host.children.length; c++) {
+        const child = host.children[c];
+        if (child.classList && child.classList.contains('has-agent-card')) anchors.push(child);
       }
-      for (let r = 0; r < run.length; r++) {
-        seen.add(run[r]);
-        run[r].classList.toggle('agent-group-member', run.length > 1);
-        const head = run[r].querySelector(':scope > .agent-group-head');
-        if (head && (r > 0 || run.length < 2)) head.remove();
+      let head = null;
+      for (let c = 0; c < host.children.length; c++) {
+        const child = host.children[c];
+        if (child.classList && child.classList.contains('agent-delegation__head')) {
+          head = child;
+          break;
+        }
       }
-      if (run.length < 2) continue;
-      let head = first.querySelector(':scope > .agent-group-head');
+      if (anchors.length < 2) {
+        if (head) head.remove();
+        continue;
+      }
       if (!head) {
-        head = el('div', 'agent-group-head');
-        first.insertBefore(head, first.firstChild);
+        head = el('div', 'agent-delegation__head');
+        host.insertBefore(head, host.firstChild);
       }
-      let runningCount = 0;
-      let doneCount = 0;
-      let failedCount = 0;
-      for (let r = 0; r < run.length; r++) {
-        const st = blockAgentState(run[r]);
-        const status = st && st.view ? st.view.status : 'queued';
-        if (status === 'running' || status === 'queued') runningCount++;
-        else if (status === 'completed') doneCount++;
-        else failedCount++;
-      }
-      const parts = [`并行 ${run.length} 个 Agent`];
-      if (runningCount) parts.push(`${runningCount} 运行中`);
-      if (doneCount) parts.push(`${doneCount} 已完成`);
-      if (failedCount) parts.push(`${failedCount} 未完成`);
-      head.textContent = parts.join(' · ');
+      head.textContent = delegationLabel(anchors);
     }
   }
 

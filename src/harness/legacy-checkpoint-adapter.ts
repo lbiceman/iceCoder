@@ -264,9 +264,6 @@ export function adaptCombinedCheckpoint(
   return adaptLegacyCheckpoint(combined, context);
 }
 
-/** Alias for callers that emphasize the unknown-input boundary. */
-export const adaptLegacyCheckpointPayload = adaptLegacyCheckpoint;
-
 /** Stable digest for store deduplication; independent of object key insertion order. */
 export function legacyCheckpointSourceHash(input: unknown): string {
   return createHash('sha256').update(canonicalJson(input)).digest('hex');

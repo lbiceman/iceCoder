@@ -603,6 +603,9 @@ describe('executeStopVerificationPlan', () => {
     });
 
     expect(result.status).toBe('passed');
+    expect(result.optionalFailures).toEqual([
+      { command: 'npm run optional', status: 'failed', exitCode: 1 },
+    ]);
     expect(executeToolCall).toHaveBeenCalledTimes(2);
     expect(verificationState.lastResult?.status).toBe('passed');
   });

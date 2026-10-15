@@ -140,6 +140,7 @@ export const ChatWsStreamHandlers = (() => {
           type,
           iteration: step && step.iteration,
           stopReason: step && step.stopReason,
+          completionStatus: step && step.completionStatus,
           ts: Date.now(),
         });
       } catch (_e) { /* observer must not affect chat */ }

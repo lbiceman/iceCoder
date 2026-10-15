@@ -124,8 +124,10 @@ export const ChatFile = (() => {
         } else if (file.status === 'failed') {
           nameEl.textContent = `${file.filename} (failed)`;
           nameEl.classList.add('pending-file-failed');
-        } else {
+        } else if (typeof file.size === 'number' && isFinite(file.size)) {
           nameEl.textContent = `${file.filename} (${formatSize(file.size)})`;
+        } else {
+          nameEl.textContent = file.filename;
         }
         item.appendChild(nameEl);
 

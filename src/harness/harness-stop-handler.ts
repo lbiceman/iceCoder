@@ -4,7 +4,6 @@ import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint
 import { buildLlmRoundLogFields } from './harness-llm-log.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
-import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
@@ -20,7 +19,7 @@ import {
   sanitizeAssistantContentForUser,
   AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
-import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
+import { dispatchStreamChunkToStep } from './harness-llm-call.js';
 import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
 import type {
   CompletionReason,
@@ -66,7 +65,6 @@ export async function handleHarnessStop(
     runtimeState.completionStatus = completionStatus;
     runtimeState.completionReason = completionReason;
   }
-  // currentPlanTracker.onFinal removed (Phase 11)
   await saveTaskCheckpoint(
     deps,
     checkpointStatusForCompletion(completionStatus),
@@ -74,8 +72,8 @@ export async function handleHarnessStop(
     messages,
     runtimeState,
     reason,
+    'final_draft',
   );
-  await resilienceSaveCheckpoint(deps, 'final_draft', runtimeState, reason);
   if (runtimeState) {
     recordTelemetrySummary(deps, reason, runtimeState, {
       status: completionStatus,

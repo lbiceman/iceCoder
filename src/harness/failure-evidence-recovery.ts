@@ -9,9 +9,9 @@
 
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { extractRunCommand } from './branch-budget-tool-path.js';
-import { toolCallSignature } from './harness-permission-runtime.js';
+import { extractRunCommand } from './branch-budget-path.js';
 import { findLastFailedVerification } from './rebuild-escalation.js';
+import type { RunCommandResultClassification } from './run-command-result.js';
 
 export type EphemeralFailureRecoveryKind = 'light' | 'evidence' | 'strong';
 
@@ -178,16 +178,18 @@ export function purgeEphemeralFailureRecoveryMessagesInPlace(
   messages.splice(0, messages.length, ...next);
 }
 
-export function roundHadSuccessfulVerification(
-  executableToolCalls: ToolCall[],
-  failedSignatures: string[],
-): boolean {
-  const failed = new Set(failedSignatures);
-  for (const tc of executableToolCalls) {
-    if (tc.name !== 'run_command') continue;
-    if (failed.has(toolCallSignature(tc))) continue;
-    const command = extractRunCommand(tc.arguments);
-    if (command) return true;
+/**
+ * 本轮终态成功的命令只清掉它自己之前的失败输出；后台 start / running 不算成功，
+ * 无关命令（ls、git status）成功也不会抹掉验收失败证据。
+ */
+export function clearResolvedVerificationFailures(
+  buffer: VerificationOutputBuffer,
+  runCommandClassifications: ReadonlyMap<string, RunCommandResultClassification>,
+): void {
+  for (const classified of runCommandClassifications.values()) {
+    const passed = classified.kind === 'background_completed'
+      ? classified.exitCode === undefined || classified.exitCode === 0
+      : classified.kind === 'foreground' && classified.foregroundSuccess;
+    if (passed) buffer.clearCommand(classified.command);
   }
-  return false;
 }

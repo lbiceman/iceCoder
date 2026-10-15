@@ -2,10 +2,10 @@
  * verification-exempt-config 作用域隔离测试（P1-10）。
  *
  * 验证 runWithVerificationExemptScope 使并发会话各自隔离，
- * 互不覆盖验收豁免配置；无作用域时回退到进程级全局。
+ * 互不覆盖验收豁免配置；没有作用域时 set 不会写进进程级配置。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isProjectCustomExemptPath,
@@ -58,8 +58,11 @@ describe('verification-exempt scope isolation', () => {
     expect(isProjectCustomExemptPath('E:/proj/a/.scratch-a/x.md')).toBe(false);
   });
 
-  it('falls back to global runtime when no scope is active', () => {
+  it('ignores set when no scope is active', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     setVerificationExemptRuntime({ workspaceRoot: 'E:/proj/g', prefixes: ['.scratch-g'] });
-    expect(isProjectCustomExemptPath('E:/proj/g/.scratch-g/x.md')).toBe(true);
+    expect(isProjectCustomExemptPath('E:/proj/g/.scratch-g/x.md')).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

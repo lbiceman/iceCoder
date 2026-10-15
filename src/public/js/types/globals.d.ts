@@ -50,6 +50,7 @@ declare global {
     ChatModelPicker?: any;
     ChatReasoningStepper?: any;
     ChatFile?: any;
+    ComposerReuse?: any;
     ChatQR?: any;
     ChatPetBridge?: any;
     EtlShellDock?: any;

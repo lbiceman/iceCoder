@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AssistantVisibleStreamFilter } from '../../src/harness/text-tool-call-salvage.js';
-import { dispatchStreamChunkToStep } from '../../src/harness/stream-step-dispatch.js';
+import { dispatchStreamChunkToStep } from '../../src/harness/harness-llm-call.js';
 import { ReasoningSystemTagStreamFilter } from '../../src/harness/thinking-content-strip.js';
 import type { HarnessStepEvent } from '../../src/harness/types.js';
 

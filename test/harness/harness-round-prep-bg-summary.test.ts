@@ -67,7 +67,6 @@ function buildDeps(sessionId: string, workspaceRoot: string) {
     stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
     checkpointManager: undefined,
     enqueueCheckpointPersist: async (task: () => Promise<unknown>) => task(),
-    resilienceV2Enabled: false,
     checkpointEngine: undefined,
     toolExecutor: new ToolExecutor(new ToolRegistry(), {
       maxRetries: 0,

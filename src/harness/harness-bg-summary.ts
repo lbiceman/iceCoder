@@ -1,7 +1,7 @@
 /**
  * Harness 后台任务摘要注入（LLM 通路）。
  *
- * Phase 4a 核心：每轮工具循环前，把当前 session 仍在跑的后台任务摘要
+ * 每轮工具循环前，把当前 session 仍在跑的后台任务摘要
  * 作为一段轻量 `[Background Task Status]` 块注入给模型，避免模型对长任务失忆。
  *
  * 设计原则（避免 CC #11716 stale reminder 坑）：
@@ -10,9 +10,8 @@
  * 3. 占用预算 ≤ 600 字硬上限；
  * 4. 节流：同一任务每 5 分钟最多注入一次（dirty 优先）。
  *
- * 本模块**仅提供工具函数**，不强行接入 harness.ts 主循环（保持 Phase 4a 可独立验证）。
- * Harness 集成方在调用 LLM 前主动调用 {@link composeBgStatusUserMessage}，把返回的
- * 文本作为额外 user-style 消息插入即可。
+ * 本模块只提供工具函数。准备轮次时调用 {@link composeBgStatusUserMessage}，
+ * 把返回的文本作为额外 user 消息插入。
  */
 
 import {

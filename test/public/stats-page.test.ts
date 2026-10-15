@@ -252,11 +252,11 @@ describe('统计页 Token 图表', () => {
         rootOverflow: root ? getComputedStyle(root).overflow : '',
       };
     });
-    expect(snapshot.trendStrokes).toBe(2);
+    expect(snapshot.trendStrokes).toBe(3);
     expect(snapshot.trendFills).toBe(0);
-    expect(snapshot.trendMetrics).toBe(3);
-    expect(snapshot.trendMetricLabels).toEqual(['会话', '记忆', '请求次数']);
-    expect(snapshot.trendLegend).toEqual(['会话', '记忆']);
+    expect(snapshot.trendMetrics).toBe(4);
+    expect(snapshot.trendMetricLabels).toEqual(['会话', '子 Agent', '记忆', '请求次数']);
+    expect(snapshot.trendLegend).toEqual(['会话', '子 Agent', '记忆']);
     expect(snapshot.model).toBe(0);
     expect(snapshot.turns).toBe(0);
     expect(snapshot.split).toBe(1);

@@ -136,9 +136,6 @@ function partialSystemTagCloseSuffix(text: string): string {
   return longest;
 }
 
-/** @deprecated 使用 {@link stripSystemTagsFromReasoning} */
-export const stripSystemTagsFromContent = stripSystemTagsFromReasoning;
-
 /** 流式侧：剥离 system 系标签（reasoning 与可见正文共用）。 */
 export class ReasoningSystemTagStreamFilter {
   private hold = '';

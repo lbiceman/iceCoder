@@ -48,6 +48,7 @@ export const ChatUI = (() => {
   // 实时工具区 DOM
   let liveToolRoundActive = false;
   let liveToolRoundRoot = null;
+  let liveDelegationHost = null;
   let liveToolRoundVisible = null;
   let liveToolRoundCollapsed = null;
   let liveToolRoundToggle = null;
@@ -1452,6 +1453,8 @@ export const ChatUI = (() => {
       node.classList.contains('tool-action')
       || node.classList.contains('tool-action-row-block')
       || node.classList.contains('tool-trace-group')
+      || node.classList.contains('agent-delegation')
+      || node.classList.contains('turn-activity')
     );
   }
 
@@ -1530,6 +1533,13 @@ export const ChatUI = (() => {
         node = node.previousElementSibling;
         continue;
       }
+      if (node.classList && (
+        node.classList.contains('is-agent-anchor')
+        || node.classList.contains('agent-delegation')
+        || node.classList.contains('turn-activity')
+      )) {
+        break;
+      }
       if (node.classList && (node.classList.contains('tool-action') || isToolRowBlock(node))) {
         flats.unshift(node);
         node = node.previousElementSibling;
@@ -1575,42 +1585,58 @@ export const ChatUI = (() => {
       parent.appendChild(block);
     }
 
-    const wrap = document.createElement('div');
-    wrap.className = 'tool-trace-group';
-    if (opts.agentMsgId) wrap.setAttribute('data-agent-msg-id', opts.agentMsgId);
-    const visible = document.createElement('div');
-    visible.className = 'tool-trace-visible';
+    const toolIdx = [];
+    const taskIdx = [];
+    for (let i = 0; i < traces.length; i++) {
+      if (traces[i] && traces[i].toolName === 'task') taskIdx.push(i);
+      else toolIdx.push(i);
+    }
 
-    const max = TOOL_TRACE_VISIBLE_MAX;
-    if (traces.length <= max) {
-      for (let i = 0; i < traces.length; i++) {
-        appendTraceRow(visible, traces[i], i);
+    let wrap = null;
+    if (toolIdx.length) {
+      wrap = document.createElement('div');
+      wrap.className = 'tool-trace-group';
+      if (opts.agentMsgId) wrap.setAttribute('data-agent-msg-id', opts.agentMsgId);
+      const visible = document.createElement('div');
+      visible.className = 'tool-trace-visible';
+      const max = TOOL_TRACE_VISIBLE_MAX;
+      if (toolIdx.length <= max) {
+        for (let i = 0; i < toolIdx.length; i++) appendTraceRow(visible, traces[toolIdx[i]], toolIdx[i]);
+        wrap.appendChild(visible);
+      } else {
+        const olderCount = toolIdx.length - max;
+        const collapsed = document.createElement('div');
+        collapsed.className = 'tool-trace-collapsed';
+        collapsed.style.display = 'none';
+        for (let j = 0; j < olderCount; j++) appendTraceRow(collapsed, traces[toolIdx[j]], toolIdx[j]);
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'tool-trace-toggle';
+        toggle.textContent = `还有 ${olderCount} 条历史 · 展开`;
+        for (let k = olderCount; k < toolIdx.length; k++) appendTraceRow(visible, traces[toolIdx[k]], toolIdx[k]);
+        wrap.appendChild(collapsed);
+        wrap.appendChild(toggle);
+        wrap.appendChild(visible);
+        bindToolTraceToggle(toggle, collapsed, wrap, forHistory);
       }
-      wrap.appendChild(visible);
-      return wrap;
     }
 
-    const olderCount = traces.length - max;
-    const collapsed = document.createElement('div');
-    collapsed.className = 'tool-trace-collapsed';
-    collapsed.style.display = 'none';
-    for (let j = 0; j < olderCount; j++) {
-      appendTraceRow(collapsed, traces[j], j);
-    }
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'tool-trace-toggle';
-    toggle.textContent = `还有 ${olderCount} 条历史 · 展开`;
-
-    for (let k = olderCount; k < traces.length; k++) {
-      appendTraceRow(visible, traces[k], k);
+    let delegation = null;
+    if (taskIdx.length) {
+      delegation = document.createElement('section');
+      delegation.className = 'agent-delegation';
+      delegation.setAttribute('aria-label', '子 Agent');
+      for (let i = 0; i < taskIdx.length; i++) appendTraceRow(delegation, traces[taskIdx[i]], taskIdx[i]);
     }
 
-    wrap.appendChild(collapsed);
-    wrap.appendChild(toggle);
-    wrap.appendChild(visible);
-    bindToolTraceToggle(toggle, collapsed, wrap, forHistory);
-    return wrap;
+    if (wrap && delegation) {
+      const box = document.createElement('div');
+      box.className = 'turn-activity';
+      box.appendChild(wrap);
+      box.appendChild(delegation);
+      return box;
+    }
+    return wrap || delegation;
   }
 
   function insertFoldableToolTraceGroup(traces, displays, agentMsgId) {
@@ -1627,6 +1653,10 @@ export const ChatUI = (() => {
     }
     let prev = elTailAnchor ? elTailAnchor.previousElementSibling : null;
     while (prev && (prev.id === 'streaming-msg' || prev.id === 'streaming-reasoning-msg')) {
+      prev = prev.previousElementSibling;
+    }
+    if (prev && prev.classList && prev.classList.contains('agent-delegation')) {
+      liveDelegationHost = prev;
       prev = prev.previousElementSibling;
     }
     if (prev && prev.classList && prev.classList.contains('tool-trace-group')) {
@@ -1658,7 +1688,33 @@ export const ChatUI = (() => {
     liveToolRoundRoot.appendChild(liveToolRoundToggle);
     liveToolRoundRoot.appendChild(liveToolRoundVisible);
     bindToolTraceToggle(liveToolRoundToggle, liveToolRoundCollapsed, liveToolRoundRoot, false);
-    insertTailBefore(liveToolRoundRoot);
+    if (liveDelegationHost && liveDelegationHost.parentNode) {
+      liveDelegationHost.parentNode.insertBefore(liveToolRoundRoot, liveDelegationHost);
+    } else {
+      insertTailBefore(liveToolRoundRoot);
+    }
+  }
+
+  function placeLiveDelegation(block) {
+    if (liveDelegationHost && liveDelegationHost.parentNode) {
+      liveDelegationHost.appendChild(block);
+      return;
+    }
+    const host = document.createElement('section');
+    host.className = 'agent-delegation';
+    host.setAttribute('aria-label', '子 Agent');
+    if (liveToolRoundRoot && liveToolRoundRoot.parentNode) {
+      liveToolRoundRoot.parentNode.insertBefore(host, liveToolRoundRoot.nextSibling);
+    } else {
+      const stream = elTailAnchor ? elTailAnchor.previousElementSibling : null;
+      if (stream && (stream.id === 'streaming-msg' || stream.id === 'streaming-reasoning-msg') && stream.parentNode) {
+        stream.parentNode.insertBefore(host, stream);
+      } else {
+        insertTailBefore(host);
+      }
+    }
+    liveDelegationHost = host;
+    host.appendChild(block);
   }
 
   function appendToolAction(toolName, detail, status, toolCallId, diffSource, toolArgs) {
@@ -1667,6 +1723,12 @@ export const ChatUI = (() => {
     coalesceFlatToolActionsBeforeAnchor();
     const block = createToolRowBlock(toolName, detail, status || 'pending', toolCallId || '', diffSource || null);
     seedToolIoArgs(block, toolName, toolArgs);
+
+    if (block.classList.contains('is-agent-anchor')) {
+      placeLiveDelegation(block);
+      notifyContentLayoutChange();
+      return block;
+    }
 
     if (liveToolRoundActive) {
       adoptOrCreateLiveToolGroupDom();
@@ -1740,6 +1802,22 @@ export const ChatUI = (() => {
     });
   }
 
+  /** 滚到目标后闪一下该行，方便在一串工具里认出刚点中的那条。 */
+  function flashLocatedToolRow(block) {
+    if (!block || !block.querySelector) return;
+    const row = block.querySelector('.tool-action') || block;
+    if (!row.classList) return;
+    row.classList.remove('is-tool-locate');
+    void row.offsetWidth;
+    row.classList.add('is-tool-locate');
+    const clear = () => {
+      row.classList.remove('is-tool-locate');
+      row.removeEventListener('animationend', clear);
+    };
+    row.addEventListener('animationend', clear);
+    setTimeout(clear, 1400);
+  }
+
   /** 先脱离贴底跟随，再滚到工具行。滚完保持钉住，避免末尾几毫秒贴底/虚拟列表把位置拽偏。 */
   function scrollToToolCall(toolCallId) {
     const block = findToolRowBlockByCallId(toolCallId);
@@ -1752,15 +1830,30 @@ export const ChatUI = (() => {
     suppressScrollSync = true;
     stopPinnedToolScrollWatch();
     const gen = ++toolScrollGen;
+    let flashed = false;
+    const flashOnce = () => {
+      if (flashed || gen !== toolScrollGen) return;
+      flashed = true;
+      flashLocatedToolRow(block);
+    };
     toolScrollEndHandler = function () {
+      flashOnce();
       finishPinnedToolScroll(gen);
     };
     if (elMessages) {
       elMessages.addEventListener('scrollend', toolScrollEndHandler);
     }
     toolScrollFinishTimer = setTimeout(() => {
+      flashOnce();
       finishPinnedToolScroll(gen);
     }, 800);
+    const alreadyVisible = (() => {
+      if (!elMessages || !block.getBoundingClientRect) return false;
+      const view = elMessages.getBoundingClientRect();
+      const rect = block.getBoundingClientRect();
+      if (rect.height < 1 || view.height < 1) return false;
+      return rect.top >= view.top + 8 && rect.bottom <= view.bottom - 8;
+    })();
     requestAnimationFrame(() => {
       if (gen !== toolScrollGen) return;
       try {
@@ -1768,6 +1861,7 @@ export const ChatUI = (() => {
       } catch (_e) {
         try { block.scrollIntoView(true); } catch (_e2) { /* ignore */ }
       }
+      if (alreadyVisible) flashOnce();
     });
     return true;
   }
@@ -1844,13 +1938,20 @@ export const ChatUI = (() => {
     liveToolRoundCollapsed = null;
     liveToolRoundToggle = null;
     liveToolRoundCount = 0;
+    liveDelegationHost = null;
   }
 
   /** 移除当前 live 工具区 DOM（F5 还原前清掉缓存占位，避免重复） */
   function clearLiveToolRoundDom() {
     liveToolRoundActive = false;
     if (liveToolRoundRoot && liveToolRoundRoot.parentNode) {
+      const next = liveToolRoundRoot.nextElementSibling;
       liveToolRoundRoot.parentNode.removeChild(liveToolRoundRoot);
+      if (next && next.classList && next.classList.contains('agent-delegation')) {
+        next.parentNode.removeChild(next);
+      }
+    } else if (liveDelegationHost && liveDelegationHost.parentNode) {
+      liveDelegationHost.parentNode.removeChild(liveDelegationHost);
     }
     resetLiveToolRoundTargets();
     clearTrailingToolDomBeforeAnchor();
@@ -1898,7 +1999,7 @@ export const ChatUI = (() => {
   }
 
   const restoreUiState = { canRestore: true, checkpointIds: {}, cursorMessageId: '', cursorRestored: false };
-  const messageActionHandlers = { onDelete: null, onRestore: null };
+  const messageActionHandlers = { onDelete: null, onRestore: null, onReuse: null };
 
   function rebindExistingMessageActionButtons() {
     if (!elMessages) return;
@@ -1912,12 +2013,18 @@ export const ChatUI = (() => {
       const res = restoreBtns[j];
       if (!res._actionBound) bindMessageActionButton(res, 'restore', res.dataset.messageId || '');
     }
+    const reuseBtns = elMessages.querySelectorAll('.msg-reuse-btn');
+    for (let k = 0; k < reuseBtns.length; k++) {
+      const reuse = reuseBtns[k];
+      if (!reuse._actionBound) bindMessageActionButton(reuse, 'reuse', reuse.dataset.messageId || '');
+    }
   }
 
   function setMessageActionHandlers(handlers) {
     handlers = handlers || {};
     messageActionHandlers.onDelete = typeof handlers.onDelete === 'function' ? handlers.onDelete : null;
     messageActionHandlers.onRestore = typeof handlers.onRestore === 'function' ? handlers.onRestore : null;
+    messageActionHandlers.onReuse = typeof handlers.onReuse === 'function' ? handlers.onReuse : null;
     rebindExistingMessageActionButtons();
   }
 
@@ -1935,7 +2042,9 @@ export const ChatUI = (() => {
       const now = Date.now();
       if (now - lastInvokeAt < 350) return;
       lastInvokeAt = now;
-      const fn = type === 'delete' ? messageActionHandlers.onDelete : messageActionHandlers.onRestore;
+      const fn = type === 'delete'
+        ? messageActionHandlers.onDelete
+        : (type === 'reuse' ? messageActionHandlers.onReuse : messageActionHandlers.onRestore);
       if (typeof fn === 'function') fn(messageId, btn);
     }
 
@@ -1960,6 +2069,10 @@ export const ChatUI = (() => {
     return window.AppIcon ? window.AppIcon.html('trash', { width: 12, className: 'msg-delete-icon' }) : '';
   }
 
+  function reuseButtonIconSvg() {
+    return window.AppIcon ? window.AppIcon.html('reinput', { width: 12, className: 'msg-reuse-icon' }) : '';
+  }
+
   function createRestoreButton(messageId, sentAt) {
     const restoreBtn = document.createElement('button');
     restoreBtn.type = 'button';
@@ -1972,6 +2085,20 @@ export const ChatUI = (() => {
     bindMessageActionButton(restoreBtn, 'restore', messageId);
     applyRestoreButtonState(restoreBtn);
     return restoreBtn;
+  }
+
+  function createReuseButton(messageId, sentAt) {
+    const reuseBtn = document.createElement('button');
+    reuseBtn.type = 'button';
+    reuseBtn.className = 'msg-reuse-btn';
+    reuseBtn.innerHTML = reuseButtonIconSvg();
+    if (window.AppIcon) window.AppIcon.hydrate(reuseBtn);
+    reuseBtn.dataset.messageId = messageId;
+    if (sentAt) reuseBtn.dataset.sentAt = String(sentAt);
+    reuseBtn.setAttribute('aria-label', '放回输入框');
+    reuseBtn.title = '把这条消息的内容、图片和文件放回输入框';
+    bindMessageActionButton(reuseBtn, 'reuse', messageId);
+    return reuseBtn;
   }
 
   function createDeleteButton(messageId, sentAt) {
@@ -1991,6 +2118,7 @@ export const ChatUI = (() => {
   function createUserMessageActions(messageId, sentAt) {
     const actions = document.createElement('div');
     actions.className = 'msg-label-actions';
+    actions.appendChild(createReuseButton(messageId, sentAt));
     actions.appendChild(createDeleteButton(messageId, sentAt));
     actions.appendChild(createRestoreButton(messageId, sentAt));
     return actions;
@@ -2005,7 +2133,15 @@ export const ChatUI = (() => {
       if (!mid) continue;
       const row = el.querySelector('.msg-label-row');
       if (!row) continue;
-      if (row.querySelector('.msg-label-actions')) continue;
+      const existingActions = row.querySelector('.msg-label-actions');
+      if (existingActions) {
+        if (!existingActions.querySelector('.msg-reuse-btn')) {
+          const timeEl = row.querySelector('.msg-time');
+          const sentAt = timeEl && timeEl.dateTime ? Date.parse(timeEl.dateTime) : null;
+          existingActions.insertBefore(createReuseButton(mid, sentAt), existingActions.firstChild);
+        }
+        continue;
+      }
       const looseDelete = row.querySelector('.msg-delete-btn');
       const looseRestore = row.querySelector('.msg-restore-btn');
       if (looseDelete) looseDelete.remove();

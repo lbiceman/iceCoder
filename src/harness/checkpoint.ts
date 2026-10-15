@@ -23,7 +23,6 @@ import {
   createVerificationRuntimeState,
   type VerificationRuntimeState,
 } from './verification-state.js';
-// ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -48,7 +47,6 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
-  // plan field removed (Phase 11)
 }
 
 export interface TaskCheckpointUpdate {
@@ -74,7 +72,6 @@ export interface TaskCheckpointUpdate {
     branchBudget?: BranchBudgetSnapshot;
     failedToolCallSignatures?: Record<string, number>;
   };
-  // plan field removed (Phase 11)
 }
 
 export class TaskCheckpointManager {
@@ -109,7 +106,10 @@ export class TaskCheckpointManager {
     this.store.setPersistBlocked(blocked);
   }
 
-  async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
+  async save(
+    update: TaskCheckpointUpdate,
+    decorate?: (project: ProjectCheckpointV3) => ProjectCheckpointV3,
+  ): Promise<TaskCheckpoint> {
     const existingProject = await this.store.load();
     const now = new Date().toISOString();
     const completionFacts = CompletionFactsView.fromCompletionSnapshot({
@@ -119,7 +119,7 @@ export class TaskCheckpointManager {
         ?? [],
     });
     const view = toTaskCheckpointView(update, existingProject, now, completionFacts);
-    const projectCheckpoint = buildNativeProjectCheckpoint(
+    const built = buildNativeProjectCheckpoint(
       update,
       existingProject,
       view,
@@ -127,13 +127,12 @@ export class TaskCheckpointManager {
       now,
       completionFacts,
     );
+    const projectCheckpoint = decorate ? decorate(built) : built;
     if (!this.store.isPersistBlocked()) {
       await this.store.save(projectCheckpoint);
     }
     return view;
   }
-
-  // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
     return {
@@ -216,6 +215,8 @@ function buildNativeProjectCheckpoint(
     legacyApi: {
       status: view.status,
       userGoal: view.userGoal,
+      ...(view.lastCompletedStep ? { lastCompletedStep: view.lastCompletedStep } : {}),
+      ...(view.nextSuggestedStep ? { nextSuggestedStep: view.nextSuggestedStep } : {}),
       failedToolCalls: view.failedToolCalls,
       createdAt: view.createdAt,
       updatedAt: view.updatedAt,
@@ -308,12 +309,10 @@ function projectToLegacyCheckpoint(checkpoint: ProjectCheckpointV3): TaskCheckpo
     status: isTaskCheckpointStatus(legacy.status) ? legacy.status : 'paused',
     userGoal: typeof legacy.userGoal === 'string' ? legacy.userGoal : checkpoint.execution.taskState.goal,
     phase: checkpoint.execution.taskState.phase,
-    lastCompletedStep: typeof legacySource.lastCompletedStep === 'string'
-      ? legacySource.lastCompletedStep
-      : undefined,
-    nextSuggestedStep: typeof legacySource.nextSuggestedStep === 'string'
-      ? legacySource.nextSuggestedStep
-      : undefined,
+    lastCompletedStep: stringField(legacy, 'lastCompletedStep')
+      ?? stringField(legacySource, 'lastCompletedStep'),
+    nextSuggestedStep: stringField(legacy, 'nextSuggestedStep')
+      ?? stringField(legacySource, 'nextSuggestedStep'),
     taskState: { ...checkpoint.execution.taskState },
     repoContext: checkpoint.workspace.repoContext,
     failedToolCalls: Array.isArray(legacy.failedToolCalls)
@@ -330,6 +329,11 @@ function projectToLegacyCheckpoint(checkpoint: ProjectCheckpointV3): TaskCheckpo
     createdAt: typeof legacy.createdAt === 'string' ? legacy.createdAt : capturedAt,
     updatedAt: typeof legacy.updatedAt === 'string' ? legacy.updatedAt : capturedAt,
   };
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function isTaskCheckpointStatus(value: unknown): value is TaskCheckpointStatus {

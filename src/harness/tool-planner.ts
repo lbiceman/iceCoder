@@ -1,6 +1,16 @@
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
-import { INTENT_TOOL_SUGGESTIONS } from './tool-plan-intent-map.js';
 import { inferIntent } from './task-state.js';
+
+/** 意图 → 建议下一轮优先使用的工具名。 */
+const INTENT_TOOL_SUGGESTIONS: Record<TaskIntent, readonly string[]> = {
+  debug: ['read_file', 'run_command', 'grep'],
+  edit: ['read_file', 'edit_file', 'run_command'],
+  test: ['run_command', 'read_file', 'grep'],
+  refactor: ['glob', 'grep', 'read_file', 'edit_file'],
+  inspect: ['glob', 'grep', 'read_file', 'file_info'],
+  docs: ['read_file', 'glob', 'grep', 'edit_file'],
+  question: ['glob', 'grep', 'read_file'],
+};
 
 export interface ToolPlan {
   intent: TaskIntent;

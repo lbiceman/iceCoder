@@ -2,6 +2,7 @@
  * 工作区路径作用域（tools / harness 共用，避免 tools → harness 依赖）。
  */
 
+import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -17,6 +18,12 @@ export function resolveAgainstWorkspace(rawPath: string, workspaceRoot: string):
   return path.isAbsolute(rawPath)
     ? path.resolve(rawPath)
     : path.resolve(workspaceRoot, rawPath);
+}
+
+/** 目标路径在工作区内是否已存在于磁盘。 */
+export function workspaceFileExists(workspaceRoot: string, rawPath: string | undefined): boolean {
+  if (!rawPath?.trim() || !workspaceRoot.trim()) return false;
+  return existsSync(resolveAgainstWorkspace(rawPath.trim(), workspaceRoot));
 }
 
 export type RipgrepSearchScope =

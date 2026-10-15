@@ -14,7 +14,8 @@
  * 设计文档：docs/任务图规划-设计文档.md §7, §29-§32
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
   TaskNode,
@@ -47,7 +48,7 @@ export interface GraphBuildInput {
 // RepoShapeDiscovery
 // ═══════════════════════════════════════════════
 
-export function discoverRepoShape(workspaceRoot: string): RepoShape {
+export async function discoverRepoShape(workspaceRoot: string): Promise<RepoShape> {
   const shape: RepoShape = {
     type: 'unknown', packageManager: 'none', isMonorepo: false,
     topLevelDirs: [], testFramework: 'none', typeSystem: 'unknown',
@@ -56,7 +57,7 @@ export function discoverRepoShape(workspaceRoot: string): RepoShape {
 
   let pkg: Record<string, unknown> | null = null;
   try {
-    const raw = readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8');
+    const raw = await fs.readFile(resolve(workspaceRoot, 'package.json'), 'utf-8');
     pkg = JSON.parse(raw);
   } catch {
     return shape;
@@ -84,14 +85,20 @@ export function discoverRepoShape(workspaceRoot: string): RepoShape {
     shape.isMonorepo = true;
   }
 
-  try {
-    if (existsSync(resolve(workspaceRoot, 'pnpm-lock.yaml'))) shape.packageManager = 'pnpm';
-    else if (existsSync(resolve(workspaceRoot, 'yarn.lock'))) shape.packageManager = 'yarn';
-    else if (existsSync(resolve(workspaceRoot, 'package-lock.json'))) shape.packageManager = 'npm';
-  } catch { /* ignore */ }
+  const lockfile = async (name: string): Promise<boolean> => {
+    try {
+      await fs.access(resolve(workspaceRoot, name));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (await lockfile('pnpm-lock.yaml')) shape.packageManager = 'pnpm';
+  else if (await lockfile('yarn.lock')) shape.packageManager = 'yarn';
+  else if (await lockfile('package-lock.json')) shape.packageManager = 'npm';
 
   try {
-    const ents = readdirSync(workspaceRoot, { withFileTypes: true });
+    const ents = await fs.readdir(workspaceRoot, { withFileTypes: true });
     shape.topLevelDirs = ents.filter(e => e.isDirectory()).map(e => e.name);
   } catch { /* ignore */ }
 
@@ -330,7 +337,8 @@ export function rankTemplates(
 export function buildGraph(input: GraphBuildInput): TaskGraphData {
   const { goal, intent, workspaceRoot, now, graphId } = input;
 
-  const repoShape = input.repoShape ?? (workspaceRoot ? discoverRepoShape(workspaceRoot) : undefined);
+  // 仓库形态由调用方 await discoverRepoShape() 后传入，避免在建图热路径上同步读盘。
+  const repoShape = input.repoShape;
   const complexity = input.complexity ?? estimateComplexity(goal, repoShape);
   const preflight = input.preflight ?? (workspaceRoot ? scanPreflight(goal, workspaceRoot) : undefined);
 

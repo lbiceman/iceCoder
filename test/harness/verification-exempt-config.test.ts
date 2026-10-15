@@ -6,6 +6,7 @@ import {
   isUnderExemptDirPrefix,
   normalizeVerificationExemptPrefix,
   resetVerificationExemptRuntime,
+  runWithVerificationExemptScope,
   setVerificationExemptRuntime,
   toWorkspaceRelativePath,
 } from '../../src/harness/verification-exempt-config.js';
@@ -33,17 +34,19 @@ describe('verification-exempt-config', () => {
   });
 
   it('setVerificationExemptRuntime applies workspace-relative custom dirs', () => {
-    setVerificationExemptRuntime({
-      workspaceRoot: 'E:/proj/game',
-      prefixes: ['.scratch', 'tmp/agent'],
-    });
-    expect(isProjectCustomExemptPath('E:/proj/game/.scratch/draft.md')).toBe(true);
+    runWithVerificationExemptScope(() => {
+      setVerificationExemptRuntime({
+        workspaceRoot: 'E:/proj/game',
+        prefixes: ['.scratch', 'tmp/agent'],
+      });
+      expect(isProjectCustomExemptPath('E:/proj/game/.scratch/draft.md')).toBe(true);
     expect(isProjectCustomExemptPath('E:/proj/game/tmp/agent/log.txt')).toBe(true);
     expect(isProjectCustomExemptPath('E:/proj/game/src/main.ts')).toBe(false);
     expect(isVerificationExemptPath('E:/proj/game/.scratch/draft.md')).toBe(true);
-    expect(writeConfirmationPaths([
-      'E:/proj/game/src/main.ts',
-      'E:/proj/game/.scratch/draft.md',
-    ])).toEqual(['E:/proj/game/src/main.ts']);
+      expect(writeConfirmationPaths([
+        'E:/proj/game/src/main.ts',
+        'E:/proj/game/.scratch/draft.md',
+      ])).toEqual(['E:/proj/game/src/main.ts']);
+    });
   });
 });

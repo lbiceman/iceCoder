@@ -1,9 +1,13 @@
 /**
  * Token 预算追踪器。
  *
- * 被动追踪 token 使用量，供 harness 的循环控制和日志使用。
- * 不再直接控制循环继续/停止（已移除 <status> 自动续行机制）。
+ * 被动记下 token 用量。单次 run 真正停不停，看 LoopController 的成本护栏
+ * （`DEFAULT_HARNESS_RUN_TOKEN_BUDGET`，1e9），不看这里的 50 万默认值。
+ * 50 万只在调用方没传入 totalBudget 时，给本追踪器的剩余比例和摘要用。
  */
+
+/** 未传入 totalBudget 时的追踪器本地默认。不是单次 run 的成本护栏。 */
+export const DEFAULT_TOKEN_TRACKER_BUDGET = 500_000;
 
 /**
  * Token 预算配置。
@@ -18,7 +22,7 @@ export interface TokenBudgetConfig {
 }
 
 const DEFAULT_CONFIG: TokenBudgetConfig = {
-  totalBudget: 500000,
+  totalBudget: DEFAULT_TOKEN_TRACKER_BUDGET,
   continuationThreshold: 0.3,
   maxContinuations: 5,
 };
@@ -59,9 +63,8 @@ export class TokenBudgetTracker {
   }
 
   /**
-   * L2-6 — RecoveryBudgetManager 需要任务级 token 总预算；返回当前 tracker 的 total 上限。
-   * 缺省 tracker（未注入 LoopConfig.tokenBudget）时，TokenBudgetTracker 仍按 DEFAULT_CONFIG.totalBudget
-   * 给出非零值，便于 V1 启发式 `recoveryTokenRatio` 落地（V2 可结合用户级配额扩展）。
+   * 返回当前 tracker 的上限。
+   * Harness 传入的是 run 成本护栏；没传时才是 {@link DEFAULT_TOKEN_TRACKER_BUDGET}。
    */
   getTotalBudget(): number {
     return this.config.totalBudget;

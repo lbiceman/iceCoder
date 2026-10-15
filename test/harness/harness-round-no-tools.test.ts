@@ -148,7 +148,7 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
     expect(state.noToolExecutionRecoveryCount).toBe(0);
   });
 
-  it('docs 意图从未调用工具时优先走一次 no-tool execution recovery', async () => {
+  it('docs 意图从未调用工具时先给一次完成自检', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '帮我写 readme 文档' },
     ];
@@ -171,8 +171,10 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
     );
 
     expect(result.action).toBe('continue');
-    expect(state.noToolExecutionRecoveryCount).toBe(1);
+    expect(state.completionSelfCheckIssued).toBe(true);
+    expect(state.noToolExecutionRecoveryCount).toBe(0);
     expect(state.stopHookContinuationCount).toBe(0);
+    expect(String(messages.at(-1)?.content)).toContain('Completion Check');
   });
 
   it('工程任务有完成证据时跳过 hook 直接 model_done', async () => {
@@ -254,7 +256,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('仅 md 变更未跑测 → 不 inject verification gate', async () => {
@@ -280,7 +281,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('没有显式硬验证时不因变更类型追加验证轮', async () => {
@@ -311,7 +311,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
     logSpy.mockRestore();
   });
 
@@ -342,7 +341,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('软验证只来自提示词而不强制 continue', async () => {
@@ -369,7 +367,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('没有显式条件时不因缺少某种工具而阻塞', async () => {
@@ -492,7 +489,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('npm test 失败加强提示后再次收尾 → model_done', async () => {
@@ -528,34 +524,65 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     }
   });
 
-  it('旧显式交付条件不再注入 Completion Gate', async () => {
+  it('文件交付未产出：先自检一次，模型再次停手即按它的决定收尾', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '整理成 md 文档放到桌面' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'a.md' } }] },
+      { role: 'tool', content: '# a', toolCallId: 'r1' },
     ];
     const state = makeState(messages, '整理成 md 文档放到桌面');
-    state.noToolExecutionRecoveryCount = 1;
+    const deps = makeDeps(new StopHookManager());
+    const turn = (content: string) => handleNoToolCalls(deps, {
+      state,
+      response: { content, finishReason: 'stop' },
+      userMessage: '整理成 md 文档放到桌面',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
 
-    const result = await handleNoToolCalls(
-      makeDeps(new StopHookManager()),
-      {
-        state,
-        response: { content: '文档已经整理好了。', finishReason: 'stop' },
-        userMessage: '整理成 md 文档放到桌面',
-        currentTools: state.tools,
-        tokenUsage: { input: 1, output: 1 },
-        logger: makeLogger(),
-      },
-    );
+    // 本轮已调过工具也要自检：读完文件说一句「整理好了」不等于写出了文件。
+    const first = await turn('文档已经整理好了。');
+    expect(first.action).toBe('continue');
+    const check = String(messages.at(-1)?.content);
+    expect(check).toContain('Completion Check');
+    expect(check).toContain('no file has been created or changed');
+
+    const second = await turn('桌面目录没有写权限，没能保存文件，内容已在上面给出。');
+    expect(second.action).toBe('return');
+    if (second.action === 'return') {
+      expect(second.result.loopState.stopReason).toBe('model_done');
+      expect(second.result.completionStatus).toBe('completed');
+      expect(second.result.content).toContain('没有写权限');
+    }
+    expect(messages.filter(message =>
+      typeof message.content === 'string' && message.content.includes('Completion Check'),
+    )).toHaveLength(1);
+  });
+
+  it('stop hook 抛错时按 paused 收尾，不当作正常完成', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '实现登录功能' }];
+    const state = makeState(messages, '实现登录功能');
+    const hooks = new StopHookManager();
+    hooks.register(async () => { throw new Error('hook crashed'); });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handleNoToolCalls(makeDeps(hooks), {
+      state,
+      response: { content: '登录功能已实现。', finishReason: 'stop' },
+      userMessage: '实现登录功能',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    errorSpy.mockRestore();
 
     expect(result.action).toBe('return');
     if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('model_done');
-      expect(result.result.completionStatus).toBe('completed');
+      expect(result.result.completionStatus).toBe('paused');
+      expect(result.result.completionReason).toBe('stop_hook_error');
+      expect(result.result.loopState.stopReason).toBe('completion_paused');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
-    expect(messages.every(message =>
-      typeof message.content !== 'string' || !message.content.includes('Completion Gate'),
-    )).toBe(true);
   });
 });
 
@@ -587,7 +614,6 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
       expect(result.result.completionStatus).toBe('completed_unverified');
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('后台操作未结束时暂停且不报告完成', async () => {

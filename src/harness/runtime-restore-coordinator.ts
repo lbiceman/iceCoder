@@ -35,6 +35,7 @@ import {
   collectPathsToDeleteOnRestore,
   mergeTrackedPathSets,
   remapPathToWorkspace,
+  RestoreFailedError,
 } from './workspace-snapshot.js';
 import {
   writeSessionNotesContent,
@@ -146,14 +147,7 @@ export class RestoreNotAllowedError extends Error {
   }
 }
 
-export class RestoreFailedError extends Error {
-  readonly code = 'RESTORE_FAILED';
-  constructor(message: string, cause?: unknown) {
-    super(message);
-    this.name = 'RestoreFailedError';
-    if (cause instanceof Error) this.cause = cause;
-  }
-}
+export { RestoreFailedError };
 
 interface PreRestoreBackup {
   combinedCheckpoint: Awaited<ReturnType<typeof readSessionCheckpointJson>>;
@@ -370,11 +364,12 @@ export class RuntimeRestoreCoordinator {
       await fs.unlink(path.join(sessionDir, `${sessionId}.workspace.json`)).catch(() => undefined);
     }
 
+    // 文件回滚失败时仍要继续恢复会话文件，否则对话与索引也停在半恢复状态。
     await applyWorkspaceFileSnapshot(
       backup.workspaceRoot,
       backup.workspaceFilesBefore,
       [],
-    );
+    ).catch((err) => console.error('[runtime-restore] rollback workspace files failed:', err));
 
     if (backup.uiMessagesRaw != null) {
       const p = path.join(sessionDir, `${sessionId}.json`);
@@ -449,11 +444,10 @@ export class RuntimeRestoreCoordinator {
     archive: IntentCheckpointArchive,
   ): Promise<IntentRestoreMaterial> {
     const { sessionDir, sessionId } = params;
-    const workspaceRoot = await this.resolveCurrentWorkspaceRoot(
-      sessionDir,
-      sessionId,
-      archive.workspaceRoot || params.defaultWorkDir,
-    );
+    // 归档里的文件快照是相对捕获时的根；会话之后切换了工作区也必须写回原根。
+    const workspaceRoot = archive.workspaceRoot?.trim()
+      ? path.resolve(archive.workspaceRoot)
+      : await this.resolveCurrentWorkspaceRoot(sessionDir, sessionId, params.defaultWorkDir);
     const currentUi = await readUiSessionMessages(sessionDir, sessionId);
     const workspaceSnapshot = await buildSessionWorkspaceRestoreSnapshot({
       archive,

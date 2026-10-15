@@ -42,7 +42,6 @@ describe('harness resilience single-axis routing', () => {
     const state = stateWithBranchBudget(branchBudget);
 
     resilienceMaybeBranchRecover({
-      resilienceV2Enabled: true,
       checkpointEngine: { save: async () => undefined } as never,
       enqueueCheckpointPersist: async task => task(),
     }, state, messages);
@@ -67,7 +66,6 @@ describe('harness resilience single-axis routing', () => {
 
     await resilienceRecordToolCalls(
       {
-        resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
           stage: () => undefined,
@@ -97,7 +95,6 @@ describe('harness resilience single-axis routing', () => {
 
     await resilienceRecordToolCalls(
       {
-        resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
           stage: () => undefined,
@@ -125,7 +122,6 @@ describe('harness resilience single-axis routing', () => {
 
     await resilienceRecordToolCalls(
       {
-        resilienceV2Enabled: true,
         checkpointEngine: {
           save: async () => undefined,
           stage: () => undefined,

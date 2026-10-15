@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -271,9 +271,16 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
+    expect(onDisk.storage).toBe('blobs-v1');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
-    expect(onDisk.projectCheckpoint.execution.taskState.goal).toBe('Implement the remaining editor feature without losing session history');
-    expect(onDisk.workspaceFiles['src/b.ts']).toBeNull();
+    expect(onDisk.workspaceFiles).toBeUndefined();
+    expect(onDisk.workspaceFileRefs['src/b.ts']).toBeNull();
+    const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');
+    expect(hydrated?.projectCheckpoint?.execution.taskState.goal).toBe(
+      'Implement the remaining editor feature without losing session history',
+    );
+    expect(hydrated?.workspaceFiles['src/b.ts']).toBeNull();
+    expect(hydrated?.combinedCheckpoint).toMatchObject({ taskId: 'task-legacy' });
   });
 
   it('does not drop combinedCheckpoint when finalizing a pre-V3 turn snapshot', async () => {
@@ -287,8 +294,12 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
+    expect(onDisk.storage).toBe('blobs-v1');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
-    expect(onDisk.uiMessages).toHaveLength(3);
+    expect(onDisk.uiMessages).toBeUndefined();
+    const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');
+    expect(hydrated?.uiMessages).toHaveLength(3);
+    expect(hydrated?.workspaceFiles['src/a.ts']).toBe('mid');
   });
 });
 
@@ -303,10 +314,17 @@ describe('CheckpointEngine upgrade guards', () => {
     await fs.rm(tmp, { recursive: true, force: true });
   });
 
-  it('refuses to replace an unreadable checkpoint with an empty stub', async () => {
+  it('moves an unreadable checkpoint to .corrupt.<ts> before writing a fresh one', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const engine = new CheckpointEngine(tmp, 'sess-guard');
     await fs.writeFile(engine.checkpointPath, '{not-json', 'utf-8');
     await engine.save({ trigger: 'tool_failed' });
-    expect(await fs.readFile(engine.checkpointPath, 'utf-8')).toBe('{not-json');
+
+    const base = path.basename(engine.checkpointPath);
+    const preserved = (await fs.readdir(tmp)).filter(name => name.startsWith(`${base}.corrupt.`));
+    expect(preserved).toHaveLength(1);
+    expect(await fs.readFile(path.join(tmp, preserved[0]), 'utf-8')).toBe('{not-json');
+    expect(JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8')).version).toBe(3);
+    vi.restoreAllMocks();
   });
 });

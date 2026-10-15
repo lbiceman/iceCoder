@@ -1,6 +1,34 @@
 import type { UnifiedMessage, ToolCall } from '../../llm/types.js';
 import type { GateContext, ToolGate, ToolGateEntry, ToolGatePlan } from '../../types/supervisor.js';
 import { toolCallSignature } from '../harness-permission-runtime.js';
+import type { HarnessRunState } from '../harness-run-state.js';
+import type { GraphExecutor } from '../task-graph-executor.js';
+
+/**
+ * 普通工具轮与 synthetic 验收共用同一 forced-graph 门控上下文。
+ * track:false 只作准入判断；真正执行前由调用方补 track:true。
+ */
+export function buildHarnessToolGateContext(
+  graphExecutor: GraphExecutor | undefined,
+  toolCalls: readonly ToolCall[] | undefined,
+  state: HarnessRunState,
+): GateContext {
+  const executionMode = state.executionMode;
+  const graphHints: GateContext['graphHints'] = [];
+
+  if (executionMode === 'forced' && graphExecutor?.hasGraph() && toolCalls) {
+    for (const toolCall of toolCalls) {
+      const check = graphExecutor.checkToolCall(toolCall.name, { track: false });
+      graphHints.push({
+        toolName: toolCall.name,
+        action: check.action,
+        message: check.message,
+      });
+    }
+  }
+
+  return { executionMode, graphHints };
+}
 
 export interface ExecuteToolCallsThroughGateArgs {
   toolCalls: ToolCall[];
@@ -15,6 +43,7 @@ export interface ToolGateExecutionResult {
 
 class DefaultToolGate implements ToolGate {
   decide(calls: ToolCall[], ctx: GateContext): ToolGatePlan {
+    // free 直接放行。forced 只在有任务图提示时才拦；adaptive 不建图，所以这里等于透传。
     if (ctx.executionMode !== 'forced') {
       return { entries: calls.map(tc => ({ toolCallId: tc.id, action: 'execute' })) };
     }

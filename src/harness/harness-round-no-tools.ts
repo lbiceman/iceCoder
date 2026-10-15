@@ -9,20 +9,17 @@ import {
   MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
+  VERIFICATION_CONTINUATION_MAX,
 } from './harness-constants.js';
+import { RECOVERY_BUDGET } from './recovery-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import {
-  getLatestRealUserText,
-  hasAssistantToolCallAfterLatestRealUser,
-} from './harness-message-utils.js';
+import { hasAssistantToolCallAfterLatestRealUser } from './harness-message-utils.js';
 import {
   buildIncompleteContinuationPrompt,
   hasPendingWork,
   isReasoningOnlyResponse,
 } from './incomplete-completion.js';
-import { isResumeContinuationMessage } from './resume-goal.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
-import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
@@ -57,10 +54,10 @@ import {
 } from './verification-state.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import {
-  containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
 } from './text-tool-call-salvage.js';
+import { containsExecutableEmbeddedToolCalls } from './text-format-tool-call-parsers.js';
 
 function buildNoToolExecutionRecoveryPrompt(): string {
   return '[System] The user requested an executable action, but no tool was invoked. Continue with the relevant available tools through native function-calling; do not embed tool syntax in plain text.';
@@ -133,18 +130,17 @@ export async function handleNoToolCalls(
 ): Promise<HandleNoToolCallsResult> {
   const { state, response, rawAssistantContent, userMessage, currentTools, tokenUsage, logger, onStep } = args;
   const msgs = state.messages;
-  state.consecutiveNoToolRounds++;
 
   const rawTextForEmbedded =
     (typeof rawAssistantContent === 'string' ? rawAssistantContent : '')
     || (typeof response.content === 'string' ? response.content : '');
-  const hasEmbeddedToolText = containsEmbeddedToolCalls(rawTextForEmbedded);
+  const hasEmbeddedToolText = containsExecutableEmbeddedToolCalls(rawTextForEmbedded);
 
   // 模型在 API tool_calls 之后又用正文输出工具（各厂商格式不同）→ 必须继续，不能 model_done / 空响应退出
   if (
     hasEmbeddedToolText
     && currentTools.length > 0
-    && state.noToolExecutionRecoveryCount < 1
+    && state.noToolExecutionRecoveryCount < RECOVERY_BUDGET.embeddedToolSyntax.max
   ) {
     state.noToolExecutionRecoveryCount++;
     console.log('[harness] 检测到正文中嵌入工具调用（未走 API），注入恢复提示并继续');
@@ -166,15 +162,8 @@ export async function handleNoToolCalls(
     return { action: 'continue' };
   }
 
-  if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
-    const responseText = response.content || '';
-    const amnesiaPatterns = [
-      /无法确定.*任务/, /不确定.*任务/, /忘记/, /请重复/, /请描述/,
-      /unsure what task/i, /don'?t know what task/i, /what (was|is) the task/i,
-      /can'?t remember/i, /forgot/i, /what would you like/i,
-    ];
-    const isAmnesia = amnesiaPatterns.some(p => p.test(responseText));
-    if (isAmnesia) {
+  if (state.justCompacted && state.amnesiaRecoveryCount < RECOVERY_BUDGET.amnesia.max) {
+    if (looksLikeTaskAmnesia(response.content || '')) {
       state.amnesiaRecoveryCount++;
       console.log('[harness] 检测到压缩后失忆，自动注入任务上下文...');
       if (response.content) {
@@ -303,25 +292,18 @@ export async function handleNoToolCalls(
   const taskSnap = state.taskState.snapshot();
   const workspaceRoot = deps.workspaceRoot;
   const pendingWork = hasPendingWork(taskSnap, workspaceRoot);
-  const latestUserText = getLatestRealUserText(msgs, userMessage);
-  const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
 
-  // 实现任务从未真正调用工具时，保留一次协议恢复；验收计划不消费这份预算。
+  // 不带工具调用的回复就是模型的完成决定。启发式只换来一次带证据的自检，不改写终态。
   if (
     currentTools.length > 0
-    && state.noToolExecutionRecoveryCount < 1
-    && state.stopHookContinuationCount === 0
-    && !hasToolCallSinceUser
-    && (
-      resumeWithPending
-      || (pendingWork && isImplementationIntent(taskSnap.intent))
-    )
+    && pendingWork
+    && !state.completionSelfCheckIssued
   ) {
-    state.noToolExecutionRecoveryCount++;
+    state.completionSelfCheckIssued = true;
     pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
-      content: buildNoToolExecutionRecoveryPrompt(),
+      content: buildCompletionSelfCheckPrompt(hasToolCallSinceUser),
     });
     state.transition = 'no_tool_execution_recovery';
     return { action: 'continue' };
@@ -339,6 +321,14 @@ export async function handleNoToolCalls(
   if (deps.stopHookManager.count > 0 && !skipStopHook) {
     const hookText = [response.content, response.reasoningContent].filter(Boolean).join('\n');
     const hookResult = await deps.stopHookManager.execute(msgs, hookText);
+    if (hookResult.error) {
+      return finishNoToolRound(deps, args, {
+        status: 'paused',
+        reason: 'stop_hook_error',
+        stopReason: 'completion_paused',
+        content: sanitizeAssistantContentForUser(response.content),
+      });
+    }
     if (hookResult.shouldContinue && hookResult.message) {
       state.stopHookContinuationCount++;
       if (state.stopHookContinuationCount > MAX_STOP_HOOK_CONTINUATIONS) {
@@ -360,7 +350,7 @@ export async function handleNoToolCalls(
 
   const hardState = deps.skipCompletionGate
     ? null
-    : evaluateCompletionHardState(state.operationOutcomes);
+    : evaluateCompletionHardState(state.operationOutcomes, { since: state.runStartedAt });
   if (hardState) {
     return finishNoToolRound(deps, args, {
       status: hardState.status,
@@ -472,7 +462,10 @@ export async function handleNoToolCalls(
       status: 'completed',
       reason: 'verification_passed',
       stopReason: 'model_done',
-      content: sanitizeAssistantContentForUser(response.content),
+      content: appendOptionalVerificationNotice(
+        sanitizeAssistantContentForUser(response.content),
+        stopVerification,
+      ),
       assistantAlreadyRecorded: true,
     });
   }
@@ -488,7 +481,11 @@ export async function handleNoToolCalls(
   }
 
   if (stopVerification.status === 'failed') {
-    if (tryConsumeVerificationContinuation(state.verificationState, 1)) {
+    if (tryConsumeVerificationContinuation(
+      state.verificationState,
+      VERIFICATION_CONTINUATION_MAX,
+      plan.fingerprint,
+    )) {
       injectContinuationUserMessage(
         deps,
         state,
@@ -501,8 +498,9 @@ export async function handleNoToolCalls(
         resolveCheckpointUserGoal(state, userMessage),
         msgs,
         state,
+        undefined,
+        'verification_failed',
       );
-      await resilienceSaveCheckpoint(deps, 'verification_failed', state);
       state.transition = 'no_tool_execution_recovery';
       return { action: 'continue' };
     }
@@ -530,11 +528,43 @@ export async function handleNoToolCalls(
   });
 }
 
-function isImplementationIntent(intent: ReturnType<HarnessRunState['taskState']['snapshot']>['intent']): boolean {
-  return intent === 'edit'
-    || intent === 'debug'
-    || intent === 'refactor'
-    || intent === 'docs';
+/** 直接陈述不知道 / 忘了当前任务。 */
+const TASK_UNKNOWN_STATEMENT = [
+  /(?:无法确定|不确定|不清楚|不知道|记不清|想不起)[^。！？\n]{0,12}(?:任务|需求|要做什么|要我做什么)/,
+  /忘(?:记|了)[^。！？\n]{0,8}(?:任务|需求|要做什么|上下文|之前的(?:对话|内容))/,
+  /\b(?:unsure|not sure|don'?t know|do not know|can'?t (?:remember|recall)|cannot (?:remember|recall)|forgot|lost track of)\b[^.?!\n]{0,40}\b(?:task|request|what you (?:asked|wanted|need))/i,
+];
+
+/** 只在疑问句里才算失忆：反问用户要做什么 / 让用户重复任务。 */
+const TASK_QUESTION = [
+  /请(?:重复|再说一遍|重新描述|再描述|描述一下)[^。！？\n]{0,12}(?:任务|需求|问题|要做)/,
+  /(?:你|您)(?:想|希望|需要)(?:让)?我(?:做|帮)(?:什么|些什么)/,
+  /\bwhat (?:was|is) the task\b/i,
+  /\bwhat would you like (?:me )?to do\b(?![^?]*\b(?:next|else)\b)/i,
+  /\b(?:could|can) you (?:repeat|restate|remind me of)\b[^?]{0,30}\b(?:task|request)/i,
+];
+
+const NEGATED_FORGET = /(?:不要|别|勿|不会|没有|千万别)忘(?:记|了)?|\b(?:don'?t|do not|never|won'?t|will not) forget\b/gi;
+
+/** 压缩后的回复是否表现为「不知道当前任务」；嘱咐类的「不要忘记…」不算。 */
+export function looksLikeTaskAmnesia(text: string): boolean {
+  const cleaned = text.replace(NEGATED_FORGET, '');
+  if (TASK_UNKNOWN_STATEMENT.some(pattern => pattern.test(cleaned))) return true;
+  const questions = cleaned.match(/[^。！？.!?\n]*[？?]/g) ?? [];
+  return questions.some(sentence => TASK_QUESTION.some(pattern => pattern.test(sentence)));
+}
+
+function buildCompletionSelfCheckPrompt(calledToolsThisTurn: boolean): string {
+  return [
+    '[System / Completion Check] You ended your turn without calling a tool.',
+    calledToolsThisTurn
+      ? 'The request appears to ask for a file to be produced, but no file has been created or changed in this turn.'
+      : 'The request appears to ask for a file to be produced, but no tool has been called and no file has been created in this turn.',
+    'Decide for yourself:',
+    '- If the file still needs to be produced, continue now with native tool calls.',
+    '- If it is already done, was not actually requested, or you are blocked (missing input, permission, or tool limits), reply with your final answer and say which one plainly.',
+    'This check is shown once. Your next reply without tool calls ends the turn.',
+  ].join('\n');
 }
 
 function buildVerificationContinuationPrompt(
@@ -545,8 +575,8 @@ function buildVerificationContinuationPrompt(
     result.failedCommand ? `Command: ${result.failedCommand}` : '',
     result.exitCode !== undefined ? `Exit code: ${result.exitCode}` : '',
     result.outputTail ? `Relevant output:\n${result.outputTail.slice(-1_200)}` : '',
-    'The single stop-verification continuation is now consumed.',
     'Fix the real cause and run only the relevant verification. Do not substitute git diff or directory listings.',
+    'If you stop again without changing any file, the turn ends and this failure is reported to the user.',
   ].filter(Boolean).join('\n');
 }
 
@@ -559,6 +589,24 @@ function appendVerificationFailureNotice(
   return [content, `Verification still failed: ${command}${exit}.`]
     .filter(Boolean)
     .join('\n\n');
+}
+
+function appendOptionalVerificationNotice(
+  content: string,
+  result: StopVerificationResult,
+): string {
+  const failures = result.optionalFailures ?? [];
+  if (failures.length === 0) return content;
+  const items = failures.map(failure => {
+    const detail = failure.status === 'unavailable'
+      ? 'could not run'
+      : failure.exitCode !== undefined ? `exit code ${failure.exitCode}` : 'failed';
+    return `${failure.command} (${detail})`;
+  });
+  return [
+    content,
+    `Required verification passed, but optional checks did not: ${items.join('; ')}.`,
+  ].filter(Boolean).join('\n\n');
 }
 
 async function finishNoToolRound(
@@ -609,12 +657,7 @@ async function finishNoToolRound(
     state.messages,
     state,
     terminal.stopReason,
-  );
-  await resilienceSaveCheckpoint(
-    deps,
     'final_draft',
-    state,
-    terminal.stopReason,
   );
   recordTelemetrySummary(deps, terminal.stopReason, state, {
     status: terminal.status,

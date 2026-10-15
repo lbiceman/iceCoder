@@ -7,6 +7,9 @@
 import type { LLMResponse } from '../llm/types.js';
 import {
   containsEmbeddedToolCalls,
+  contentMightContainEmbeddedToolCalls,
+  executableCallsFromInspection,
+  inspectEmbeddedToolCalls,
   parseEmbeddedToolCallsFromText,
   partialEmbeddedToolPrefixSuffix,
   prepareAssistantContentForHistory,
@@ -59,45 +62,58 @@ export function absorbEmbeddedThinking(response: LLMResponse): LLMResponse {
 /**
  * 统一抢救入口：原生 tool_calls 时净化正文；否则从嵌入文本解析 toolCalls。
  * 净化后若仍像工具正文但未解析出调用，由 harness 走 no_tool 恢复（见 handleNoToolCalls）。
+ * allowedToolNames 为本轮可用工具；不在其中的名字不会被执行。
  */
-export function salvageTextToolCallsInResponse(response: LLMResponse): LLMResponse {
+function salvageVisibleContent(
+  content: string,
+  allowedToolNames?: ReadonlySet<string>,
+): { calls: ReturnType<typeof executableCallsFromInspection>; cleaned: string } | null {
+  if (!content || !contentMightContainEmbeddedToolCalls(content)) return null;
+  const inspection = inspectEmbeddedToolCalls(content);
+  const calls = executableCallsFromInspection(content, inspection, allowedToolNames);
+  if (calls.length === 0) return null;
+  return { calls, cleaned: stripEmbeddedToolCalls(content, inspection) };
+}
+
+export function salvageTextToolCallsInResponse(
+  response: LLMResponse,
+  allowedToolNames?: ReadonlySet<string>,
+): LLMResponse {
   response = absorbEmbeddedThinking(response);
   if (response.toolCalls?.length) {
     return { ...response, content: prepareAssistantContentForHistory(response.content ?? '') };
   }
   const raw = response.content?.trim() ?? '';
-  if (!raw || !containsEmbeddedToolCalls(raw)) {
-    return response;
-  }
-
-  const { calls } = parseEmbeddedToolCallsFromText(raw);
-  if (calls.length === 0) {
-    return response;
-  }
-
-  const cleaned = stripEmbeddedToolCalls(raw);
+  const salvaged = salvageVisibleContent(raw, allowedToolNames);
+  if (!salvaged) return response;
   return {
     ...response,
-    toolCalls: calls,
-    content: cleaned || '',
+    toolCalls: salvaged.calls,
+    content: salvaged.cleaned || '',
     finishReason: 'tool_calls',
   };
 }
 
-/** 供 harness 主循环使用：在 {@link salvageTextToolCallsInResponse} 之后再尝试一次嵌入解析。 */
-export function resolveSalvagedLlmResponse(raw: LLMResponse): LLMResponse {
-  let response = salvageTextToolCallsInResponse(raw);
+/**
+ * 供 harness 主循环使用。思考块已经在 salvage 里吸收过；
+ * 只有剥离思考后的正文和已扫描正文不同时才再解析一次。
+ */
+export function resolveSalvagedLlmResponse(
+  raw: LLMResponse,
+  allowedToolNames?: ReadonlySet<string>,
+): LLMResponse {
+  const response = salvageTextToolCallsInResponse(raw, allowedToolNames);
   if (response.toolCalls?.length) return response;
 
   const rawText = stripEmbeddedThinking(raw.content?.trim() ?? '');
-  if (!rawText || !containsEmbeddedToolCalls(rawText)) return response;
+  const visible = response.content?.trim() ?? '';
+  if (!rawText || rawText === visible || rawText === (raw.content?.trim() ?? '')) return response;
 
-  const { calls } = parseEmbeddedToolCallsFromText(rawText);
-  if (calls.length === 0) return response;
-
+  const salvaged = salvageVisibleContent(rawText, allowedToolNames);
+  if (!salvaged) return response;
   return {
     ...response,
-    toolCalls: calls,
+    toolCalls: salvaged.calls,
     content: prepareAssistantContentForHistory(raw.content ?? ''),
     finishReason: 'tool_calls',
   };

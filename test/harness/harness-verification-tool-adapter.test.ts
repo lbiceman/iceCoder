@@ -5,6 +5,7 @@ import {
 } from '../../src/harness/harness-verification-tool-adapter.js';
 import { executeStopVerificationPlan } from '../../src/harness/harness-stop-verification.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
+import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
@@ -29,6 +30,7 @@ function adapterState(messages: UnifiedMessage[] = []): HarnessRunState {
     shellMandatoryConfirmDenials: new Set(),
     verificationOutputBuffer: new VerificationOutputBuffer(),
     executionMode: 'free',
+    branchBudget: new BranchBudgetTracker(),
   } as HarnessRunState;
 }
 
@@ -59,7 +61,7 @@ describe('Harness verification tool adapter', () => {
 
     const result = await adapter(toolCall);
 
-    expect(executeTool).toHaveBeenCalledWith(toolCall, expect.any(Function));
+    expect(executeTool).toHaveBeenCalledWith(toolCall, expect.any(Function), undefined);
     expect(result).toMatchObject({
       classification: {
         kind: 'foreground',
@@ -133,12 +135,13 @@ describe('Harness verification tool adapter', () => {
     expect(onStep).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tool_result',
       toolCallId: 'verify-denied',
-      toolOutcome: 'policy_block',
+      toolOutcome: 'user_denied',
     }));
+    expect(onStep.mock.calls.filter(([event]) => event.type === 'tool_result')).toHaveLength(1);
     expect(recordTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: 'run_command',
       success: false,
-      outcome: 'policy_block',
+      outcome: 'user_denied',
     }));
   });
 

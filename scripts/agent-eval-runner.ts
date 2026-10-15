@@ -11,7 +11,7 @@ import { Harness } from '../src/harness/harness.js';
 import { AgentSpawner } from '../src/harness/agents/agent-spawner.js';
 import { listAgentMetas } from '../src/harness/agents/agent-store.js';
 import type { ChatFunction, HarnessConfig, HarnessResult, HarnessStepEvent } from '../src/harness/types.js';
-import type { RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
+import { runtimeTelemetryFile, type RuntimeTelemetryEvent } from '../src/harness/runtime-telemetry.js';
 import { initializeToolSystem } from '../src/tools/index.js';
 import type { LLMResponse } from '../src/llm/types.js';
 import type { AgentEvalCase, AgentEvalScriptedTurn } from './agent-eval-cases.js';
@@ -64,13 +64,15 @@ export async function runAgentEvalCase(
   testCase: AgentEvalCase,
   options: RunAgentEvalCaseOptions,
 ): Promise<CaseResult> {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), `ice-agent-eval-${testCase.id}-`));
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), `ice-agent-eval-${testCase.id}-`));
+  const workspace = testCase.workspaceLock ? path.join(sandbox, 'project') : sandbox;
   const sessionDir = path.join(workspace, '.icecoder', 'sessions');
   const memoryDir = path.join(workspace, '.icecoder', 'memory-files');
   const initialFiles = new Map<string, string>();
   const events: HarnessStepEvent[] = [];
 
   try {
+    await fs.mkdir(workspace, { recursive: true });
     await writeCaseFiles(workspace, testCase.files, initialFiles);
     if (testCase.memoryFiles) {
       await writeCaseFiles(memoryDir, testCase.memoryFiles);
@@ -109,7 +111,7 @@ export async function runAgentEvalCase(
         timeout: testCase.timeoutMs ?? 120_000,
         tokenBudget: 250_000,
       },
-      permissions: [],
+      permissions: testCase.permissions ?? [],
       skipPermissionChecks: true,
       compactionThreshold: testCase.compactionThreshold ?? 40,
       compactionTokenThreshold: testCase.compactionTokenThreshold ?? 80_000,
@@ -119,6 +121,7 @@ export async function runAgentEvalCase(
       sessionDir,
       sessionId: testCase.id,
       workspaceRoot: workspace,
+      ...(testCase.workspaceLock ? { workspaceLock: { lockedRoot: workspace, referenceReads: [] } } : {}),
     };
 
     if (testCase.subAgents) {
@@ -141,6 +144,11 @@ export async function runAgentEvalCase(
     }
 
     const harness = new Harness(harnessConfig, executor);
+    if (testCase.incompleteTaskStopHook) {
+      const { evaluateIncompleteTaskStopHook } = await import('../src/harness/incomplete-task-stop-hook.js');
+      harness.getStopHookManager().register(async (messages, lastContent) =>
+        evaluateIncompleteTaskStopHook(messages, lastContent));
+    }
     const result = await harness.run(
       buildPrompt(testCase),
       chatFn,
@@ -148,7 +156,7 @@ export async function runAgentEvalCase(
     );
 
     const judgeResults = await runJudgeCommands(workspace, testCase.verifyCommands);
-    const telemetry = await readTelemetryEvents(path.join(workspace, '.icecoder', 'runtime', 'telemetry.jsonl'));
+    const telemetry = await readTelemetryEvents(runtimeTelemetryFile(sessionDir, testCase.id));
     const caseResult = await scoreCase({
       testCase,
       workspace,
@@ -175,7 +183,7 @@ export async function runAgentEvalCase(
     };
   } finally {
     if (!options.keepWorkspace) {
-      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(sandbox, { recursive: true, force: true });
     }
   }
 }
@@ -189,6 +197,17 @@ function buildPrompt(testCase: AgentEvalCase): string {
 
 function usage(): LLMResponse['usage'] {
   return { inputTokens: 40, outputTokens: 20, totalTokens: 60, provider: 'eval' };
+}
+
+function finalFromLastTool(msgs: { role: string; content?: unknown }[], contains: string) {
+  const toolText = msgs
+    .filter(message => message.role === 'tool')
+    .map(message => typeof message.content === 'string' ? message.content : '')
+    .join('\n');
+  const content = toolText.includes(contains)
+    ? toolText
+    : `tool result did not contain ${JSON.stringify(contains)}`;
+  return { content, usage: usage(), finishReason: 'stop' as const };
 }
 
 export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFunction | undefined {
@@ -213,6 +232,7 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
     }
     if (index >= turns.length) {
       const last = turns.at(-1);
+      if (last?.type === 'final-from-tool') return finalFromLastTool(msgs, last.contains);
       return {
         content: last && last.type === 'final' ? last.content : 'done',
         usage: usage(),
@@ -223,6 +243,7 @@ export function createScriptedEvalChat(turns?: AgentEvalScriptedTurn[]): ChatFun
     if (turn.type === 'final') {
       return { content: turn.content, usage: usage(), finishReason: 'stop' };
     }
+    if (turn.type === 'final-from-tool') return finalFromLastTool(msgs, turn.contains);
     const calls = turn.type === 'tools'
       ? turn.calls
       : [{ name: turn.name, arguments: turn.arguments }];
@@ -275,6 +296,7 @@ function createChildScriptedChat(
     }
     if (index >= turns.length) {
       const last = turns.at(-1);
+      if (last?.type === 'final-from-tool') return finalFromLastTool(msgs, last.contains);
       return {
         content: last && last.type === 'final' ? last.content : 'done',
         usage: usage(),
@@ -285,6 +307,7 @@ function createChildScriptedChat(
     if (turn.type === 'final') {
       return { content: turn.content, usage: usage(), finishReason: 'stop' };
     }
+    if (turn.type === 'final-from-tool') return finalFromLastTool(msgs, turn.contains);
     const calls = turn.type === 'tools'
       ? turn.calls
       : [{ name: turn.name, arguments: turn.arguments }];
@@ -411,6 +434,10 @@ async function scoreCase(args: {
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
   }
+  for (const relativePath of testCase.expected.outsideWorkspaceAbsent ?? []) {
+    const exists = await fs.access(path.resolve(workspace, relativePath)).then(() => true, () => false);
+    if (exists) failures.push(`file escaped the workspace: ${relativePath}`);
+  }
   if (
     testCase.expected.completionStatus
     && result.completionStatus !== testCase.expected.completionStatus
@@ -418,6 +445,14 @@ async function scoreCase(args: {
     failures.push(
       `expected completionStatus=${testCase.expected.completionStatus}, got ${result.completionStatus ?? '(missing)'}`,
     );
+  }
+  if (testCase.expected.maxLlmCalls !== undefined) {
+    const llmCalls = result.log.filter(entry => entry.event === 'llm_call').length;
+    if (llmCalls > testCase.expected.maxLlmCalls) {
+      failures.push(
+        `expected at most ${testCase.expected.maxLlmCalls} LLM calls, got ${llmCalls}`,
+      );
+    }
   }
   if (
     testCase.expected.completionReason

@@ -130,9 +130,14 @@ export async function maybeCompact(
 
   deps.contextCompactor.resetMicroCompactRound();
 
-  const usageOptions = buildUsageOptions(args);
+  const contextWindowTokens = readEffectiveContextWindowTokens();
+  const usageOptions: CompactionUsageOptions = {
+    ...buildUsageOptions(args),
+    contextWindowTokens,
+  };
   const tools = usageOptions.tools;
   const usage = resolveCompactionUsage({ messages, ...usageOptions });
+  usageOptions.usage = usage;
 
   const needsHard = deps.contextCompactor.needsCompaction(messages, usageOptions);
   const needsMicro = deps.contextCompactor.needsMicroCompaction(messages, usageOptions);
@@ -192,7 +197,6 @@ export async function maybeCompact(
     const content: string = typeof rawContent === 'string' ? rawContent : '';
     if (content.startsWith('<system-reminder>') && content.includes('Recalled Memories')) {
       recentMemoryMessages.unshift(messages[i]);
-      break;
     }
   }
 
@@ -223,24 +227,20 @@ export async function maybeCompact(
 
   // ── 压缩后统一恢复 ──
 
-  // 1. 重新注入最近记忆消息（如果被压缩掉了）
-  if (recentMemoryMessages.length > 0) {
-    const hasMemoryInCompacted = messages.some(m => {
-      const c = typeof m.content === 'string' ? m.content : '';
-      return c.startsWith('<system-reminder>') && c.includes('Recalled Memories');
-    });
-    if (!hasMemoryInCompacted) {
-      // 插在 system 之后、recent 尾段之前；勿用 length-keepRecent（短消息时会变成 0，把记忆插到 system 前 → MiniMax 400）
-      let insertAt = 0;
-      while (insertAt < messages.length && messages[insertAt].role === 'system') {
-        insertAt++;
-      }
-      const keepRecent = deps.contextCompactor.getConfig().keepRecent;
-      if (keepRecent > 0 && messages.length > insertAt) {
-        insertAt = Math.max(insertAt, messages.length - keepRecent);
-      }
-      messages.splice(insertAt, 0, ...recentMemoryMessages);
+  // 1. 重新注入最近记忆消息（只补回被压缩掉的）
+  const survivingContents = new Set(messages.map(m => m.content));
+  const lostMemoryMessages = recentMemoryMessages.filter(m => !survivingContents.has(m.content));
+  if (lostMemoryMessages.length > 0) {
+    // 插在 system 之后、recent 尾段之前；勿用 length-keepRecent（短消息时会变成 0，把记忆插到 system 前 → MiniMax 400）
+    let insertAt = 0;
+    while (insertAt < messages.length && messages[insertAt].role === 'system') {
+      insertAt++;
     }
+    const keepRecent = deps.contextCompactor.getConfig().keepRecent;
+    if (keepRecent > 0 && messages.length > insertAt) {
+      insertAt = Math.max(insertAt, messages.length - keepRecent);
+    }
+    messages.splice(insertAt, 0, ...lostMemoryMessages);
   }
 
   // 2. 重新注入 Runtime State + Repo Context（压缩恢复优先上下文）

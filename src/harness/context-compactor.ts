@@ -27,8 +27,18 @@
 import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
-import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
+import {
+  estimateMessageTokens,
+  estimateMessagesTokens,
+  resolveCompactionUsage,
+  type CompactionUsageSnapshot,
+} from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
+import { warnHarnessFailure } from './runtime-telemetry.js';
+import {
+  MIN_USER_MSG_LENGTH_TO_PRESERVE,
+  SHORT_USER_MSG_MAX_LENGTH,
+} from './harness-constants.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
@@ -67,10 +77,83 @@ function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage
   return start > 0 ? recent.slice(start) : recent;
 }
 
+/**
+ * 切割点不能落在 tool 消息上，否则 tool_result 与它的 assistant(tool_calls) 会被拆到两侧。
+ * 优先向前退到 assistant（整组保留）；退到头仍无可丢弃消息时，向后越过这组 tool（整组丢弃）。
+ */
+function alignSplitOutsideToolResults(
+  messages: UnifiedMessage[],
+  splitAt: number,
+  contentStart: number,
+): number {
+  let back = splitAt;
+  while (back > contentStart && messages[back]?.role === 'tool') back--;
+  if (back > contentStart) return back;
+  let forward = splitAt;
+  while (forward < messages.length && messages[forward]?.role === 'tool') forward++;
+  return forward;
+}
+
+/** microcompact 后仍保留的参数：说明「对什么做了什么」，摘要与续跑依赖它们。 */
+const MICROCOMPACT_KEPT_ARG_KEYS = [
+  'path', 'file_path', 'paths', 'old_path', 'new_path', 'source', 'destination',
+  'command', 'cwd', 'pattern', 'query', 'url', 'task_id', 'action',
+] as const;
+const MICROCOMPACT_KEPT_ARG_MAX_CHARS = 200;
+const MICROCOMPACT_KEPT_ARRAY_MAX_ITEMS = 10;
+
+function truncateKeptArg(value: string): string {
+  return value.length > MICROCOMPACT_KEPT_ARG_MAX_CHARS
+    ? `${value.slice(0, MICROCOMPACT_KEPT_ARG_MAX_CHARS)}…`
+    : value;
+}
+
+function keepIdentifyingToolArgs(args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  if (!args) return kept;
+  for (const key of MICROCOMPACT_KEPT_ARG_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string') {
+      kept[key] = truncateKeptArg(value);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      kept[key] = value;
+    } else if (Array.isArray(value)) {
+      kept[key] = value
+        .filter((item): item is string => typeof item === 'string')
+        .slice(0, MICROCOMPACT_KEPT_ARRAY_MAX_ITEMS)
+        .map(truncateKeptArg);
+    }
+  }
+  return kept;
+}
+
+/** 同一批消息只估算一次，split / 收缩循环按对象身份复用。 */
+class MessageTokenCache {
+  private readonly values = new WeakMap<UnifiedMessage, number>();
+
+  tokens(message: UnifiedMessage): number {
+    const cached = this.values.get(message);
+    if (cached !== undefined) return cached;
+    const estimated = estimateMessageTokens(message);
+    this.values.set(message, estimated);
+    return estimated;
+  }
+
+  sum(messages: readonly UnifiedMessage[]): number {
+    let total = 0;
+    for (const message of messages) total += this.tokens(message);
+    return total;
+  }
+}
+
 /** 压缩判定时可选的双轨占用输入 */
 export interface CompactionUsageOptions {
   lastApiPromptTokens?: number;
   tools?: ToolDefinition[];
+  /** 调用方已经算好的占用，避免同一轮重复估算。 */
+  usage?: CompactionUsageSnapshot;
+  /** 调用方已经读到的上下文窗口，避免重复同步读配置。 */
+  contextWindowTokens?: number;
 }
 
 /** {@link compact} / {@link compactWithSessionMemory} 运行时选项 */
@@ -108,13 +191,38 @@ export interface CompactionConfig {
   maxRuntimeRecoveryTokens: number;
   /** 会话 id，用于压缩截断提示中的 session-notes 路径 */
   sessionId?: string;
+  /** 会话目录。LLM 摘要失败时，failure telemetry 与该会话的 runtime 日志写在同一处。 */
+  sessionDir?: string;
 }
 
-/** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
-const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
+function isLongTaskUserMessage(msg: UnifiedMessage): boolean {
+  return msg.role === 'user'
+    && typeof msg.content === 'string'
+    && msg.content.length > MIN_USER_MSG_LENGTH_TO_PRESERVE
+    && !isSyntheticUserBlockContent(msg.content);
+}
 
-/** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
-const SHORT_USER_MSG_MAX_LENGTH = 50;
+/**
+ * 按 splitAt 切分；最近一条长任务描述若落在丢弃区，单独前置到 recent。
+ * 切割点不随它前移，否则其后的历史全都丢不掉。
+ */
+function splitKeepingTaskAnchor(
+  messages: UnifiedMessage[],
+  contentStart: number,
+  splitAt: number,
+): { droppedMessages: UnifiedMessage[]; recentMessages: UnifiedMessage[] } {
+  const droppedMessages = messages.slice(contentStart, splitAt);
+  const recentMessages = messages.slice(splitAt);
+  for (let i = messages.length - 1; i >= contentStart; i--) {
+    if (!isLongTaskUserMessage(messages[i])) continue;
+    if (i < splitAt) {
+      const [anchor] = droppedMessages.splice(i - contentStart, 1);
+      recentMessages.unshift(anchor);
+    }
+    break;
+  }
+  return { droppedMessages, recentMessages };
+}
 
 /** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe） */
 const MIN_REAL_USERS_IN_SUFFIX = 2;
@@ -267,7 +375,6 @@ export class ContextCompactor {
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.config.tokenThreshold ??= Math.floor(getContextWindow() * HARD_COMPACTION_RATIO);
     const reinjectCap = this.config.maxReinjectFiles;
     this.config.maxReinjectFiles =
       typeof reinjectCap === 'number' &&
@@ -292,11 +399,16 @@ export class ContextCompactor {
   }
 
   private resolveEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    if (options?.usage) return options.usage.effectiveUsed;
     return resolveCompactionUsage({
       messages,
       tools: options?.tools,
       lastApiPromptTokens: options?.lastApiPromptTokens,
     }).effectiveUsed;
+  }
+
+  private resolveContextWindow(options?: CompactionUsageOptions): number {
+    return options?.contextWindowTokens ?? getContextWindow();
   }
 
   /**
@@ -305,7 +417,7 @@ export class ContextCompactor {
    */
   needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     if (!this.canMicroCompact()) return false;
-    const ctxWindow = getContextWindow();
+    const ctxWindow = this.resolveContextWindow(options);
     const effectiveUsed = this.resolveEffectiveUsed(messages, options);
     const microThreshold = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
     return effectiveUsed >= microThreshold;
@@ -357,17 +469,13 @@ export class ContextCompactor {
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
   needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
-    const ctxWindow = getContextWindow();
+    const ctxWindow = this.resolveContextWindow(options);
     const effectiveUsed = this.resolveEffectiveUsed(messages, options);
     const remaining = ctxWindow - effectiveUsed;
     const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
 
     if (effectiveUsed >= tokenThreshold) return true;
-    if (remaining < COMPACTION_RESERVE_TOKENS) return true;
-
-    // 向后兼容：未配置 token 阈值时也检查旧的消息数阈值逻辑。
-    if (this.config.tokenThreshold) return false;
-    return messages.length > this.config.threshold;
+    return remaining < COMPACTION_RESERVE_TOKENS;
   }
 
   /** 双轨有效占用（供日志 / 主动收缩判定） */
@@ -412,12 +520,11 @@ export class ContextCompactor {
       return split;
     }
 
-    const splitAt = compacted.length - minRecent;
-    return {
-      systemMessages,
-      droppedMessages: compacted.slice(contentStart, splitAt),
-      recentMessages: compacted.slice(splitAt),
-    };
+    const splitAt = alignSplitOutsideToolResults(compacted, compacted.length - minRecent, contentStart);
+    if (splitAt <= contentStart || splitAt >= compacted.length) {
+      return split;
+    }
+    return { systemMessages, ...splitKeepingTaskAnchor(compacted, contentStart, splitAt) };
   }
 
   /**
@@ -478,12 +585,15 @@ export class ContextCompactor {
       ...recent,
     ];
 
+    const tokenCache = new MessageTokenCache();
     let result = assemble();
+    let resultTokens = tokenCache.sum(result);
     let shrinkPass = 0;
-    while (estimateTokens(result) > targetTokens && recent.length > 8 && shrinkPass < 12) {
+    while (resultTokens > targetTokens && recent.length > 8 && shrinkPass < 12) {
       const drop = Math.max(4, Math.ceil(recent.length * 0.12));
       recent = trimLeadingOrphanToolMessages(recent.slice(drop));
       result = assemble();
+      resultTokens = tokenCache.sum(result);
       shrinkPass++;
     }
 
@@ -894,22 +1004,6 @@ Continue the conversation from where it left off without asking the user any fur
   }
 
   /**
-   * 从消息历史中提取任务描述（最早的长度 > 200 字符的用户消息）。
-   * 用于压缩前备份到会话笔记，确保压缩后模型能找回任务目标。
-   * @returns 截取前 300 字符的任务摘要，若无长用户消息则返回 null
-   */
-  getTaskDescription(messages: UnifiedMessage[]): string | null {
-    for (const msg of messages) {
-      if (msg.role !== 'user') continue;
-      const content = typeof msg.content === 'string' ? msg.content : '';
-      if (content.length > 200) {
-        return content.substring(0, 300);
-      }
-    }
-    return null;
-  }
-
-  /**
    * 第一层：Snip — 裁剪历史中的冗余段落。
    *
    * - 删除重复的 <system-reminder>（只保留最后一个）
@@ -976,7 +1070,7 @@ Continue the conversation from where it left off without asking the user any fur
     return messages.map((msg, idx) => {
       if (idx >= recentStart) return msg;
 
-      // 压缩旧的 assistant tool_calls（保留工具名，清除参数）
+      // 压缩旧的 assistant tool_calls（保留工具名与标识性参数，清除大段内容参数）
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
         const cleaned = prepareAssistantContentForHistory(
           typeof msg.content === 'string' ? msg.content : '',
@@ -984,7 +1078,7 @@ Continue the conversation from where it left off without asking the user any fur
         return {
           ...msg,
           content: cleaned,
-          toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: {} })),
+          toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: keepIdentifyingToolArgs(tc.arguments) })),
         };
       }
 
@@ -1075,7 +1169,7 @@ Continue the conversation from where it left off without asking the user any fur
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCalls) {
         for (const tc of msg.toolCalls) {
-          if (['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file'].includes(tc.name)) {
+          if (FILE_TOOLS_PRESERVE_FULL_OUTPUT.has(tc.name)) {
             fileToolCallIds.add(tc.id);
           }
         }
@@ -1092,7 +1186,8 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 计算初始切割点（token 预算优先，≥10K token, ≥5 条消息, ≤40K token）
-    let splitAt = this.findSplitByTokenBudget(messages, contentStart);
+    const tokenCache = new MessageTokenCache();
+    let splitAt = this.findSplitByTokenBudget(messages, contentStart, tokenCache);
 
     // 保护长篇分析文本（assistant 无 toolCalls 且 content > 500 字符），
     // 这类消息通常是分析报告，压缩后会丢失关键上下文导致重复分析。
@@ -1103,20 +1198,6 @@ Continue the conversation from where it left off without asking the user any fur
         && !msg.toolCalls?.length
         && typeof msg.content === 'string'
         && msg.content.length > 500
-      ) {
-        splitAt = i;
-        break;
-      }
-    }
-
-    // 保护包含任务描述的长用户消息（content > MIN_USER_MSG_LENGTH_TO_PRESERVE），
-    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致模型无法继续执行任务。
-    for (let i = contentStart; i < splitAt; i++) {
-      const msg = messages[i];
-      if (
-        msg.role === 'user'
-        && typeof msg.content === 'string'
-        && msg.content.length > MIN_USER_MSG_LENGTH_TO_PRESERVE
       ) {
         splitAt = i;
         break;
@@ -1197,11 +1278,7 @@ Continue the conversation from where it left off without asking the user any fur
       break;
     }
 
-    return {
-      systemMessages,
-      droppedMessages: messages.slice(contentStart, splitAt),
-      recentMessages: messages.slice(splitAt),
-    };
+    return { systemMessages, ...splitKeepingTaskAnchor(messages, contentStart, splitAt) };
   }
 
   /**
@@ -1296,11 +1373,22 @@ Continue the conversation from where it left off without asking the user any fur
       if (response.content && response.content.length > 0) {
         return response.content;
       }
-    } catch {
-      // LLM 摘要失败，回退到结构化摘要
+      await this.reportSummarizeFailure('empty summary');
+    } catch (err) {
+      await this.reportSummarizeFailure(err instanceof Error ? err.message : String(err));
     }
 
     return structuralSummary;
+  }
+
+  /** LLM 精炼失败时保留结构化摘要，但把原因写进 warn 和 failure telemetry。 */
+  private async reportSummarizeFailure(message: string): Promise<void> {
+    await warnHarnessFailure({
+      source: 'llm_summarize',
+      message,
+      sessionId: this.config.sessionId,
+      sessionDir: this.config.sessionDir,
+    });
   }
 
   /**
@@ -1313,7 +1401,11 @@ Continue the conversation from where it left off without asking the user any fur
    *
    * 同时受 keepRecent（消息数上限）约束。
    */
-  private findSplitByTokenBudget(messages: UnifiedMessage[], contentStart: number): number {
+  private findSplitByTokenBudget(
+    messages: UnifiedMessage[],
+    contentStart: number,
+    tokenCache: MessageTokenCache,
+  ): number {
     let tokenCount = 0;
     let messageCount = 0;
     const minTokens = this.config.keepRecentMinTokens;
@@ -1321,9 +1413,9 @@ Continue the conversation from where it left off without asking the user any fur
     const minMessages = this.config.keepRecentMinMessages;
     const maxMessages = this.config.keepRecent;
 
-    // 从末尾向前扫描
+    // 从末尾向前累计单条估算，同一条消息不重复扫描正文。
     for (let i = messages.length - 1; i >= contentStart; i--) {
-      const msgTokens = estimateTokens([messages[i]]);
+      const msgTokens = tokenCache.tokens(messages[i]!);
       tokenCount += msgTokens;
       messageCount++;
 

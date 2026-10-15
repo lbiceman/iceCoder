@@ -112,29 +112,47 @@ export class ProjectCheckpointStore {
       }
       return this.withFileLock(async () => {
         await this.recoverInterruptedReplace();
+        let raw: string;
         try {
-          const parsed: unknown = JSON.parse(await fs.readFile(this.checkpointPath, 'utf-8'));
-          if (isProjectCheckpointV3(parsed)) {
-            const checkpoint = cloneProjectCheckpointV3(parsed);
-            this.writeState.latest = cloneProjectCheckpointV3(checkpoint);
-            this.writeState.generation = checkpoint.snapshotMeta.sequence ?? 0;
-            return checkpoint;
+          raw = await fs.readFile(this.checkpointPath, 'utf-8');
+        } catch (error) {
+          if (!isNodeError(error, 'ENOENT')) {
+            console.warn(`[checkpoint] 读取 ${this.checkpointPath} 失败:`, errorMessage(error));
           }
-          // A native v3 file that fails the strict validator must not be
-          // empty-adapted; callers would then persist a blank stand-in.
-          if (isRecord(parsed) && parsed.version === PROJECT_CHECKPOINT_VERSION) {
-            return null;
-          }
-          const checkpoint = adaptLegacyCheckpoint(parsed, {
-            projectId: this.projectId,
-            sessionId: this.sessionId,
-          });
+          return null;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          await this.quarantineUnreadable('corrupt JSON', error);
+          return null;
+        }
+        if (isProjectCheckpointV3(parsed)) {
+          const checkpoint = cloneProjectCheckpointV3(parsed);
           this.writeState.latest = cloneProjectCheckpointV3(checkpoint);
           this.writeState.generation = checkpoint.snapshotMeta.sequence ?? 0;
           return checkpoint;
-        } catch {
+        }
+        // A native v3 file that fails the strict validator must not be
+        // empty-adapted; callers would then persist a blank stand-in.
+        if (isRecord(parsed) && parsed.version === PROJECT_CHECKPOINT_VERSION) {
+          await this.quarantineUnreadable('v3 schema validation failed');
           return null;
         }
+        let checkpoint: ProjectCheckpointV3;
+        try {
+          checkpoint = adaptLegacyCheckpoint(parsed, {
+            projectId: this.projectId,
+            sessionId: this.sessionId,
+          });
+        } catch (error) {
+          await this.quarantineUnreadable('legacy adaptation failed', error);
+          return null;
+        }
+        this.writeState.latest = cloneProjectCheckpointV3(checkpoint);
+        this.writeState.generation = checkpoint.snapshotMeta.sequence ?? 0;
+        return checkpoint;
       });
     });
   }
@@ -218,6 +236,24 @@ export class ProjectCheckpointStore {
     return pathExists(this.checkpointPath);
   }
 
+  /**
+   * 删除活动 checkpoint 文件并清空进程内缓存。排在已入队写入之后执行，
+   * 否则缓存里的旧 aggregate 会在下一次 save 时被写回。
+   */
+  async clear(): Promise<void> {
+    await this.enqueue(async () => {
+      this.discardCachedLatest();
+      try {
+        await fs.access(path.dirname(this.checkpointPath));
+      } catch {
+        return;
+      }
+      await this.withFileLock(async () => {
+        await fs.unlink(this.checkpointPath).catch(() => undefined);
+      });
+    });
+  }
+
   /** Transaction rollback hook when the active checkpoint did not exist before restore. */
   discardCachedLatest(): void {
     this.writeState.latest = null;
@@ -277,18 +313,53 @@ export class ProjectCheckpointStore {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      await this.copyLegacyBackupOnce();
+      await this.backupUnreadableBeforeReplace('corrupt JSON');
       return;
     }
     if (isProjectCheckpointV3(parsed)) return;
+    if (isRecord(parsed) && parsed.version === PROJECT_CHECKPOINT_VERSION) {
+      await this.backupUnreadableBeforeReplace('v3 schema validation failed');
+      return;
+    }
     await this.copyLegacyBackupOnce();
   }
 
-  private async copyLegacyBackupOnce(): Promise<void> {
+  /** legacy backup 只保留第一份；之后的坏文件各留一份 `.corrupt.<ts>`，不能被直接覆盖掉。 */
+  private async backupUnreadableBeforeReplace(reason: string): Promise<void> {
+    let target = this.legacyBackupPath;
+    if (!await this.copyLegacyBackupOnce()) {
+      target = this.corruptCopyPath();
+      await fs.copyFile(this.checkpointPath, target, constants.COPYFILE_EXCL);
+    }
+    console.warn(`[checkpoint] ${this.checkpointPath} 不可读（${reason}），覆盖前已另存为 ${target}`);
+  }
+
+  /** load 遇到不可读文件时移走原文件，调用方按「无 checkpoint」继续，原内容留在 `.corrupt.<ts>`。 */
+  private async quarantineUnreadable(reason: string, error?: unknown): Promise<void> {
+    const target = this.corruptCopyPath();
+    const detail = error === undefined ? reason : `${reason}: ${errorMessage(error)}`;
+    try {
+      await fs.rename(this.checkpointPath, target);
+      console.warn(`[checkpoint] ${this.checkpointPath} 不可读（${detail}），已移至 ${target}`);
+    } catch (renameError) {
+      console.warn(
+        `[checkpoint] ${this.checkpointPath} 不可读（${detail}），且无法移走:`,
+        errorMessage(renameError),
+      );
+    }
+  }
+
+  private corruptCopyPath(): string {
+    return `${this.checkpointPath}.corrupt.${Date.now()}`;
+  }
+
+  private async copyLegacyBackupOnce(): Promise<boolean> {
     try {
       await fs.copyFile(this.checkpointPath, this.legacyBackupPath, constants.COPYFILE_EXCL);
+      return true;
     } catch (error) {
       if (!isNodeError(error, 'EEXIST')) throw error;
+      return false;
     }
   }
 
@@ -314,12 +385,13 @@ export class ProjectCheckpointStore {
 
   /**
    * Uses rename directly where the platform supports replacement. On Windows replacement
-   * errors, a fixed displaced file and marker make the two-rename transaction recoverable.
+   * errors, a fixed displaced file makes the two-rename transaction recoverable.
+   * Recovery looks at whether that file exists, not a phase marker.
    * This is crash-recoverable, not an operating-system atomic replacement guarantee.
    */
   private async recoverableReplace(checkpoint: ProjectCheckpointV3): Promise<string> {
     const tmp = `${this.checkpointPath}.${randomUUID()}.tmp`;
-    const serialized = `${JSON.stringify(checkpoint, null, 2)}\n`;
+    const serialized = `${JSON.stringify(checkpoint)}\n`;
     const expectedHash = sha256(serialized);
     try {
       await fs.writeFile(tmp, serialized, { encoding: 'utf-8', flag: 'wx' });
@@ -332,23 +404,19 @@ export class ProjectCheckpointStore {
         await fs.rename(tmp, this.checkpointPath);
       } catch (error) {
         if (!isWindowsReplaceError(error)) throw error;
-        await this.writeRecoveryMarker('prepared');
         try {
           await fs.rename(this.checkpointPath, this.recoveryDisplacedPath);
         } catch (moveError) {
           if (!isNodeError(moveError, 'ENOENT')) throw moveError;
         }
-        await this.writeRecoveryMarker('displaced');
         try {
           await fs.rename(tmp, this.checkpointPath);
         } catch (replaceError) {
           if (await pathExists(this.recoveryDisplacedPath)) {
             await fs.rename(this.recoveryDisplacedPath, this.checkpointPath);
           }
-          await fs.unlink(this.recoveryMarkerPath).catch(() => undefined);
           throw replaceError;
         }
-        await this.writeRecoveryMarker('installed');
         await fs.unlink(this.recoveryDisplacedPath).catch(() => undefined);
         await fs.unlink(this.recoveryMarkerPath).catch(() => undefined);
       }
@@ -358,19 +426,13 @@ export class ProjectCheckpointStore {
     }
   }
 
-  private async writeRecoveryMarker(phase: 'prepared' | 'displaced' | 'installed'): Promise<void> {
-    await fs.writeFile(
-      this.recoveryMarkerPath,
-      JSON.stringify({ version: 1, phase, updatedAt: new Date().toISOString() }),
-      'utf-8',
-    );
-  }
-
   private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {
     const handle = await acquireFileLock(this.lockPath);
+    const heartbeat = startLockHeartbeat(this.lockPath);
     try {
       return await operation();
     } finally {
+      clearInterval(heartbeat);
       await handle.close().catch(() => undefined);
       await fs.unlink(this.lockPath).catch(() => undefined);
     }
@@ -379,6 +441,10 @@ export class ProjectCheckpointStore {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sha256(value: string): string {
@@ -409,6 +475,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 const LOCK_RETRY_LIMIT = 200;
 const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 30_000;
+const LOCK_HEARTBEAT_MS = 5_000;
 
 async function acquireFileLock(lockPath: string): Promise<Awaited<ReturnType<typeof fs.open>>> {
   for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt++) {
@@ -418,18 +485,66 @@ async function acquireFileLock(lockPath: string): Promise<Awaited<ReturnType<typ
       return handle;
     } catch (error) {
       if (!isNodeError(error, 'EEXIST')) throw error;
-      try {
-        const stat = await fs.stat(lockPath);
-        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+      const state = await inspectHeldLock(lockPath);
+      if (state === 'gone') continue;
+      if (state === 'abandoned') {
+        try {
           await fs.unlink(lockPath);
-          continue;
+        } catch (unlinkError) {
+          if (!isNodeError(unlinkError, 'ENOENT')) throw unlinkError;
         }
-      } catch (statError) {
-        if (!isNodeError(statError, 'ENOENT')) throw statError;
         continue;
       }
       await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
     }
   }
   throw new Error(`Timed out acquiring checkpoint lock: ${lockPath}`);
+}
+
+/** 持有者在锁期间每 LOCK_HEARTBEAT_MS 刷新 mtime，长操作不会被他人当作过期锁删掉。 */
+function startLockHeartbeat(lockPath: string): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    const now = new Date();
+    void fs.utimes(lockPath, now, now).catch(() => undefined);
+  }, LOCK_HEARTBEAT_MS);
+  timer.unref();
+  return timer;
+}
+
+/**
+ * 持有进程已退出 → 立即可回收；心跳停了 LOCK_STALE_MS 也回收（PID 可能已被系统复用）。
+ * 其余情况视为仍被持有。
+ */
+async function inspectHeldLock(lockPath: string): Promise<'gone' | 'abandoned' | 'held'> {
+  let mtimeMs: number;
+  let raw: string;
+  try {
+    mtimeMs = (await fs.stat(lockPath)).mtimeMs;
+    raw = await fs.readFile(lockPath, 'utf-8');
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return 'gone';
+    throw error;
+  }
+  if (Date.now() - mtimeMs > LOCK_STALE_MS) return 'abandoned';
+  const pid = lockOwnerPid(raw);
+  if (pid !== undefined && pid !== process.pid && !isProcessAlive(pid)) return 'abandoned';
+  return 'held';
+}
+
+function lockOwnerPid(raw: string): number | undefined {
+  try {
+    const pid = (JSON.parse(raw) as { pid?: unknown }).pid;
+    return typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isNodeError(error, 'ESRCH');
+  }
 }

@@ -63,6 +63,23 @@ describe('images-cache', () => {
     expect(harnessUserMessage).toContain('image_read');
   });
 
+  it('没有用户正文时不编造分析图片的句子', () => {
+    const dataUrl = 'data:image/png;base64,abc';
+    const { content, harnessUserMessage } = buildUserMessageWithImages({
+      userText: '',
+      filePaths: [],
+      imageAbsolutePaths: ['D:\\data\\imagesCache\\sess\\abc.png'],
+      imageDataUrls: [dataUrl],
+      supportsVision: true,
+    });
+    expect(harnessUserMessage).not.toContain('请分析这些图片');
+    expect(JSON.stringify(content)).not.toContain('请分析这些图片');
+    expect(content).toEqual([
+      { type: 'text', text: expect.stringContaining('无需调用 image_read') },
+      { type: 'image', imageUrl: dataUrl },
+    ]);
+  });
+
   it('vision 时返回 ContentBlock 数组', () => {
     const dataUrl = 'data:image/png;base64,abc';
     const { content } = buildUserMessageWithImages({

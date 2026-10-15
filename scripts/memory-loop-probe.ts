@@ -220,8 +220,8 @@ async function main() {
   if (resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: false }) === 'coarse_pre_llm') {
     ok('首轮执行任务走 coarse_pre_llm');
   } else ng('首轮相位错误');
-  if (resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: true }) === 'default') {
-    ok('工具轮后走标准召回');
+  if (resolveRecallInjectMode({ casual: false, hadToolRoundThisRun: true }) === 'coarse_pre_llm') {
+    ok('工具轮后仍走关键词召回');
   } else ng('工具轮后相位错误');
 
   console.log(`\n${C.cyan}5. Harness 注入循环（关键词）${C.reset}`);

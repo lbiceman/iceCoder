@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseFrontmatter } from '../memory/file-memory/memory-scanner.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
-import { validatePath, PathTraversalError } from '../memory/file-memory/memory-security.js';
+import { validatePath, validatePathWithSymlink, PathTraversalError } from '../memory/file-memory/memory-security.js';
 
 /** 技能元信息（列表展示用） */
 export interface SkillMeta {
@@ -136,6 +136,151 @@ export async function readSkillBody(skillsDir: string, filename: string): Promis
   const found = await readSkillFile(skillsDir, filename);
   if (!found) return null;
   return extractBodyFromMarkdown(found.content).trim();
+}
+
+const SKILL_SEGMENT_MAX = 80;
+const SKILL_CONTENT_MAX = 200_000;
+const SKILL_SEGMENT_ILLEGAL = /[\\/:*?"<>|\u0000-\u001f]/;
+
+/** 写入技能文件时的可预期错误（路径、重名、内容）。 */
+export class SkillWriteError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status = 400) {
+    super(message);
+    this.name = 'SkillWriteError';
+    this.status = status;
+  }
+}
+
+function assertPlainSegment(label: string, value: string): void {
+  if (!value || value === '.' || value === '..' || value.includes('..')) {
+    throw new SkillWriteError(`${label}无效`);
+  }
+  if (SKILL_SEGMENT_ILLEGAL.test(value) || /\s/.test(value) || value.startsWith('.') || value.endsWith('.')) {
+    throw new SkillWriteError(`${label}不能包含空格、斜杠或特殊字符`);
+  }
+  if (value.length > SKILL_SEGMENT_MAX) {
+    throw new SkillWriteError(`${label}过长`);
+  }
+  const nfkc = value.normalize('NFKC');
+  if (nfkc !== value && (nfkc.includes('..') || nfkc.includes('/') || nfkc.includes('\\'))) {
+    throw new SkillWriteError(`${label}包含非法字符`);
+  }
+  try {
+    const decoded = decodeURIComponent(value);
+    if (decoded !== value && (decoded.includes('..') || decoded.includes('/') || decoded.includes('\\'))) {
+      throw new SkillWriteError(`${label}包含非法字符`);
+    }
+  } catch (e) {
+    if (e instanceof SkillWriteError) throw e;
+    throw new SkillWriteError(`${label}包含非法字符`);
+  }
+}
+
+/** 技能文件夹：空字符串表示放在技能根目录；否则只能是一级目录名。 */
+export function normalizeSkillFolderSegment(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) return '';
+  assertPlainSegment('文件夹', value);
+  return value;
+}
+
+/** 技能名称：用作文件名（不含 .md）和 frontmatter name。 */
+export function normalizeSkillLeafName(raw: unknown): string {
+  let value = typeof raw === 'string' ? raw.trim() : '';
+  if (value.toLowerCase().endsWith('.md')) value = value.slice(0, -3).trim();
+  if (!value) throw new SkillWriteError('请填写名称');
+  assertPlainSegment('名称', value);
+  if (value.toLowerCase() === 'readme') throw new SkillWriteError('不能使用 readme 作为技能名称');
+  return value;
+}
+
+function descriptionFromBody(body: string): string {
+  const line = body
+    .split('\n')
+    .map((item) => item.trim())
+    .find((item) => item.length > 0 && item !== '---');
+  if (!line) return '';
+  return line.replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/** 简单技能文件：名称写入 frontmatter；若内容本身已是完整 Markdown（含 frontmatter）则原样保存。 */
+export function composeSkillDocument(name: string, body: string, createdAt = new Date().toISOString()): string {
+  const normalized = body.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim();
+  if (normalized.startsWith('---')) {
+    return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+  }
+  const description = descriptionFromBody(normalized);
+  const head = [
+    '---',
+    `name: ${name}`,
+    ...(description ? [`description: ${description}`] : []),
+    `createdAt: ${createdAt}`,
+    '---',
+    '',
+  ];
+  return `${head.join('\n')}${normalized}\n`;
+}
+
+/** 在技能目录创建简单技能（单个 .md，不附带脚本）。 */
+export async function createSkillFile(
+  skillsDir: string,
+  input: { folder?: unknown; name?: unknown; content?: unknown },
+): Promise<{ filename: string; content: string; meta: SkillMeta }> {
+  const folder = normalizeSkillFolderSegment(input.folder);
+  const name = normalizeSkillLeafName(input.name);
+  if (typeof input.content !== 'string' || !input.content.trim()) {
+    throw new SkillWriteError('请填写内容');
+  }
+  if (input.content.length > SKILL_CONTENT_MAX) {
+    throw new SkillWriteError('内容过长');
+  }
+
+  const relative = folder ? `${folder}/${name}.md` : `${name}.md`;
+  const filename = normalizeSkillFilename(relative);
+  if (!filename || isExcludedSkillMarkdown(filename)) {
+    throw new SkillWriteError('技能路径无效');
+  }
+
+  await fs.mkdir(skillsDir, { recursive: true });
+  const filePath = await validatePathWithSymlink(filename, skillsDir);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const content = composeSkillDocument(name, input.content);
+  try {
+    await fs.writeFile(filePath, content, { encoding: 'utf-8', flag: 'wx' });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new SkillWriteError('同名技能已存在', 409);
+    }
+    throw e;
+  }
+  const stat = await fs.stat(filePath);
+  return { filename, content, meta: buildSkillMeta(filename, content, stat.mtimeMs) };
+}
+
+/** 覆盖已有技能的 Markdown 内容。 */
+export async function updateSkillContent(
+  skillsDir: string,
+  rawFilename: string,
+  content: unknown,
+): Promise<{ filename: string; content: string; meta: SkillMeta }> {
+  const filename = normalizeSkillFilename(rawFilename);
+  if (!filename) throw new SkillWriteError('技能路径无效');
+  if (typeof content !== 'string' || !content.trim()) throw new SkillWriteError('内容不能为空');
+  if (content.length > SKILL_CONTENT_MAX) throw new SkillWriteError('内容过长');
+
+  const filePath = await validatePathWithSymlink(filename, skillsDir);
+  try {
+    await fs.access(filePath);
+  } catch {
+    throw new SkillWriteError(`技能不存在：${filename}`, 404);
+  }
+  const normalized = content.replace(/\r\n/g, '\n');
+  const withNewline = normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+  await fs.writeFile(filePath, withNewline, 'utf-8');
+  const stat = await fs.stat(filePath);
+  return { filename, content: withNewline, meta: buildSkillMeta(filename, withNewline, stat.mtimeMs) };
 }
 
 /** 将用户输入规范化为技能相对路径（自动补 .md；支持一级子目录如 openClaude/skll.md）。 */
