@@ -113,7 +113,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）。仓库 `data/` �
 
 - **`run_in_background: true`**：立刻返回 agentId，主 Agent 继续干活；用 **`check_agent`** 查询，或等结束后自动注入报告。
 - **写租约**：并行的子 Agent 不能写同一个文件。子 Agent 不能再派子 Agent，也不能 `git commit` / `push` / `reset` / `checkout` 等改历史的命令。
-- **聊天卡片**：运行中展示工具轨迹和 diff，完成后收成一行；可打开只读子会话。确认弹窗会标明是哪个子 Agent 发起的。
+- **委派卡片**：和本轮的工具列表分开。收起时是标题、状态和当前一句；展开后才是过程、报告和改动。可打开只读子会话。确认弹窗会标明是哪个子 Agent 发起的。
 - 子 Agent 的完整对话不进入主上下文，主 Agent 只看到 `[Agent Result]`。
 
 ### 三种会话模式
@@ -209,7 +209,7 @@ Shell 协作会话另外使用 `interactive_shell`、`shell_exec`、`shell_wait`
 
 ### 遥测与可观测性
 
-Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`（`execution_mode_enter` / `exit`）。Token 用量是独立 JSONL，统计页读的是这份账本；接口里已按主 Agent / 子 Agent 拆开（`byRole`），页面上目前只分「会话 / 记忆」。
+Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`（`execution_mode_enter` / `exit`）。Token 用量是独立 JSONL。统计页按当前时间范围拆成会话、子 Agent 和记忆。
 
 - Web：`~tokens`、`~telemetry`、`~supervisor`。
 - HTTP：`GET /api/supervisor/events` 返回 Execution Mode 进入/退出。

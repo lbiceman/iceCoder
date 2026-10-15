@@ -255,7 +255,9 @@
 .chat-vhistory-slot .message:is(.assistant, .agent) {
   align-self: flex-start;
 }
-.chat-vhistory-slot .tool-trace-group {
+.chat-vhistory-slot .tool-trace-group,
+.chat-vhistory-slot .turn-activity,
+.chat-vhistory-slot .agent-delegation {
   align-self: flex-start;
   max-width: 92%;
 }

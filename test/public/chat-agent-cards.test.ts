@@ -356,10 +356,15 @@ describe('子 Agent 卡片', () => {
     ChatAgentCards.onAgentStream({ agentId: 'a1', kind: 'text', delta: '正在分析测试失败原因' });
 
     const card = document.querySelector('.agent-card[data-agent-id="a1"]') as unknown as DomEl;
-    expect(card.classList.contains('is-expanded')).toBe(true);
+    expect(card.classList.contains('is-expanded')).toBe(false);
+    expect(card.querySelector('.agent-card__type')!.textContent).toBe('实现');
     expect(card.querySelector('.agent-card__stop')!.hidden).toBe(false);
     expect(card.querySelector('.agent-card__meta')!.textContent).toContain('运行中');
-    expect(card.querySelector('.agent-card__meta')!.textContent).toContain('23 次工具调用');
+    expect(card.querySelector('.agent-card__meta')!.textContent).toContain('改了 1 个文件');
+    expect(card.querySelector('.agent-card__meta')!.textContent).not.toContain('次工具调用');
+    const anchor = card.parentElement as DomEl;
+    expect(anchor.classList.contains('is-agent-anchor')).toBe(true);
+    expect(anchor.querySelector('.tool-action')!.hidden).toBe(true);
     expect(card.querySelector('.agent-card__recent')!.children).toHaveLength(5);
     expect(card.querySelector('.agent-card__older')!.children).toHaveLength(2);
     expect(card.querySelector('.agent-card__older-toggle')!.textContent).toBe('还有 2 条 · 展开');
@@ -416,8 +421,10 @@ describe('子 Agent 卡片', () => {
       }));
     }
     await new Promise(resolve => setTimeout(resolve, 20));
-    const head = document.querySelector('.agent-group-head') as unknown as DomEl;
-    expect(head.textContent).toBe('并行 3 个 Agent · 2 运行中 · 1 已完成');
+    const head = document.querySelector('.agent-delegation__head') as unknown as DomEl;
+    expect(head.textContent).toBe('3 个 Agent · 2 个运行中 · 1 个已完成');
+    const delegation = document.querySelector('.agent-delegation') as unknown as DomEl;
+    expect(delegation.querySelectorAll('.agent-card')).toHaveLength(3);
   });
 
   it('有租约拦截时标题行显示橙色提示', () => {

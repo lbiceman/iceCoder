@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Token 用量统计页：合计趋势 + 会话/记忆消耗（读独立 JSONL 账本）。
+ * Token 用量统计页：合计趋势 + 会话 / 子 Agent / 记忆（读独立 JSONL 账本）。
  * 日 / 当周 / 当月为滚动窗口：24 小时 / 7 天 / 30 天。
  */
 
@@ -138,7 +138,7 @@ export const StatsPage = (() => {
   function paintLoading() {
     if (!mainEl) return;
     mainEl.innerHTML =
-      `<section class="stats-card stats-card-main" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-aux-metrics">${skelMetrics()}</div><div class="stats-skel-chart"></div></section><div class="stats-split stats-split-aux"><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section></div>`;
+      `<section class="stats-card stats-card-main" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-aux-metrics">${skelMetrics(4)}</div><div class="stats-skel-chart"></div></section><div class="stats-split stats-split-aux"><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section></div>`;
   }
 
   function paintError(message) {
@@ -440,8 +440,11 @@ export const StatsPage = (() => {
     );
   }
 
-  function skelMetrics() {
-    return skelMetric() + skelMetric() + skelMetric();
+  function skelMetrics(count) {
+    const n = count || 3;
+    let html = '';
+    for (let i = 0; i < n; i++) html += skelMetric();
+    return html;
   }
 
   function supervisorBySignal(mode) {
@@ -515,13 +518,16 @@ export const StatsPage = (() => {
     if (!panel) return;
     const kinds = sumKindTotals(buckets);
     const chat = kinds.chat.totalTokens;
+    const subAgent = kinds.subAgent.totalTokens;
     const memory = kinds.memory.totalTokens;
-    const total = chat + memory;
+    const total = chat + subAgent + memory;
     const chatShare = total > 0 ? Math.round((chat / total) * 100) : 0;
-    const memoryShare = total > 0 ? Math.max(0, 100 - chatShare) : 0;
-    const turns = kinds.chat.turns + kinds.memory.turns;
+    const subShare = total > 0 ? Math.round((subAgent / total) * 100) : 0;
+    const memoryShare = total > 0 ? Math.max(0, 100 - chatShare - subShare) : 0;
+    const turns = kinds.chat.turns + kinds.subAgent.turns + kinds.memory.turns;
     panel.innerHTML =
       auxMetric('会话', formatTokenCount(chat), `${chatShare}%`) +
+      auxMetric('子 Agent', formatTokenCount(subAgent), `${subShare}%`) +
       auxMetric('记忆', formatTokenCount(memory), `${memoryShare}%`) +
       auxMetric('请求次数', formatTokenCount(turns), '次');
   }
@@ -533,6 +539,12 @@ export const StatsPage = (() => {
         label: '会话',
         color: colors[0],
         values: buckets.map((b) => Number(kindFromBucket(b, 'chat').totalTokens) || 0),
+      },
+      {
+        key: 'subAgent',
+        label: '子 Agent',
+        color: colors[2] || colors[0],
+        values: buckets.map((b) => Number(kindFromBucket(b, 'subAgent').totalTokens) || 0),
       },
       {
         key: 'memory',
@@ -866,14 +878,19 @@ export const StatsPage = (() => {
   }
 
   function sumKindTotals(buckets) {
-    const out = { chat: emptyKindTotals(), memory: emptyKindTotals() };
+    const out = { chat: emptyKindTotals(), subAgent: emptyKindTotals(), memory: emptyKindTotals() };
     for (let i = 0; i < buckets.length; i++) {
       const chat = kindFromBucket(buckets[i], 'chat');
+      const subAgent = kindFromBucket(buckets[i], 'subAgent');
       const memory = kindFromBucket(buckets[i], 'memory');
       out.chat.inputTokens += chat.inputTokens;
       out.chat.outputTokens += chat.outputTokens;
       out.chat.totalTokens += chat.totalTokens;
       out.chat.turns += chat.turns;
+      out.subAgent.inputTokens += subAgent.inputTokens;
+      out.subAgent.outputTokens += subAgent.outputTokens;
+      out.subAgent.totalTokens += subAgent.totalTokens;
+      out.subAgent.turns += subAgent.turns;
       out.memory.inputTokens += memory.inputTokens;
       out.memory.outputTokens += memory.outputTokens;
       out.memory.totalTokens += memory.totalTokens;

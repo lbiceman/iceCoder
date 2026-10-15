@@ -102,6 +102,10 @@
   margin-bottom: 6px;
 }
 
+.stats-card-main .stats-aux-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .stats-aux-metric {
   min-width: 0;
   padding: 8px 10px;

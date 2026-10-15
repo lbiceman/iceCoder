@@ -38,6 +38,8 @@ export interface TokenUsageKindTotals extends TokenUsageTotals {
 
 export interface TokenUsageByKind {
   chat: TokenUsageKindTotals;
+  /** 子 Agent 调用，不计入 chat */
+  subAgent: TokenUsageKindTotals;
   memory: TokenUsageKindTotals;
 }
 
@@ -89,6 +91,7 @@ export function emptyTokenUsageKindTotals(): TokenUsageKindTotals {
 export function emptyTokenUsageByKind(): TokenUsageByKind {
   return {
     chat: emptyTokenUsageKindTotals(),
+    subAgent: emptyTokenUsageKindTotals(),
     memory: emptyTokenUsageKindTotals(),
   };
 }
@@ -204,7 +207,9 @@ export function aggregateTokenUsageWindows(
 function addToBucket(bucket: TokenUsageBucket, record: TokenUsageRecord): void {
   bucket.turns += 1;
   addUsage(bucket, record.inputTokens, record.outputTokens);
-  const kind = isMemoryTokenSource(record.source) ? 'memory' : 'chat';
+  const kind = isSubAgentTokenRecord(record)
+    ? 'subAgent'
+    : isMemoryTokenSource(record.source) ? 'memory' : 'chat';
   bucket.byKind[kind].turns += 1;
   addUsage(bucket.byKind[kind], record.inputTokens, record.outputTokens);
   const model = record.usedModel;

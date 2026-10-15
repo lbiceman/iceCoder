@@ -113,7 +113,7 @@ In the default mode the parent agent calls **`task`** to run a full child Harnes
 
 - **`run_in_background: true`** returns an agent id immediately. The parent keeps working, polls with **`check_agent`**, or receives the report on a later round.
 - **Write leases** stop parallel sub-agents from editing the same file. A sub-agent cannot spawn another sub-agent, and cannot run history-changing git (`commit`, `push`, `reset`, `checkout`, and similar).
-- **Chat cards** show the live tool trail and diffs, then collapse to one line. The child transcript opens read-only. Confirm dialogs name the sub-agent that asked.
+- **Delegation cards** sit apart from that turn’s tool list. Collapsed, a card is the title, status, and the current line; the trail, report, and edits are inside. The child transcript opens read-only. Confirm dialogs name the sub-agent that asked.
 - The parent context only receives `[Agent Result]`. The child transcript stays out of it.
 
 ### Three session modes
@@ -209,7 +209,7 @@ Shell-collaboration sessions add `interactive_shell`, `shell_exec`, `shell_wait`
 
 ### Telemetry and observability
 
-Harness rounds, memory ops, and L1 mode changes go to `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Token usage is a separate JSONL ledger — that is what Stats reads. The API already splits **main vs sub-agent** (`byRole`); the page currently shows **session vs memory** only.
+Harness rounds, memory ops, and L1 mode changes go to `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Token usage is a separate JSONL ledger. Stats splits the selected range into session, sub-agent, and memory.
 
 - Web: **`~tokens`**, **`~telemetry`**, **`~supervisor`**.
 - HTTP: `GET /api/supervisor/events` returns Execution Mode enter/exit telemetry.
