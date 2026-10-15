@@ -247,6 +247,102 @@
   background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.skills-btn.is-active {
+  border-color: var(--accent-border-strong);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.skills-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.skills-list-toolbar {
+  display: none;
+}
+
+.skills-card:focus-visible {
+  outline: none;
+  border-color: var(--accent-border-strong);
+  box-shadow: var(--focus-ring);
+}
+
+.skills-create-note {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+
+.skills-create-note p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.skills-create-note strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.skills-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skills-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skills-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.skills-field-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.skills-field-input:focus,
+textarea.skills-detail-content:focus {
+  outline: none;
+  border-color: var(--accent-border-strong);
+  box-shadow: var(--focus-ring);
+}
+
+textarea.skills-detail-content {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 280px;
+  resize: vertical;
+  color: var(--text-primary);
+  background: var(--bg-input);
+}
+
+.skills-editor-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .skills-detail-content {
   margin: 0;
   padding: 16px;
@@ -270,10 +366,22 @@
   .skills-detail-panel {
     display: none;
   }
+  .skills-list-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
   .skills-card-actions {
     display: flex;
+    flex-wrap: wrap;
     margin-top: 10px;
     gap: 8px;
+  }
+  .skills-root.is-composing .skills-list-panel {
+    display: none;
+  }
+  .skills-root.is-composing .skills-detail-panel {
+    display: block;
   }
   .skills-card.is-expanded {
     border-color: var(--accent-border-strong);

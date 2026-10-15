@@ -1,62 +1,139 @@
-/* ===== Toast Notification ===== */
+/* ===== Toast：左右居中，距顶部 80px，从上方落下 ===== */
 .notification-stack {
   position: fixed;
-  top: 64px;
-  right: 20px;
-  z-index: 10000;
+  top: 80px;
+  left: 50%;
+  z-index: 10050;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100vw - 48px);
+  transform: translateX(-50%);
   pointer-events: none;
-  max-width: min(420px, calc(100vw - 40px));
 }
 
 .notification {
-  padding: 10px 18px;
-  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 13px 18px 13px 12px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.5;
-  white-space: pre-line;
-  box-shadow: var(--shadow-md);
+  text-align: left;
+  user-select: none;
   pointer-events: auto;
   cursor: pointer;
   opacity: 0;
-  transform: translateX(100%);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: translateY(calc(-100% - 80px));
+}
+
+.notification-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--tone-bg);
+  color: var(--tone);
+}
+
+.notification-mark svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.notification-body {
+  min-width: 0;
+  white-space: pre-line;
+  word-break: break-word;
 }
 
 .notification--visible {
-  opacity: 1;
-  transform: translateX(0);
+  animation: notification-drop 0.56s cubic-bezier(0.16, 0.84, 0.32, 1) forwards;
 }
 
 .notification--leaving {
-  opacity: 0;
-  transform: translateX(100%);
+  animation: notification-leave 0.26s ease forwards;
+}
+
+@keyframes notification-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(-100% - 80px));
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes notification-leave {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
 }
 
 .notification.success {
-  background: var(--success-light);
-  color: var(--success);
-  border: 1px solid var(--success);
+  --tone: var(--success);
+  --tone-bg: var(--success-light);
 }
 
 .notification.error {
-  background: var(--danger-light);
-  color: var(--danger);
-  border: 1px solid var(--danger);
+  --tone: var(--danger);
+  --tone-bg: var(--danger-light);
 }
 
 .notification.warning {
-  background: var(--warning-light);
-  color: var(--warning);
-  border: 1px solid var(--warning);
+  --tone: var(--warning);
+  --tone-bg: var(--warning-light);
 }
 
 .notification.info {
-  background: var(--accent-light);
-  color: var(--text-primary);
-  border: 1px solid var(--accent-border);
+  --tone: var(--text-secondary);
+  --tone-bg: var(--bg-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification {
+    transform: none;
+    transition: opacity 0.15s ease;
+  }
+
+  .notification--visible,
+  .notification--leaving {
+    animation: none;
+  }
+
+  .notification--visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  .notification--leaving {
+    opacity: 0;
+  }
 }

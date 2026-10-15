@@ -17,7 +17,15 @@
 export const Notification = (() => {
 
   const DEFAULT_DURATION = 3000;
+  const LEAVE_MS = 280;
   let stackEl = null;
+
+  const ICONS = {
+    success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+    error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 4.3 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>',
+  };
 
   function ensureStack() {
     if (!stackEl || !stackEl.parentNode) {
@@ -40,7 +48,7 @@ export const Notification = (() => {
         stackEl.parentNode.removeChild(stackEl);
         stackEl = null;
       }
-    }, 200);
+    }, LEAVE_MS);
   }
 
   /**
@@ -52,10 +60,22 @@ export const Notification = (() => {
   function show(message, type = 'info', opts = {}) {
     const duration = typeof opts.duration === 'number' ? opts.duration : DEFAULT_DURATION;
 
+    const kind = ICONS[type] ? type : 'info';
     const el = document.createElement('div');
-    el.className = `notification ${type}`;
+    el.className = `notification ${kind}`;
     el.setAttribute('role', 'status');
-    el.textContent = message || '';
+
+    const mark = document.createElement('span');
+    mark.className = 'notification-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.innerHTML = ICONS[kind];
+
+    const body = document.createElement('span');
+    body.className = 'notification-body';
+    body.textContent = message || '';
+
+    el.appendChild(mark);
+    el.appendChild(body);
 
     ensureStack().appendChild(el);
 
