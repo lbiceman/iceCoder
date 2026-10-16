@@ -819,10 +819,43 @@ body.setup-required .chat-sidebar-settings-btn {
   opacity: 0.55;
 }
 
-.settings-etl-desktop-pet {
+.settings-etl-desktop-pet,
+.settings-etl-screen-ping {
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--border-color);
+}
+
+.settings-etl-screen-ping[hidden],
+.settings-screen-ping-crop[hidden] {
+  display: none !important;
+}
+
+.settings-screen-ping-crop {
+  margin-top: 12px;
+}
+
+.settings-screen-ping-crop-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.settings-screen-ping-crop-field input {
+  width: 88px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.settings-screen-ping-crop-unit {
+  color: var(--text-secondary, #8b97a3);
+  font-size: 13px;
 }
 
 .settings-etl-row {

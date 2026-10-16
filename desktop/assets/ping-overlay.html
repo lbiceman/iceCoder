@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>iceCoder ping</title>
+  <style>
+    :root { --gold: #c8aa6e; --gold-dim: #8a7448; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #wheel {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 600px;
+      height: 600px;
+      margin: -300px 0 0 -300px;
+      opacity: 0;
+      transform: scale(.85);
+      transition: opacity .12s ease-out, transform .12s ease-out;
+    }
+    #wheel.open { opacity: 1; transform: scale(1); }
+    #wheel svg { width: 600px; height: 600px; display: block; overflow: visible; }
+    #wheel .wedge { transition: fill-opacity .08s; }
+    #wheel .icon {
+      transition: filter .1s, transform .1s;
+      transform-box: fill-box;
+      transform-origin: center;
+      filter: grayscale(1) sepia(.75) saturate(1.3) brightness(1.15);
+    }
+    #wheel .icon.hot { filter: none; transform: scale(1.18); }
+    .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
+    .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
+
+    .ping {
+      position: absolute;
+      width: 0;
+      height: 0;
+      display: none;
+      --size: 110px;
+      --c: #f2c518;
+      --dur: 3.2s;
+    }
+    .ping.on { display: block; }
+    .crop-frame {
+      position: absolute;
+      box-sizing: border-box;
+      border: 1.5px solid rgba(242, 214, 120, 0.78);
+      background: rgba(242, 197, 24, 0.035);
+      box-shadow:
+        0 0 0 1px rgba(255, 248, 220, 0.16),
+        0 0 18px rgba(242, 197, 24, 0.22);
+      pointer-events: none;
+    }
+    .ping.on .crop-frame {
+      animation: crop-in .2s ease-out both;
+    }
+    @keyframes crop-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .ping .ground {
+      position: absolute;
+      left: -28px;
+      top: -7px;
+      width: 56px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(closest-side, var(--c), transparent);
+      opacity: 0;
+      animation: ground var(--dur) ease-out forwards;
+    }
+    .ping .ring {
+      position: absolute;
+      left: calc(var(--size) * -0.545);
+      top: calc(var(--size) * -0.545);
+      width: calc(var(--size) * 1.09);
+      height: calc(var(--size) * 1.09);
+      box-sizing: border-box;
+      border-radius: 50%;
+      border: 3px solid var(--c);
+      box-shadow: 0 0 18px var(--c), inset 0 0 12px var(--c);
+      opacity: 0;
+      animation: ring .65s ease-out forwards;
+    }
+    .ping .ring.r2 { animation-delay: .22s; }
+    .ping .ring.r3 { animation-delay: 1.4s; }
+    .ping .art {
+      position: absolute;
+      left: -34px;
+      top: -88px;
+      width: 68px;
+      height: 88px;
+    }
+    .ping .pop {
+      position: absolute;
+      inset: 0;
+      filter: drop-shadow(0 0 10px var(--c));
+      animation: pop .28s cubic-bezier(.2,1.6,.4,1) both, bob 1.6s ease-in-out .3s infinite;
+    }
+    .ping .pop svg { width: 100%; height: 100%; display: block; }
+    .mark-card {
+      position: absolute;
+      left: 72px;
+      top: -36px;
+      width: max-content;
+      max-width: 280px;
+      padding: 10px 12px 8px;
+      border-radius: 10px;
+      background: rgba(8, 12, 16, .9);
+      border: 1px solid rgba(200, 170, 110, .55);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, .4);
+      color: #f0e6d2;
+      font: 600 13px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .ping.is-left .mark-card { left: auto; right: 72px; }
+    .mark-card.is-error { border-color: rgba(255, 120, 110, .75); }
+    .mark-card.is-loading .mark-card-text { color: #e7d7a4; }
+    .mark-card-text { white-space: pre-wrap; word-break: break-word; }
+    .mark-card-hint { margin-top: 6px; color: #8b97a3; font-size: 11px; font-weight: 500; }
+
+    @keyframes pop { 0% { transform: scale(.4); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
+    @keyframes bob { 0%, 100% { translate: 0 0 } 50% { translate: 0 -5px } }
+    @keyframes ring { 0% { transform: scale(.25); opacity: .95 } 100% { transform: scale(1.35); opacity: 0 } }
+    @keyframes ground { 0% { opacity: 0 } 10% { opacity: .75 } 85% { opacity: .55 } 100% { opacity: .45 } }
+  </style>
+</head>
+<body>
+  <div id="wheel"></div>
+  <div class="ping" id="mark">
+    <div class="crop-frame" id="crop-frame"></div>
+    <div class="ground"></div>
+    <div class="ring"></div>
+    <div class="ring r2"></div>
+    <div class="ring r3"></div>
+    <div class="art"><div class="pop" id="mark-art"></div></div>
+    <div class="mark-card" id="mark-card">
+      <div class="mark-card-text" id="mark-text"></div>
+      <div class="mark-card-hint">Esc 关闭 · 30 秒后自动收起</div>
+    </div>
+  </div>
+  <script>
+    const R_IN = 86, R_OUT = 188, R_EXT = 288, R_ICON = 137;
+    const NS = 'http://www.w3.org/2000/svg';
+    const QUESTION = 6;
+
+    function questionMark(gradId, width, height) {
+      var body = 'M62 46 C70 34 68 12 46 8 C22 4 8 22 16 42 C22 56 36 62 44 76 C46 82 40 88 32 86';
+      return '<svg class="q-art" width="' + width + '" height="' + height + '" viewBox="0 0 96 124">'
+        + '<defs><linearGradient id="' + gradId + '" x1="18" y1="6" x2="58" y2="118" gradientUnits="userSpaceOnUse">'
+        + '<stop offset="0" stop-color="#fff4a4"/>'
+        + '<stop offset=".38" stop-color="#ffe14a"/>'
+        + '<stop offset="1" stop-color="#e39a00"/>'
+        + '</linearGradient></defs>'
+        + '<path d="' + body + '" fill="none" stroke="#1a1204" stroke-width="30" stroke-linecap="round"/>'
+        + '<path d="' + body + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="22" stroke-linecap="round"/>'
+        + '<path d="M52 20 C44 12 30 12 24 22" fill="none" stroke="#fff8d2" stroke-width="5" stroke-linecap="round" opacity=".9"/>'
+        + '<polygon points="40,96 54,112 40,124 26,112" fill="#1a1204"/>'
+        + '<polygon points="40,100 50,112 40,120 30,112" fill="url(#' + gradId + ')"/>'
+        + '<polygon points="40,104 45,110 40,114 36,110" fill="#fff6c4" opacity=".85"/>'
+        + '</svg>';
+    }
+
+    const ICONS = [
+      '<path d="M0-14 L13 12 H-13 Z" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linejoin="round"/><path d="M0-3 V6" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/>',
+      '<path d="M-11 8 C-2 -10 10 -8 12 -1" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/><path d="M5-7 H13 V1" fill="none" stroke="#e6d3a1" stroke-width="2.2"/>',
+      '<path d="M-3 14 V-10 L12 -2 Z" fill="#e6d3a1"/>',
+      '<path d="M0-13 V8 M-8 2 L0 12 L8 2" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+      '<path d="M-11-9 L9 11 M9-9 L-11 11" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/>',
+      '<path d="M-2 14 V-12 M-2-12 H11 L7-5 H-2" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linejoin="round"/>',
+      '',
+      '<ellipse cx="0" cy="0" rx="12" ry="7.5" fill="none" stroke="#e6d3a1" stroke-width="2.2"/><circle cx="0" cy="0" r="3" fill="#e6d3a1"/>',
+    ];
+
+    function pt(r, deg) {
+      const rad = deg * Math.PI / 180;
+      return [r * Math.cos(rad), r * Math.sin(rad)];
+    }
+    function sector(r0, r1, a0, a1) {
+      const [x0, y0] = pt(r0, a0);
+      const [x1, y1] = pt(r1, a0);
+      const [x2, y2] = pt(r1, a1);
+      const [x3, y3] = pt(r0, a1);
+      return 'M' + x0 + ',' + y0 + ' L' + x1 + ',' + y1
+        + ' A' + r1 + ',' + r1 + ' 0 0 1 ' + x2 + ',' + y2
+        + ' L' + x3 + ',' + y3
+        + ' A' + r0 + ',' + r0 + ' 0 0 0 ' + x0 + ',' + y0 + 'Z';
+    }
+
+    const wheel = document.getElementById('wheel');
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '-300 -300 600 600');
+    wheel.appendChild(svg);
+    const el = (tag, attrs, parent) => {
+      const node = document.createElementNS(NS, tag);
+      for (const key in attrs) node.setAttribute(key, attrs[key]);
+      (parent || svg).appendChild(node);
+      return node;
+    };
+
+    const defs = el('defs', {});
+    defs.innerHTML = ''
+      + '<radialGradient id="ext" cx="0" cy="0" r="' + R_EXT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_OUT / R_EXT) + '" stop-color="#5c6066" stop-opacity=".55"/>'
+      + '<stop offset="1" stop-color="#5c6066" stop-opacity="0"/></radialGradient>'
+      + '<radialGradient id="ring" cx="0" cy="0" r="' + R_OUT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_IN / R_OUT) + '" stop-color="#2a2d31"/>'
+      + '<stop offset="1" stop-color="#4a4e54"/></radialGradient>'
+      + '<radialGradient id="hot" cx="0" cy="0" r="' + R_EXT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_IN / R_EXT) + '" stop-color="#8a8f96"/>'
+      + '<stop offset="' + (R_OUT / R_EXT) + '" stop-color="#9aa0a8"/>'
+      + '<stop offset="1" stop-color="#9aa0a8" stop-opacity="0"/></radialGradient>'
+      + '<radialGradient id="core" cx="0" cy="-10" r="' + R_IN + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="0" stop-color="#2c5d60"/><stop offset="1" stop-color="#11292c"/></radialGradient>';
+
+    const wedges = [];
+    for (let i = 0; i < 8; i++) {
+      const mid = -90 + i * 45;
+      if (i % 2 === 0) el('path', { d: sector(R_OUT, R_EXT, mid - 22.5, mid + 22.5), fill: 'url(#ext)' });
+    }
+    el('circle', { r: (R_IN + R_OUT) / 2, fill: 'none', stroke: 'url(#ring)', 'stroke-width': R_OUT - R_IN, opacity: .92 });
+    for (let i = 0; i < 8; i++) {
+      const mid = -90 + i * 45;
+      const reach = i % 2 === 0 ? R_EXT : R_OUT;
+      const wedge = el('path', {
+        d: sector(R_IN, reach, mid - 22.5, mid + 22.5),
+        fill: 'url(#hot)',
+        'fill-opacity': 0,
+        class: 'wedge' + (i === QUESTION ? ' is-q' : ''),
+        'data-slice': i,
+      });
+      wedges.push(wedge);
+    }
+    for (let i = 0; i < 8; i++) {
+      const mid = -90 + i * 45;
+      const [x0, y0] = pt(R_IN, mid - 22.5);
+      const [x1, y1] = pt(R_OUT, mid - 22.5);
+      el('line', { x1: x0, y1: y0, x2: x1, y2: y1, stroke: '#a08a5c', 'stroke-opacity': .45, 'stroke-width': 1.2 });
+    }
+    const icons = [];
+    for (let i = 0; i < 8; i++) {
+      const [ix, iy] = pt(R_ICON, -90 + i * 45);
+      const icon = el('g', { class: 'icon' + (i === QUESTION ? ' is-q' : ''), 'data-slice': String(i), transform: 'translate(' + ix + ' ' + iy + ')' });
+      if (i === QUESTION) {
+        icon.innerHTML = '<g transform="translate(-24 -24)">' + questionMark('qg-wheel', 48, 48) + '</g>';
+      } else {
+        icon.innerHTML = ICONS[i];
+      }
+      icons.push(icon);
+    }
+    el('circle', { r: R_IN + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: .6 });
+    el('circle', { r: R_IN, fill: 'url(#core)', stroke: '#c8aa6e', 'stroke-width': 3 });
+    el('circle', { r: R_IN - 7, fill: 'none', stroke: '#8a7448', 'stroke-width': 1, opacity: .6 });
+    el('polygon', { points: '0,-52 8,-40 0,-28 -8,-40', fill: '#3ec0ea' });
+    const pingLabel = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt ping-label' });
+    pingLabel.textContent = 'PING';
+    const back = el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' });
+    back.textContent = 'BACK';
+    const mouse = el('g', { opacity: .55, transform: 'translate(-26,40)' });
+    el('rect', { x: 0, y: 0, width: 11, height: 16, rx: 5.5, fill: 'none', stroke: '#6c7a7c', 'stroke-width': 1.3 }, mouse);
+    el('path', { d: 'M5.5,0 V7 H11 V5.5 A5.5,5.5 0 0 0 5.5,0Z', fill: '#6c7a7c' }, mouse);
+
+    const mark = document.getElementById('mark');
+    const cropFrame = document.getElementById('crop-frame');
+    const markArt = document.getElementById('mark-art');
+    const markCard = document.getElementById('mark-card');
+    const markText = document.getElementById('mark-text');
+    markArt.innerHTML = questionMark('qg-mark', '100%', '100%');
+
+    let lastSlice = null;
+    let audioCtx = null;
+    function tick() {
+      try {
+        if (!audioCtx) audioCtx = new AudioContext();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = 740;
+        osc.type = 'triangle';
+        gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.03, audioCtx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.045);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.05);
+      } catch { /* 没声音也不影响落子 */ }
+    }
+
+    function paintSlice(slice) {
+      wedges.forEach((wedge, i) => {
+        const hot = slice !== null && i === slice;
+        wedge.setAttribute('fill-opacity', hot ? '0.55' : '0');
+        wedge.classList.toggle('is-hot', hot);
+      });
+      icons.forEach((icon, i) => icon.classList.toggle('hot', slice !== null && i === slice));
+      if (slice !== null && slice !== lastSlice) tick();
+      lastSlice = slice;
+    }
+
+    function setWheel(payload) {
+      if (!payload || !payload.show) {
+        if (wheel.classList.contains('open')) {
+          wheel.classList.remove('open');
+          lastSlice = null;
+          paintSlice(null);
+        }
+        return;
+      }
+      if (!wheel.classList.contains('open')) {
+        wheel.style.left = payload.x + 'px';
+        wheel.style.top = payload.y + 'px';
+        wheel.classList.add('open');
+      }
+      paintSlice(payload.slice == null ? null : payload.slice);
+    }
+
+    function setMarker(payload) {
+      if (!payload || !payload.show) {
+        mark.classList.remove('on');
+        return;
+      }
+      const crop = payload.crop > 0 ? payload.crop : 200;
+      const left = payload.x + 'px';
+      const top = payload.y + 'px';
+      const samePlace = mark.classList.contains('on')
+        && mark.style.left === left
+        && mark.style.top === top
+        && cropFrame.dataset.crop === String(crop);
+      if (!samePlace) {
+        mark.style.left = left;
+        mark.style.top = top;
+        const radius = Math.max(12, Math.round(crop * 0.12));
+        cropFrame.style.width = crop + 'px';
+        cropFrame.style.height = crop + 'px';
+        cropFrame.style.left = (-crop / 2) + 'px';
+        cropFrame.style.top = (-crop / 2) + 'px';
+        cropFrame.style.borderRadius = radius + 'px';
+        cropFrame.dataset.crop = String(crop);
+        mark.classList.add('on');
+      }
+      mark.classList.toggle('is-left', payload.x > window.innerWidth - 320);
+      markCard.hidden = payload.phase === 'wait';
+      markCard.classList.toggle('is-error', payload.phase === 'error');
+      markCard.classList.toggle('is-loading', payload.phase === 'loading');
+      markText.textContent = payload.text || '';
+    }
+
+    const api = window.pingOverlay;
+    if (api) {
+      api.onWheel(setWheel);
+      api.onMarker(setMarker);
+    }
+    window.__pingPreview = { setWheel, setMarker };
+  </script>
+</body>
+</html>

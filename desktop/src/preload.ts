@@ -32,6 +32,12 @@ const api = {
   setDesktopPetEnabled: (enabled: boolean) =>
     ipcRenderer.send(IPC.PET_SET_DESKTOP_ENABLED, enabled),
 
+  /** 屏幕问号轮盘。supported 为 false 时设置页只展示、不能开。 */
+  getScreenPing: (): Promise<{ supported: boolean; enabled: boolean; cropPx: number }> =>
+    ipcRenderer.invoke(IPC.SCREEN_PING_GET),
+  setScreenPing: (patch: { enabled?: boolean; cropPx?: number }): Promise<{ supported: boolean; enabled: boolean; cropPx: number }> =>
+    ipcRenderer.invoke(IPC.SCREEN_PING_SET, patch),
+
   /** 工作区。 */
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_PICK),
   getWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_GET),

@@ -198,6 +198,28 @@ export const SettingsPage = (() => {
                 '</label>' +
               '</div>' +
             '</div>' +
+            '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
+              '<div class="settings-etl-row-info">' +
+                '<span class="settings-etl-row-label">屏幕问号</span>' +
+                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。拖到左侧问号上松开左键。松在中心则取消。Esc 关闭回答。</span>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-etl-switch" title="屏幕问号">' +
+                  '<input type="checkbox" id="settings-screen-ping" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-row settings-screen-ping-crop" id="settings-screen-ping-crop-row" hidden>' +
+              '<div class="settings-etl-row-info">' +
+                '<span class="settings-etl-row-label">截图边长</span>' +
+                '<span class="settings-etl-row-hint">问号周围正方形的边长，80–800 像素。黄框和发给模型的图用同一个尺寸。</span>' +
+              '</div>' +
+              '<div class="settings-card-control settings-screen-ping-crop-field">' +
+                '<input type="number" id="settings-screen-ping-crop" min="80" max="800" step="10" inputmode="numeric" aria-label="截图边长" />' +
+                '<span class="settings-screen-ping-crop-unit">px</span>' +
+              '</div>' +
+            '</div>' +
           '</div>' +
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
@@ -279,6 +301,7 @@ export const SettingsPage = (() => {
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
     bindEtlSettings(parentEl);
+    bindScreenPingSettings(parentEl);
     bindTaskNotificationSettings(parentEl);
   }
 
@@ -477,6 +500,64 @@ export const SettingsPage = (() => {
       parentEl._etlUnsubscribe();
       parentEl._etlUnsubscribe = null;
     }
+  }
+
+  function bindScreenPingSettings(parentEl) {
+    const row = parentEl.querySelector('#settings-screen-ping-row');
+    const cropRow = parentEl.querySelector('#settings-screen-ping-crop-row');
+    const input = parentEl.querySelector('#settings-screen-ping');
+    const cropInput = parentEl.querySelector('#settings-screen-ping-crop');
+    const hint = parentEl.querySelector('#settings-screen-ping-hint');
+    const desktop = window.iceDesktop;
+    if (!row || !input || !cropRow || !cropInput || !desktop || typeof desktop.getScreenPing !== 'function') return;
+
+    row.hidden = false;
+    cropRow.hidden = false;
+    const apply = (state) => {
+      input.checked = !!state.enabled;
+      input.disabled = !state.supported;
+      cropInput.value = String(state.cropPx);
+      cropInput.disabled = !state.supported;
+      if (!state.supported && hint) hint.textContent = '目前只在 Windows 桌面版可用';
+    };
+    desktop.getScreenPing().then(apply).catch(() => {
+      row.hidden = true;
+      cropRow.hidden = true;
+    });
+    input.addEventListener('change', () => {
+      const next = input.checked;
+      input.disabled = true;
+      desktop.setScreenPing({ enabled: next })
+        .then((state) => {
+          apply(state);
+          if (window.Notification) {
+            window.Notification.success(state.enabled ? '已开启屏幕问号' : '已关闭屏幕问号');
+          }
+        })
+        .catch(() => {
+          input.checked = !next;
+          input.disabled = false;
+          if (window.Notification) window.Notification.error('更新失败');
+        });
+    });
+    const saveCrop = () => {
+      const raw = Number(cropInput.value);
+      if (!Number.isFinite(raw)) {
+        desktop.getScreenPing().then(apply).catch(() => {});
+        return;
+      }
+      cropInput.disabled = true;
+      desktop.setScreenPing({ cropPx: raw })
+        .then((state) => {
+          apply(state);
+          if (window.Notification) window.Notification.success('截图边长已改为 ' + state.cropPx + ' px');
+        })
+        .catch(() => {
+          cropInput.disabled = false;
+          if (window.Notification) window.Notification.error('更新失败');
+        });
+    };
+    cropInput.addEventListener('change', saveCrop);
   }
 
   function bindDataDirectorySettings(parentEl) {

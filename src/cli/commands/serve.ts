@@ -65,6 +65,7 @@ import { createSkillsRouter } from '../../web/routes/skills.js';
 import { createUserRulesRouter } from '../../web/routes/user-rules.js';
 import { createMcpStatusRouter } from '../../web/routes/mcp-status.js';
 import { createWorkspaceBrowseRouter } from '../../web/routes/workspace-browse.js';
+import { createScreenPingRouter } from '../../web/routes/screen-ping.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
@@ -166,6 +167,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
         },
       }) },
       { path: '/api/workspace', router: createWorkspaceBrowseRouter() },
+      { path: '/api/screen-ping', router: createScreenPingRouter(llmAdapter) },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
     ],

@@ -24,7 +24,8 @@
   },
   "dependencies": {
     "get-port": "^5.1.1",
-    "iconv-lite": "^0.6.3"
+    "iconv-lite": "^0.6.3",
+    "koffi": "^3.3.3"
   },
   "build": {
     "appId": "com.icecoder.app",
@@ -51,6 +52,7 @@
     ],
     "asarUnpack": [
       "**/*.node",
+      "**/node_modules/koffi/**",
       "**/node_modules/@vscode/ripgrep/**",
       "**/node_modules/node-pty/**"
     ],

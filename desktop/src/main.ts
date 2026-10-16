@@ -22,8 +22,11 @@ import { buildTray } from './tray';
 import { PetWindowManager } from './pet-window-manager';
 import { resolveTaskDoneNotification } from './task-done-notify';
 import { configureWindowsNotificationIdentity } from './win-notification-shortcut';
+import { createScreenPingController, type ScreenPingController } from './ping/controller';
+import { readScreenPingSettings, writeScreenPingSettings } from './ping/settings';
 
 let mainWindow: BrowserWindow | null = null;
+let screenPing: ScreenPingController | null = null;
 let serverHandle: ServerProcessHandle | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -177,6 +180,37 @@ function registerIpcHandlers(): void {
     void petManager.setDesktopPetEnabled(enabled);
   });
 
+  ipcMain.handle(IPC.SCREEN_PING_GET, () => {
+    const settings = readScreenPingSettings();
+    return {
+      supported: process.platform === 'win32',
+      enabled: settings.enabled,
+      cropPx: settings.cropPx,
+    };
+  });
+  ipcMain.handle(IPC.SCREEN_PING_SET, (_e, patch: unknown) => {
+    if (!patch || typeof patch !== 'object') throw new Error('屏幕问号设置无效');
+    const body = patch as { enabled?: unknown; cropPx?: unknown };
+    const next: { enabled?: boolean; cropPx?: number } = {};
+    if (body.enabled !== undefined) {
+      if (typeof body.enabled !== 'boolean') throw new Error('屏幕问号开关无效');
+      next.enabled = body.enabled;
+    }
+    if (body.cropPx !== undefined) {
+      if (typeof body.cropPx !== 'number' || !Number.isFinite(body.cropPx)) {
+        throw new Error('截图边长无效');
+      }
+      next.cropPx = body.cropPx;
+    }
+    const saved = writeScreenPingSettings(next);
+    if (typeof next.enabled === 'boolean') screenPing?.setEnabled(saved.enabled);
+    return {
+      supported: process.platform === 'win32',
+      enabled: saved.enabled,
+      cropPx: saved.cropPx,
+    };
+  });
+
   ipcMain.handle(IPC.WORKSPACE_PICK, async () => {
     const ws = await pickWorkspaceInteractive();
     broadcastWorkspace(ws);
@@ -249,6 +283,9 @@ async function gracefulShutdown(): Promise<void> {
   if (isQuitting) return;
   isQuitting = true;
 
+  try { screenPing?.stop(); } catch { /* ignore */ }
+  screenPing = null;
+
   try { petManager.destroy(); } catch { /* ignore */ }
 
   if (tray && !tray.isDestroyed()) {
@@ -304,6 +341,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
   const url = `http://127.0.0.1:${port}`;
+  screenPing = createScreenPingController({ serverBaseUrl: url });
   registerIpcHandlers();
 
   // 3) 将已显示的加载窗口导航至主应用，避免服务启动期间白屏。
