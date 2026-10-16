@@ -14,7 +14,6 @@ const REQUIRED_API_PREFIXES = [
   '/api/sessions',
   '/api/chat',
   '/api/memory/telemetry',
-  '/api/supervisor/events',
   '/api/token-usage',
   '/api/memory/files',
   '/api/skills',

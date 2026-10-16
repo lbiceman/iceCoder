@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { analyzeShellHostSafety } from './shell-host-guard.js';
 import { collectExpandedShellCommands } from './shell-command-parser.js';
-import { resolveMainConfigPath } from '../config/main-config-supervisor-mode.js';
+import { resolveMainConfigPath } from '../config/main-config.js';
 import type { IceCoderConfigFile } from '../web/types.js';
 
 /** 内置黑名单（字符串正则，不含首尾斜杠）；与 data/config.example.json 保持一致 */

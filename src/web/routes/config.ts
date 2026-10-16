@@ -7,8 +7,6 @@ import { Router, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import {
-  DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
-  normalizeSupervisorMode,
   readMainConfigFile,
   resolveEnableSubAgents,
   resolveSkipPermissionChecks,
@@ -17,8 +15,7 @@ import {
   writeUseWindowsToMainConfig,
   writeShellBlacklistToMainConfig,
   writeSkipPermissionChecksToMainConfig,
-  writeSupervisorModeToMainConfig,
-} from '../../config/main-config-supervisor-mode.js';
+} from '../../config/main-config.js';
 import {
   DEFAULT_ICE_ETL_PREFS,
   resolveIceEtlPrefs,
@@ -30,12 +27,6 @@ import {
   resetShellBlacklistCache,
   validateShellBlacklistPatterns,
 } from '../../tools/shell-sandbox.js';
-import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-config.js';
-import {
-  readSupervisorSettingsDocument,
-  validateSupervisorSettingsDocument,
-  writeSupervisorSettingsDocument,
-} from '../../config/supervisor-settings-io.js';
 import { isAppConfigReady } from '../../config/config-readiness.js';
 import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
@@ -176,18 +167,12 @@ export interface ConfigRouterOptions {
   onConfigSaved?: (ready: boolean) => void;
   /** 配置文件路径（须与 LLM bootstrap 的 configPath 一致，例如 CLI 下的 ~/.iceCoder/config.json） */
   configPath?: string;
-  /** 监管运行时配置路径（须与 ICE_SUPERVISOR_CONFIG_PATH 一致；测试可注入） */
-  supervisorConfigPath?: string;
   /** 配置保存后同步进程内 setup 门闩（HTTP 503 / WebSocket 拒绝） */
   setSetupRequired?: (required: boolean) => void;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
   const configFile = resolveConfigPath(options?.configPath);
-  const supervisorOptions = {
-    configPath: options?.supervisorConfigPath,
-    mainConfigPath: configFile,
-  };
   const router = Router();
 
   /**
@@ -205,7 +190,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
 
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
-      let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
       let existingEnableSubAgents: IceCoderConfigFile['enableSubAgents'];
       let existingUseWindows: IceCoderConfigFile['useWindows'];
@@ -215,7 +199,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
-        existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
         existingEnableSubAgents = existing.enableSubAgents;
         existingUseWindows = existing.useWindows;
@@ -257,7 +240,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const configData = JSON.stringify(
         {
           providers: normalizedProviders,
-          supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
           ...(existingEnableSubAgents !== undefined
             ? { enableSubAgents: existingEnableSubAgents === true }
@@ -273,7 +255,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       );
       await fs.writeFile(configFile, configData, 'utf-8');
 
-      resetSupervisorRuntimeCache();
       const setupComplete = isAppConfigReady({ providers: normalizedProviders });
       options?.setSetupRequired?.(!setupComplete);
 
@@ -314,7 +295,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
 
       res.json({
         providers: maskedProviders,
-        supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
         enableSubAgents: resolveEnableSubAgents(config.enableSubAgents),
         useWindows: resolveUseWindows(config.useWindows),
@@ -331,7 +311,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         res.json({
           providers: [],
-          supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
           enableSubAgents: true,
           useWindows: false,
@@ -346,66 +325,6 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `加载配置失败：${message}` });
-    }
-  });
-
-  /**
-   * GET /api/config/supervisor-runtime — 读取 supervisor-config.json（缺省字段用内置默认值补齐）。
-   */
-  router.get('/supervisor-runtime', async (_req: Request, res: Response): Promise<void> => {
-    try {
-      const { config, configPath } = await readSupervisorSettingsDocument(supervisorOptions);
-      res.json({ success: true, config, configPath });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '未知错误';
-      res.status(500).json({ error: `加载监管配置失败：${message}` });
-    }
-  });
-
-  /**
-   * PUT /api/config/supervisor-runtime — 整份写入 supervisor-config.json，并把 mode 同步到 config.json。
-   */
-  router.put('/supervisor-runtime', async (req: Request, res: Response): Promise<void> => {
-    try {
-      const raw = (req.body as { config?: unknown })?.config;
-      const validationError = validateSupervisorSettingsDocument(raw);
-      if (validationError) {
-        res.status(400).json({ error: validationError });
-        return;
-      }
-      const saved = await writeSupervisorSettingsDocument(raw, supervisorOptions);
-      resetSupervisorRuntimeCache();
-      res.json({ success: true, config: saved });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '未知错误';
-      const status = err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === 'VALIDATE'
-        ? 400
-        : 500;
-      res.status(status).json({ error: `保存监管配置失败：${message}` });
-    }
-  });
-
-  /**
-   * PATCH /api/config/supervisor-mode — 切换双模监管档位（写入 config.json）。
-   */
-  router.patch('/supervisor-mode', async (req: Request, res: Response): Promise<void> => {
-    try {
-      const raw = (req.body as { supervisorMode?: string })?.supervisorMode;
-      if (raw !== 'off' && raw !== 'adaptive' && raw !== 'strict') {
-        res.status(400).json({
-          error: 'supervisorMode 须为 off、adaptive 或 strict 之一',
-        });
-        return;
-      }
-      const saved = await writeSupervisorModeToMainConfig(configFile, raw);
-      resetSupervisorRuntimeCache();
-      if (options?.onConfigSaved) {
-        try { options.onConfigSaved(true); } catch { /* 不阻塞响应 */ }
-      }
-      res.json({ success: true, supervisorMode: saved });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '未知错误';
-      res.status(500).json({ error: `更新监管模式失败：${message}` });
     }
   });
 

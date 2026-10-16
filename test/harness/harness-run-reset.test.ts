@@ -4,14 +4,10 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Harness } from '../../src/harness/harness.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
-import { DEFAULT_BRANCH_BUDGET } from '../../src/harness/branch-budget.js';
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
-import { MAX_REBUILD_ESCALATIONS_PER_RUN } from '../../src/harness/harness-constants.js';
-import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
 import type { ChatFunction, HarnessConfig, HarnessStepEvent } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition } from '../../src/llm/types.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -113,16 +109,18 @@ function buildRunningCheckpoint(): TaskCheckpoint {
 }
 
 async function seedStaleCheckpoint(sessionDir: string): Promise<void> {
-  const runtimeV2 = emptyRuntimeCheckpointV2('verification_failed');
+  const runtimeV2 = emptyRuntimeCheckpointV2('verification_failed') as ReturnType<typeof emptyRuntimeCheckpointV2>
+    & Record<string, unknown>;
+  // 旧版本写入的写次数、执行档与 recovery signal：新版本必须照常打开并忽略。
   runtimeV2.branchBudget = {
-    fileEdits: { 'src/stale.ts': DEFAULT_BRANCH_BUDGET.fileEditMax + 1 },
-    commandRetries: { 'npm test': DEFAULT_BRANCH_BUDGET.commandRetryMax + 1 },
-    errorRepeats: { boom: DEFAULT_BRANCH_BUDGET.errorRepeatMax + 1 },
+    fileEdits: { 'src/stale.ts': 4 },
+    commandRetries: { 'npm test': 3 },
+    errorRepeats: { boom: 4 },
     recoverTriggers: 7,
     writeBypassPaths: ['src/stale.ts'],
     commandRetryBypassKeys: ['npm test'],
   };
-  runtimeV2.rebuildEscalationInjections = MAX_REBUILD_ESCALATIONS_PER_RUN;
+  runtimeV2.rebuildEscalationInjections = 3;
   runtimeV2.parallelBudgetBlockHintInjected = true;
   runtimeV2.verificationOutputTail = [{
     command: 'npm test',
@@ -166,38 +164,15 @@ function createChatFn(responses: LLMResponse[]): ChatFunction {
   ));
 }
 
-function adaptiveHarness(sessionDir: string, tools: ToolDefinition[], handler?: Parameters<typeof createToolExecutor>[1]) {
-  const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
+function sessionHarness(sessionDir: string, tools: ToolDefinition[], handler?: Parameters<typeof createToolExecutor>[1]) {
   const harness = new Harness(minConfig({
     context: { systemPrompt: 'test', tools },
     sessionDir,
-    supervisorConfig,
-    globalPolicy: supervisorConfig.globalPolicy,
   }), createToolExecutor(tools, handler));
   return { harness };
 }
 
-function harnessCheckpointEngine(harness: Harness) {
-  return (harness as unknown as {
-    checkpointEngine?: {
-      loadV2(): Promise<unknown>;
-      pendingRecoverySignals(): unknown[];
-    };
-  }).checkpointEngine;
-}
-
-const originalSupervisorEnv = process.env.ICE_SUPERVISOR_MODE;
-
-beforeEach(() => {
-  delete process.env.ICE_SUPERVISOR_MODE;
-});
-
 afterEach(async () => {
-  if (originalSupervisorEnv === undefined) {
-    delete process.env.ICE_SUPERVISOR_MODE;
-  } else {
-    process.env.ICE_SUPERVISOR_MODE = originalSupervisorEnv;
-  }
   vi.restoreAllMocks();
 });
 
@@ -206,7 +181,7 @@ describe('harness.run() per-user-message reset', () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     await seedStaleCheckpoint(sessionDir);
-    const { harness } = adaptiveHarness(sessionDir, tools);
+    const { harness } = sessionHarness(sessionDir, tools);
 
     const result = await harness.run('brand new task', createChatFn([finalResponse('ok')]));
 
@@ -214,16 +189,17 @@ describe('harness.run() per-user-message reset', () => {
       .filter(m => m.role === 'user')
       .map(m => (typeof m.content === 'string' ? m.content : ''))
       .join('\n');
+    expect(result.loopState.stopReason).toBe('model_done');
     expect(userText).not.toContain('stale cross-run warning');
     expect(userText).not.toContain('stale.test.ts');
-    expect(result.loopState.executionMode).toBe('free');
+    expect(result.loopState).not.toHaveProperty('executionMode');
   });
 
   it('does not inherit acceptanceGate progress from checkpoint', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     await seedStaleCheckpoint(sessionDir);
-    const { harness } = adaptiveHarness(sessionDir, tools);
+    const { harness } = sessionHarness(sessionDir, tools);
 
     const longGoal = [
       'Implement full benchmark pipeline:',
@@ -233,9 +209,10 @@ describe('harness.run() per-user-message reset', () => {
       '4. run npm run test:e2e',
     ].join('\n');
 
-    await harness.run(longGoal, createChatFn([finalResponse('starting')]));
+    const result = await harness.run(longGoal, createChatFn([finalResponse('starting')]));
 
-    expect(harness.getLoopState().executionMode).toBe('free');
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(harness.getLoopState()).not.toHaveProperty('executionMode');
   });
 
   it('resets loop round counter on each run (same harness instance)', async () => {
@@ -267,7 +244,7 @@ describe('harness.run() per-user-message reset', () => {
     expect(second.loopState.totalInputTokens).toBeLessThan(first.loopState.totalInputTokens + 5000);
   });
 
-  it('allows file edits after checkpoint had exhausted branchBudget counters', async () => {
+  it('allows file edits after an old checkpoint had exhausted write counters', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('edit_file')];
     let editAttempts = 0;
@@ -302,7 +279,7 @@ describe('harness.run() per-user-message reset', () => {
     expect(blocked).toHaveLength(0);
   });
 
-  it('accumulates same-path edit_file across two tool rounds in one run', async () => {
+  it('runs every same-path edit_file across tool rounds without a per-file cap', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('edit_file')];
     let editAttempts = 0;
@@ -334,37 +311,20 @@ describe('harness.run() per-user-message reset', () => {
       },
     );
 
-    expect(editAttempts).toBe(DEFAULT_BRANCH_BUDGET.fileEditMax);
-    expect(blocked.length).toBeGreaterThan(0);
+    expect(editAttempts).toBe(4);
+    expect(blocked).toHaveLength(0);
   });
 
-  it('resetGraph at run() clears graph seeded before run()', async () => {
+  it('emits execution_plan_clear at run start so the workbench resets', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
-    const { harness } = adaptiveHarness(sessionDir, tools);
-    const ge = (harness as unknown as { graphExecutor: GraphExecutor }).graphExecutor;
-    ge.initGraph({ goal: 'stale graph goal', intent: 'edit' });
-    expect(ge.hasGraph()).toBe(true);
+    const { harness } = sessionHarness(sessionDir, tools);
 
     const events: HarnessStepEvent[] = [];
     await harness.run('new work', createChatFn([finalResponse('ok')]), e => events.push(e));
 
-    expect(ge.hasGraph()).toBe(false);
-    expect(events.some(e => e.type === 'task_graph_node')).toBe(false);
-    expect(events.some(e => e.type === 'execution_plan_clear')).toBe(true);
-  });
-
-  it('discardPendingRecoverySignals clears pending on harness checkpoint engine', async () => {
-    const sessionDir = await tempSessionDir();
-    await seedStaleCheckpoint(sessionDir);
-
-    const tools = [makeTool('read_file')];
-    const { harness } = adaptiveHarness(sessionDir, tools);
-    const engine = harnessCheckpointEngine(harness)!;
-    await engine.loadV2();
-    expect(engine.pendingRecoverySignals().length).toBeGreaterThan(0);
-
-    await harness.run('fresh', createChatFn([finalResponse('ok')]));
-    expect(engine.pendingRecoverySignals()).toHaveLength(0);
+    expect(events[0]?.type).toBe('execution_plan_clear');
+    expect(events.some(e => String(e.type).startsWith('task_graph'))).toBe(false);
+    expect(events.some(e => String(e.type).startsWith('execution_mode'))).toBe(false);
   });
 });

@@ -5,7 +5,7 @@
  * 职责：
  *   1. 由 ChatPage 转发 `connected` / `session_updated`（见 notifyConnected / notifySessionUpdated）。
  *      原因：ChatWebSocket.on() 每个 type 只保留最后一个回调，若在桥里 WS.on('connected') 会被 ChatPage 覆盖。
- *   2. 把 `task_graph_*` / `execution_plan_*`（兼容）事件转给 ChatExecutionPlan 面板；
+ *   2. 把 `execution_plan_*`（兼容）事件转给 ChatExecutionPlan 面板；
  *   3. WS 重连或先错过 init 时通过 GET /api/sessions/:id/plan 重同步；
  *   4. 每个 session 在 localStorage 仅保留最近一次执行流快照（见 ChatExecutionFlowStore）；
  *   5. 详情卡片锚定冰豆底部 #status-turn；localStorage ICE_PLAN_PANEL=0 仍可关闭计划展示。
@@ -29,7 +29,7 @@ export const ChatExecutionPlanBridge = (() => {
   let currentPlanId = null;     // 本地 plan 跟踪 ID（防错位）
   let lastSyncMs = 0;
   let syncGeneration = 0;       // REST 请求代次，旧响应不得覆盖较新会话
-  /** exit_forced 后抑制 REST 重同步，直到新一轮 task_graph / plan init */
+  /** 旧快照里计划已定格时抑制 REST 重同步，直到新一轮 plan init */
   let planFootDismissed = false;
   /** 新一轮用户输入已清空面板时，忽略 REST /plan 返回的上一轮计划。 */
   let restPlanSuppressed = false;
@@ -112,7 +112,6 @@ export const ChatExecutionPlanBridge = (() => {
     const planId = bridgePlanId || currentPlanId || (plan && plan.planId) || null;
     const hasFlow = !!(planId
       || panel.roundRecords.length
-      || panel.currentExecutionMode
       || typeof panel.turnStartedAt === 'number');
     if (!hasFlow) {
       clearSessionFlow(sessionId);
@@ -355,48 +354,8 @@ export const ChatExecutionPlanBridge = (() => {
       return;
     }
 
-    // 独立于 enabled：终态必须定格保留，直到显式 clear 或新任务替换。
-    if (step.type === 'task_graph_done') {
-      planFootDismissed = true;
-      if (window.ChatExecutionPlan) {
-        window.ChatExecutionPlan.applyPatch({
-          activeStepId: null,
-          progress: 100,
-          updatedAt: typeof step.ts === 'number' ? step.ts : Date.now(),
-        });
-      }
-      return;
-    }
-
-    // 独立于 enabled：exit_forced = L2 交还模型；保留计划与监管横幅状态。
-    if (step.type === 'execution_mode_exit') {
-      if (window.ChatExecutionPlan) {
-        if (window.ChatExecutionPlan.applyRoundActivity) {
-          window.ChatExecutionPlan.applyRoundActivity(step);
-        }
-        window.ChatExecutionPlan.applyExecutionModeEvent(step);
-      }
-      return;
-    }
-
-    if (step.type === 'execution_mode_enter') {
-      capabilityEvidenceFromStep();
-      if (!enabled) return;
-      planFootDismissed = false;
-      if (window.ChatExecutionPlan) {
-        if (window.ChatExecutionPlan.applyRoundActivity) {
-          window.ChatExecutionPlan.applyRoundActivity(step);
-        }
-        window.ChatExecutionPlan.applyExecutionModeEvent(step);
-      }
-      return;
-    }
-
     // connected 尚未到达时，以首个明确计划事件作为旧服务兼容能力证据。
     if (step.type === 'execution_plan_init' && step.plan) {
-      capabilityEvidenceFromStep();
-    }
-    if (step.type === 'task_graph_init') {
       capabilityEvidenceFromStep();
     }
     if (!enabled) return;
@@ -417,39 +376,6 @@ export const ChatExecutionPlanBridge = (() => {
         return;
       }
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyPatch(step.patch);
-    }
-
-    // ── TaskGraph events (Phase 7) ──
-    if (step.type === 'task_graph_init') {
-      restPlanSuppressed = false;
-      planFootDismissed = false;
-      currentPlanId = step.plan && step.plan.planId ? step.plan.planId : currentPlanId;
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.renderGraph(step);
-      ensurePanelVisible();
-      return;
-    }
-    if (step.type === 'task_graph_node' && step.nodeId) {
-      if (!planFootDismissed && window.ChatExecutionPlan) {
-        window.ChatExecutionPlan.updateGraphNode(step);
-      }
-    }
-    if (step.type === 'task_graph_update' && step.plan) {
-      if (planFootDismissed) return;
-      restPlanSuppressed = false;
-      currentPlanId = step.plan.planId;
-      if (window.ChatExecutionPlan) {
-        // TaskGraphView 也是面板的权威只读快照；完整投影可保留 createdAt /
-        // updatedAt 以及 Timeline、Footer 后续消费的其它时间字段。
-        window.ChatExecutionPlan.setPlan({ ...step.plan });
-      }
-    }
-    if (step.type === 'task_graph_branch') {
-      if (window.ChatExecutionPlan) {
-        if (window.ChatExecutionPlan.applyRoundActivity) {
-          window.ChatExecutionPlan.applyRoundActivity(step);
-        }
-        window.ChatExecutionPlan.highlightGraphBranch(step);
-      }
     }
   }
 

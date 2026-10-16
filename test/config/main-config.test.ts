@@ -5,18 +5,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   readEnableSubAgentsFromMainConfig,
+  readMainConfigFile,
   readSkipPermissionChecksFromMainConfig,
-  readSupervisorModeFromMainConfig,
   resolveEnableSubAgents,
   resolveSkipPermissionChecks,
   writeEnableSubAgentsToMainConfig,
   writeShellBlacklistToMainConfig,
   writeSkipPermissionChecksToMainConfig,
-  writeSupervisorModeToMainConfig,
-} from '../../src/config/main-config-supervisor-mode.js';
+} from '../../src/config/main-config.js';
 
-describe('main-config-supervisor-mode', () => {
-  it('reads and writes supervisorMode in config.json', async () => {
+describe('main-config', () => {
+  it('旧 config.json 里残留的 supervisorMode 不影响读写其它开关', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-config-'));
     const configPath = path.join(dir, 'config.json');
     await fs.writeFile(
@@ -25,10 +24,9 @@ describe('main-config-supervisor-mode', () => {
       'utf-8',
     );
 
-    expect(await readSupervisorModeFromMainConfig(configPath)).toBe('strict');
-    const saved = await writeSupervisorModeToMainConfig(configPath, 'off');
-    expect(saved).toBe('off');
-    expect(await readSupervisorModeFromMainConfig(configPath)).toBe('off');
+    expect(await writeSkipPermissionChecksToMainConfig(configPath, true)).toBe(true);
+    expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(true);
+    expect(await readMainConfigFile(path.join(dir, 'missing.json'))).toEqual({ providers: [] });
   });
 
   it('resolveSkipPermissionChecks only true for literal true', () => {

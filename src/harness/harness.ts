@@ -17,11 +17,6 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { clearReadBeforeEditScope } from '../tools/read-before-edit.js';
-import type { TaskGraphSnapshot } from '../types/task-graph.js';
-import type {
-  ModeSignal,
-  ModeSignalSource,
-} from '../types/supervisor.js';
 import type {
   ChatFunction,
   HarnessConfig,
@@ -47,29 +42,14 @@ import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { OperationOutcomeLedger } from './operation-outcome.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
-import { emptyCheckFailureStreak } from './check-failure-streak.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
-import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine } from './checkpoint-engine.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
-import { GraphExecutor } from './task-graph-executor.js';
 import { ensureTaskTool, stripTaskTool } from './agents/task-tool.js';
 import { AgentAwareToolExecutor } from './agents/agent-tool-executors.js';
-import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
-import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
-import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
 import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../config/model-capabilities.js';
 import {
-  buildModeDecisionContext,
-  buildRuntimeExecutionState,
-} from './supervisor/runtime-execution-state.js';
-import {
-  applyExecutionModeConstraints,
-  syncExecutionModeLoopState,
-} from './supervisor/execution-mode-constraints.js';
-import {
-  APPROX_LINES_PER_FILE_CHANGE,
   CHECKPOINT_RESUME_FORK_MIN_MESSAGES,
   CHECKPOINT_RESUME_FORK_TOKEN_RATIO,
   DEFAULT_COMPACTION_KEEP_RECENT,
@@ -144,24 +124,18 @@ export class Harness {
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
   private checkpointPersistTail = Promise.resolve();
-  private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   /** 构造时的默认工作区；工作区锁只覆盖单次 run，不回写此字段 */
   private readonly workspaceRoot: string;
   private sessionDir?: string;
   private sessionId: string;
   private checkpointEngine?: CheckpointEngine;
-  private globalPolicy?: HarnessConfig['globalPolicy'];
-  private supervisorConfig?: HarnessConfig['supervisorConfig'];
   private verificationExemptDirs?: string[];
-  private modeDecisionEngine: ModeDecisionEngine;
-  private taskRiskClassifier: TaskRiskClassifier;
   private agentMaxOutputTokens: number;
   private readonly config: HarnessConfig;
 
   /**
-   * 根据 HarnessConfig 组装循环所需子模块：上下文、压缩、工具执行、检查点、双模决策引擎等。
-   * 未显式传入 supervisorConfig 时默认为 off，避免 CLI/Web 入口行为被悄悄改变。
+   * 根据 HarnessConfig 组装循环所需子模块：上下文、压缩、工具执行、检查点、记忆等。
    */
   constructor(
     config: HarnessConfig,
@@ -203,12 +177,6 @@ export class Harness {
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.verificationExemptDirs = config.verificationExemptDirs;
     this.sessionDir = config.sessionDir;
-    // 未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 CLI / Web 入口的行为。
-    // 需要双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
-    this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
-    this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
-    this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
-    this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
     this.checkpointManager = config.sessionDir
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;
@@ -217,8 +185,6 @@ export class Harness {
     if (config.sessionDir) {
       this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
     }
-
-    this.graphExecutor = new GraphExecutor();
 
     this.memoryIntegration = new HarnessMemoryIntegration({
       memoryDir: config.memoryDir,
@@ -242,7 +208,6 @@ export class Harness {
       loopController: this.loopController,
       contextCompactor: this.contextCompactor,
       memoryIntegration: this.memoryIntegration,
-      graphExecutor: this.graphExecutor,
       runtimeTelemetry: this.runtimeTelemetry,
       checkpointManager: this.checkpointManager,
       enqueueCheckpointPersist: (task) => this.enqueueCheckpointPersist(task),
@@ -261,9 +226,6 @@ export class Harness {
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,
       tokenBudgetTracker: this.tokenBudgetTracker,
-      executionModeConfig: this.supervisorConfig?.executionMode,
-      executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
-      globalPolicy: this.globalPolicy,
       agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
       checkpointOwner: this.config.checkpointOwner,
@@ -290,138 +252,7 @@ export class Harness {
   }
 
   /**
-   * 每轮调用 LLM 之前：汇总图/仓库/失败等信号，经 ModeDecisionEngine 裁决 free/forced，
-   * 并同步 BranchBudget、CheckpointEngine 的 forced 策略与 loopController 状态。
-   * modeDecisionEngineEnabled 为 false 时直接返回（OFF 模式无副作用）。
-   */
-  private evaluateExecutionModeBeforeLlm(
-    deps: RoundPrepDeps,
-    state: HarnessRunState,
-    round: number,
-    onStep?: (event: HarnessStepEvent) => void,
-  ): void {
-    // 信号生命周期是「上一轮事件 → 本轮 evaluate 消费」。
-    // runHarnessToolRound 末段提交的 tool_failure / multi_write / recovery_pending
-    // 写入 pendingModeSignals，下一轮在这里读取并清空，所以进入 forced 通常滞后 1 轮。
-    // tool_failure 常见来源是验收命令失败，或 BranchBudget 拦住尚未执行的写工具。
-    // 即时阻断由 ToolGate 在工具执行前单独处理。
-    const config = this.supervisorConfig?.executionMode;
-    const policy = this.globalPolicy;
-    if (!config || !policy) return;
-    // OFF 模式不提交信号、不写 state、不动 gate。
-    if (!policy.modeDecisionEngineEnabled) return;
-
-    const modeSnapshot = deps.graphExecutor?.readModeSnapshot() ?? {
-      snapshot: null,
-      pendingStepCount: 0,
-      hasPendingImplementNode: false,
-    };
-    this.submitGraphModeSignals(state, modeSnapshot.snapshot, modeSnapshot.pendingStepCount);
-    const graphState = {
-      active: modeSnapshot.snapshot != null,
-      pendingStepCount: modeSnapshot.pendingStepCount,
-      activeGraphHasImplementNode: modeSnapshot.hasPendingImplementNode,
-    };
-    // 从当前 run state 派生 RuntimeExecutionState。
-    const recoveryPending = state.pendingModeSignals.includes('recovery_pending')
-      || state.recoveryPendingSticky;
-    const stableRounds = state.stableRoundsSinceLastFailure;
-    const repoSnap = state.repoContext.snapshot();
-    const filesChangedSnapshot = state.filesChangedAtRoundStart;
-    const accumulatedDiffLines = Math.max(0, repoSnap.filesChanged.length - filesChangedSnapshot)
-      * APPROX_LINES_PER_FILE_CHANGE;
-    const runtimeState = buildRuntimeExecutionState({
-      round,
-      readonlyToolNames: config.readonlyToolNames,
-      plannedToolNames: [],
-      graphState,
-      forcedEntryRound: state.executionModeEnteredAtRound ?? null,
-      forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry,
-      stableRounds,
-      // 验收失败仍参与 digest / circuit breaker，但不单独升级 execution mode。
-      lastToolSuccess: !state.lastRoundModeEscalatingFailure,
-      recoveryPending,
-      // recoverTriggerCount 是累计遥测值，不能作为当前债务，否则首次恢复触发后
-      // branchDebt 将永久大于 0，forced 再也无法退出。
-      branchDebt: recoveryPending ? 1 : 0,
-      accumulatedDiffLines,
-      branchSwitchedThisRound: state.branchSwitchedThisRound,
-    });
-    const riskLevel = this.taskRiskClassifier.classify(runtimeState);
-    const ctx = buildModeDecisionContext({
-      round,
-      executionMode: state.executionMode,
-      executionModeLockRemaining: state.executionModeLockRemaining,
-      supervisorMode: policy.supervisorMode,
-      riskLevel,
-      state: runtimeState,
-      signals: state.pendingModeSignals,
-    });
-    const decision = this.modeDecisionEngine.evaluate(ctx);
-
-    applyExecutionModeConstraints(
-      {
-        ...deps,
-        onExecutionModeChanged: (nextMode) => this.applyExecutionModeGates(state, nextMode),
-      },
-      {
-        state,
-        decision,
-        round,
-        config,
-        onStep,
-      },
-    );
-    state.pendingModeSignals = [];
-    syncExecutionModeLoopState(this.loopController, state);
-  }
-
-  /**
-   * execution mode 切换时同步 BranchBudget / CheckpointEngine 的 forced policy。
-   * 唯一调用入口：applyExecutionModeConstraints 的 onExecutionModeChanged 回调。
-   */
-  private applyExecutionModeGates(state: HarnessRunState, nextMode: 'free' | 'forced'): void {
-    const forced = nextMode === 'forced';
-    state.branchBudget.setEnabled(forced);
-    this.checkpointEngine?.setForcedPolicy(forced);
-  }
-
-  /**
-   * 向本轮待消费信号队列写入一条 ModeSignal，并转发给 ModeDecisionEngine。
-   * recovery_pending 会设跨轮 sticky；branch_switched 仅标记本轮，下轮 prep 时重置。
-   */
-  private submitModeSignal(
-    state: HarnessRunState,
-    source: ModeSignalSource,
-    signal: ModeSignal,
-    payload?: Record<string, unknown>,
-  ): void {
-    state.pendingModeSignals.push(signal);
-    // recovery_pending 跨轮保留，直到退出 forced。
-    // branch_switched 只标记本轮，下一轮 prepare 时重置。
-    if (signal === 'recovery_pending') {
-      state.recoveryPendingSticky = true;
-    } else if (signal === 'branch_switched') {
-      state.branchSwitchedThisRound = true;
-    }
-    this.modeDecisionEngine.submitSignal(source, signal, payload);
-  }
-
-  /** 若当前存在任务图，向模式决策提交 task_graph_active / pending_steps 等图相关信号。 */
-  private submitGraphModeSignals(
-    state: HarnessRunState,
-    snapshot: TaskGraphSnapshot | null,
-    pendingStepCount: number,
-  ): void {
-    if (!snapshot) return;
-    state.submitModeSignal?.('graph_executor', 'task_graph_active');
-    if (pendingStepCount > 0) {
-      state.submitModeSignal?.('graph_executor', 'pending_steps');
-    }
-  }
-
-  /**
-   * 执行核心 while 循环：prep → 模式评估 → LLM → 无工具/有工具分支 → 直至 stop。
+   * 执行核心 while 循环：prep → LLM → 无工具/有工具分支 → 直至 stop。
    * 负责会话初始化、工作区锁定、检查点/resilience 恢复、记忆 hydrate，并在 finally 中收尾记忆写入。
    */
   async run(
@@ -462,7 +293,6 @@ export class Harness {
 
     try {
       this.loopController.resetForNewRun();
-      syncExecutionModeLoopState(this.loopController, state);
       endTiming('run_init', runStartedAt);
       while (true) {
         const roundStartedAt = markTimingStart();
@@ -483,10 +313,6 @@ export class Harness {
           sessionId: this.sessionId,
           round: prep.round,
         });
-
-        timeSync('mode_eval', () => {
-          this.evaluateExecutionModeBeforeLlm(phases.prep, state, prep.round, onStep);
-        }, prep.round);
 
         timeSync('context_usage', () => {
           onStep?.({
@@ -621,10 +447,6 @@ export class Harness {
     const logger = new HarnessLogger();
     resetHarnessTiming();
     const runStartedAt = markTimingStart();
-    // Harness 实例会被 CLI / Web 复用。清掉上一次 run 没消费完的信号，
-    // 避免中断后残留信号漏到下一次 run。
-    this.modeDecisionEngine.resetSubmittedSignals();
-    this.graphExecutor.resetGraph();
     onStep?.({ type: 'execution_plan_clear' });
 
     let messages: UnifiedMessage[];
@@ -756,7 +578,6 @@ export class Harness {
       llmRetryCount: 0,
       emptyResponseRetryCount: 0,
       consecutiveToolFailures: 0,
-      consecutiveReadOnlyRounds: 0,
       hadToolRoundThisRun: false,
       noToolExecutionRecoveryCount: 0,
       runStartedAt: Date.now(),
@@ -773,15 +594,7 @@ export class Harness {
       referenceReads,
       workspaceAnchorHash: '',
       failedToolCallSignatures: new Map(),
-      branchBudget: new BranchBudgetTracker(),
-      branchBudgetWarnedThisRound: false,
-      verificationDigestInjectedThisRound: false,
-      rebuildEscalationInjections: 0,
-      rebuildEscalationInjectedThisRound: false,
-      checkFailureStreak: emptyCheckFailureStreak(),
-      parallelBudgetBlockHintInjected: false,
       sessionGoalAnchor,
-      buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
       operationOutcomes: new OperationOutcomeLedger(),
       verificationPlanResolution,
@@ -792,44 +605,11 @@ export class Harness {
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
       contextEmergencyCompactCount: 0,
-      stepReviewedThisRound: false,
-      executionMode: 'free',
-      executionModeLockRemaining: 0,
-      executionModeEnteredBy: [],
-      pendingModeSignals: [],
-      forcedTaskBearingRoundsSinceEntry: 0,
-      recoveryPendingSticky: false,
-      lastRoundModeEscalatingFailure: false,
-      stableRoundsSinceLastFailure: 0,
-      filesChangedAtRoundStart: 0,
-      branchSwitchedThisRound: false,
     };
-    state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
-    syncExecutionModeLoopState(this.loopController, state);
-    // 只有模式决策开启时，才让 ExecutionMode 控制 BranchBudget / CheckpointEngine。
-    // OFF 模式保持预算和 checkpoint 的原有行为。
-    if (this.globalPolicy?.modeDecisionEngineEnabled) {
-      this.applyExecutionModeGates(state, state.executionMode);
-    }
 
     if (this.checkpointEngine) {
       try {
-        const v2 = await this.checkpointEngine.loadV2();
-        if (v2) {
-          state.branchBudget.applySnapshot(v2.branchBudget);
-          // execution-mode 历史承载位（observability only）；checkpoint_resumed 不跨用户发送恢复
-          if (v2.executionModeState) {
-            const execution = v2.executionModeState;
-            state.executionModeEnteredBy = [...(execution.executionModeEnteredBy ?? [])];
-            state.executionModeEnteredByPrimary = execution.executionModeEnteredByPrimary;
-            state.executionModeEnteredAtRound = execution.executionModeEnteredAtRound ?? undefined;
-            state.forcedDegradedTier = execution.forcedDegradedTier;
-            state.forcedTaskBearingRoundsSinceEntry = execution.forcedTaskBearingRoundsSinceEntry ?? 0;
-            state.lastModeDecision = execution.lastModeDecision;
-          }
-          // Verification output buffers and pending recovery signals do not cross user turns.
-          this.checkpointEngine.discardPendingRecoverySignals();
-        }
+        await this.checkpointEngine.loadV2();
       } catch (err) {
         console.debug(
           '[harness] resilience v2 load failed:',
@@ -838,12 +618,7 @@ export class Harness {
       }
     }
 
-    // 每次用户发送：门控计数与上下文不继承 checkpoint
-    state.branchBudget.resetRoundBudget();
-    state.rebuildEscalationInjections = 0;
-    state.rebuildEscalationInjectedThisRound = false;
-    state.checkFailureStreak = emptyCheckFailureStreak();
-    state.parallelBudgetBlockHintInjected = false;
+    // Verification output buffers do not cross user turns.
     state.verificationOutputBuffer.clear();
 
     if (memoryActive && existingMessages && existingMessages.length > 0) {
@@ -890,7 +665,6 @@ export class Harness {
       state.completionGateBlockingSignature = projectCheckpoint.completion.blockingSignature;
       state.completionStatus = projectCheckpoint.completion.status;
       state.completionReason = projectCheckpoint.completion.reason;
-      state.branchBudget.applySnapshot(projectCheckpoint.execution.resumable?.branchBudget);
       state.failedToolCallSignatures = new Map(
         Object.entries(projectCheckpoint.execution.resumable?.failedToolCallSignatures ?? {}),
       );

@@ -62,23 +62,23 @@ doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#D0D0D0').
 doc.moveDown(0.6);
 
 sec('个人简介');
-body('七年前端开发经验，专注 Web 工程化与 AI 工具型产品。独立设计并开源 iceCoder —— 面向本地仓库的 AI 编程助手运行时，通过 Harness 主循环、双模监管、TaskGraph、收尾门控、冰豆宠物可视化与文件化长期记忆，解决长编码任务易跑偏、上下文膨胀、缺乏交付闭环三大痛点。擅长前端架构设计与复杂交互实现，具备从 0 到 1 的全链路产品交付能力。');
+body('七年前端开发经验，专注 Web 工程化与 AI 工具型产品。独立设计并开源 iceCoder —— 面向本地仓库的 AI 编程助手运行时，通过模型主导的 Harness 主循环、停时验收、Plan 模式、冰豆宠物可视化与文件化长期记忆，解决长编码任务易跑偏、上下文膨胀、缺乏交付闭环三大痛点。擅长前端架构设计与复杂交互实现，具备从 0 到 1 的全链路产品交付能力。');
 
 sec('核心项目: iceCoder');
-body('自托管工具化 LLM 运行时治理层，核心价值是让 AI 长编码任务不跑偏、不丢失上下文、能交付验收。Harness 主循环将模型意图落成可审计的工具执行，配合双模监管、结构化任务图、验收门控与文件化记忆。实测 217+ 轮长会话稳定运行，173 测试文件 / 2048 用例 / ~49s 全量通过。');
+body('自托管工具化 LLM 运行时，核心价值是让 AI 长编码任务不跑偏、不丢失上下文、能交付验收。Harness 主循环由模型自己安排读、改、跑命令，配合权限与沙箱、连续失败阶梯、停时验收、检查点与文件化记忆。先查再改交给 Plan 模式。');
 
 // ── 第1页放 4 个模块 ──
-sub('① 双模运行时与监管 (L0 / L1 / L2)');
-dot('L0 三档 off/adaptive/strict 动态切换；L1 ToolGate 门禁 + BranchBudget 分支预算；L2 Observer 识别跑偏后 takeover→handoff。');
+sub('① Harness 主循环');
+dot('模型自己决定读文件、改代码、跑命令。权限规则、Shell 沙箱、连续失败阶梯和熔断仍在；三档监管、任务图和同文件写次数上限已移除。');
 
-sub('② TaskGraph 与 Harness 主循环');
-dot('Harness 落成可审计工具执行：权限裁决、早停、失败检测、上下文压缩与恢复重注入。TaskGraph 为结构化上下文注入源。');
+sub('② 检查点与上下文');
+dot('可审计工具执行：权限裁决、停时验收、失败检测、上下文压缩。Checkpoint 在压缩或重启后从结构化快照恢复，旧会话里的执行档字段读取时丢弃。');
 
 sub('③ 收尾门控 (Acceptance × Verification)');
 dot('Acceptance Gate 解析验收命令链全 passed 才停止；Verification Gate 对代码变更强制跑单测。');
 
 sub('④ 冰豆宠物 (Canvas 可视化)');
-dot('~20 种表情 + L0 眼色 + L1 角标 + token 环，WebSocket 驱动；桌面端悬浮窗口 + TaskGraph 渲染。');
+dot('表情 + 上下文 token 环，WebSocket 驱动；桌面端悬浮窗口。右侧工作台展示检查点与执行流。');
 
 /* ═══════════ PAGE 2 (pdfkit auto-paginates) ═══════════ */
 
@@ -95,7 +95,7 @@ sub('⑧ 多会话与跨端同步');
 dot('侧栏增删改查独立会话；~scan 二维码绑定手机与 PC 共享上下文；断线重连恢复 UI 状态。');
 
 sub('⑨ MCP 与子代理');
-dot('MCP 子进程并入外部 Server 工具；request_analysis 异步只读子代理降低 token 与等待成本。');
+dot('MCP 子进程并入外部 Server 工具；task 派出 general / explore 子 Agent，结果经 check_agent 回流。');
 
 sec('项目架构');
 body('多入口 (CLI / Web / 桌面端) 统一注入提示词 → Harness 主循环统筹 LLM、工具、上下文与状态 → 文件系统持久化 (checkpoint / memory / events)。构建: TypeScript + Vite + npm pack。');
@@ -105,7 +105,7 @@ metric('Harness 稳定性', '217+ 轮长会话稳定运行');
 metric('测试基线', '173 文件 / 2048 用例 / ~49s');
 metric('记忆模块', '20 文件 / ~391 用例');
 metric('桌面端', 'Windows x64 安装包 + Electron + 悬浮冰豆');
-metric('监管档位', 'off / adaptive(默认) / strict，侧栏一键切换');
+metric('执行方式', '模型主导单循环；先计划再改代码走 Plan 模式');
 
 doc.y += 85; // 下移约3cm
 sec('技能栈');

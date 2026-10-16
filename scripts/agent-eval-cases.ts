@@ -9,7 +9,8 @@ export type AgentEvalCategory =
   | 'completion-gate'
   | 'stop-verification'
   | 'sub-agent'
-  | 'safety';
+  | 'safety'
+  | 'model-led';
 
 export interface AgentEvalFileAssertion {
   path: string;
@@ -65,6 +66,8 @@ export interface AgentEvalCase {
     verificationRuns?: Record<string, { min?: number; max?: number }>;
     /** 不允许出现的 run_command 子串。 */
     forbidCommands?: string[];
+    /** 同一文件成功写入次数下限（write/edit 类工具，按 path 计）。 */
+    sameFileWrites?: { path: string; min: number };
     /**
      * 父模型发出的 task 次数。
      * enforce 默认 scripted：只约束脚本化父模型。
@@ -152,6 +155,174 @@ function mathWorkspace(impl: string, extra: Record<string, string> = {}): Record
     'src/math.js': mathSource(impl),
     'test/math.test.js': mathTest(),
     ...extra,
+  };
+}
+
+/** 同一文件里五个待实现函数：模型自然会多次改同一个文件、多次跑同一条测试命令。 */
+const TEXT_FUNCTIONS = [
+  { name: 'capitalize', impl: 'return s.charAt(0).toUpperCase() + s.slice(1);', test: "assert.equal(capitalize('ice'), 'Ice');" },
+  { name: 'reverse', impl: "return s.split('').reverse().join('');", test: "assert.equal(reverse('abc'), 'cba');" },
+  { name: 'countVowels', impl: 'return (s.match(/[aeiou]/gi) || []).length;', test: "assert.equal(countVowels('Harness'), 2);" },
+  { name: 'isPalindrome', impl: "const t = s.toLowerCase().replace(/[^a-z0-9]/g, '');\n  return t === t.split('').reverse().join('');", test: "assert.equal(isPalindrome('A man, a plan, a canal: Panama'), true);\n  assert.equal(isPalindrome('ice'), false);" },
+  { name: 'truncate', impl: "return s.length <= n ? s : s.slice(0, n) + '...';", test: "assert.equal(truncate('supervision', 5), 'super...');\n  assert.equal(truncate('ok', 5), 'ok');" },
+] as const;
+
+function textTodoBody(name: string): string {
+  return `throw new Error('TODO ${name}');`;
+}
+
+function textWorkspace(): Record<string, string> {
+  const source = [
+    ...TEXT_FUNCTIONS.map(fn => {
+      const params = fn.name === 'truncate' ? 's, n' : 's';
+      return `function ${fn.name}(${params}) {\n  ${textTodoBody(fn.name)}\n}\n`;
+    }),
+    `module.exports = { ${TEXT_FUNCTIONS.map(fn => fn.name).join(', ')} };\n`,
+  ].join('\n');
+  const test = [
+    "const test = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    `const { ${TEXT_FUNCTIONS.map(fn => fn.name).join(', ')} } = require('../src/text');`,
+    '',
+    ...TEXT_FUNCTIONS.map(fn => `test('${fn.name}', () => {\n  ${fn.test}\n});\n`),
+  ].join('\n');
+  return {
+    'package.json': packageJson(),
+    'src/text.js': source,
+    'test/text.test.js': test,
+  };
+}
+
+/** 八个模块串成一条计算链；回答问题必须把它们全读一遍。 */
+function pipelineWorkspace(): Record<string, string> {
+  const steps = [
+    { file: 'a', expr: 'x + 3' },
+    { file: 'b', expr: 'x * 2' },
+    { file: 'c', expr: 'x - 4' },
+    { file: 'd', expr: 'x * 5' },
+    { file: 'e', expr: 'x + 11' },
+    { file: 'f', expr: 'Math.floor(x / 3)' },
+    { file: 'g', expr: 'x + 100' },
+    { file: 'h', expr: 'x - 7' },
+  ];
+  const files: Record<string, string> = {};
+  steps.forEach((step, index) => {
+    const next = steps[index + 1];
+    files[`src/steps/${step.file}.js`] = next
+      ? `const { ${next.file} } = require('./${next.file}');\n\nfunction ${step.file}(x) {\n  return ${next.file}(${step.expr});\n}\n\nmodule.exports = { ${step.file} };\n`
+      : `function ${step.file}(x) {\n  return ${step.expr};\n}\n\nmodule.exports = { ${step.file} };\n`;
+  });
+  files['src/main.js'] = "const { a } = require('./steps/a');\n\nfunction main() {\n  return a(4);\n}\n\nmodule.exports = { main };\n";
+  return files;
+}
+
+/** a(4)：4+3=7 → 14 → 10 → 50 → 61 → 20 → 120 → 113 */
+const PIPELINE_ANSWER = '113';
+
+function fnModule(name: string, body: string): string {
+  return `function ${name}(n) {\n  ${body}\n}\n\nmodule.exports = { ${name} };\n`;
+}
+
+/** 三个互相独立的错误实现。模型要分别改这三个文件，不能靠一张步骤表。 */
+function threeBugWorkspace(): Record<string, string> {
+  const test = [
+    "const test = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "const { left } = require('../src/left');",
+    "const { mid } = require('../src/mid');",
+    "const { right } = require('../src/right');",
+    '',
+    "test('left adds one', () => { assert.equal(left(5), 6); });",
+    "test('mid doubles', () => { assert.equal(mid(4), 8); });",
+    "test('right echoes', () => { assert.equal(right(3), 3); });",
+    '',
+  ].join('\n');
+  return {
+    'package.json': packageJson(),
+    'src/left.js': fnModule('left', 'return n - 1; // BUG'),
+    'src/mid.js': fnModule('mid', 'return n * 0; // BUG'),
+    'src/right.js': fnModule('right', 'return 0; // BUG'),
+    'test/parts.test.js': test,
+  };
+}
+
+/** 同一条 node 命令先失败再成功。旧监管会在重复失败后拦住这条命令。 */
+function flagCheckWorkspace(): Record<string, string> {
+  return {
+    'package.json': packageJson({ test: 'node check.js' }),
+    'src/flag.js': 'module.exports = { ready: false };\n',
+    'check.js': [
+      "const { ready } = require('./src/flag');",
+      'if (!ready) {',
+      "  console.error('not ready');",
+      '  process.exit(1);',
+      '}',
+      "console.log('ready');",
+      '',
+    ].join('\n'),
+  };
+}
+
+/**
+ * a(2) 正确链：2+1=3 → 9 → 8 → 18。c 写成 d(0)，结果变成 10。
+ * 要先把链读完再改，旧监管会在连续只读之后催促或改道。
+ */
+function brokenChainWorkspace(): Record<string, string> {
+  return {
+    'package.json': packageJson(),
+    'src/main.js': "const { a } = require('./steps/a');\n\nfunction main() {\n  return a(2);\n}\n\nmodule.exports = { main };\n",
+    'src/steps/a.js': "const { b } = require('./b');\n\nfunction a(x) {\n  return b(x + 1);\n}\n\nmodule.exports = { a };\n",
+    'src/steps/b.js': "const { c } = require('./c');\n\nfunction b(x) {\n  return c(x * 3);\n}\n\nmodule.exports = { b };\n",
+    'src/steps/c.js': "const { d } = require('./d');\n\nfunction c(x) {\n  return d(0);\n}\n\nmodule.exports = { c };\n",
+    'src/steps/d.js': 'function d(x) {\n  return x + 10;\n}\n\nmodule.exports = { d };\n',
+    'test/chain.test.js': [
+      "const test = require('node:test');",
+      "const assert = require('node:assert/strict');",
+      "const { main } = require('../src/main');",
+      '',
+      "test('main follows the chain', () => {",
+      '  assert.equal(main(), 18);',
+      '});',
+      '',
+    ].join('\n'),
+  };
+}
+
+/** 测试已经写好，源文件还不存在。模型要自己建文件，而不是等任务图发一步。 */
+function missingClampWorkspace(): Record<string, string> {
+  return {
+    'package.json': packageJson(),
+    'test/clamp.test.js': [
+      "const test = require('node:test');",
+      "const assert = require('node:assert/strict');",
+      "const { clamp } = require('../src/clamp');",
+      '',
+      "test('clamp', () => {",
+      '  assert.equal(clamp(10, 0, 5), 5);',
+      '  assert.equal(clamp(-1, 0, 5), 0);',
+      '  assert.equal(clamp(3, 0, 5), 3);',
+      '});',
+      '',
+    ].join('\n'),
+  };
+}
+
+/** 调用方和被调用方都错。两边都要改，不能只改一个文件就停。 */
+function callerCalleeWorkspace(): Record<string, string> {
+  return {
+    'package.json': packageJson(),
+    'src/format.js': "function label(name) {\n  return 'draft:' + name;\n}\n\nmodule.exports = { label };\n",
+    'src/app.js': "const { label } = require('./format');\n\nfunction render(name) {\n  return label();\n}\n\nmodule.exports = { render };\n",
+    'test/app.test.js': [
+      "const test = require('node:test');",
+      "const assert = require('node:assert/strict');",
+      "const { render } = require('../src/app');",
+      '',
+      "test('render labels the name', () => {",
+      "  assert.equal(render('ice'), 'ok:ice');",
+      '});',
+      '',
+    ].join('\n'),
   };
 }
 
@@ -1603,5 +1774,306 @@ export const agentEvalCases: AgentEvalCase[] = [
     },
     maxRounds: 6,
     timeoutMs: 120_000,
+  },
+  // ─── 模型自主：没有监管档、步骤表和反复修改上限 ───
+  {
+    id: 'model-led-same-file-five-edits',
+    category: 'model-led',
+    prompt: 'Implement the five TODO functions in src/text.js one by one, then run npm test.',
+    files: textWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 1 } },
+      sameFileWrites: { path: 'src/text.js', min: 5 },
+    },
+    assertions: [
+      { path: 'src/text.js', notContains: 'TODO' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/text.js' } },
+      ...TEXT_FUNCTIONS.map(fn => ({
+        type: 'tool' as const,
+        name: 'edit_file',
+        arguments: { path: 'src/text.js', search: textTodoBody(fn.name), replace: fn.impl },
+      })),
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'All five functions implemented; npm test passes.' },
+    ],
+    maxRounds: 12,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'model-led-rerun-failing-command',
+    category: 'model-led',
+    prompt: 'npm test is failing. Run it as often as you need, fix src/math.js, and confirm it passes.',
+    files: mathWorkspace('return a - b;'),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      verificationAfterLastWrite: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 2 } },
+    },
+    assertions: [
+      { path: 'src/math.js', notContains: 'return a - b;' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/math.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/math.js', search: 'return a - b;', replace: 'return a + b;' },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'Fixed add(); npm test passes now.' },
+    ],
+    maxRounds: 10,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'model-led-long-read-only-exploration',
+    category: 'model-led',
+    prompt: `Without changing any file, tell me what main() in src/main.js returns. Answer with the number.`,
+    files: pipelineWorkspace(),
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      finalContains: PIPELINE_ANSWER,
+    },
+    assertions: [
+      { path: 'src/main.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/main.js' } },
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(step => ({
+        type: 'tool' as const,
+        name: 'read_file',
+        arguments: { path: `src/steps/${step}.js` },
+      })),
+      { type: 'final', content: `main() returns ${PIPELINE_ANSWER}.` },
+    ],
+    maxRounds: 14,
+    timeoutMs: 90_000,
+  },
+  {
+    id: 'model-led-real-incremental-functions',
+    category: 'model-led',
+    prompt: [
+      'Implement the five TODO functions in src/text.js.',
+      'Work incrementally: implement one function, run npm test to watch the failures shrink, then do the next one.',
+      'Finish when npm test passes.',
+    ].join(' '),
+    files: textWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+    },
+    assertions: [
+      { path: 'src/text.js', notContains: 'TODO' },
+    ],
+    maxRounds: 30,
+    timeoutMs: 300_000,
+  },
+  {
+    id: 'model-led-real-read-chain',
+    category: 'model-led',
+    prompt: 'Without changing any file, work out exactly what main() in src/main.js returns. Reply with the number.',
+    files: pipelineWorkspace(),
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      finalContains: PIPELINE_ANSWER,
+    },
+    assertions: [
+      { path: 'src/main.js', unchanged: true },
+    ],
+    maxRounds: 20,
+    timeoutMs: 240_000,
+  },
+  {
+    id: 'model-led-three-file-bugfix',
+    category: 'model-led',
+    prompt: [
+      'src/left.js, src/mid.js, and src/right.js each return the wrong value and are marked with a BUG comment.',
+      'Fix all three files so npm test passes.',
+      'Remove every BUG comment. Edit each file as many times as you need.',
+    ].join(' '),
+    files: threeBugWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 1 } },
+    },
+    assertions: [
+      { path: 'src/left.js', notContains: 'BUG' },
+      { path: 'src/mid.js', notContains: 'BUG' },
+      { path: 'src/right.js', notContains: 'BUG' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/left.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/mid.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/right.js' } },
+      { type: 'tool', name: 'edit_file', arguments: { path: 'src/left.js', search: 'return n - 1; // BUG', replace: 'return n + 1;' } },
+      { type: 'tool', name: 'edit_file', arguments: { path: 'src/mid.js', search: 'return n * 0; // BUG', replace: 'return n * 2;' } },
+      { type: 'tool', name: 'edit_file', arguments: { path: 'src/right.js', search: 'return 0; // BUG', replace: 'return n;' } },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'Fixed left, mid, and right; npm test passes.' },
+    ],
+    maxRounds: 16,
+    timeoutMs: 180_000,
+  },
+  {
+    id: 'model-led-retry-check-script',
+    category: 'model-led',
+    prompt: [
+      'Run node check.js first and read the failure.',
+      'Then change src/flag.js so the script can succeed.',
+      'Run node check.js again and do not stop until that command exits 0.',
+    ].join(' '),
+    files: flagCheckWorkspace(),
+    verifyCommands: ['node check.js'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'check.js': { min: 2 } },
+    },
+    assertions: [
+      { path: 'src/flag.js', notContains: 'ready: false' },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'run_command', arguments: { command: 'node check.js' } },
+      { type: 'tool', name: 'run_command', arguments: { command: 'node check.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/flag.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/flag.js', search: 'ready: false', replace: 'ready: true' },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'node check.js' } },
+      { type: 'final', content: 'flag is ready and node check.js exits 0.' },
+    ],
+    maxRounds: 12,
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'model-led-read-chain-then-fix',
+    category: 'model-led',
+    prompt: [
+      'npm test fails because one step under src/steps returns 0 and breaks the chain.',
+      'Read src/main.js and the step files it reaches before editing.',
+      'Fix only the broken step, then run npm test until it passes.',
+    ].join(' '),
+    files: brokenChainWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 1 } },
+    },
+    assertions: [
+      { path: 'src/steps/c.js', notContains: 'd(0)' },
+      { path: 'src/main.js', unchanged: true },
+      { path: 'test/chain.test.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/main.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/steps/a.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/steps/b.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/steps/c.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/steps/d.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'test/chain.test.js' } },
+      {
+        type: 'tool',
+        name: 'edit_file',
+        arguments: { path: 'src/steps/c.js', search: 'return d(0);', replace: 'return d(x - 1);' },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'Fixed step c; npm test passes.' },
+    ],
+    maxRounds: 16,
+    timeoutMs: 360_000,
+  },
+  {
+    id: 'model-led-create-missing-module',
+    category: 'model-led',
+    prompt: [
+      'test/clamp.test.js imports ../src/clamp.js, which does not exist yet.',
+      'Create that module so npm test passes.',
+      'Do not modify the test file.',
+    ].join(' '),
+    files: missingClampWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 1 } },
+    },
+    assertions: [
+      { path: 'src/clamp.js', contains: 'clamp' },
+      { path: 'test/clamp.test.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'test/clamp.test.js' } },
+      {
+        type: 'tool',
+        name: 'write_file',
+        arguments: {
+          path: 'src/clamp.js',
+          content: 'function clamp(n, lo, hi) {\n  return Math.min(hi, Math.max(lo, n));\n}\n\nmodule.exports = { clamp };\n',
+        },
+      },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'Created src/clamp.js; npm test passes.' },
+    ],
+    maxRounds: 12,
+    timeoutMs: 120_000,
+  },
+  {
+    id: 'model-led-caller-and-callee',
+    category: 'model-led',
+    prompt: [
+      'render("ice") should return ok:ice, but both src/format.js and src/app.js are wrong.',
+      'Fix both files. You can edit either file more than once.',
+      'Run npm test and stop when it passes. Do not change the test.',
+    ].join(' '),
+    files: callerCalleeWorkspace(),
+    verifyCommands: ['npm test'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      verificationRuns: { 'npm test': { min: 1 } },
+    },
+    assertions: [
+      { path: 'src/format.js', notContains: 'draft:' },
+      { path: 'src/app.js', notContains: 'label()' },
+      { path: 'test/app.test.js', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/format.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/app.js' } },
+      { type: 'tool', name: 'read_file', arguments: { path: 'test/app.test.js' } },
+      { type: 'tool', name: 'edit_file', arguments: { path: 'src/format.js', search: "return 'draft:' + name;", replace: "return 'ok:' + name;" } },
+      { type: 'tool', name: 'edit_file', arguments: { path: 'src/app.js', search: 'return label();', replace: 'return label(name);' } },
+      { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
+      { type: 'final', content: 'Fixed format and app; npm test passes.' },
+    ],
+    maxRounds: 14,
+    timeoutMs: 150_000,
   },
 ];

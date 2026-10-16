@@ -7,8 +7,8 @@ function platformPathKey(posixPath: string): string {
   return process.platform === 'win32' ? posixPath.toLowerCase() : posixPath;
 }
 
-/** BranchBudget 统一使用 workspace 相对路径（POSIX `/`），合并绝对/相对重复键。 */
-export function canonicalBudgetPath(
+/** 统一成 workspace 相对路径（POSIX `/`），让绝对/相对写法落到同一个键。 */
+export function canonicalWorkspacePath(
   workspaceRoot: string | undefined,
   rawPath: string | undefined | null,
 ): string | undefined {
@@ -28,30 +28,6 @@ export function canonicalBudgetPath(
     return platformPathKey(trimmed.replace(/\\/g, '/'));
   }
   return platformPathKey(rel.replace(/\\/g, '/'));
-}
-
-/** checkpoint 恢复后合并同文件不同路径表示的编辑计数。 */
-export function mergeBudgetPathMap(
-  map: Map<string, number>,
-  workspaceRoot: string,
-): Map<string, number> {
-  const merged = new Map<string, number>();
-  for (const [rawKey, count] of map) {
-    const key = canonicalBudgetPath(workspaceRoot, rawKey) ?? rawKey.replace(/\\/g, '/');
-    merged.set(key, Math.max(merged.get(key) ?? 0, count));
-  }
-  return merged;
-}
-
-export function mergeBudgetPathSet(
-  paths: Set<string>,
-  workspaceRoot: string,
-): Set<string> {
-  const merged = new Set<string>();
-  for (const raw of paths) {
-    merged.add(canonicalBudgetPath(workspaceRoot, raw) ?? raw.replace(/\\/g, '/'));
-  }
-  return merged;
 }
 
 const FILE_WRITE_TOOLS = new Set([

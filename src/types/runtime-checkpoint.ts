@@ -34,12 +34,6 @@ import type {
   TaskStateSnapshot,
 } from './runtime-snapshot.js';
 import { LEGACY_TASK_VERIFICATION_KEYS } from './legacy-runtime-schema.js';
-import type {
-  ExecutionMode,
-  ForcedDegradedTier,
-  ModeDecision,
-  ModeSignal,
-} from './supervisor.js';
 
 /** v2 schema 版本号；保留为字面量类型方便后续迁移判别。 */
 export const RUNTIME_CHECKPOINT_VERSION = 2 as const;
@@ -50,15 +44,15 @@ export interface ToolHistoryEntry {
   toolName: string;
   /** 是否成功 */
   success: boolean;
-  /** 调用签名（toolName + args 摘要），用于 budget 计数对齐 */
+  /** 调用签名（toolName + args 摘要） */
   signature: string;
   /** 时间戳（epoch ms） */
   at: number;
 }
 
-/** 最近一次失败的精简记录（用于 step-review / branch budget 恢复后立即对齐计数） */
+/** 最近一次失败的精简记录 */
 export interface FailureHistoryEntry {
-  /** 工具调用签名（与 BranchBudgetTracker 内部签名一致） */
+  /** 工具调用签名 */
   signature: string;
   /** 失败次数（同 signature 的累计计数） */
   count: number;
@@ -85,59 +79,6 @@ export interface AcceptanceGateSnapshot {
     lastRunAt?: number;
     evidenceRefs?: string[];
   }>;
-}
-
-/** 分支预算追踪器持久化快照 */
-export interface BranchBudgetSnapshot {
-  /** 同一文件路径累计编辑次数 */
-  fileEdits: Record<string, number>;
-  /** 同一命令累计重试次数 */
-  commandRetries: Record<string, number>;
-  /** 同一错误签名累计计数 */
-  errorRepeats: Record<string, number>;
-  /** 已触发过的 recover 信号（计数，用于"分支耗尽后切策略仍失败"时不再重复) */
-  recoverTriggers: number;
-  /** 待消费的 write_file 豁免路径（canonical POSIX 相对路径） */
-  writeBypassPaths?: string[];
-  /** 待消费的验收命令重试豁免（规范化命令） */
-  commandRetryBypassKeys?: string[];
-}
-
-/**
- * 运行时恢复信号 — 由 BranchBudgetTracker 或其他子系统抛出，
- * 在持久化里保留，重启后立即重新注入。
- */
-export interface RecoverySignal {
-  /** 触发来源：分支预算 / 步骤回顾 / 验证失败 等 */
-  source: 'branch_budget' | 'step_review' | 'verification' | 'other';
-  /** 用户可读的 warning 文案（注入到下一轮 user message） */
-  message: string;
-  /** 触发时间 */
-  at: number;
-  /** 是否已被消费（注入到对话）。重启后未消费的会再次注入。 */
-  consumed: boolean;
-}
-
-/** L1 execution-mode state persisted in checkpoint v2. */
-export interface RuntimeExecutionModeCheckpointState {
-  /** Current Execution Free/Forced boundary mode. */
-  executionMode: ExecutionMode;
-  /** Anti-flap lock remaining after entering forced. */
-  executionModeLockRemaining: number;
-  /** Signals that caused the last forced entry, sorted by §2.8.8 precedence. */
-  executionModeEnteredBy: ModeSignal[];
-  /** Primary entry signal; mirrors executionModeEnteredBy[0] when present. */
-  executionModeEnteredByPrimary?: ModeSignal;
-  /** Round where forced was entered; null while free or before Batch 2 persistence. */
-  executionModeEnteredAtRound: number | null;
-  /** Forced degraded tier, when graph/step queue/write-intent fallback is active. */
-  forcedDegradedTier?: ForcedDegradedTier;
-  /** Last mode decision for observability and later resume logic. */
-  lastModeDecision?: ModeDecision;
-  /** Append-only pending signals captured before evaluation. */
-  pendingModeSignals: ModeSignal[];
-  /** I10 dwell counter; persisted later when Harness accounting is connected. */
-  forcedTaskBearingRoundsSinceEntry: number;
 }
 
 /**
@@ -170,8 +111,6 @@ export interface RuntimeCheckpointV2 {
   currentStepId?: string;
   /** 当前执行步骤标题（冗余字段，方便人眼检查 checkpoint 文件） */
   currentStepTitle?: string;
-  /** 分支预算快照 */
-  branchBudget: BranchBudgetSnapshot;
   /** 最近工具历史（最多保留 N 条） */
   recentTools: ToolHistoryEntry[];
   /** 最近失败历史 */
@@ -180,24 +119,16 @@ export interface RuntimeCheckpointV2 {
   planVersion?: number;
   /** 是否仍有 verification 未通过 */
   verificationPending: boolean;
-  /** 待消费 / 历史 recovery signals */
-  recoverySignals: RecoverySignal[];
   /** 触发本次 save 的事件（用于 telemetry / 调试） */
   lastTrigger: CheckpointSaveTrigger;
   /** 最后一次循环 stopReason（来自 Harness loopState） */
   lastStopReason?: StopReason;
-  /** L1 execution-mode state. */
-  executionModeState?: RuntimeExecutionModeCheckpointState;
   /** v2 写入时间 */
   v2UpdatedAt: string;
   /** 最近验收失败 stderr tail；跨 checkpoint 恢复 digest 注入 */
   verificationOutputTail?: VerificationOutputTailEntry[];
   /** 长跑任务多命令验收进度 */
   acceptanceGate?: AcceptanceGateSnapshot;
-  /** Rebuild Escalation 已注入次数（跨 checkpoint 延续） */
-  rebuildEscalationInjections?: number;
-  /** 并行 BranchBudget 拦截指引是否已注入（每 run 一次） */
-  parallelBudgetBlockHintInjected?: boolean;
   /**
    * 后台任务快照（Phase 5）：序列化当前 session 仍在跑的后台任务清单，
    * 让 checkpoint resume 后 LLM 知道「上一轮起过这些后台任务」。
@@ -217,58 +148,32 @@ export type CheckpointSaveTrigger =
   | 'final_draft'
   | 'manual';
 
-/** 默认空 budget 快照（构造器初始化用） */
-export function emptyBranchBudgetSnapshot(): BranchBudgetSnapshot {
-  return {
-    fileEdits: {},
-    commandRetries: {},
-    errorRepeats: {},
-    recoverTriggers: 0,
-  };
-}
-
 /** 默认空 v2 checkpoint（用于 first save） */
 export function emptyRuntimeCheckpointV2(
   trigger: CheckpointSaveTrigger = 'manual',
 ): RuntimeCheckpointV2 {
   return {
     runtimeVersion: RUNTIME_CHECKPOINT_VERSION,
-    branchBudget: emptyBranchBudgetSnapshot(),
     recentTools: [],
     recentFailures: [],
     verificationPending: false,
-    recoverySignals: [],
     lastTrigger: trigger,
-    executionModeState: emptyRuntimeExecutionModeCheckpointState(),
     v2UpdatedAt: new Date(0).toISOString(),
-  };
-}
-
-/** Inert defaults: Batch 1 only persists shape, it does not alter Harness execution. */
-export function emptyRuntimeExecutionModeCheckpointState(): RuntimeExecutionModeCheckpointState {
-  return {
-    executionMode: 'free',
-    executionModeLockRemaining: 0,
-    executionModeEnteredBy: [],
-    executionModeEnteredAtRound: null,
-    pendingModeSignals: [],
-    forcedTaskBearingRoundsSinceEntry: 0,
   };
 }
 
 /**
  * 类型守卫：判断一个解析出来的 JSON 对象是否包含完整 v2 字段。
  * 用于 CheckpointEngine 在 load 时决定是走 v2 路径还是 fallback 到 v1。
+ * 旧文件里的 branchBudget / recoverySignals / executionModeState 不参与判定，读取时丢弃。
  */
 export function isRuntimeCheckpointV2(value: unknown): value is RuntimeCheckpointV2 {
   if (!value || typeof value !== 'object') return false;
   const v = value as Partial<RuntimeCheckpointV2>;
   return (
     v.runtimeVersion === RUNTIME_CHECKPOINT_VERSION
-    && !!v.branchBudget
     && Array.isArray(v.recentTools)
     && Array.isArray(v.recentFailures)
-    && Array.isArray(v.recoverySignals)
     && typeof v.verificationPending === 'boolean'
   );
 }
@@ -302,7 +207,6 @@ export interface ProjectCheckpointExecution {
 }
 
 export interface ProjectCheckpointResumableExecution {
-  branchBudget?: BranchBudgetSnapshot;
   failedToolCallSignatures?: Record<string, number>;
 }
 
@@ -446,7 +350,6 @@ function isProjectCompletion(value: unknown): value is ProjectCheckpointCompleti
 
 function isProjectResumableExecution(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (value.branchBudget !== undefined && !isBranchBudgetSnapshot(value.branchBudget)) return false;
   if (value.failedToolCallSignatures !== undefined) {
     if (!isRecord(value.failedToolCallSignatures)) return false;
     if (!Object.values(value.failedToolCallSignatures).every(isNonNegativeInteger)) return false;
@@ -731,17 +634,6 @@ function isCompletionReason(value: unknown): value is CompletionReason {
     'settled',
     'settled_without_independent_receipt',
   ].includes(String(value));
-}
-
-function isBranchBudgetSnapshot(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  for (const key of ['fileEdits', 'commandRetries', 'errorRepeats']) {
-    const counts = value[key];
-    if (!isRecord(counts) || !Object.values(counts).every(isNonNegativeInteger)) return false;
-  }
-  return isNonNegativeInteger(value.recoverTriggers)
-    && (value.writeBypassPaths === undefined || isStringArray(value.writeBypassPaths))
-    && (value.commandRetryBypassKeys === undefined || isStringArray(value.commandRetryBypassKeys));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

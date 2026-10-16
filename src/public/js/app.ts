@@ -58,11 +58,8 @@
     if (!shell || !window.ChatSessionSidebar) return;
     window.ChatSessionSidebar.create(shell);
   }
-  // 顶栏元素已移入侧边栏（IceCoder logo / 监管模式 / 设置 / 连接状态），此处不再持有引用。
+  // 顶栏元素已移入侧边栏（IceCoder logo / 设置 / 连接状态），此处不再持有引用。
 
-  const SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
-  const SUPERVISOR_LABELS = { off: '自由', adaptive: '自适应', strict: '严格' };
-  let currentSupervisorMode = 'adaptive';
   let setupRequired = false;
 
   function applySetupMode(required) {
@@ -93,50 +90,6 @@
     } else {
       navigateDesktop('chat');
     }
-  }
-
-  // ---- 监管模式 ----
-
-  function syncSupervisorModeToPet(showBubble) {
-    const label = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
-    if (window.ChatPetBridge) {
-      if (showBubble && typeof window.ChatPetBridge.notifySupervisorMode === 'function') {
-        window.ChatPetBridge.notifySupervisorMode(currentSupervisorMode, label);
-      } else if (typeof window.ChatPetBridge.syncSupervisorModeEye === 'function') {
-        window.ChatPetBridge.syncSupervisorModeEye(currentSupervisorMode);
-      }
-    }
-  }
-
-  function applySupervisorModeFromConfig(data) {
-    if (data && (data.supervisorMode === 'off' || data.supervisorMode === 'adaptive' || data.supervisorMode === 'strict')) {
-      currentSupervisorMode = data.supervisorMode;
-    }
-    syncSupervisorModeToPet(false);
-    if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
-      window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
-    }
-  }
-
-  function cycleSupervisorMode() {
-    const idx = SUPERVISOR_MODES.indexOf(currentSupervisorMode);
-    const next = SUPERVISOR_MODES[(idx + 1) % SUPERVISOR_MODES.length];
-    fetch('/api/config/supervisor-mode', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ supervisorMode: next }),
-    })
-      .then((res) => { return res.json().then((body) =>  ({ ok: res.ok, body })); })
-      .then((result) => {
-        if (result.ok && result.body.success) {
-          currentSupervisorMode = result.body.supervisorMode;
-          syncSupervisorModeToPet(true);
-          if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
-            window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
-          }
-        }
-      })
-      .catch(() => { /* ignore */ });
   }
 
   // ---- 主题管理 ----
@@ -201,11 +154,6 @@
     return document.documentElement.getAttribute('data-theme') || getStoredTheme();
   }
 
-  function getSupervisorMode() { return currentSupervisorMode; }
-  function getSupervisorLabel(mode) {
-    return SUPERVISOR_LABELS[mode || currentSupervisorMode] || (mode || currentSupervisorMode);
-  }
-
   let currentConnectionState = 'disconnected';
   function getConnectionState() { return currentConnectionState; }
   function setConnectionState(state) {
@@ -228,7 +176,6 @@
     };
   }
 
-  const supervisorModeHub = createListenerHub();
   const themeChangeHub = createListenerHub();
   const connectionChangeHub = createListenerHub();
 
@@ -237,15 +184,10 @@
     setTheme,
     toggleTheme,
     themeToggleTitle,
-    getSupervisorMode,
-    getSupervisorLabel,
-    cycleSupervisorMode,
     setConnectionState,
     getConnectionState,
-    addSupervisorModeListener: supervisorModeHub.add,
     addThemeChangeListener: themeChangeHub.add,
     addConnectionChangeListener: connectionChangeHub.add,
-    notifySupervisorModeChange: supervisorModeHub.notify,
     notifyThemeChange: themeChangeHub.notify,
     notifyConnectionChange: connectionChangeHub.notify,
   };
@@ -713,7 +655,6 @@
       .then((data) => {
         applySetupMode(!!data.setupRequired);
         setConnectionState('connected');
-        applySupervisorModeFromConfig(data);
 
         const providers = data.providers || [];
         if (providers.length > 0) {
@@ -803,12 +744,6 @@
     exitSetupMode,
     isSetupRequired() {
       return setupRequired;
-    },
-    getSupervisorMode() {
-      return currentSupervisorMode;
-    },
-    applySupervisorMode(mode) {
-      applySupervisorModeFromConfig({ supervisorMode: mode });
     },
     getShell() {
       return currentShell;

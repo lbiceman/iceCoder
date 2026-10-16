@@ -184,25 +184,6 @@ async function loadStats(page: Page, payload: Record<string, unknown>) {
           }),
         } as Response);
       }
-      if (url.includes('/api/supervisor/events')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            success: true,
-            executionMode: {
-              enter: 3,
-              exit: 1,
-              byMode: { forced: 3 },
-              bySignal: { tool_failure: 2, multi_write: 1 },
-              series: auxDays.map((row, i) => ({
-                ...row,
-                enter: i === 6 ? 3 : 0,
-                exit: i === 4 ? 1 : 0,
-              })),
-            },
-          }),
-        } as Response);
-      }
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(data),
@@ -214,11 +195,10 @@ async function loadStats(page: Page, payload: Record<string, unknown>) {
   await page.waitForSelector('[data-chart="trend"] svg');
   await page.waitForSelector('[data-role="memory-metrics"] .stats-aux-metric-value');
   await page.waitForSelector('[data-chart="memory"] svg');
-  await page.waitForSelector('[data-chart="supervisor"] svg');
 }
 
 describe('统计页 Token 图表', () => {
-  it('上排 Token 卡，下排记忆与监管统计，并可切换时间范围', async () => {
+  it('上排 Token 卡，下排记忆统计，并可切换时间范围', async () => {
     const page = await browser.newPage();
     openPages.add(page);
     const now = Date.now();
@@ -242,9 +222,8 @@ describe('统计页 Token 图表', () => {
         memoryRead: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric-value')?.textContent,
         memoryStrokes: document.querySelectorAll('[data-chart="memory"] .stats-area-stroke').length,
         memoryFills: document.querySelectorAll('[data-chart="memory"] .stats-area-fill').length,
-        supervisorStrokes: document.querySelectorAll('[data-chart="supervisor"] .stats-area-stroke').length,
-        supervisorFills: document.querySelectorAll('[data-chart="supervisor"] .stats-area-fill').length,
-        supervisorEnter: document.querySelector('[data-role="supervisor-enter"]')?.textContent,
+        supervisor: document.querySelectorAll('[data-chart="supervisor"], [data-role^="supervisor-"]').length,
+        hint: document.querySelector('.stats-hint')?.textContent ?? '',
         io: document.querySelectorAll('[data-chart="io-in"], [data-chart="io-out"]').length,
         rangeLabels: [...document.querySelectorAll('.stats-range-btn')].map((el) => el.textContent),
         table: document.querySelectorAll('.stats-table').length,
@@ -261,13 +240,12 @@ describe('统计页 Token 图表', () => {
     expect(snapshot.turns).toBe(0);
     expect(snapshot.split).toBe(1);
     expect(snapshot.reserve).toBe(0);
-    expect(snapshot.labels).toEqual(['Token 消耗', '记忆', '监管']);
+    expect(snapshot.labels).toEqual(['Token 消耗', '记忆']);
     expect(snapshot.memoryRead).toBe('4');
     expect(snapshot.memoryStrokes).toBe(3);
     expect(snapshot.memoryFills).toBe(0);
-    expect(snapshot.supervisorStrokes).toBe(2);
-    expect(snapshot.supervisorFills).toBe(0);
-    expect(snapshot.supervisorEnter).toBe('3 次');
+    expect(snapshot.supervisor).toBe(0);
+    expect(snapshot.hint).not.toMatch(/监管/);
     expect(snapshot.io).toBe(0);
     expect(snapshot.rangeLabels).toEqual(['日', '当周', '当月']);
     expect(snapshot.table).toBe(0);
@@ -288,9 +266,7 @@ describe('统计页 Token 图表', () => {
 
     const before = await page.evaluate(() => ({
       metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
-      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
       chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
-      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
     }));
 
     await page.evaluate(() => {
@@ -301,7 +277,7 @@ describe('统计页 Token 图表', () => {
       };
       window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.includes('/api/memory/telemetry') || url.includes('/api/supervisor/events')) {
+        if (url.includes('/api/memory/telemetry')) {
           return new Promise((resolve, reject) => {
             pending.push(() => {
               orig(input, init).then(resolve, reject);
@@ -319,40 +295,27 @@ describe('统计页 Token 图表', () => {
     const during = await page.evaluate(() => ({
       skel: document.querySelectorAll('[data-role="memory-metrics"] .stats-aux-metric-sub .stats-skel').length,
       memoryChartSkel: document.querySelectorAll('[data-chart="memory"] .stats-skel-chart').length,
-      supervisorChartSkel: document.querySelectorAll('[data-chart="supervisor"] .stats-skel-chart').length,
       memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
-      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
       metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
-      supervisor: document.querySelector('[data-role="supervisor-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
       chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
-      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
     }));
     expect(during.skel).toBe(3);
     expect(during.memoryChartSkel).toBe(1);
-    expect(during.supervisorChartSkel).toBe(1);
     expect(during.memorySvg).toBe(0);
-    expect(during.supervisorSvg).toBe(0);
     expect(Math.abs(during.metric - before.metric)).toBeLessThan(1);
-    expect(Math.abs(during.supervisor - before.supervisor)).toBeLessThan(1);
     expect(Math.abs(during.chart - before.chart)).toBeLessThan(1);
-    expect(Math.abs(during.supervisorChart - before.supervisorChart)).toBeLessThan(1);
 
     await page.evaluate(() => {
       (window as unknown as { __releaseAux?: () => void }).__releaseAux?.();
     });
     await page.waitForSelector('[data-chart="memory"] svg');
-    await page.waitForSelector('[data-chart="supervisor"] svg');
     const after = await page.evaluate(() => ({
       metric: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric')!.getBoundingClientRect().height,
       chart: document.querySelector('[data-chart="memory"]')!.getBoundingClientRect().height,
-      supervisorChart: document.querySelector('[data-chart="supervisor"]')!.getBoundingClientRect().height,
       memorySvg: document.querySelectorAll('[data-chart="memory"] svg').length,
-      supervisorSvg: document.querySelectorAll('[data-chart="supervisor"] svg').length,
     }));
     expect(after.memorySvg).toBe(1);
-    expect(after.supervisorSvg).toBe(1);
     expect(Math.abs(after.metric - before.metric)).toBeLessThan(1);
     expect(Math.abs(after.chart - before.chart)).toBeLessThan(1);
-    expect(Math.abs(after.supervisorChart - before.supervisorChart)).toBeLessThan(1);
   });
 });

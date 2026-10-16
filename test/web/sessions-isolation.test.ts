@@ -152,7 +152,7 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
     expect(called).toEqual([sessionId]);
   });
 
-  it('GET /:id/plan reads {sessionId}.session-notes.md (not the global file)', async () => {
+  it('GET /:id/plan 忽略 session-notes 里残留的 icecoder-plan fence', async () => {
     await fs.mkdir(tempDir, { recursive: true });
     const sessionId = 'sess-plan';
     await fs.writeFile(
@@ -186,12 +186,11 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
 
     const res = await fetch(`${baseUrl}/${sessionId}/plan`);
     expect(res.ok).toBe(true);
-    const body = await res.json() as { plan: { steps: { title: string }[] } | null };
-    expect(body.plan).toBeTruthy();
-    expect(body.plan?.steps[0]?.title).toBe('hello');
+    const body = await res.json() as { plan: unknown };
+    expect(body.plan).toBeNull();
   });
 
-  it('GET /:id/plan does NOT cross-leak from other session notes', async () => {
+  it('GET /:id/plan 不会把别的会话 fence 当成当前计划', async () => {
     await fs.mkdir(tempDir, { recursive: true });
     const a = 'sess-a';
     const b = 'sess-b';
@@ -220,7 +219,8 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
     expect(bodyB.plan).toBeNull();
 
     const resA = await fetch(`${baseUrl}/${a}/plan`);
-    const bodyA = await resA.json() as { plan: { steps: { title: string }[] } };
-    expect(bodyA.plan?.steps[0]?.title).toBe('plan-for-A');
+    expect(resA.ok).toBe(true);
+    const bodyA = await resA.json() as { plan: unknown };
+    expect(bodyA.plan).toBeNull();
   });
 });

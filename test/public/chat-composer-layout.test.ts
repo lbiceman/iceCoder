@@ -154,7 +154,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
     await page.close();
   });
 
-  it('监管模式下 ETL 长 skill 目标不会撑破滚动容器', async () => {
+  it('ETL 长 skill 目标不会撑破滚动容器', async () => {
     const page = await browser.newPage({ viewport: { width: 420, height: 640 } });
     openPages.add(page);
     await page.setContent(
@@ -192,18 +192,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
         steps: [{ id: 's0', title: '步骤一', status: 'running' }],
       };
       const bridge = (window as any).ChatExecutionPlanBridge;
-      bridge.handleStep({ type: 'task_graph_init', plan });
-      bridge.handleStep({
-        type: 'execution_mode_enter',
-        ts: Date.now(),
-        executionMode: {
-          executionMode: 'forced',
-          enteredByPrimary: 'tool_failure',
-          enteredBy: ['tool_failure'],
-          primaryReasonHuman: '工具失败',
-          round: 3,
-        },
-      });
+      bridge.handleStep({ type: 'execution_plan_init', plan });
     });
 
     await page.evaluate(() => {
@@ -233,7 +222,6 @@ describe('聊天输入区与欢迎页布局审计', () => {
       const chapters = panel.querySelector('.etl-chapter-list') as HTMLElement;
       const goal = document.querySelector('#etl-overview-goal')?.textContent || '';
       flow.scrollTop = flow.scrollHeight;
-      const banner = panel.querySelector('.exec-plan-mode-banner') as HTMLElement;
       return {
         hasScrollRegion: !!flow,
         overflowY: window.getComputedStyle(flow).overflowY,
@@ -243,7 +231,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
         mainFitsPanel: main.clientHeight <= panel.clientHeight + 1,
         goal,
         goalNotFullSkill: !goal.includes('步骤一\n步骤一'),
-        bannerVisible: banner && !banner.classList.contains('hidden'),
+        hasModeBanner: !!panel.querySelector('.exec-plan-mode-banner'),
         roundCount: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
       };
     });
@@ -257,7 +245,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
     expect(result.roundCount).toBeGreaterThan(0);
     expect(result.goal).toBe('[Active Skill: examLogin/skill.md]');
     expect(result.goalNotFullSkill).toBe(true);
-    expect(result.bannerVisible).toBe(true);
+    expect(result.hasModeBanner).toBe(false);
     await page.close();
   });
 

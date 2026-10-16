@@ -53,10 +53,9 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
-import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import {
   readSkipPermissionChecksFromMainConfig,
-} from '../../config/main-config-supervisor-mode.js';
+} from '../../config/main-config.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
 import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
@@ -178,12 +177,6 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
     error('请先完成模型配置后再使用终端对话');
     process.exit(1);
   }
-
-  // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
-  const supervisorRuntime = await loadHarnessSupervisorRuntime({
-    dataDir: ctx.paths.dataDir,
-    mainConfigPath: ctx.paths.configPath,
-  });
 
   // 初始化记忆系统
   let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
@@ -486,8 +479,6 @@ ${c.bold}终端内置命令:${c.reset}
         sessionId: 'default',
         workspaceRoot: wsCtx.effectiveWorkspaceRoot,
         verificationExemptDirs,
-        supervisorConfig: supervisorRuntime.supervisorConfig,
-        globalPolicy: supervisorRuntime.globalPolicy,
         onConfirm: createCliOnConfirm(spinner),
         onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(spinner),
       };

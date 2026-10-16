@@ -19,8 +19,7 @@ export function findToolCallForResult(
 
 export function toolResultLooksFailed(content: string): boolean {
   return content.includes('Tool execution error')
-    || content.includes('工具执行错误')
-    || content.includes('[BranchBudget / Blocked]');
+    || content.includes('工具执行错误');
 }
 
 /**

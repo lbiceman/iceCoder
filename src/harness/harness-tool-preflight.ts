@@ -1,15 +1,12 @@
 import { realpathSync } from 'node:fs';
 import nodePath from 'node:path';
 
-import type { BranchBudgetTracker } from './branch-budget.js';
 import { isUnderRoot } from '../shared/path-scope.js';
 import {
   canonicalizeMemoryToolPath,
   resolveMemoryRootForPath,
 } from '../memory/file-memory/memory-write-pipeline.js';
-import { extractRunCommand } from './branch-budget-path.js';
-import { canonicalBudgetPath } from './branch-budget-path.js';
-import type { ToolCall } from '../llm/types.js';
+import { canonicalWorkspacePath, extractRunCommand } from './tool-target-path.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
 import { workspaceFileExists } from '../shared/path-scope.js';
 import {
@@ -20,9 +17,7 @@ import { analyzeShellSandbox } from '../tools/shell-sandbox.js';
 export interface ToolPreflightInput {
   toolName: string;
   args: Record<string, unknown>;
-  branchBudget?: BranchBudgetTracker;
   completionFacts?: CompletionFactsView;
-  buildDiagnosticGateActive?: boolean;
   workspaceRoot?: string;
   lockedWorkspaceRoot?: string;
   /** 同路径 missing-file preflight 拦截次数（由 HarnessRunState 持有）。 */
@@ -31,7 +26,7 @@ export interface ToolPreflightInput {
 
 export interface ToolPreflightDecision {
   blocked: boolean;
-  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_hard_block' | 'outside_workspace';
+  reason?: 'dist_read' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_hard_block' | 'outside_workspace';
   message?: string;
   hostKillLabel?: string;
 }
@@ -93,7 +88,7 @@ export function buildMissingFileBlockMessage(
 }
 
 function missingFileAttemptKey(workspaceRoot: string, rawPath: string): string {
-  return canonicalBudgetPath(workspaceRoot, rawPath) ?? rawPath;
+  return canonicalWorkspacePath(workspaceRoot, rawPath) ?? rawPath;
 }
 
 /** 计数按原始 path 记录（执行器 ENOENT 计数同样如此）；查询时合并同一文件的不同写法取最大值。 */
@@ -250,22 +245,6 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
     }
   }
 
-  if (input.toolName === 'run_command' && input.buildDiagnosticGateActive) {
-    const command = extractRunCommand(input.args);
-    if (command && input.branchBudget?.wouldBlockCommandRetry(command)) {
-      return {
-        blocked: true,
-        reason: 'build_diagnostic_gate',
-        message: [
-          '[Harness / Diagnostic Gate] the failed command is paused until you diagnose the failure.',
-          `Blocked command: ${command}`,
-          'Read this round\'s output, fix the cause, then re-run the project\'s own verification command.',
-          'Do not rerun the same failed command until the implementation changes.',
-        ].join('\n'),
-      };
-    }
-  }
-
   if (input.toolName === 'run_command') {
     const command = extractRunCommand(input.args);
     if (command) {
@@ -313,52 +292,4 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
   }
 
   return { blocked: false };
-}
-
-export function shouldActivateBuildDiagnosticGate(args: {
-  branchBudget?: BranchBudgetTracker;
-  executionFailedSignatures: string[];
-  policyBlockedSignatures: string[];
-  toolCalls: ToolCall[];
-  signatureOf: (tc: ToolCall) => string;
-}): boolean {
-  if (!args.branchBudget) return false;
-
-  for (const tc of args.toolCalls) {
-    if (tc.name !== 'run_command') continue;
-    const command = extractRunCommand(tc.arguments);
-    if (!command) continue;
-    if (!args.branchBudget.wouldBlockCommandRetry(command)) continue;
-    const sig = args.signatureOf(tc);
-    if (args.executionFailedSignatures.includes(sig) || args.policyBlockedSignatures.includes(sig)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function shouldClearBuildDiagnosticGate(args: {
-  toolCalls: ToolCall[];
-  failedSignatures: string[];
-  signatureOf: (tc: ToolCall) => string;
-}): boolean {
-  const writeTools = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
-  for (const tc of args.toolCalls) {
-    if (!writeTools.has(tc.name)) continue;
-    if (args.failedSignatures.includes(args.signatureOf(tc))) continue;
-    const path = typeof tc.arguments.path === 'string'
-      ? tc.arguments.path
-      : (typeof tc.arguments.file_path === 'string' ? tc.arguments.file_path : undefined);
-    if (path) return true;
-  }
-  return false;
-}
-
-export function buildDiagnosticGateMessage(): string {
-  return [
-    '[System / Build Diagnostic Gate]',
-    'A verification command is blocked by BranchBudget after repeated failures.',
-    'Switch to diagnosis: read this round\'s failing output, fix the cause, then re-run the project\'s own verification command.',
-    'Do not rerun the same failed command until the implementation changes.',
-  ].join('\n');
 }

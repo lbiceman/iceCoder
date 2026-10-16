@@ -13,7 +13,6 @@ import { prepareHarnessRound } from '../../src/harness/harness-round-prep.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
 import { TaskState } from '../../src/harness/task-state.js';
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
 import type { ChatFunction } from '../../src/harness/types.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -35,7 +34,6 @@ function makeState(goal: string): HarnessRunState {
     llmRetryCount: 0,
     emptyResponseRetryCount: 0,
     consecutiveToolFailures: 0,
-    consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
@@ -46,9 +44,6 @@ function makeState(goal: string): HarnessRunState {
     repoContext: new RepoContext(),
     runtimeStateHash: '',
     failedToolCallSignatures: new Map(),
-    branchBudgetWarnedThisRound: false,
-    verificationDigestInjectedThisRound: false,
-    stepReviewedThisRound: false,
   };
 }
 
@@ -62,7 +57,6 @@ function buildDeps(sessionId: string, workspaceRoot: string) {
   return {
     loopController: new LoopController({ maxRounds: 3 }),
     memoryIntegration: new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' }),
-    graphExecutor: new GraphExecutor(),
     contextCompactor: new ContextCompactor({ threshold: 9999 }),
     stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
     checkpointManager: undefined,

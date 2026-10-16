@@ -29,10 +29,9 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
-import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import {
   readSkipPermissionChecksFromMainConfig,
-} from '../../config/main-config-supervisor-mode.js';
+} from '../../config/main-config.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
@@ -67,11 +66,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
 
   try {
     let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
-    const { supervisorConfig, globalPolicy } = await loadHarnessSupervisorRuntime({
-      dataDir: ctx.paths.dataDir,
-      mainConfigPath: ctx.paths.configPath,
-    });
-
     const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
     const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
@@ -150,8 +144,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       sessionId: 'default',
       workspaceRoot: wsCtx.effectiveWorkspaceRoot,
       verificationExemptDirs,
-      supervisorConfig,
-      globalPolicy,
       onConfirm: createCliOnConfirm(!jsonOutput ? spinner : undefined),
       onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(!jsonOutput ? spinner : undefined),
     };

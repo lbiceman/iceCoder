@@ -61,7 +61,7 @@ export const ChatSessionSidebar = (() => {
     sidebar = document.createElement('aside');
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
-      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">任务</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">知识库</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span><button class="chat-sidebar-search-btn" type="button" title="搜索会话" aria-label="搜索会话" aria-expanded="false">${ic('search', 14)}</button></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-search" hidden><span class="chat-sidebar-search-icon" aria-hidden="true">${ic('search', 13)}</span><input class="chat-sidebar-search-input" type="search" placeholder="搜索会话标题" aria-label="搜索会话标题" autocomplete="off" spellcheck="false"></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button><button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('clock')}</span><span class="chat-sidebar-control-label">自适应</span></button></div>`;
+      `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div><nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">任务</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">知识库</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav><div class="chat-sidebar-header"><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span><button class="chat-sidebar-search-btn" type="button" title="搜索会话" aria-label="搜索会话" aria-expanded="false">${ic('search', 14)}</button></div><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button></div><div class="chat-sidebar-search" hidden><span class="chat-sidebar-search-icon" aria-hidden="true">${ic('search', 13)}</span><input class="chat-sidebar-search-input" type="search" placeholder="搜索会话标题" aria-label="搜索会话标题" autocomplete="off" spellcheck="false"></div><div class="chat-sidebar-list"></div><div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置"><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings')}</span><span class="chat-sidebar-control-label">设置</span></button></div>`;
 
     const mainEl = host.querySelector('.app-main');
     if (mainEl) {
@@ -189,37 +189,8 @@ export const ChatSessionSidebar = (() => {
     WS.on('shell_collab_entered', notifyShellCollabUpdated);
   }
 
-  function syncShellMode() {
-    if (!sidebar) return;
-    const shell = window.AppShell;
-    const btn = sidebar.querySelector('.chat-sidebar-mode-btn');
-    if (!btn) return;
-    const mode = (shell && typeof shell.getSupervisorMode === 'function') ? shell.getSupervisorMode() : 'adaptive';
-    const label = (shell && typeof shell.getSupervisorLabel === 'function') ? shell.getSupervisorLabel(mode) : mode;
-    btn.setAttribute('data-mode', mode);
-    const labelEl = btn.querySelector('.chat-sidebar-control-label');
-    if (labelEl) labelEl.textContent = label;
-    const summaries = {
-      off: '不切换执行档，不建任务图',
-      adaptive: '按进展在自由和强制之间切换，并收紧写预算；不建任务图，强制时不按步骤拦工具',
-      strict: '保持强制。工程任务会建任务图，不合当前步骤的工具会被拦住',
-    };
-    const summary = summaries[mode] || summaries.adaptive;
-    btn.title = `监管模式：${label}。${summary}（点击切换）`;
-  }
-
   function bindShellControls() {
-    const shell = window.AppShell;
-    syncShellMode();
     syncSidebarSettingsActive();
-
-    const modeBtn = sidebar.querySelector('.chat-sidebar-mode-btn');
-    if (modeBtn) {
-      modeBtn.addEventListener('click', () => {
-        if (!shell || typeof shell.cycleSupervisorMode !== 'function') return;
-        shell.cycleSupervisorMode();
-      });
-    }
 
     const settingsBtn = sidebar.querySelector('.chat-sidebar-settings-btn');
     if (settingsBtn) {
@@ -230,12 +201,6 @@ export const ChatSessionSidebar = (() => {
           window.dispatchEvent(new HashChangeEvent('hashchange'));
         }
       });
-    }
-
-    if (shell) {
-      if (typeof shell.addSupervisorModeListener === 'function') {
-        shell.addSupervisorModeListener(() => { syncShellMode(); });
-      }
     }
   }
 

@@ -2,10 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   SESSION_PET_PALETTE_COLORS,
   SESSION_PET_DISPLAY_NAME,
-  SUPERVISOR_MODE_EYE_ORDER,
+  SESSION_PET_EYE_COLOR,
   tokenPercentToPaletteIndex,
   eyeColorForTokenPct,
-  supervisorModeToEyeColor,
   pickRandomPaletteColor,
   buildSessionPetCanvasAriaLabel,
 } from '../../src/public/js/session-pet-palette.js';
@@ -17,16 +16,9 @@ describe('session-pet-palette', () => {
     expect(SESSION_PET_DISPLAY_NAME).toBe('冰豆');
   });
 
-  it('色板为三档监管模式眼色', () => {
-    expect(n).toBe(3);
-    expect(SUPERVISOR_MODE_EYE_ORDER).toEqual(['off', 'adaptive', 'strict']);
-  });
-
-  it('supervisorModeToEyeColor 与三档一一对应', () => {
-    expect(supervisorModeToEyeColor('off')).toBe('#88EDC7');
-    expect(supervisorModeToEyeColor('adaptive')).toBe('#86E0FF');
-    expect(supervisorModeToEyeColor('strict')).toBe('#F1A8B2');
-    expect(supervisorModeToEyeColor('unknown')).toBe('#86E0FF');
+  it('眼睛色固定为色板中的默认色', () => {
+    expect(SESSION_PET_EYE_COLOR).toBe('#86E0FF');
+    expect(SESSION_PET_PALETTE_COLORS).toContain(SESSION_PET_EYE_COLOR);
   });
 
   it('tokenPercentToPaletteIndex：0 → 0，100 → 最后一档', () => {
@@ -61,7 +53,7 @@ describe('session-pet-palette', () => {
     }
   });
 
-  it('buildSessionPetCanvasAriaLabel 提及圆环与监管模式眼色', () => {
+  it('buildSessionPetCanvasAriaLabel 提及圆环，不再提监管模式', () => {
     const label = buildSessionPetCanvasAriaLabel({
       tokenPct: 40,
       tokenUsed: 1000,
@@ -73,7 +65,7 @@ describe('session-pet-palette', () => {
     });
     expect(label).toContain('冰豆');
     expect(label).toMatch(/圆环/);
-    expect(label).toMatch(/监管模式/);
+    expect(label).not.toMatch(/监管/);
     expect(label).toContain('40%');
   });
 });

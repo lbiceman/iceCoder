@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import type { ChatFunction } from '../src/harness/types.js';
 import { agentEvalCases, type AgentEvalCase } from './agent-eval-cases.js';
+import type { CaseStats } from './agent-eval-runner.js';
 
 interface EvalMetrics {
   task_success_rate: number;
@@ -23,6 +24,7 @@ interface CaseResult {
   passed: boolean;
   metrics: EvalMetrics;
   failures: string[];
+  stats?: CaseStats;
   workspace?: string;
   taskCallCount?: number;
   agents?: Array<{ type: string; status: string; rounds: number; toolCalls: number; description: string }>;
@@ -44,6 +46,7 @@ const METRIC_KEYS: Array<keyof EvalMetrics> = [
 interface CliArgs {
   mode: 'real' | 'mock' | 'local';
   caseId?: string;
+  category?: string;
   format: 'json' | 'markdown';
   keepWorkspaces: boolean;
   help: boolean;
@@ -57,8 +60,8 @@ async function main(): Promise<void> {
   }
 
   const selectedCases = args.mode === 'local'
-    ? selectLocalCases(selectCases(args.caseId))
-    : selectCases(args.caseId);
+    ? selectLocalCases(selectCases(args.caseId, args.category))
+    : selectCases(args.caseId, args.category);
   const results = args.mode === 'real'
     ? await runRealEval(selectedCases, args)
     : args.mode === 'local'
@@ -240,11 +243,18 @@ async function appendHistory(report: unknown): Promise<void> {
   await fs.appendFile(historyPath, `${JSON.stringify(report)}\n`, 'utf-8');
 }
 
-function selectCases(caseId: string | undefined): AgentEvalCase[] {
-  if (!caseId) return agentEvalCases;
-  const selected = agentEvalCases.filter(testCase => testCase.id === caseId);
-  if (selected.length === 0) {
-    throw new Error(`Unknown eval case: ${caseId}. Available: ${agentEvalCases.map(testCase => testCase.id).join(', ')}`);
+function selectCases(caseId: string | undefined, category: string | undefined): AgentEvalCase[] {
+  const byCategory = category
+    ? agentEvalCases.filter(testCase => testCase.category === category)
+    : agentEvalCases;
+  if (category && byCategory.length === 0) {
+    throw new Error(`Unknown eval category: ${category}.`);
+  }
+  if (!caseId) return byCategory;
+  const ids = new Set(caseId.split(',').map(id => id.trim()).filter(Boolean));
+  const selected = byCategory.filter(testCase => ids.has(testCase.id));
+  if (selected.length !== ids.size) {
+    throw new Error(`Unknown eval case: ${caseId}. Available: ${byCategory.map(testCase => testCase.id).join(', ')}`);
   }
   return selected;
 }
@@ -269,6 +279,14 @@ function formatReport(report: {
     `- no_tool_final_rate: ${roundMetric(report.metrics.no_tool_final_rate)}`,
     `- memory_interference_rate: ${roundMetric(report.metrics.memory_interference_rate)}`,
     `- compaction_recovery_success_rate: ${roundMetric(report.metrics.compaction_recovery_success_rate)}`,
+    '',
+    '| case | result | rounds | LLM calls | tools | failed | blocked | writes | max same-file writes | run_command | tokens | seconds | stop |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...report.results.map(result => {
+      const s = result.stats;
+      if (!s) return `| ${result.id} | ${result.passed ? 'PASS' : 'FAIL'} | | | | | | | | | | | |`;
+      return `| ${result.id} | ${result.passed ? 'PASS' : 'FAIL'} | ${s.rounds} | ${s.llmCalls} | ${s.toolCalls} | ${s.failedToolResults} | ${s.policyBlocks} | ${s.writeCalls} | ${s.maxSameFileWrites} | ${s.runCommands} | ${s.totalTokens} | ${(s.durationMs / 1000).toFixed(1)} | ${s.stopReason ?? ''} |`;
+    }),
     '',
   ];
 
@@ -324,6 +342,7 @@ function parseArgs(): CliArgs {
   return {
     mode: modeArg,
     caseId: getArg('--case'),
+    category: getArg('--category'),
     format: formatArg,
     keepWorkspaces: hasFlag('--keep-workspaces'),
     help: hasFlag('--help') || hasFlag('-h'),
@@ -343,7 +362,8 @@ Options:
   --mode=<real|mock|local> real drives Harness with configured LLM;
                            mock is no-API smoke, but still runs scripted local cases for real;
                            local runs only scriptedTurns cases with real tools in isolated workspaces
-  --case=<id>              run one case
+  --case=<id[,id...]>      run the listed case(s)
+  --category=<name>        run one category (e.g. model-led)
   --format=<json|markdown> output format
   --keep-workspaces        keep temp workspaces for debugging
   --help, -h               show help

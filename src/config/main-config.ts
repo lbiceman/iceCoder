@@ -1,24 +1,11 @@
 /**
- * 从 data/config.json 读写 supervisorMode（用户可配置的三档监管模式）。
+ * data/config.json 的路径解析与单项开关读写（权限确认、子 Agent、Windows 工具、Shell 黑名单）。
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { resolveLocalDataDir } from '../cli/paths.js';
 import type { IceCoderConfigFile } from '../web/types.js';
-import type { SupervisorMode } from '../types/supervisor.js';
-
-export const DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE: SupervisorMode = 'adaptive';
-
-export function normalizeSupervisorMode(
-  value: unknown,
-  fallback: SupervisorMode = DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
-): SupervisorMode {
-  if (value === 'off' || value === 'adaptive' || value === 'strict') {
-    return value;
-  }
-  return fallback;
-}
 
 export async function readMainConfigFile(configPath: string): Promise<IceCoderConfigFile> {
   try {
@@ -28,32 +15,10 @@ export async function readMainConfigFile(configPath: string): Promise<IceCoderCo
     return parsed;
   } catch (error) {
     if (isMissingFile(error)) {
-      return { providers: [], supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE };
+      return { providers: [] };
     }
     throw error;
   }
-}
-
-/** 读取 config.json 中的 supervisorMode；字段缺失时返回 undefined（由 supervisor-config.json 兜底）。 */
-export async function readSupervisorModeFromMainConfig(
-  configPath: string,
-): Promise<SupervisorMode | undefined> {
-  const config = await readMainConfigFile(configPath);
-  if (config.supervisorMode == null) {
-    return undefined;
-  }
-  return normalizeSupervisorMode(config.supervisorMode);
-}
-
-export async function writeSupervisorModeToMainConfig(
-  configPath: string,
-  mode: SupervisorMode,
-): Promise<SupervisorMode> {
-  const normalized = normalizeSupervisorMode(mode);
-  const config = await readMainConfigFile(configPath);
-  config.supervisorMode = normalized;
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
-  return normalized;
 }
 
 /** 与 Web/CLI 共用：优先 `ICE_CONFIG_PATH`，否则 `{ICE_DATA_DIR|本地缓存}/config.json`。 */

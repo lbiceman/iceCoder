@@ -15,7 +15,7 @@ import {
 describe('failure-evidence-recovery', () => {
   it('detects failed tool result content variants', () => {
     expect(isFailedToolResultContent('Tool execution error: boom')).toBe(true);
-    expect(isFailedToolResultContent('[BranchBudget / Blocked] x')).toBe(true);
+    expect(isFailedToolResultContent('[Tool skipped] x')).toBe(true);
     expect(isFailedToolResultContent('ok')).toBe(false);
   });
 
@@ -30,12 +30,12 @@ describe('failure-evidence-recovery', () => {
     expect(entries[0]!.body).toContain('AssertionError');
   });
 
-  it('appends buffered verification output when branch block hid stderr', () => {
+  it('appends buffered verification output when compaction dropped the failing command', () => {
     const buffer = new VerificationOutputBuffer();
     buffer.recordFailed('npm test', 'FAIL src/a.test.ts\nexpected true');
     const messages: UnifiedMessage[] = [
-      { role: 'assistant', content: '', toolCalls: [{ id: '1', name: 'run_command', arguments: { command: 'npm test' } }] },
-      { role: 'tool', toolCallId: '1', content: '[BranchBudget / Blocked] retry cap' },
+      { role: 'assistant', content: '', toolCalls: [{ id: '1', name: 'read_file', arguments: { path: 'src/a.ts' } }] },
+      { role: 'tool', toolCallId: '1', content: 'Tool execution error: ENOENT' },
     ];
     const entries = collectFailureEvidenceEntries(messages, buffer);
     expect(entries.some(e => e.label.includes('buffered'))).toBe(true);

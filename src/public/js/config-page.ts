@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 设置页面：Tab 切换「通用」「模型配置」「MCP 配置」与「监管模式配置」。
+ * 设置页面：Tab 切换「通用」「模型配置」与「MCP 配置」。
  */
 
 /* exported ConfigPage, SettingsPage */
@@ -893,7 +893,7 @@ export const SettingsPage = (() => {
         '<header class="config-center-header">' +
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
-            '<p class="config-center-subtitle">管理外观主题、安全选项、模型、MCP 服务器与监管模式</p>' +
+            '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
             '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）</p>' +
           '</div>' +
         '</header>' +
@@ -901,13 +901,11 @@ export const SettingsPage = (() => {
           '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">通用</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">模型配置</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">MCP 配置</button>' +
-          '<button type="button" class="config-tab' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-tab="supervisor" role="tab" aria-selected="' + (activeTab === 'supervisor' ? 'true' : 'false') + '">监管模式配置</button>' +
         '</nav>' +
         '<div class="config-tab-panels">' +
           '<div class="config-tab-panel' + (activeTab === 'general' ? ' is-active' : '') + '" data-panel="general" role="tabpanel" id="config-tab-general"' + (activeTab === 'general' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'model' ? ' is-active' : '') + '" data-panel="model" role="tabpanel" id="config-tab-model"' + (activeTab === 'model' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-panel="mcp" role="tabpanel" id="config-tab-mcp"' + (activeTab === 'mcp' ? '' : ' hidden') + '></div>' +
-          '<div class="config-tab-panel' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-panel="supervisor" role="tabpanel" id="config-tab-supervisor"' + (activeTab === 'supervisor' ? '' : ' hidden') + '></div>' +
         '</div>' +
       '</div>';
 
@@ -968,14 +966,6 @@ export const SettingsPage = (() => {
       }
     } else if (switching && window.McpConfigPanel && window.McpConfigPanel.pause) {
       window.McpConfigPanel.pause();
-    }
-
-    if (tab === 'supervisor' && window.SupervisorConfigPanel) {
-      const supEl = container.querySelector('#config-tab-supervisor');
-      if (supEl && !supEl.dataset.mounted) {
-        supEl.dataset.mounted = '1';
-        window.SupervisorConfigPanel.render(supEl);
-      }
     }
   }
 

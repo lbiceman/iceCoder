@@ -29,12 +29,29 @@ export interface EvalMetrics {
   compaction_recovery_success_rate: number;
 }
 
+/** 单个 case 的行为读数：轮次、工具、写同一文件次数、跑命令次数、token、耗时。 */
+export interface CaseStats {
+  rounds: number;
+  llmCalls: number;
+  toolCalls: number;
+  failedToolResults: number;
+  policyBlocks: number;
+  writeCalls: number;
+  maxSameFileWrites: number;
+  runCommands: number;
+  totalTokens: number;
+  durationMs: number;
+  stopReason?: string;
+  completionStatus?: string;
+}
+
 export interface CaseResult {
   id: string;
   category: AgentEvalCase['category'];
   passed: boolean;
   metrics: EvalMetrics;
   failures: string[];
+  stats?: CaseStats;
   workspace?: string;
   /** 父模型发出的 task 次数。真实模型不强制派出，只做记录。 */
   taskCallCount?: number;
@@ -149,11 +166,13 @@ export async function runAgentEvalCase(
       harness.getStopHookManager().register(async (messages, lastContent) =>
         evaluateIncompleteTaskStopHook(messages, lastContent));
     }
+    const startedAt = Date.now();
     const result = await harness.run(
       buildPrompt(testCase),
       chatFn,
       event => events.push(event),
     );
+    const durationMs = Date.now() - startedAt;
 
     const judgeResults = await runJudgeCommands(workspace, testCase.verifyCommands);
     const telemetry = await readTelemetryEvents(runtimeTelemetryFile(sessionDir, testCase.id));
@@ -167,6 +186,7 @@ export async function runAgentEvalCase(
       judgeResults,
       sessionDir,
       scriptedParent: !options.chatFn,
+      durationMs,
     });
 
     return options.keepWorkspace
@@ -404,11 +424,13 @@ async function scoreCase(args: {
   judgeResults: JudgeCommandResult[];
   sessionDir: string;
   scriptedParent: boolean;
+  durationMs: number;
 }): Promise<CaseResult> {
   const { testCase, workspace, initialFiles, result, events, telemetry, judgeResults, sessionDir, scriptedParent } = args;
   const failures: string[] = [];
   const assertionFailures = await evaluateAssertions(workspace, initialFiles, testCase);
   failures.push(...assertionFailures);
+  failures.push(...findSupervisionTraces(result, events));
 
   for (const judge of judgeResults) {
     if (!judge.success) {
@@ -481,6 +503,13 @@ async function scoreCase(args: {
       if (countCommandRuns(events, command) > 0) {
         failures.push(`unexpected run_command matching ${JSON.stringify(command)}`);
       }
+    }
+  }
+  if (testCase.expected.sameFileWrites) {
+    const { path: target, min } = testCase.expected.sameFileWrites;
+    const writes = successfulWritesByPath(events).get(normalizePath(target)) ?? 0;
+    if (writes < min) {
+      failures.push(`expected at least ${min} successful writes to ${target}, got ${writes}`);
     }
   }
   const taskCallCount = events.filter(event =>
@@ -588,6 +617,7 @@ async function scoreCase(args: {
     passed: failures.length === 0,
     metrics,
     failures,
+    stats: collectCaseStats(result, events, args.durationMs),
     ...(testCase.subAgents ? {
       taskCallCount,
       agents: agentMetas.map(meta => ({
@@ -760,6 +790,73 @@ const WRITE_TOOLS = new Set([
   'patch_file',
   'batch_edit_file',
 ]);
+
+/**
+ * 监管已移除：任何 case 都不该再看到模式切换、步骤表、反复修改上限或只读催促留下的文案和事件。
+ * 文案按旧实现原样列出，旧会话历史里可能还留着，所以只查本次 run 新增的 user / tool 消息。
+ */
+const SUPERVISION_MARKERS = [
+  '[BranchBudget',
+  '[ToolGate]',
+  '[TaskGraph]',
+  '[Runtime Self-Review]',
+  'Rebuild Escalation',
+  'Build Diagnostic Gate',
+  'Diagnostic Gate]',
+  'Current branch exhausted',
+  'reading/analyzing for',
+];
+
+function findSupervisionTraces(result: HarnessResult, events: HarnessStepEvent[]): string[] {
+  const traces: string[] = [];
+  for (const message of result.messages) {
+    if (message.role !== 'user' && message.role !== 'tool') continue;
+    const text = typeof message.content === 'string' ? message.content : '';
+    const marker = SUPERVISION_MARKERS.find(m => text.includes(m));
+    if (marker) traces.push(`supervision text injected: ${marker}`);
+  }
+  for (const event of events) {
+    const type = String(event.type);
+    if (type.startsWith('execution_mode') || type.startsWith('task_graph')) {
+      traces.push(`supervision event emitted: ${type}`);
+    }
+  }
+  return [...new Set(traces)];
+}
+
+function successfulWritesByPath(events: HarnessStepEvent[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const event of events) {
+    if (event.type !== 'tool_result' || event.toolSuccess !== true || event.agentId) continue;
+    if (!WRITE_TOOLS.has(event.toolName ?? '')) continue;
+    const raw = event.toolArgs?.path ?? event.toolArgs?.file_path;
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const key = normalizePath(raw.trim()).replace(/^\.\//, '');
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function collectCaseStats(result: HarnessResult, events: HarnessStepEvent[], durationMs: number): CaseStats {
+  const mainToolResults = events.filter(event => event.type === 'tool_result' && !event.agentId);
+  const writes = successfulWritesByPath(events);
+  return {
+    rounds: result.loopState.currentRound,
+    llmCalls: result.log.filter(entry => entry.event === 'llm_call').length,
+    toolCalls: result.loopState.totalToolCalls,
+    failedToolResults: mainToolResults.filter(event => event.toolSuccess === false).length,
+    policyBlocks: mainToolResults.filter(event => event.toolOutcome === 'policy_block').length,
+    writeCalls: [...writes.values()].reduce((sum, count) => sum + count, 0),
+    maxSameFileWrites: Math.max(0, ...writes.values()),
+    runCommands: events.filter(event =>
+      event.type === 'tool_call' && event.toolName === 'run_command' && !event.agentId,
+    ).length,
+    totalTokens: result.loopState.totalInputTokens + result.loopState.totalOutputTokens,
+    durationMs,
+    stopReason: result.loopState.stopReason,
+    completionStatus: result.completionStatus,
+  };
+}
 
 function didVerificationFollowLastWrite(events: HarnessStepEvent[], verifyCommands: string[]): boolean {
   if (verifyCommands.length === 0) return false;

@@ -36,7 +36,6 @@ export const EtlChronicle = (() => {
   };
 
   const MARKER_LABELS = {
-    supervision: '监管曾介入',
     compaction: '本章发生过压缩',
     circuit: '熔断保护',
     subagent: '子代理',
@@ -240,8 +239,7 @@ export const EtlChronicle = (() => {
     for (let i = 0; i < list.length; i++) {
       const key = list[i];
       if (!key || seen[key]) continue;
-      if (!MARKER_LABELS[key] && key !== 'supervision' && key !== 'compaction'
-        && key !== 'circuit' && key !== 'subagent') continue;
+      if (!MARKER_LABELS[key]) continue;
       seen[key] = true;
       out.push(key);
     }

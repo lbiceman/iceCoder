@@ -54,23 +54,8 @@ export const ChatWelcome = (() => {
       .replace(/"/g, '&quot;');
   }
 
-  function getSupervisorLabel(mode) {
-    if (window.AppShell && typeof window.AppShell.getSupervisorLabel === 'function') {
-      return window.AppShell.getSupervisorLabel(mode);
-    }
-    const labels = { off: '自由', adaptive: '自适应', strict: '严格' };
-    return labels[mode] || mode || '自适应';
-  }
-
-  // 与 src/harness/supervisor/supervisor-mode-contract.ts 的 summary 保持一致。
-  function getSubtitle(mode) {
-    if (mode === 'off') return '不切换执行档，不建任务图';
-    if (mode === 'strict') return '保持强制。工程任务会建任务图，不合当前步骤的工具会被拦住';
-    return '按进展在自由和强制之间切换，并收紧写预算；不建任务图，强制时不按步骤拦工具';
-  }
-
   function statIconSvg(name) {
-    const map = { mode: 'eye', memory: 'database', harness: 'harness', l2: 'shield-badge' };
+    const map = { memory: 'database', harness: 'harness', l2: 'shield-badge' };
     return window.AppIcon ? window.AppIcon.html(map[name] || 'circle', { width: 18 }) : '';
   }
 
@@ -92,7 +77,7 @@ export const ChatWelcome = (() => {
     }).join('');
 
     return (
-      `<div class="chat-welcome-inner"><header class="chat-welcome-header"><div class="chat-welcome-brand"><div class="chat-welcome-headings"><h1 class="chat-welcome-title">IceCoder 已就绪</h1><p class="chat-welcome-subtitle" data-welcome-subtitle></p></div></div></header><div class="chat-welcome-stats"><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-mode">${statIconSvg('mode')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">模式</span><span class="chat-welcome-stat-value chat-welcome-stat-value-accent" data-welcome-mode>—</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon">${statIconSvg('memory')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Memory</span><span class="chat-welcome-stat-value" data-welcome-memory>载入中…</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-harness" data-welcome-harness-icon>${statIconSvg('harness')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Harness</span><span class="chat-welcome-stat-value" data-welcome-harness title="L1 主循环：消息预处理 → LLM → 工具执行">—</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>${statIconSvg('l2')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">验收门控</span><span class="chat-welcome-stat-value" data-welcome-pipeline title="工具执行前的审批：allow / confirm / deny">—</span></div></div></div><section class="chat-welcome-section"><h2 class="chat-welcome-section-title">快速上手</h2><div class="chat-welcome-tips">${tipsHtml}</div></section><section class="chat-welcome-section chat-welcome-context"><h2 class="chat-welcome-section-title">当前上下文</h2><div class="chat-welcome-context-rows"><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">工作区</span><span class="chat-welcome-context-value" data-welcome-workspace title="">—</span></div><div class="chat-welcome-context-row chat-welcome-context-row--tools"><span class="chat-welcome-context-label">系统工具</span><div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">载入中…</div></div><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">上下文大小</span><span class="chat-welcome-context-value" data-welcome-context-size title="">载入中…</span></div></div></section></div>`
+      `<div class="chat-welcome-inner"><header class="chat-welcome-header"><div class="chat-welcome-brand"><div class="chat-welcome-headings"><h1 class="chat-welcome-title">IceCoder 已就绪</h1></div></div></header><div class="chat-welcome-stats"><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon">${statIconSvg('memory')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Memory</span><span class="chat-welcome-stat-value" data-welcome-memory>载入中…</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-harness" data-welcome-harness-icon>${statIconSvg('harness')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Harness</span><span class="chat-welcome-stat-value" data-welcome-harness title="L1 主循环：消息预处理 → LLM → 工具执行">—</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>${statIconSvg('l2')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">验收门控</span><span class="chat-welcome-stat-value" data-welcome-pipeline title="工具执行前的审批：allow / confirm / deny">—</span></div></div></div><section class="chat-welcome-section"><h2 class="chat-welcome-section-title">快速上手</h2><div class="chat-welcome-tips">${tipsHtml}</div></section><section class="chat-welcome-section chat-welcome-context"><h2 class="chat-welcome-section-title">当前上下文</h2><div class="chat-welcome-context-rows"><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">工作区</span><span class="chat-welcome-context-value" data-welcome-workspace title="">—</span></div><div class="chat-welcome-context-row chat-welcome-context-row--tools"><span class="chat-welcome-context-label">系统工具</span><div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">载入中…</div></div><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">上下文大小</span><span class="chat-welcome-context-value" data-welcome-context-size title="">载入中…</span></div></div></section></div>`
     );
   }
 
@@ -426,16 +411,6 @@ export const ChatWelcome = (() => {
     return root || elRoot;
   }
 
-  function updateModeLabel(mode, root) {
-    const r = resolveRoot(root);
-    if (!r) return;
-    const modeEl = r.querySelector('[data-welcome-mode]');
-    const subEl = r.querySelector('[data-welcome-subtitle]');
-    const label = getSupervisorLabel(mode);
-    if (modeEl) modeEl.textContent = label;
-    if (subEl) subEl.textContent = getSubtitle(mode);
-  }
-
   function setVisible(show) {
     if (!elRoot || !elMessages) return;
     elRoot.classList.toggle('hidden', !show);
@@ -465,7 +440,6 @@ export const ChatWelcome = (() => {
     if (!show) return;
 
     applyContextFromOpts(opts);
-    updateModeLabel(opts.supervisorMode || 'adaptive');
     updateHarnessLabel(opts);
     updatePipelineLabel(opts);
     updateMemoryLabel();
@@ -480,7 +454,6 @@ export const ChatWelcome = (() => {
     opts = opts || {};
     if (!root) return;
     applyContextFromOpts(opts);
-    updateModeLabel(opts.supervisorMode || 'adaptive', root);
     updateHarnessLabel(opts, root);
     updatePipelineLabel(opts, root);
     updateMemoryLabel(root);

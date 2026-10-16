@@ -42,7 +42,7 @@ describe('handleHarnessStop user_checkpoint', () => {
 
     expect(chatFn).not.toHaveBeenCalled();
     expect(logger.llmCall).not.toHaveBeenCalled();
-    expect(result.content).toContain('Supervisor 已暂停自动恢复');
+    expect(result.content).toContain('已暂停自动恢复');
     expect(result.loopState.stopReason).toBe('user_checkpoint');
     expect(result.completionStatus).toBe('paused');
     expect(result.completionReason).toBe('user_checkpoint');

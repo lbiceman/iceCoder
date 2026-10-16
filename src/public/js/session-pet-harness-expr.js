@@ -607,5 +607,5 @@ export const HARNESS_PET_DEMO_EXTRAS = [
   { state: 'clap', title: '完成', why: '鼓掌（model_done）' },
   { state: 'error', title: '出错', why: '挑眉（工具失败）' },
   { state: 'tool_confirm', title: '待确认', why: '捂嘴等你点' },
-  { state: 'user_checkpoint', title: '请接管', why: '格旗，监管暂停' },
+  { state: 'user_checkpoint', title: '请接管', why: '格旗，需要你介入' },
 ];

@@ -31,16 +31,8 @@ import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
-import type { GraphExecutor } from './task-graph-executor.js';
-import { shouldUseTaskGraph } from './task-graph-config.js';
-import { supervisorModeBuildsTaskGraph } from './supervisor/supervisor-mode-contract.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
-import {
-  markForcedDegraded,
-  syncExecutionModeLoopState,
-} from './supervisor/execution-mode-constraints.js';
-import type { GlobalModePolicy } from '../types/supervisor.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -51,10 +43,7 @@ import { timeAsync, timeSync } from './harness-timing.js';
 export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
-  graphExecutor: GraphExecutor;
   runtimeTelemetry?: RuntimeTelemetry;
-  /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
-  globalPolicy?: GlobalModePolicy;
   /** 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
@@ -128,7 +117,7 @@ export function buildUnrelatedTaskNotice(userMessage: string): string {
 }
 
 /**
- * 轮次预处理：压缩、推进轮次、运行时注入、任务图、记忆、工具规划、规范化与预算、任务切换检测。
+ * 轮次预处理：压缩、推进轮次、运行时注入、记忆、工具规划、规范化与预算、任务切换检测。
  */
 export async function prepareHarnessRound(
   deps: RoundPrepDeps,
@@ -159,9 +148,6 @@ export async function prepareHarnessRound(
 
   deps.loopController.advanceRound();
   state.turnCount++;
-  // 轮次开始时记下 filesChanged 基线，并清掉上一轮的分支切换标记。
-  state.filesChangedAtRoundStart = state.repoContext.snapshot().filesChanged.length;
-  state.branchSwitchedThisRound = false;
   const round = deps.loopController.getState().currentRound;
   logger.roundStart(round, msgs.length);
   deps.runtimeTelemetry?.recordRound({
@@ -198,47 +184,6 @@ export async function prepareHarnessRound(
 
   const workspaceAnchor = prepareWorkspaceAnchorEphemeral(state);
   if (workspaceAnchor) ephemeralBlocks.push(workspaceAnchor);
-
-  if (state.turnCount === 1 && deps.graphExecutor) {
-    const taskSnapshot = state.taskState.snapshot();
-    // 只有 strict 建任务图。adaptive 也会进 forced，但没有图，ToolGate 不按步骤拦工具。
-    const shouldInit = supervisorModeBuildsTaskGraph(deps.globalPolicy?.supervisorMode)
-      && shouldUseTaskGraph(taskSnapshot.intent);
-    if (shouldInit) {
-      try {
-        deps.graphExecutor.initGraph({
-          goal: taskSnapshot.goal || userMessage,
-          intent: taskSnapshot.intent,
-        });
-        onStep?.({
-          type: 'task_graph_init',
-          graphGoal: taskSnapshot.goal || userMessage,
-          graphIntent: taskSnapshot.intent,
-          plan: deps.graphExecutor.toView() ?? undefined,
-        });
-      } catch (err) {
-        if (!markForcedDegraded(state, 'graph')) {
-          throw err;
-        }
-        state.submitModeSignal?.('graph_executor', 'recovery_pending', {
-          reason: 'task_graph_init_failed',
-          message: err instanceof Error ? err.message : String(err),
-        });
-        syncExecutionModeLoopState(deps.loopController, state);
-      }
-    }
-  }
-
-  if (deps.graphExecutor?.hasGraph()) {
-    const ctx = deps.graphExecutor.getCurrentNodeContext();
-    if (ctx) {
-      ephemeralBlocks.push(ctx);
-    }
-    const snap = deps.graphExecutor.toSnapshot();
-    if (snap?.cursor) {
-      onStep?.({ type: 'task_graph_node', nodeId: snap.cursor.nodeId, nodeIndex: snap.cursor.nodeIndex, graphStatus: snap.status });
-    }
-  }
 
   // 后台任务摘要：running 5min 节流；任意终态 dirty 立即注入。启动 ≠ 通过，由模型看 exit。
   if (deps.workspaceRoot) {

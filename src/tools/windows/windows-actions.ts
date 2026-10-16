@@ -3,7 +3,7 @@
  * 不加载 koffi，单测可以在任意系统上跑。
  */
 
-import { readUseWindowsFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import { readUseWindowsFromMainConfig } from '../../config/main-config.js';
 
 export const WINDOWS_MOUSE_TOOL = 'windows_mouse';
 export const WINDOWS_KEYBOARD_TOOL = 'windows_keyboard';

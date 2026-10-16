@@ -104,6 +104,17 @@ describe('桌面侧栏主导航与会话列表', () => {
     expect(state.activeNavPage).toBe('chat');
   });
 
+  it('侧栏底部只保留设置按钮，不再有监管模式切换', async () => {
+    const page = await openSidebarPage();
+    const footer = await page.evaluate(() => ({
+      modeBtn: document.querySelectorAll('.chat-sidebar-mode-btn').length,
+      controls: Array.from(document.querySelectorAll('.chat-sidebar-footer .chat-sidebar-control'))
+        .map((el) => el.className),
+    }));
+    expect(footer.modeBtn).toBe(0);
+    expect(footer.controls).toEqual(['chat-sidebar-control chat-sidebar-settings-btn']);
+  });
+
   it('知识库入口覆盖技能/记忆两个路由，并打开上次停留的页签', async () => {
     const page = await openSidebarPage();
 

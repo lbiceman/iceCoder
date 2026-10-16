@@ -138,7 +138,7 @@ describe('legacy checkpoint adapter', () => {
 
     const result = adaptLegacyCheckpoint(input);
 
-    expect(result.execution.resumable?.branchBudget).toEqual(input.runtimeV2.branchBudget);
+    expect(result.execution.resumable ?? {}).not.toHaveProperty('branchBudget');
     expect(result.extensions.runtimeResilience).toMatchObject({
       runtimeVersion: 2,
       recoverySignals: input.runtimeV2.recoverySignals,

@@ -34,7 +34,6 @@ export class LoopController {
 
   /**
    * 新一次 harness.run()：轮次与累计 token/工具计数归零（maxRounds / tokenBudget / timeout 按本次 run 计量）。
-   * Execution Mode 观察字段由后续 syncExecutionModeLoopState 重新写入。
    */
   resetForNewRun(): void {
     this.state = {
@@ -114,24 +113,6 @@ export class LoopController {
    */
   recordToolCalls(count: number): void {
     this.state.totalToolCalls += count;
-  }
-
-  /**
-   * 同步 Execution Mode 观察字段；模式裁决仍只由 ModeDecisionEngine 产生。
-   */
-  updateExecutionModeState(fields: Partial<Pick<
-    LoopState,
-    | 'executionMode'
-    | 'executionModeLockRemaining'
-    | 'executionModeEnteredBy'
-    | 'executionModeEnteredByPrimary'
-    | 'executionModeEnteredAtRound'
-    | 'forcedDegradedTier'
-    | 'lastModeDecision'
-    | 'pendingModeSignals'
-    | 'forcedTaskBearingRoundsSinceEntry'
-  >>): void {
-    this.state = { ...this.state, ...fields };
   }
 
   /**

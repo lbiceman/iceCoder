@@ -1,5 +1,4 @@
 {
-  "supervisorMode": "adaptive",
   "useWindows": false,
   "iceEtlPrefs": {
     "panelDefaultExpanded": true,

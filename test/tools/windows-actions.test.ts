@@ -10,7 +10,7 @@ import {
   readUseWindowsFromMainConfig,
   resolveUseWindows,
   writeUseWindowsToMainConfig,
-} from '../../src/config/main-config-supervisor-mode.js';
+} from '../../src/config/main-config.js';
 import { encodePngFromBottomUpBgra } from '../../src/tools/windows/png32.js';
 import {
   applyUseWindowsToolOffering,

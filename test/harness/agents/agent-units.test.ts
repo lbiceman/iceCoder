@@ -27,7 +27,6 @@ import { TaskState } from '../../../src/harness/task-state.js';
 import { RepoContext } from '../../../src/harness/repo-context.js';
 import { createVerificationRuntimeState } from '../../../src/harness/verification-state.js';
 import { classifyToolRoundProgress } from '../../../src/harness/tool-round-progress.js';
-import { GraphExecutor } from '../../../src/harness/task-graph-executor.js';
 import { aggregateTokenUsageByRole, tokenUsageEventsToRecords } from '../../../src/web/token-usage-stats.js';
 import { isConcurrencySafe } from '../../../src/tools/tool-metadata.js';
 import { alignPromptWithAvailableTools } from '../../../src/prompts/prompt-assembler.js';
@@ -176,11 +175,6 @@ describe('中性工具', () => {
       executableToolCalls: [{ id: '1', name: 'task', arguments: {} }],
       failedSignatures: [],
     })).toBe('meaningful_progress');
-  });
-
-  it('TaskGraph 不约束 task', () => {
-    const graph = new GraphExecutor();
-    expect(graph.checkToolCall('task').action).toBe('allow');
   });
 });
 

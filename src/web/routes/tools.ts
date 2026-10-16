@@ -7,7 +7,7 @@ import { Router, type Request, type Response } from 'express';
 import {
   readUseWindowsFromMainConfig,
   resolveMainConfigPath,
-} from '../../config/main-config-supervisor-mode.js';
+} from '../../config/main-config.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import { summarizeToolCategories } from '../../tools/tool-offering-selector.js';

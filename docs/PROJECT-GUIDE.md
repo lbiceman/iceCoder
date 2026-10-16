@@ -2,7 +2,7 @@
 
 > Full project introduction. For a quick overview, see [README](../README.md).
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), a single-axis Supervisor (`off` / `adaptive` / `strict` → `free` / `forced`), file-based long-term memory, **Agent Skills**, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket / Mobile H5** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a **model-led** Harness loop with tools (the model decides when to read, edit, and run commands; "think first" lives only in Plan mode), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), file-based long-term memory, **Agent Skills**, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket / Mobile H5** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 22+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
@@ -10,7 +10,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-> 2026-08-31 breaking change: L2 takeover/observer/recovery/timeline was removed. Any later historical validation tables mentioning takeover, handoff, graph_hint, shadow, or Supervisor Timeline describe the retired implementation only.
+> 2026-10-16 breaking change: the three supervision tiers (off / adaptive / strict), the L1 `free` ↔ `forced` execution mode, TaskGraph, and the branch budget were removed — see [`requirement/监管收束-愿景.md`](./requirement/监管收束-愿景.md). Old `supervisorMode` values in `config.json` are ignored. The L2 takeover/observer/recovery/timeline stack was removed earlier, on 2026-08-31.
 
 [中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md)
 
@@ -20,20 +20,19 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 | Area | Status |
 |------|--------|
-| **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, D′ stop-time verification, no-tool recovery, repeat-failure detection |
-| **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
+| **Harness core** | Model-led single loop: tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, D′ stop-time verification, no-tool recovery, repeat-failure hints, all-tools-failed ladder with circuit breaker |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
-| **Single-axis Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard; L2 takeover stack retired on 2026-08-31; overview [`docs/双模机制详解.md`](./双模机制详解.md) |
+| **Supervision / TaskGraph** | **Removed** on 2026-10-16 (tiers, execution mode, TaskGraph, branch budget); see [`requirement/监管收束-愿景.md`](./requirement/监管收束-愿景.md) |
 | **Memory system** | File-based long-term memory + session notes + Dream/eviction; **24** test files **~446** cases — see **Memory System** · [`记忆系统详解.md`](./记忆系统详解.md) |
 | **Agent Skills** | Markdown skills in `ICE_SKILLS_DIR`; Web Skills page + chat `#` injection; `/api/skills` — see **Agent Skills** |
 | **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
 | **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
-| **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
+| **Ice Bean (pet UI)** | Web Canvas session indicator; ~20 expressions + token ring — see **Web app** |
 | **Workbench (ETL UI)** | Right-hand panel, no tabs: chapter directory (rollback on title) + selected-chapter flow; footer docks for files and tool names. Chronicle from session data (`etl-chronicle.js`). Spec: [`requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) |
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` classifier (long → background, short → foreground + soft-timeout escalate); **detached** background tasks survive Agent Stop / session switch; ETL Shell Dock + `bgTasks` WS snapshot — see **Tool Runtime** |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
-| **Eval** | `npm run eval:agent` — Agent behavior regression (7 fixed cases, temp sandbox, Harness pass/fail); TaskGraph metrics via `scripts/eval-runner.ts` |
+| **Eval** | `npm run eval:agent` — Agent behavior regression (temp sandbox, Harness pass/fail); `--category=model-led` checks the runtime never blocks the model |
 
 Verification:
 
@@ -43,7 +42,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth. Baseline (2026-07-09): **~225** test files, **~2,000** cases. Full breakdown in **Testing & validation** below.
+Treat **`npm test`** as the source of truth. Baseline (2026-10-16): **384** test files. Full breakdown in **Testing & validation** below.
 
 ---
 
@@ -58,7 +57,7 @@ User / CLI / Web / Mobile H5 / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
-      -> GraphExecutor (TaskGraph) + TaskCheckpointManager / CheckpointEngine
+      -> TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -89,99 +88,38 @@ while running:
     finalize
 ```
 
-### Sub-Agent Runner
+### Sub-agents
 
-`src/harness/sub-agent-runner.ts` provides the **isolated read-only agent executor** used by async `request_analysis` background tasks. The sub-agent runs with a read-only whitelist, writes artifacts into the Analysis Workspace, and returns concise Analysis Ready summaries instead of blocking the main context.
-
-This solves the "context pollution" problem: previously, each exploration task dumped large search results and file contents directly into the session, accelerating compaction and wasting tokens. With the sub-agent, the main context receives only a short summary (~hundreds of tokens), cutting exploration-induced context bloat by an estimated 60-80%.
-
-The sub-agent also has a **process-level LRU cache** (default 100 entries, keyed by task + filesRead + mtimes) to skip re-execution of identical queries when files haven't changed on disk.
-
-Key components:
-- `SubAgentRunner` — isolated message loop with timeout and round limits
-- `request_analysis` — the async background analysis tool exposed to the model
-- `AnalysisSupervisor` / `analysis-ready-injector` — schedules background analysis and injects ready summaries
+The model can spawn a child agent with the `task` tool (`src/harness/agents/`). `general` can read, edit, and run commands inside a write lease. `explore` is read-only. Results come back through `check_agent` or a background injection. `request_analysis`, `SubAgentRunner`, and `AnalysisSupervisor` are gone.
 
 Key runtime protections:
 
 - No-tool recovery for executable tasks
-- D′ stop-time verification: no-tool body proposes stop; stale plan runs once via `run_command` ToolGate
-- Permission rules before tool execution
+- D′ stop-time verification: no-tool body proposes stop; stale plan runs once via `run_command` through the same permission and execution path as ordinary tool rounds
+- Permission rules before tool execution (`skipPermissionChecks` never skips an explicit deny); shell sandbox, HostGuard, workspace write boundary, missing-file preflight
 - Confirmation-required tools are denied if no confirmation callback exists
-- Repeated failed tool signature detection
-- Consecutive failure circuit breaker
+- Repeated failed tool signature detection (hint only)
+- All-tools-failed ladder: light hint at 2–3 rounds, failure-evidence bundle at 4–6, strong warning at 7–9, `circuit_breaker` at ≥10
 - Context compaction and post-compaction Runtime Recovery Context
 
 ### Tool planner
 
-On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of **2–3 suggested tool names** derived from `taskState.intent` (see `src/harness/tool-plan-intent-map.ts` and `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
+On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of suggested tool names derived from `taskState.intent` (see `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
 
-### TaskGraph (replaces Execution Transparency Layer)
+### Model-led loop (supervision removed)
 
-The Harness loop integrates **TaskGraph** as the **sole context injection source** for LLM prompts (Phase 11–13). TaskGraph replaces the legacy Execution Transparency Layer (ETL).
+Like Codex, Claude Code, and OpenCode, the Harness is one loop: the model decides when to read files, edit code, and run commands. The runtime does **not** switch execution tiers, build a step table, gate tools by the current step, or stop the model for editing the same file / re-running a failing command. "Analyze, write a plan, confirm, then edit" exists only in **Plan mode** (`/plan`).
 
-- **Generation**: `buildGraph()` (`task-graph-builder.ts`) constructs a multi-step task graph from intent snapshots; `GraphExecutor` (`task-graph-executor.ts`) manages graph lifecycle, node context injection, tool call validation, and round evaluation.
-- **Context injection**: `GraphExecutor.getCurrentNodeContext()` returns the **only** structured context appended to LLM prompts — no other execution plan data enters the model. Non-critical intents (`question`, `inspect`, `explain`) skip graph initialization via **TaskDomainGate** (`shouldUseTaskGraph()` in `task-graph-config.ts`), preserving free-mode operation.
-- **Events**: Graph lifecycle emits **`task_graph_init`** / **`task_graph_node`** / **`task_graph_branch`** / **`task_graph_done`** on the `HarnessStepEvent` channel. Legacy `execution_plan_*` event types are retained for frontend compatibility only.
-- **Persistence**: Legacy checkpoint `plan` field and `ExecutionPlan` types have been removed (Phase 11). TaskGraph state persists through `checkpoint-engine.ts` `runtimeV2` field.
-
-Key files:
-- `src/types/task-graph.ts` — core graph data model
-- `src/types/task-graph-view.ts` — UI view model types
-- `src/harness/task-graph.ts` — graph state machine
-- `src/harness/task-graph-builder.ts` — graph construction
-- `src/harness/task-graph-executor.ts` — Harness integration bridge
-- `src/harness/task-graph-review.ts` — contract validation, deviation detection, failure classification
-- `src/harness/task-graph-config.ts` — TaskDomainGate (`shouldUseTaskGraph`)
+Removed on 2026-10-16 (see [`requirement/监管收束-愿景.md`](./requirement/监管收束-愿景.md)): `supervisorMode` (off / adaptive / strict) and the L1 `free` ↔ `forced` execution mode, TaskGraph (step-level tool gating, `force_switch` / fallback), the branch budget (per-file edit cap, per-command retry cap), Build Diagnostic Gate, Rebuild Escalation, Runtime Self-Review hints, the "too many read-only rounds" nudge, `execution_mode_*` / `task_graph_*` events, `~supervisor`, `/api/supervisor/events`, the Settings supervision tab, and the tier-colored pet eyes. The `user_checkpoint` stop reason is kept only so old sessions still load; nothing produces it anymore.
 
 ### CheckpointEngine (Runtime Resilience v2)
 
 `CheckpointEngine` (`src/harness/checkpoint-engine.ts`) wraps the existing **`TaskCheckpointManager`** writes for the **same** `{sessionId}.checkpoint.json` file:
 
-- **`TaskCheckpoint`** (v1) fields remain authoritative for resumes and tooling; **`runtimeV2`** is an **additive** sibling object for richer telemetry-style history (recent tools, failures, recovery signals, **branch budget** snapshots via `branch-budget.ts`).
-- Older files without `runtimeV2` still load cleanly; saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
-- Triggers mirror the long-session design (step/tool/verification/compaction milestones — see `docs/requirement/长时间连续工作-finish.md`).
-
-### Single-axis Supervisor
-
-Current overview: [`双模机制详解.md`](./双模机制详解.md) · L2 retirement: [`L2监管层详解.md`](./L2监管层详解.md)
-
-```text
-L0 Policy tier (config.json · supervisorMode)
-  off / adaptive / strict
-        ↓
-L1 Execution mode (Harness · executionMode)
-  free ↔ forced
-  ModeController · ToolGate · TaskGraph · branchBudget
-        ↓
-L3 Graph hard guard
-  block / force_switch / user_checkpoint
-```
-
-| Layer | Key modules | Role |
-|-------|-------------|------|
-| **L0** | `mode-controller.ts` · `supervisor-config.ts` | Load tier + global policy; degrade to `off` on failure |
-| **L1** | `execution-mode-constraints.ts` · `tool-gate.ts` · `mode-decision-engine.ts` | Enter/exit forced by signals; strict floor = forced |
-| **L3** | `task-graph-executor.ts` · `task-graph-review.ts` | Hard block; switch fallback branch; checkpoint when none exists |
-
-**L0 tiers**
-
-| Mode | `supervisorMode` | Summary |
-|------|------------------|---------|
-| **off** | `off` | Execution Mode and first-round graph disabled |
-| **adaptive** | `adaptive` (default) | Risk-based free ↔ forced; no first-round graph |
-| **strict** | `strict` | Forced floor and first-round graph for engineering tasks |
-
-**Config & entrypoints**
-
-- **Tier**: `data/config.json` → `supervisorMode` (Web nav · `PATCH /api/config/supervisor-mode`)
-- **Params**: `data/supervisor-config.json` (template [`supervisor-config.example.json`](../data/supervisor-config.example.json))
-- **Loading**: `loadHarnessSupervisorRuntime()` from `chat` / `run` / `chat-ws` / `remote-ws`
-- **Env vars**: [`docs/环境变量.md`](./环境变量.md) §4
-
-The former L2 takeover/observer/recovery/timeline stack was removed on 2026-08-31.
-`GET /api/supervisor/events` now returns only Execution Mode enter/exit telemetry from
-`data/runtime/telemetry.jsonl`.
+- **`TaskCheckpoint`** (v1) fields remain authoritative for resumes and tooling; **`runtimeV2`** is an **additive** sibling object (recent tools, failures, verification state, verification output tail, background tasks).
+- Saves on `tool_failed` / `verification_failed` / compaction / final draft, plus `step_completed` once at the end of each round. There is no forced save policy anymore.
+- Older files without `runtimeV2` still load cleanly; legacy fields such as `branchBudget`, `executionModeState`, `recoverySignals`, `rebuildEscalationInjections` are dropped on read. Saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
+- Triggers mirror the long-session design (see `docs/requirement/长时间连续工作-finish.md`).
 
 ---
 
@@ -508,75 +446,34 @@ This gives the model a stable view of what has happened even if conversation his
 
 ## Testing & validation
 
-> Manual steps + copy-paste prompts: [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) · Dual-mode e2e: `test/e2e/dual-mode-scenarios.test.ts`
-
 ### Automated tests (Vitest)
 
-**Baseline (2026-07-09):** **~225** test files · **~2,000** cases · `npx tsc --noEmit` 0 errors
+**Baseline (2026-10-16):** **384** test files under `test/**/*.test.ts` (dedicated supervision / TaskGraph / branch-budget suites and the dual-mode e2e were deleted with those features). Case counts and coverage come from a local run.
 
 | Directory | Files | Notes |
 |-----------|-------|-------|
-| `test/harness/` | **90** | Harness loop, compaction, checkpoint, **full supervisor stack**, Shell dual-track |
-| `test/memory/` | **24** | File memory recall / extract / Dream / eviction |
-| `test/web/` | **19** | API, sessions, setup gate, supervisor-events, chat-ws |
-| `test/tools/` | **14** | Shell classifier, background tasks, git, patch, parsers |
-| `test/llm/` | **7** | Adapters, token counting |
-| `test/public/` | **4** | Ice Bean palette, diff viewer |
-| `test/e2e/` | **1** | **7** dual-mode scenarios A–F |
-| Other | **~18** | parser, cli, core, prompts, config |
+| `test/harness/` | **106** | Harness loop, permissions, failure ladder, stop-time verification, compaction, checkpoint, Shell dual-track |
+| `test/web/` | **57** | API, sessions, setup gate, workspace browse, skills, chat-ws |
+| `test/tools/` | **44** | Shell classifier / sandbox, background tasks, git, patch, parsers, Windows tools |
+| `test/public/` | **42** | Ice Bean, workbench, chat page, stats page, diff viewer |
+| `test/memory/` | **30** | File memory recall / extract / Dream / eviction |
+| `test/llm/` | **23** | Adapters, token counting |
+| `test/eval/` | **13** | Agent eval sandbox (including scripted `model-led` cases) |
+| Other | **69** | cli, mcp, session, desktop, config, prompts, parser, core, … |
 
 ```bash
 npx tsc --noEmit
 npm test
-npm test -- test/harness/supervisor-bridge.test.ts    # 53 cases
-npm test -- test/harness/recovery-boundary.test.ts    # 13 cases
-npm test -- test/e2e/dual-mode-scenarios.test.ts      # 7 cases
 npm test -- test/memory/
-# Set data/config.json supervisorMode to off (or adaptive) for harness zero-regression
 npm test -- test/harness/harness.test.ts
+npm test -- test/eval/agent-eval-sandbox.test.ts   # scripted eval cases, offline
 ```
-
-> If `data/config.json` has `supervisorMode: strict` left over from manual L2-6 runs, **2** cases in `mode-controller.test.ts` may fail until restored to `adaptive`.
-
-### End-to-end (dual-mode · P2-2)
-
-File: `test/e2e/dual-mode-scenarios.test.ts` — **7** cases:
-
-| # | Scenario | Mode | Assertion |
-|---|----------|------|-----------|
-| A | Read-only | adaptive | Stays `free`, no enter |
-| B | Small edit | adaptive | No first-round graph, may stay `free` |
-| C | New module | strict | First-round graph → `forced` |
-| D | Multi-file refactor | strict | `forced` + modeLock |
-| E | Checkpoint resume | adaptive | `checkpoint_resumed` → `forced` |
-| F | Graph build failure | adaptive | degraded forced |
-| F′ | Graph build failure | strict | First-round init error path |
-
-### Manual Web tests (2026-05-22)
-
-Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md)
-
-**L1 execution mode — scenarios A–H (8)**
-
-| Scenario | Mode | Result |
-|----------|------|--------|
-| A read-only | adaptive | ✅ |
-| B single-file edit | adaptive | ✅ |
-| C multi-file create | adaptive | ✅ |
-| D strict graph | strict | ✅ |
-| E checkpoint | adaptive | ✅ |
-| F tool failures | adaptive | ✅ L1 forced / circuit breaker（旧 L2 `no_progress` 口径已不适用） |
-| G off control | off | ✅ |
-| H long session | adaptive | ✅ |
-
-> **L2-1–L2-7 手工场景（2026-05）已作废。** takeover / Timeline / graph_hint 随 2026-08-31 L2 删除；勿再按 [`requirement/L2测试过程.md`](./requirement/L2测试过程.md) 验收现行版本。现行监管验收以 L0/L1/L3 + `npm test` 为准。
 
 ### Release gate
 
 1. `npx tsc --noEmit` — 0 errors  
 2. `npm test` — all green (default config)  
-3. `data/config.json` → `supervisorMode: off` — harness suites zero regression  
-4. After `supervisor/` changes: rerun dual-mode / execution-mode related tests（`supervisor-bridge` / `recovery-boundary` 等旧套件若已删除则跳过）
+3. `npm run eval:agent -- --mode=local` — scripted cases pass (including `model-led`)
 
 ---
 
@@ -588,15 +485,18 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 npm run eval:agent                              # default real — configured LLM required
 npm run eval:agent -- --mode=mock               # no-API smoke; scripted local cases still run for real
 npm run eval:agent -- --mode=local              # scriptedTurns only: isolated workspace + real tools
-npm run eval:agent -- --case=single-file-edit
+npm run eval:agent -- --case=single-file-edit   # comma-separated ids allowed
+npm run eval:agent -- --category=model-led      # one category only
 npm run eval:agent -- --format=markdown --keep-workspaces
 ```
 
-- Case definitions: `scripts/agent-eval-cases.ts` (catalog + `stop-verification` local-edit cases).
+- Case definitions: `scripts/agent-eval-cases.ts` (catalog + `stop-verification` local-edit cases + `model-led` cases).
+- `model-led`: scripted `model-led-same-file-five-edits`, `model-led-rerun-failing-command`, `model-led-long-read-only-exploration` (also run offline in `test/eval/agent-eval-sandbox.test.ts`), plus real-model `model-led-real-incremental-functions` and `model-led-real-read-chain`.
+- Every case additionally fails on any supervision text (`[BranchBudget`, `[ToolGate]`, `[TaskGraph]`, `[Runtime Self-Review]`, `Rebuild Escalation`, `Diagnostic Gate`, `Current branch exhausted`, `reading/analyzing for`) or any `execution_mode_*` / `task_graph_*` event. Each report includes a behavior table (rounds, LLM calls, tool calls, failures, blocks, writes, max writes to one file, `run_command` count, tokens, duration, stop reason).
 - Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, file/command judges. Cases with `scriptedTurns` must not be fake-passed by mock metrics.
 - History: `data/eval/agent-eval-history.jsonl`.
 - Non-zero exit when any case fails or P0 metrics regress.
-- Stop-time verification design: [`harness/收尾策略-模型停手与验收门控.md`](./harness/收尾策略-模型停手与验收门控.md).
+- Stop-time verification design: [`harness/收尾策略-模型停手与验收门控-finish.md`](./harness/收尾策略-模型停手与验收门控-finish.md).
 
 Metrics per case and aggregate:
 
@@ -611,8 +511,6 @@ Metrics per case and aggregate:
 - compaction_saved_tokens
 - compaction_recovery_success_rate (`compression-recovery` only; requires hard compaction + post-compaction tool progress + verification)
 
-**TaskGraph eval** (separate): `npx tsx scripts/eval-runner.ts` — graph completion / node scores from benchmark fixtures.
-
 
 ---
 
@@ -624,7 +522,7 @@ Metrics per case and aggregate:
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients use `/api/remote` and related routes.
 - **Desktop routes**: `#/chat`, `#/tasks`, `#/skills`, `#/memory`, `#/rules`, `#/stats`, `#/settings` — left nav: Work / Tasks / Knowledge / Stats.
 - **Mobile H5 routes**: `#/m/work`, `#/m/work/:sessionId`, `#/m/tasks`, `#/m/skills`, `#/m/memory`, `#/m/rules`, `#/m/config` — bottom tabs: Work / Tasks / Knowledge / Settings (`src/public/js/shell/mobile-shell.ts`).
-- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/skills`, `/api/workspace/browse`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export), `/api/supervisor/events` (Supervisor / Execution Mode events report — see **`~supervisor`** under Dual-mode Supervisor).
+- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/skills`, `/api/workspace/browse`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export).
 - **Frontend** lives under `src/public/` (chat UI, Skills/Memory pages, Ice Bean, mobile pages). Production build output: `dist/public/`.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
@@ -641,7 +539,7 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 ![Work chat (light)](./assets/desktop-work-chat-light.png)
 
-![Stats — token, memory, and supervisor trends (dark)](./assets/desktop-stats.png)
+![Stats — token and memory trends (dark)](./assets/desktop-stats.png)
 
 ![Stats (light theme)](./assets/desktop-stats-light.png)
 
@@ -664,17 +562,16 @@ WebSocket HarnessStepEvent
   → chat-page.js
   → ChatPetBridge (chat-pet-bridge.js)
        ├─ SessionPet (session-pet.js)        Canvas render · expression FSM
-       ├─ session-pet-palette.js             Eye / ring colors
-       └─ ChatExecutionPlan                  forced · … chip · graph progress
+       ├─ session-pet-palette.js             Fixed eye color / ring colors
+       └─ ChatExecutionPlan                  workbench chapters / flow
 ```
 
 | | |
 |---|---|
-| **Look** | ~120×120 px; **eye color = L0 tier** (off `#88EDC7` / adaptive `#86E0FF` / strict `#F1A8B2`) |
+| **Look** | ~120×120 px; fixed eye color (`SESSION_PET_EYE_COLOR`), no longer tied to a supervision tier |
 | **Token ring** | Context usage arc (green → yellow → red) via `eyeColorForTokenPct()` |
-| **Foot label** | `forced · …` (L1) · graph step summary · turn count |
-| **Expressions** | ~**20** states (thinking, tools, memory, MCP, tunnel, **L3 force_switch**, etc.) |
-| **Dual-mode link** | Nav tier change → bubble「当前模式：…」; `graph_hint force_switch` → L3 pet bubble |
+| **Bubbles** | Harness events: tool call, failure, pending confirm, compaction, circuit breaker, done |
+| **Expressions** | ~**20** states (thinking, tools, memory, MCP, tunnel, etc.) |
 | **Interaction** | Drag (`localStorage` `ice-session-pet-position`) · double-click reset · `aria-label` |
 | **Sources** | `session-pet.js` · `session-pet-palette.js` · `chat-pet-bridge.js` · `style.css` |
 | **Demo** | `pet-expressions-demo.html` — manual expression QA |
@@ -745,12 +642,11 @@ Quick reference:
 | `ICE_CONFIG_PATH` | LLM provider config | `{dataDir}/config.json` | file path |
 | `ICE_SKILLS_DIR` | Agent skill Markdown files | `{dataDir}/skills` | directory path |
 | `PORT` | HTTP port | CLI **3784** / `index.ts` **1024** | port number |
-| `config.json` → `supervisorMode` | Dual-mode supervisor | `adaptive` | `off` \| `adaptive` \| `strict` |
 | `ICE_CONTEXT_WINDOW` | Context token cap | provider → **128000** | positive integer |
 | `ICE_EVAL_MODE` | Eval mode (skip extraction, etc.) | off | `1` |
 | `ICE_MCP_CONFIG_PATH` | MCP config | `<cwd>/.iceCoder/mcp.json` | file path |
 
-**40+** process variables total. Removed vars (`ICE_HARNESS_TOKEN_BUDGET`, `ICE_HARNESS_TIMEOUT_*`, etc.) are listed in the doc. Browser `ICE_PLAN_PANEL=0` in `localStorage` hides the task-graph panel.
+**40+** process variables total. Removed vars (`ICE_HARNESS_TOKEN_BUDGET`, `ICE_HARNESS_TIMEOUT_*`, `ICE_SUPERVISOR_CONFIG_PATH`, `ICE_TASK_GRAPH`, etc.) are listed in the doc. Browser `ICE_PLAN_PANEL=0` in `localStorage` hides the execution workbench.
 
 ---
 
@@ -760,8 +656,8 @@ Quick reference:
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness, compaction, task/repo state, TaskGraph, D′ stop-time verification,
-                    # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
+  harness/          # Harness, compaction, task/repo state, D′ stop-time verification,
+                    # checkpoint + CheckpointEngine v2
   llm/              # OpenAI-compatible + Anthropic Messages adapters
   memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction
   skills/             # skill-loader, SkillRegistry helpers
@@ -771,8 +667,8 @@ src/
   mcp/              # MCP client manager
   web/              # Express server, routes, WebSocket chat, workspace browse
   public/           # Vite root: chat UI, Skills/Memory pages, mobile shell, Ice Bean
-  types/            # Shared types (runtime snapshot, task-graph, runtime-checkpoint schema)
-docs/               # Requirements archives, memory benchmarks, dual-mode specs
+  types/            # Shared types (runtime snapshot, runtime-checkpoint schema)
+docs/               # Requirements archives, memory benchmarks, historical supervision specs
 test/               # Vitest suites mirroring src areas
 data/               # Provider config templates, sessions, optional MCP-side memory sample
 ```
@@ -810,16 +706,17 @@ Higher-level prose (beyond this README):
 - [`docs/环境变量.md`](./环境变量.md) — **full environment variable reference** (purpose, valid values, defaults)
 - [`docs/记忆系统详解.md`](./记忆系统详解.md) — Memory v2 design (no vector DB)
 - [`docs/压缩机制详解.md`](./压缩机制详解.md) — layered compaction + structured recovery
-- [`docs/双模机制详解.md`](./双模机制详解.md) — current L0 / L1 / L3 single-axis supervisor
-- [`docs/L2监管层详解.md`](./L2监管层详解.md) — retired L2 migration note
-- [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
-- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (prompt injection superseded by TaskGraph; the **UI panel** is now the workbench)
+- [`docs/requirement/监管收束-愿景.md`](./requirement/监管收束-愿景.md) — why supervision tiers / TaskGraph / branch budget were removed
+- [`docs/双模机制详解.md`](./双模机制详解.md) — **historical**: L0 / L1 / L3 single-axis supervisor (removed 2026-10-16)
+- [`docs/L2监管层详解.md`](./L2监管层详解.md) — **historical**: retired L2 migration note
+- [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — **historical**: TaskGraph / StepGraph design (removed 2026-10-16)
+- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (the **UI panel** is now the workbench)
 - [`docs/requirement/执行流-最终效果-finish.md`](./requirement/执行流-最终效果-finish.md) — chronicle data meaning (chapter = user turn)
 - [`docs/requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) — **current** workbench UI (no tabs; aligned to 2026-09-14 code)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments (changelog)
-- [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) — **dual-mode test playbook** (~2,000 automated + 15 manual Web scenarios)
-- [`docs/requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) — dual-mode supervisor spec **V1.3.7**
+- [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) — **historical**: dual-mode test playbook (features removed)
+- [`docs/requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) — **historical**: dual-mode supervisor spec V1.3.7 (removed)
 - [`docs/requirement/运行时后续优化.md`](./requirement/运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
 

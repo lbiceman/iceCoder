@@ -12,7 +12,7 @@ function stripToolErrorPrefix(content: string): string {
   return content.replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '').trim();
 }
 
-/** 保留最近若干条失败命令输出，compaction / BranchBudget block 后仍可注入 digest。 */
+/** 保留最近若干条失败命令输出，compaction 后失败证据包仍能引用。 */
 export class VerificationOutputBuffer {
   private entries: VerificationOutputEntry[] = [];
 

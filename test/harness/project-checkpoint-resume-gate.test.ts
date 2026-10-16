@@ -7,7 +7,6 @@ import { CompletionFactsView } from '../../src/harness/completion-facts-view.js'
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
 import { ProjectCheckpointStore } from '../../src/harness/project-checkpoint-store.js';
 import { CheckpointEngine } from '../../src/harness/checkpoint-engine.js';
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import type { ProjectCheckpointV3 } from '../../src/types/runtime-checkpoint.js';
 
 let tempDir: string;
@@ -47,12 +46,6 @@ function checkpoint(): ProjectCheckpointV3 {
         startTime: 1,
       },
       resumable: {
-        branchBudget: {
-          fileEdits: { 'src/a.ts': 2 },
-          commandRetries: { 'npm test': 1 },
-          errorRepeats: {},
-          recoverTriggers: 0,
-        },
         failedToolCallSignatures: { 'run_command:npm test': 1 },
       },
     },
@@ -105,7 +98,7 @@ function checkpoint(): ProjectCheckpointV3 {
 }
 
 describe('V3 crash resume gate equivalence', () => {
-  it('restores completion facts, blocking signature, and budget from a saved V3 file', async () => {
+  it('restores completion facts, blocking signature, and failed signatures from a saved V3 file', async () => {
     const store = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-1' });
     await store.save(checkpoint());
 
@@ -125,9 +118,43 @@ describe('V3 crash resume gate equivalence', () => {
     expect(restored!.completion.blockingSignature).toBe(checkpoint().completion.blockingSignature);
     expect(restored!.completion.status).toBe('failed');
     expect(restored!.completion.reason).toBe('verification_failed');
-    expect(restored!.execution.resumable?.branchBudget?.fileEdits['src/a.ts']).toBe(2);
-    expect(BranchBudgetTracker.fromSnapshot(restored!.execution.resumable!.branchBudget!).inspect()
-      .fileEdits['src/a.ts']).toBe(2);
+    expect(restored!.execution.resumable?.failedToolCallSignatures).toEqual({ 'run_command:npm test': 1 });
+  });
+
+  it('still opens an old V3 file that carries write counts and execution-mode state', async () => {
+    const legacy = checkpoint() as ProjectCheckpointV3 & Record<string, unknown>;
+    (legacy.execution.resumable as Record<string, unknown>).branchBudget = {
+      fileEdits: { 'src/a.ts': 2 },
+      commandRetries: { 'npm test': 1 },
+      errorRepeats: {},
+      recoverTriggers: 0,
+    };
+    (legacy.execution.loopState as unknown as Record<string, unknown>).executionMode = 'forced';
+    legacy.extensions.runtimeResilience = {
+      runtimeVersion: 2,
+      branchBudget: { fileEdits: { 'src/a.ts': 2 }, commandRetries: {}, errorRepeats: {}, recoverTriggers: 1 },
+      recoverySignals: [{ source: 'branch_budget', message: 'switch', at: 1, consumed: false }],
+      executionModeState: { executionMode: 'forced', executionModeEnteredBy: ['tool_failure'] },
+      recentTools: [],
+      recentFailures: [],
+      lastTrigger: 'tool_failed',
+      v2UpdatedAt: '2026-09-09T00:00:00.000Z',
+    };
+    await fs.writeFile(
+      path.join(tempDir, 'session-1.checkpoint.json'),
+      JSON.stringify(legacy),
+      'utf-8',
+    );
+
+    const restored = await new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-1' }).load();
+    expect(restored?.completion.blockingSignature).toBe(checkpoint().completion.blockingSignature);
+
+    const engine = new CheckpointEngine(tempDir, 'session-1');
+    const v2 = await engine.loadV2();
+    expect(v2).not.toBeNull();
+    expect(v2).not.toHaveProperty('branchBudget');
+    expect(v2).not.toHaveProperty('executionModeState');
+    expect(v2).not.toHaveProperty('recoverySignals');
   });
 
   it('does not persist while a tool batch lock is active', async () => {

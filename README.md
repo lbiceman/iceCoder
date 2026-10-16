@@ -1,6 +1,6 @@
 # iceCoder
 
-**Self-hosted AI coding agent for desktop and mobile.** Single-axis supervision (L0/L1/L3), sub-agents, scheduled tasks, file memory, and MCP. One-click Windows install, or run from source / CLI on Node.js 22+.
+**Self-hosted AI coding agent for desktop and mobile.** Model-led agent loop with Plan mode, sub-agents, scheduled tasks, file memory, and MCP. One-click Windows install, or run from source / CLI on Node.js 22+.
 
 [中文简介](./README.zh-CN.md) · [**Usage & commands**](./docs/使用文档.md) · [Full guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
@@ -8,7 +8,7 @@
 
 ### Desktop
 
-Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings** and the supervision tier (off / adaptive / strict). Under Work, sessions split into **regular** and **task** groups.
+Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings**. Under Work, sessions split into **regular** and **task** groups.
 
 **Work / chat** — transcript in the center, **iceCoder Workbench** on the right, `#` / `@` composer at the bottom with model and reasoning pickers. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, and changed files.
 
@@ -20,13 +20,13 @@ Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings** and the sup
 
 **Knowledge** — tabs `#/skills`, `#/memory`, `#/rules`: skills (create, view, edit, delete), a memory graph, and global user rules.
 
-**Stats** — token usage from a per-call JSONL ledger (session vs memory), plus memory read/write and supervisor enter/exit. Day / week / month are rolling 24h / 7d / 30d windows:
+**Stats** — token usage from a per-call JSONL ledger (session vs memory), plus memory read/write. Day / week / month are rolling 24h / 7d / 30d windows:
 
-![Desktop — stats: token, memory, and supervisor trends (dark)](./docs/assets/desktop-stats.png)
+![Desktop — stats: token and memory trends (dark)](./docs/assets/desktop-stats.png)
 
 ![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
 
-**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP, Supervisor. General includes four themes (dark / light / modern / fresh), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
+**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP. General includes four themes (dark / light / modern / fresh), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
 
 ### Mobile H5
 
@@ -83,23 +83,20 @@ Node.js **22+** (required, matches `engines.node >=22`). The repo `data/` direct
 
 ## Core features
 
-### Single-axis supervisor (L0 / L1 / L3)
+### Harness loop (model-led)
 
-Three layers: **L0** is the tier in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L3** is TaskGraph hard guard (`block` / `force_switch`, or `user_checkpoint` when no fallback).
+Like Codex, Claude Code, and OpenCode, **Harness** is one loop: the model decides when to read files, edit code, and run commands. The runtime does not switch execution tiers, does not gate tools by plan step, and does not stop the model for editing the same file or re-running a failing command. “Think first, then edit” lives only in **Plan mode** (`/plan`).
 
-> Legacy **L2** (takeover / PassiveObserver / CorrectionPort / EventTimeline) was removed on 2026-08-31 — see [`docs/L2监管层详解.md`](./docs/L2监管层详解.md).
+> The three supervision tiers (off / adaptive / strict), the L1 `free` ↔ `forced` execution mode, TaskGraph, and the branch budget were removed on 2026-10-16 — see [`docs/requirement/监管收束-愿景.md`](./docs/requirement/监管收束-愿景.md). Old `supervisorMode` values in `config.json` are ignored. Legacy **L2** was removed earlier, on 2026-08-31.
 
-- **adaptive** (default) balances freedom and enforcement; **strict** stays near forced and builds the graph on round 1 for critical engineering tasks.
-- Tied to **TaskGraph** and **D′ stop-time verification** — engineering edits may run a bounded acceptance plan via `run_command`; supervision does not decide completion.
-- Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only). The Settings “Supervisor” tab edits the same tier.
-- A sub-agent’s own tier is `off` (no graph, no forced mode). The parent Verification Gate still decides whether the work is done.
+What the loop still enforces:
 
-### Harness loop & TaskGraph
-
-**Harness** turns model intent into executed tools: permission rules (allow/confirm/deny), no-tool recovery, repeat-failure detection, micro/hard compaction with runtime re-injection. **TaskGraph** is the **only** structured execution context (replaces the old Execution Plan): enabled for `edit` / `debug` / `test` / `refactor`; `question` / `inspect` stay in free mode without a graph, on a lighter casual path.
-
+- **Permission rules** (allow / confirm / deny); `skipPermissionChecks` never skips an explicit deny. Shell sandbox, host-process guard, workspace write boundary, and missing-file preflight.
+- **All-tools-failed ladder**: light hint at 2–3 consecutive failed rounds, failure-evidence bundle at 4–6, strong warning at 7–9, `circuit_breaker` stop at ≥10. Same-arguments repeat failures get a hint.
+- **D′ stop-time verification**: engineering edits may run a bounded acceptance plan through the same permission and execution path as ordinary tool rounds.
+- No-tool recovery and micro/hard compaction with runtime re-injection.
 - **TaskState + RepoContext** track intent, phase, touched files, and verification status.
-- **CheckpointEngine v2** adds `runtimeV2` on the same `{sessionId}.checkpoint.json` (tool trail, failures, branch budget, supervisor snapshot).
+- **CheckpointEngine v2** adds `runtimeV2` on the same `{sessionId}.checkpoint.json` (recent tools, failures, verification state). It saves on `tool_failed` / `verification_failed` / compaction / final draft, plus once at the end of each round. Old checkpoints that still carry branch-budget or execution-mode fields open normally; those fields are dropped.
 - **Intent checkpoints** snapshot the workspace before each user turn. Rolling back to that turn restores files and deletes sub-agent records from that message onward.
 
 ### Sub-agents
@@ -126,7 +123,7 @@ In the default mode the parent agent calls **`task`** to run a full child Harnes
 
 `/plan` and `/shell` stick for the session until you leave. Shell collaboration wins over plan mode.
 
-Other `/` commands: `/also` (inject a note while a turn is running), `/next` (queue the next task quietly), `/open` (deterministic drive/directory listing; `~open` still works). The `+` button opens the `~` palette: `~scan`, `~tokens`, `~telemetry`, `~supervisor`.
+Other `/` commands: `/also` (inject a note while a turn is running), `/next` (queue the next task quietly), `/open` (deterministic drive/directory listing; `~open` still works). The `+` button opens the `~` palette: `~scan`, `~tokens`, `~telemetry`.
 
 ### Scheduled tasks
 
@@ -136,10 +133,8 @@ Unattended runs auto-approve every tool confirmation, including deletes and dang
 
 ### Ice Bean (Web session indicator)
 
-Web-only Canvas pet — visual feedback from Harness / Supervisor / TaskGraph events; **does not** drive runtime decisions.
+Web-only Canvas pet — visual feedback from Harness events; **does not** drive runtime decisions.
 
-- **L0 eye color** reflects `off` / `adaptive` / `strict`.
-- **L1 chip** shows `forced · …` aligned with `execution_mode_enter` reasons.
 - **~20 expressions** plus a token ring.
 - Minimizing the desktop window can show the same pet on the desktop. Task completion can raise a system notification. Both toggles are in Settings.
 
@@ -190,7 +185,7 @@ Sidebar **CRUD** per session — isolated history, `session-notes`, checkpoints,
 
 ### Checkpoint, compaction, and resume
 
-Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervisor snapshot**. Writes are serialized via the Harness tail.
+Disk checkpoints bundle **task state and runtimeV2** (recent tools, failures, verification state, background tasks). Writes are serialized via the Harness tail.
 
 - After **hard compaction**, TaskState + RepoContext are re-injected.
 - **F5 / WS reconnect** uses `runningTurn` + checkpoint replay.
@@ -209,18 +204,17 @@ Shell-collaboration sessions add `interactive_shell`, `shell_exec`, `shell_wait`
 
 ### Telemetry and observability
 
-Harness rounds, memory ops, and L1 mode changes go to `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Token usage is a separate JSONL ledger. Stats splits the selected range into session, sub-agent, and memory.
+Harness rounds and memory ops go to `data/*/telemetry.jsonl`. Token usage is a separate JSONL ledger. Stats splits the selected range into session, sub-agent, and memory.
 
-- Web: **`~tokens`**, **`~telemetry`**, **`~supervisor`**.
-- HTTP: `GET /api/supervisor/events` returns Execution Mode enter/exit telemetry.
+- Web: **`~tokens`**, **`~telemetry`**.
 - Commands and paths: [`docs/使用文档.md`](./docs/使用文档.md).
 
 ### Tests and quality baseline
 
-**410** Vitest files under `test/**/*.test.ts`, covering gates, TaskGraph, sub-agents, scheduled tasks, memory, Web routes, and parts of the UI. Case counts and coverage come from a local run — the old “~2,000 cases / ~78%” figures are retired.
+**384** Vitest files under `test/**/*.test.ts`, covering permission and verification gates, sub-agents, scheduled tasks, memory, Web routes, and parts of the UI. Case counts and coverage come from a local run — the old “~2,000 cases / ~78%” figures are retired.
 
 - `npm test` · `npm run test:coverage` · `npm run lint`
-- **`npm run eval:agent`**: agent behavior regression. `--mode=local` runs scripted file-edit cases; `--mode=mock` must not mark those cases passed. See [`docs/harness/收尾策略-模型停手与验收门控-finish.md`](./docs/harness/收尾策略-模型停手与验收门控-finish.md).
+- **`npm run eval:agent`**: agent behavior regression. `--mode=local` runs scripted file-edit cases; `--mode=mock` must not mark those cases passed. `--category=model-led` runs the model-led cases (same file edited 5 times, failing command re-run, long read-only exploration, plus two real-model cases); `--case` accepts comma-separated ids. Every case also fails if any supervision text or `execution_mode_*` / `task_graph_*` event shows up, and its report includes a behavior table (rounds, tool calls, writes, tokens, stop reason, …). See [`docs/harness/收尾策略-模型停手与验收门控-finish.md`](./docs/harness/收尾策略-模型停手与验收门控-finish.md).
 - **`npm run telemetry:runtime`**: summarize runtime telemetry JSONL.
 
 ### Local benchmarks
@@ -230,7 +224,7 @@ Archived **same-model** runs vs **Claude Code**. Scores are **SR** plus **Compos
 - Layers **L1–L8** (billing L4+: 97 files / 19 bugs; fusion L7: 33 probes; **L8 SaaS fusion**: multi-tenant order × supply × approval × billing).
 - How to run: [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md#本地-benchmark) · rubric [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md).
 
-**Read more:** supervision → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · memory → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · compaction → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案-finish.md`](./docs/requirement/移动端H5-Shell方案-finish.md) · sub-agents → [`docs/requirement/多agent协同.md`](./docs/requirement/多agent协同.md)
+**Read more:** memory → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · compaction → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案-finish.md`](./docs/requirement/移动端H5-Shell方案-finish.md) · sub-agents → [`docs/requirement/多agent协同.md`](./docs/requirement/多agent协同.md)
 
 ---
 
@@ -262,9 +256,8 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 ```text
 CLI / Web / WS / Mobile H5
   → memory + skills + user rules
-  → Harness (tools, verify, compact)
+  → Harness (model-led loop: tools, permissions, verify, compact)
        → child Harness (task: general / explore, optional background)
-  → TaskGraph → Supervisor L0/L1/L3
   → Checkpoint + write leases
   → built-in tools + MCP
 ```
@@ -273,8 +266,6 @@ CLI / Web / WS / Mobile H5
 |-------|------|
 | **Harness** | Main loop, D′ stop-time verification, compaction, telemetry |
 | **Sub-agents** | `task` / `check_agent`; child Harness writes the same workspace under file leases |
-| **Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard |
-| **TaskGraph** | Structured plan injection; it does not schedule agents |
 | **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |
 | **Skills / rules** | Markdown skills and global user rules |
 | **Scheduled tasks** | Interval or calendar schedules, each with its own session |
@@ -294,8 +285,8 @@ CLI / Web / WS / Mobile H5
 | [项目介绍](./docs/项目介绍.md) | Chinese architecture notes (same caveat; prefer this README and the source) |
 | [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 |
 | [压缩机制详解](./docs/压缩机制详解.md) | Layered compaction |
-| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L3 |
-| [L2监管层详解](./docs/L2监管层详解.md) | L2 retirement note |
+| [双模机制详解](./docs/双模机制详解.md) | Historical: L0 / L1 / L3 supervision (removed 2026-10-16) |
+| [L2监管层详解](./docs/L2监管层详解.md) | Historical: L2 retirement note |
 | [PACKAGE_USAGE](./PACKAGE_USAGE.md) | `npm pack` install |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Scoring methodology |
 

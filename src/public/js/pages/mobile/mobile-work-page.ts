@@ -81,7 +81,6 @@ export const MobileWorkPage = (() => {
 
     const shell = window.AppShell;
     window.ChatWelcome.syncDashboard(dashboard, {
-      supervisorMode: shell && typeof shell.getSupervisorMode === 'function' ? shell.getSupervisorMode() : 'adaptive',
       connectionState: shell && typeof shell.getConnectionState === 'function' ? shell.getConnectionState() : 'disconnected',
       setupRequired: window.AppRouter && typeof window.AppRouter.isSetupRequired === 'function' ? window.AppRouter.isSetupRequired() : false,
     });

@@ -1,10 +1,7 @@
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
 import type { RepoContext } from './repo-context.js';
-import type { StepReviewResult } from './step-review.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import type { CheckFailureStreakState } from './check-failure-streak.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type { CompletionCondition } from './completion-condition.js';
@@ -14,13 +11,6 @@ import type {
 } from './completion-state.js';
 import type { VerificationPlanResolution } from './verification-plan.js';
 import type { VerificationRuntimeState } from './verification-state.js';
-import type {
-  ExecutionMode,
-  ForcedDegradedTier,
-  ModeDecision,
-  ModeSignal,
-  ModeSignalSource,
-} from '../types/supervisor.js';
 
 /**
  * 循环 continue 的原因（用于调试和测试）。
@@ -54,8 +44,6 @@ export interface HarnessRunState {
   reasoningOnlyRecoveryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
-  /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
-  consecutiveReadOnlyRounds: number;
   /** 本 run 是否已经跑过至少一轮可执行工具；下一轮 prep 据此改走标准召回 */
   hadToolRoundThisRun?: boolean;
   /** 正文里嵌入工具语法（未走 native function-calling）时的协议恢复次数 */
@@ -88,27 +76,8 @@ export interface HarnessRunState {
   workspaceAnchorHash?: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
-  /** 分支预算 tracker；每次 run 都会创建 */
-  branchBudget: BranchBudgetTracker;
-  /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
-  branchBudgetWarnedThisRound: boolean;
-  /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
-  verificationDigestInjectedThisRound: boolean;
-  /** 文件 cap / 续段 / 检查失败 streak 等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
-  rebuildEscalationInjections: number;
-  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / streak / 连续失败去重） */
-  rebuildEscalationInjectedThisRound: boolean;
-  /**
-   * 同一规范化检查命令的连续失败次数。
-   * write 不清零；该键终态成功才清零。新用户消息在 run() 清零。
-   */
-  checkFailureStreak?: CheckFailureStreakState;
-  /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
-  parallelBudgetBlockHintInjected: boolean;
   /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
   sessionGoalAnchor?: string;
-  /** build 反复失败后进入诊断模式，暂停 build 类 run_command */
-  buildDiagnosticGateActive?: boolean;
   /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
   verificationOutputBuffer: VerificationOutputBuffer;
   /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
@@ -138,42 +107,4 @@ export interface HarnessRunState {
   contextEmergencyCompactUsed: boolean;
   /** 续跑 checkpoint 短摘要（emergency fork 复用） */
   activeCheckpointResumeSummary?: UnifiedMessage;
-  /** Resilience v2：本轮是否已做过 step review（避免重复） */
-  stepReviewedThisRound: boolean;
-  /** Resilience v2：最近一次 step review 结果（供启发式参考） */
-  lastStepReview?: StepReviewResult;
-  /** 执行边界模式。 */
-  executionMode: ExecutionMode;
-  /** forced 进入后的防抖锁剩余轮数。 */
-  executionModeLockRemaining: number;
-  /** 进入 forced 的有序信号列表。 */
-  executionModeEnteredBy: ModeSignal[];
-  /** 进入 forced 的主信号。 */
-  executionModeEnteredByPrimary?: ModeSignal;
-  /** 进入 forced 的轮次。 */
-  executionModeEnteredAtRound?: number;
-  /** forced 下当前退化层。 */
-  forcedDegradedTier?: ForcedDegradedTier;
-  /** 最近一次模式决策。 */
-  lastModeDecision?: ModeDecision;
-  /** 本轮待评估的 mode signals。 */
-  pendingModeSignals: ModeSignal[];
-  /** forced 期间的 task-bearing 轮次计数。 */
-  forcedTaskBearingRoundsSinceEntry: number;
-  /** 统一信号提交入口；子模块不得直接写 executionMode。 */
-  submitModeSignal?: (
-    source: ModeSignalSource,
-    signal: ModeSignal,
-    payload?: Record<string, unknown>,
-  ) => void;
-  /** 尚未被有效进展解除的 recovery 标志。只阻塞退出 forced，不参与进入。 */
-  recoveryPendingSticky: boolean;
-  /** 最近工具轮是否出现应升级模式的真实失败；验收命令失败不计入。 */
-  lastRoundModeEscalatingFailure: boolean;
-  /** 连续无失败轮次（与 consecutiveToolFailures 互斥推进），用于 stableRounds。 */
-  stableRoundsSinceLastFailure: number;
-  /** 本轮开始时 RepoContext.filesChanged 的长度，用于派生 accumulatedDiffLines。 */
-  filesChangedAtRoundStart: number;
-  /** 本轮是否发生任务图 fallback。由 submitModeSignal('branch_switched') 置位。 */
-  branchSwitchedThisRound: boolean;
 }

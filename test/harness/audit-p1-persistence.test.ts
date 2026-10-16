@@ -8,7 +8,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { checkMissingFilePreflight } from '../../src/harness/harness-tool-preflight.js';
 import {
   loadSessionWorkspace,
@@ -131,20 +130,7 @@ async function corruptFiles(dir: string, baseName: string): Promise<string[]> {
   return (await fs.readdir(dir)).filter((name) => name.startsWith(`${baseName}.corrupt.`));
 }
 
-describe('#24 BranchBudget / missing-file 键大小写与绝对路径', () => {
-  it.runIf(isWin)('Windows 上 Src/a.ts 与 src/a.ts 共用 fileEditMax', async () => {
-    await fs.mkdir(path.join(tmp, 'src'), { recursive: true });
-    await fs.writeFile(path.join(tmp, 'src', 'a.ts'), 'x', 'utf-8');
-    const tracker = new BranchBudgetTracker({ fileEditMax: 2 });
-    tracker.bindWorkspaceRoot(tmp);
-
-    tracker.recordFileEdit('Src/a.ts');
-    tracker.recordFileEdit('src/A.ts');
-
-    expect(tracker.wouldBlockFileEdit('SRC\\a.ts')).toBe(true);
-    expect(Object.keys(tracker.inspect().fileEdits)).toEqual(['src/a.ts']);
-  });
-
+describe('#24 missing-file 键大小写与绝对路径', () => {
   it.runIf(isWin)('Windows 上大小写不同的缺失路径累计到同一个 missing-file 计数', () => {
     const attempts = new Map<string, number>();
     const first = checkMissingFilePreflight({

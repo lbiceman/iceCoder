@@ -279,13 +279,6 @@ export const ChatWsStreamHandlers = (() => {
         && (step.type === 'execution_plan_init'
           || step.type === 'execution_plan_update'
           || step.type === 'execution_plan_clear'
-          || step.type === 'task_graph_init'
-          || step.type === 'task_graph_node'
-          || step.type === 'task_graph_update'
-          || step.type === 'task_graph_branch'
-          || step.type === 'task_graph_done'
-          || step.type === 'execution_mode_enter'
-          || step.type === 'execution_mode_exit'
           // Phase 5：工具事件用于推导 LLM 当前动作（面板内只读 toolName / 到达状态）
           || step.type === 'tool_call'
           || step.type === 'tool_result')) {

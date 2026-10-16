@@ -414,6 +414,61 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('旧快照里的 currentExecutionMode / signals / supervision 标记被安全忽略', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = Date.now() - 5000;
+      panel.setVisible(true);
+      const restored = panel.restoreFlowSnapshot({
+        currentPlan: null,
+        currentExecutionMode: {
+          executionMode: 'forced',
+          enteredByPrimary: 'tool_failure',
+          enteredBy: ['tool_failure'],
+          round: 2,
+        },
+        liveChapterMeta: {
+          messageId: 'u-legacy',
+          preview: '旧会话',
+          startedAt,
+          markers: ['supervision'],
+          status: 'done',
+        },
+        turnStartedAt: startedAt,
+        turnEndedAt: startedAt + 3000,
+        roundRecords: [{
+          iteration: 1,
+          startTs: startedAt,
+          endTs: startedAt + 3000,
+          status: 'done',
+          toolCallIds: [],
+          signals: ['tool_failure'],
+          branchReasons: [],
+        }],
+        toolRecords: [],
+      });
+      const snapshot = panel.getFlowSnapshot();
+      const panelEl = document.getElementById('exec-transparency-panel');
+      return {
+        restored,
+        panelCount: document.querySelectorAll('#exec-transparency-panel').length,
+        roundCount: snapshot.roundRecords.length,
+        hasModeField: Object.prototype.hasOwnProperty.call(snapshot, 'currentExecutionMode'),
+        roundHasSignals: Object.prototype.hasOwnProperty.call(snapshot.roundRecords[0], 'signals'),
+        text: panelEl ? panelEl.textContent || '' : '',
+      };
+    });
+
+    expect(result.restored).toBe(true);
+    expect(result.panelCount).toBe(1);
+    expect(result.roundCount).toBe(1);
+    expect(result.hasModeField).toBe(false);
+    expect(result.roundHasSignals).toBe(false);
+    expect(result.text).not.toMatch(/监管|forced|工具失败/);
+    await page.close();
+  });
+
   it('检查点时间只计最近一次任务，且不含回滚系统提示', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
@@ -563,23 +618,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('TaskGraph 节点将 progress 推到 100 后同样冻结', async () => {
-    const page = await loadPanel();
-    const result = await page.evaluate((plan) => {
-      const panel = (window as any).ChatExecutionPlan;
-      panel.setPlan(plan);
-      panel.updateGraphNode({ nodeId: 'step-0', nodeIndex: 3 });
-      panel.applyPatch({ progress: 25, updatedAt: plan.updatedAt + 1000 });
-      return {
-        progress: panel.getPlan()?.progress,
-        open: document.body.classList.contains('etl-panel-open'),
-      };
-    }, makePlan());
-
-    expect(result).toEqual({ progress: 100, open: true });
-    await page.close();
-  });
-
   it('聊天页无计划时显示明确问答空态', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
@@ -707,174 +745,33 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('TaskGraph 顶层渲染异常统一 teardown，且新计划可恢复', async () => {
-    const page = await loadPanel();
-    const result = await page.evaluate((basePlan) => {
-      const panel = (window as any).ChatExecutionPlan;
-      const outcomes: Record<string, { count: number; petHidden: boolean }> = {};
-      let sequence = 0;
-      const recover = () => {
-        sequence += 1;
-        panel.setPlan({
-          ...basePlan,
-          planId: `graph-recovery-${sequence}`,
-          progress: 0,
-          steps: [{ ...basePlan.steps[0], status: 'running', endedAt: undefined }],
-        });
-      };
-      const record = (name: string) => {
-        outcomes[name] = {
-          count: document.querySelectorAll('#exec-transparency-panel').length,
-          petHidden: document.body.classList.contains('etl-pet-hidden-by-panel'),
-        };
-      };
-
-      recover();
-      const currentForUpdate = document.querySelector('#etl-current-step') as HTMLElement;
-      Object.defineProperty(currentForUpdate, 'innerHTML', {
-        configurable: true,
-        set() { throw new Error('updateGraphNode injection'); },
-      });
-      panel.updateGraphNode({ nodeId: 'step-0', nodeIndex: 0 });
-      record('updateGraphNode');
-      delete (currentForUpdate as any).innerHTML;
-
-      recover();
-      const list = document.querySelector('#exec-plan-list') as HTMLOListElement;
-      Object.defineProperty(list, 'querySelectorAll', {
-        configurable: true,
-        value: () => { throw new Error('highlightGraphBranch injection'); },
-      });
-      panel.highlightGraphBranch({});
-      record('highlightGraphBranch');
-      delete (list as any).querySelectorAll;
-
-      recover();
-      const currentForComplete = document.querySelector('#etl-current-step') as HTMLElement;
-      Object.defineProperty(currentForComplete, 'innerHTML', {
-        configurable: true,
-        set() { throw new Error('markGraphComplete injection'); },
-      });
-      panel.markGraphComplete();
-      record('markGraphComplete');
-      delete (currentForComplete as any).innerHTML;
-
-      recover();
-      const currentForRender = document.querySelector('#etl-current-step') as HTMLElement;
-      Object.defineProperty(currentForRender, 'innerHTML', {
-        configurable: true,
-        set() { throw new Error('renderGraph injection'); },
-      });
-      panel.renderGraph({
-        plan: {
-          ...basePlan,
-          planId: 'graph-render-fatal',
-          steps: [{ ...basePlan.steps[0] }],
-        },
-      });
-      record('renderGraph');
-      delete (currentForRender as any).innerHTML;
-
-      recover();
-      return {
-        outcomes,
-        recovered: document.body.classList.contains('etl-panel-open'),
-      };
-    }, makePlan());
-
-    expect(result).toEqual({
-      outcomes: {
-        updateGraphNode: { count: 0, petHidden: false },
-        highlightGraphBranch: { count: 0, petHidden: false },
-        markGraphComplete: { count: 0, petHidden: false },
-        renderGraph: { count: 0, petHidden: false },
-      },
-      recovered: true,
-    });
-    await page.close();
-  });
-
-  it.each(['node', 'branch', 'done'] as const)(
-    'TaskGraph %s fatal 后下一条同类合法事件自行恢复完整面板',
-    async (kind) => {
-      const page = await loadPanel();
-      const result = await page.evaluate(({ plan, kind }) => {
-        const panel = (window as any).ChatExecutionPlan;
-        panel.setPlan(plan);
-
-        if (kind === 'node') {
-          const current = document.querySelector('#etl-current-step') as HTMLElement;
-          Object.defineProperty(current, 'innerHTML', {
-            configurable: true,
-            set() { throw new Error('node fatal injection'); },
-          });
-          panel.updateGraphNode({ nodeId: 'step-0', nodeIndex: 0 });
-          delete (current as any).innerHTML;
-          panel.updateGraphNode({ nodeId: 'step-0', nodeIndex: 1 });
-        } else if (kind === 'branch') {
-          const list = document.querySelector('#exec-plan-list') as HTMLOListElement;
-          Object.defineProperty(list, 'querySelectorAll', {
-            configurable: true,
-            value: () => { throw new Error('branch fatal injection'); },
-          });
-          panel.highlightGraphBranch({});
-          delete (list as any).querySelectorAll;
-          panel.highlightGraphBranch({});
-        } else {
-          const current = document.querySelector('#etl-current-step') as HTMLElement;
-          Object.defineProperty(current, 'innerHTML', {
-            configurable: true,
-            set() { throw new Error('done fatal injection'); },
-          });
-          panel.markGraphComplete();
-          delete (current as any).innerHTML;
-          panel.markGraphComplete();
-        }
-
-        return {
-          panelCount: document.querySelectorAll('#exec-transparency-panel').length,
-          open: document.body.classList.contains('etl-panel-open'),
-          petHidden: document.body.classList.contains('etl-pet-hidden-by-panel'),
-          stepCount: document.querySelectorAll('.exec-plan-step').length,
-          progress: panel.getPlan()?.progress,
-          branchMarked: document.querySelector('.exec-plan-step')
-            ?.classList.contains('exec-plan-step--fallback') || false,
-        };
-      }, { plan: makePlan(), kind });
-
-      expect(result.panelCount).toBe(1);
-      expect(result.open).toBe(true);
-      expect(result.petHidden).toBe(true);
-      expect(result.stepCount).toBe(1);
-      if (kind === 'node') expect(result.progress).toBe(50);
-      if (kind === 'branch') expect(result.branchMarked).toBe(true);
-      if (kind === 'done') expect(result.progress).toBe(100);
-      await page.close();
-    },
-  );
-
-  it('主开关关闭不挂面板，但冰豆仍可读取进行中计划摘要', async () => {
+  it('主开关关闭不挂面板，冰豆保持可见，且不再暴露执行档 API', async () => {
     const page = await loadPanel(false);
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      panel.applyExecutionModeEvent({
-        type: 'execution_mode_enter',
-        executionMode: { executionMode: 'forced', enteredByPrimary: 'explicit_impl' },
-      });
       return {
         panelCount: document.querySelectorAll('#exec-transparency-panel').length,
-        live: panel.isPlanLive(),
-        summary: panel.formatFootSummary(panel.getPlan()),
+        planId: panel.getPlan()?.planId,
         petHidden: document.body.classList.contains('etl-pet-hidden-by-panel'),
+        removedApis: [
+          'applyExecutionModeEvent',
+          'getExecutionModeChip',
+          'getExecutionModeState',
+          'resetExecutionMode',
+          'renderGraph',
+          'updateGraphNode',
+          'highlightGraphBranch',
+          'markGraphComplete',
+        ].filter((name) => typeof panel[name] === 'function'),
       };
     }, makePlan());
 
     expect(result).toEqual({
       panelCount: 0,
-      live: true,
-      summary: '0/1 · 进行中 · 步骤 0',
+      planId: 'phase-8-plan',
       petHidden: false,
+      removedApis: [],
     });
     await page.close();
   });
@@ -1546,6 +1443,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         hasExpand: !!document.querySelector('#etl-panel-default-expanded'),
         hasLlm: !!document.querySelector('#etl-show-llm-activity'),
         hasWidth: !!document.querySelector('#etl-panel-width'),
+        tabs: Array.from(document.querySelectorAll('.config-tab')).map((el) => el.getAttribute('data-tab')),
+        supervisorPanel: !!document.querySelector('#config-tab-supervisor'),
       };
     });
     expect(missing).toEqual({
@@ -1557,6 +1456,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       hasExpand: true,
       hasLlm: false,
       hasWidth: false,
+      tabs: ['general', 'model', 'mcp'],
+      supervisorPanel: false,
     });
     await page.close();
   });

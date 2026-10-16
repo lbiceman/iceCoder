@@ -1,6 +1,6 @@
 /**
  * 冰豆（Ice Bean）— iceCoder Web 会话状态指示器
- * 极简风格：固定黑底 + 胶囊眼睛；眼睛色对应当前 supervisorMode（见 session-pet-palette）。
+ * 极简风格：固定黑底 + 胶囊眼睛；眼睛色见 session-pet-palette 的 SESSION_PET_EYE_COLOR。
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
  *
@@ -8,8 +8,7 @@
  * 外圈圆环：自顶端顺时针表示上下文 token 占用率。
  */
 import {
-  SESSION_PET_PALETTE_COLORS as COLORS,
-  supervisorModeToEyeColor,
+  SESSION_PET_EYE_COLOR,
   buildSessionPetCanvasAriaLabel,
   SESSION_PET_DISPLAY_NAME,
 } from './session-pet-palette.js';
@@ -20,8 +19,6 @@ import {
   IDLE_POSES,
   idlePoseHoldMs,
 } from './session-pet-harness-expr.js';
-
-window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
 (() => {
 
@@ -353,11 +350,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     let tokenUsed = 0;
     let tokenMax = 0;
     let tokenOutput = 0;
-    const initialMode =
-      window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
-        ? window.AppRouter.getSupervisorMode()
-        : 'adaptive';
-    let eyeColor = supervisorModeToEyeColor(initialMode, COLORS);
+    let eyeColor = SESSION_PET_EYE_COLOR;
     const tokenHintEl = document.createElement('span');
     tokenHintEl.className = 'pet-token-hint';
     tokenHintEl.setAttribute('aria-hidden', 'true');

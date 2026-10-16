@@ -18,25 +18,20 @@
  * 设计文档：docs/长时间连续工作.md §Part 3
  */
 
-import type { TaskGraphSnapshot, GraphMetrics, GraphSession } from '../types/task-graph.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
   emptyRuntimeCheckpointV2,
-  emptyRuntimeExecutionModeCheckpointState,
   isProjectCheckpointV3,
   cloneProjectCheckpointV3,
   type RuntimeCheckpointV2,
-  type RuntimeExecutionModeCheckpointState,
   type CheckpointSaveTrigger,
   type ToolHistoryEntry,
   type FailureHistoryEntry,
-  type RecoverySignal,
   type VerificationOutputTailEntry,
   type ProjectCheckpointV3,
 } from '../types/runtime-checkpoint.js';
-import { BranchBudgetTracker } from './branch-budget.js';
 import { ProjectCheckpointStore } from './project-checkpoint-store.js';
 import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
 
@@ -44,12 +39,6 @@ import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
 export interface CombinedCheckpointFile extends TaskCheckpoint {
   /** v2 附加字段（v1 进程读到时会忽略，不影响兼容） */
   runtimeV2?: RuntimeCheckpointV2;
-  /** TaskGraph 快照（Phase 6） */
-  taskGraph?: TaskGraphSnapshot;
-  /** TaskGraph 指标（Phase 6） */
-  graphMetrics?: GraphMetrics;
-  /** TaskGraph 会话边界（Phase 6） */
-  graphSession?: GraphSession;
 }
 
 /** Save 时调用方传入的「最新运行时状态」 */
@@ -58,54 +47,31 @@ export interface CheckpointSaveInput {
   /** 当前执行步骤信息（来自 ExecutionPlanTracker.getPlan().activeStepId） */
   currentStepId?: string;
   currentStepTitle?: string;
-  /** 分支预算 tracker；engine 调用 .snapshot() 持久化 */
-  branchBudget?: BranchBudgetTracker;
   /** 增量的 recent tool 记录（engine 内部自动累加 / 截断） */
   appendTool?: ToolHistoryEntry;
   /** 增量的 recent failure 记录 */
   appendFailure?: FailureHistoryEntry;
-  /** 待注入的 recovery signal（新触发的） */
-  appendRecoverySignal?: RecoverySignal;
   /** ExecutionPlan，可选（仅用于读 plan.version） */
   plan?: any;
   /** Harness loop 当前 stopReason（如果已停止） */
   lastStopReason?: TaskCheckpoint['stopReason'];
-  /** TaskGraph 快照（Phase 6） */
-  taskGraphSnapshot?: TaskGraphSnapshot;
-  /** TaskGraph 指标（Phase 6） */
-  graphMetrics?: GraphMetrics;
-  /** TaskGraph 会话边界（Phase 6） */
-  graphSession?: GraphSession;
-  /** L1 execution-mode snapshot. */
-  executionModeState?: RuntimeExecutionModeCheckpointState;
   /** 最近验收失败 stderr tail（VerificationOutputBuffer.snapshot） */
   verificationOutputTail?: VerificationOutputTailEntry[];
-  /** Rebuild Escalation 已注入次数 */
-  rebuildEscalationInjections?: number;
-  /** 并行 BranchBudget 拦截指引是否已注入 */
-  parallelBudgetBlockHintInjected?: boolean;
 }
 
 /** 最大保留条目 */
 const MAX_RECENT_TOOLS = 20;
 const MAX_RECENT_FAILURES = 10;
-const MAX_RECOVERY_SIGNALS = 8;
 
 /**
- * forced 段比 free 段需要更激进的 checkpoint：
- * 包含 step_completed / verification_started 这类 free 段允许跳过的触发器。
- * free 段保留原有触发器集合，避免在「轻读取」任务里频繁落盘。
+ * 单独落盘的触发器。step_completed / verification_started 不单独写，
+ * 由每轮收尾的 saveTaskCheckpoint 一次落盘，避免「轻读取」任务频繁写盘。
  */
-const FREE_PERSIST_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
+const PERSIST_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
   'tool_failed',
   'verification_failed',
   'compaction',
   'final_draft',
-]);
-
-const FORCED_EXTRA_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
-  'step_completed',
-  'verification_started',
 ]);
 
 /**
@@ -113,7 +79,7 @@ const FORCED_EXTRA_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
  *
  * 用法：
  *   const engine = new CheckpointEngine(sessionDir, sessionId);
- *   await engine.save({ trigger: 'tool_failed', branchBudget, ... });
+ *   await engine.save({ trigger: 'tool_failed', appendFailure, ... });
  *   const restored = await engine.loadV2();   // null 则回退到 v1
  */
 export class CheckpointEngine {
@@ -121,8 +87,6 @@ export class CheckpointEngine {
   private readonly projectStore: ProjectCheckpointStore;
   /** 内存中保留的 v2 累积状态（save 之间增量更新） */
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2();
-  /** forced 段是否启用更积极的 checkpoint policy。 */
-  private forcedPolicyActive = false;
   /** Runtime Restore / in-flight tool batches forbid durable snapshots. */
   private restoreLock = false;
 
@@ -134,15 +98,6 @@ export class CheckpointEngine {
   /** 暴露内存中的 v2 状态（测试 / 调试用） */
   getV2State(): RuntimeCheckpointV2 {
     return cloneV2(this.v2State);
-  }
-
-  /** 启停 forced 段策略；调用方按 ExecutionMode 切换。 */
-  setForcedPolicy(active: boolean): void {
-    this.forcedPolicyActive = active;
-  }
-
-  isForcedPolicyActive(): boolean {
-    return this.forcedPolicyActive;
   }
 
   /** Runtime Restore 期间锁定：禁止 save / 创建新 checkpoint。 */
@@ -180,14 +135,11 @@ export class CheckpointEngine {
   }
 
   /**
-   * 给定保存触发器，返回是否应在当前 policy 下真实落盘。
-   * free 段：仅落 tool_failed / verification_failed / compaction / final_draft。
-   * forced 段：额外覆盖 step_completed / verification_started。
+   * 给定保存触发器，返回是否应单独落盘：仅 tool_failed / verification_failed / compaction / final_draft。
    * 调用方仍可以无条件 save()——本方法用于上层 gating，避免不必要的磁盘开销。
    */
   shouldPersistOnTrigger(trigger: CheckpointSaveTrigger): boolean {
-    if (FREE_PERSIST_TRIGGERS.has(trigger)) return true;
-    return this.forcedPolicyActive && FORCED_EXTRA_TRIGGERS.has(trigger);
+    return PERSIST_TRIGGERS.has(trigger);
   }
 
   /**
@@ -263,14 +215,7 @@ export class CheckpointEngine {
     if (this.v2State.lastStopReason !== undefined) {
       next.execution.lastStopReason = this.v2State.lastStopReason;
     }
-    next.execution.resumable = {
-      ...(next.execution.resumable ?? {}),
-      branchBudget: this.v2State.branchBudget,
-    };
     next.extensions.runtimeResilience = durableResilienceState(this.v2State);
-    if (input.taskGraphSnapshot !== undefined) next.extensions.taskGraph = input.taskGraphSnapshot;
-    if (input.graphMetrics !== undefined) next.extensions.graphMetrics = input.graphMetrics;
-    if (input.graphSession !== undefined) next.extensions.graphSession = input.graphSession;
     return next;
   }
 
@@ -287,21 +232,8 @@ export class CheckpointEngine {
     if (input.currentStepTitle !== undefined) state.currentStepTitle = input.currentStepTitle;
     if (input.lastStopReason !== undefined) state.lastStopReason = input.lastStopReason;
     if (input.plan?.version !== undefined) state.planVersion = input.plan.version;
-    if (input.executionModeState) {
-      state.executionModeState = cloneExecutionModeState(input.executionModeState);
-    }
     if (input.verificationOutputTail !== undefined) {
       state.verificationOutputTail = input.verificationOutputTail.map(entry => ({ ...entry }));
-    }
-    if (input.rebuildEscalationInjections !== undefined) {
-      state.rebuildEscalationInjections = input.rebuildEscalationInjections;
-    }
-    if (input.parallelBudgetBlockHintInjected !== undefined) {
-      state.parallelBudgetBlockHintInjected = input.parallelBudgetBlockHintInjected;
-    }
-
-    if (input.branchBudget) {
-      state.branchBudget = input.branchBudget.snapshot();
     }
 
     if (input.appendTool) {
@@ -327,35 +259,6 @@ export class CheckpointEngine {
       if (state.recentFailures.length > MAX_RECENT_FAILURES) {
         state.recentFailures = state.recentFailures.slice(-MAX_RECENT_FAILURES);
       }
-    }
-
-    if (input.appendRecoverySignal) {
-      state.recoverySignals.push(input.appendRecoverySignal);
-      if (state.recoverySignals.length > MAX_RECOVERY_SIGNALS) {
-        state.recoverySignals = state.recoverySignals.slice(-MAX_RECOVERY_SIGNALS);
-      }
-    }
-  }
-
-  /** 标记一组 recoverySignals 为已消费（注入到对话后调用，避免重启时重复注入） */
-  markRecoverySignalsConsumed(predicate: (s: RecoverySignal) => boolean): void {
-    for (const sig of this.v2State.recoverySignals) {
-      if (predicate(sig)) sig.consumed = true;
-    }
-  }
-
-  /** 返回未消费的 recovery signals（用于重启后重新注入） */
-  pendingRecoverySignals(): RecoverySignal[] {
-    return this.v2State.recoverySignals.filter(s => !s.consumed);
-  }
-
-  /**
-   * 新用户消息：丢弃未消费 recovery signals，避免跨 run 重复注入对话。
-   * checkpoint 仍会持久化历史条目，但标记 consumed 后 pendingRecoverySignals 为空。
-   */
-  discardPendingRecoverySignals(): void {
-    for (const sig of this.v2State.recoverySignals) {
-      if (!sig.consumed) sig.consumed = true;
     }
   }
 
@@ -423,7 +326,7 @@ function resilienceFromDurable(durable: unknown): RuntimeCheckpointV2 | null {
   if (record.runtimeVersion !== undefined && record.runtimeVersion !== RUNTIME_CHECKPOINT_VERSION) {
     return null;
   }
-  if (!record.branchBudget || !Array.isArray(record.recentTools) || !Array.isArray(record.recentFailures)) {
+  if (!Array.isArray(record.recentTools) || !Array.isArray(record.recentFailures)) {
     return null;
   }
   return cloneV2({
@@ -440,26 +343,12 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     runtimeVersion: RUNTIME_CHECKPOINT_VERSION,
     currentStepId: v.currentStepId,
     currentStepTitle: v.currentStepTitle,
-    branchBudget: {
-      fileEdits: { ...v.branchBudget.fileEdits },
-      commandRetries: { ...v.branchBudget.commandRetries },
-      errorRepeats: { ...v.branchBudget.errorRepeats },
-      recoverTriggers: v.branchBudget.recoverTriggers,
-      writeBypassPaths: v.branchBudget.writeBypassPaths
-        ? [...v.branchBudget.writeBypassPaths]
-        : undefined,
-      commandRetryBypassKeys: v.branchBudget.commandRetryBypassKeys
-        ? [...v.branchBudget.commandRetryBypassKeys]
-        : undefined,
-    },
     recentTools: v.recentTools.map(t => ({ ...t })),
     recentFailures: v.recentFailures.map(f => ({ ...f })),
     planVersion: v.planVersion,
     verificationPending: v.verificationPending,
-    recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,
-    executionModeState: v.executionModeState ? cloneExecutionModeState(v.executionModeState) : undefined,
     verificationOutputTail: v.verificationOutputTail?.map(entry => ({ ...entry })),
     acceptanceGate: v.acceptanceGate
       ? {
@@ -467,8 +356,6 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
         commands: v.acceptanceGate.commands.map(entry => ({ ...entry })),
       }
       : undefined,
-    rebuildEscalationInjections: v.rebuildEscalationInjections,
-    parallelBudgetBlockHintInjected: v.parallelBudgetBlockHintInjected,
     v2UpdatedAt: v.v2UpdatedAt,
   };
 }
@@ -489,22 +376,4 @@ function pathSessionId(checkpointPath: string): string {
   return name.endsWith('.checkpoint.json')
     ? name.slice(0, -'.checkpoint.json'.length)
     : 'default';
-}
-
-function cloneExecutionModeState(
-  state: Partial<RuntimeExecutionModeCheckpointState>,
-): RuntimeExecutionModeCheckpointState {
-  const defaults = emptyRuntimeExecutionModeCheckpointState();
-  return {
-    executionMode: state.executionMode ?? defaults.executionMode,
-    executionModeLockRemaining: state.executionModeLockRemaining ?? defaults.executionModeLockRemaining,
-    executionModeEnteredBy: [...(state.executionModeEnteredBy ?? defaults.executionModeEnteredBy)],
-    executionModeEnteredByPrimary: state.executionModeEnteredByPrimary,
-    executionModeEnteredAtRound: state.executionModeEnteredAtRound ?? defaults.executionModeEnteredAtRound,
-    forcedDegradedTier: state.forcedDegradedTier,
-    lastModeDecision: state.lastModeDecision ? { ...state.lastModeDecision } : undefined,
-    pendingModeSignals: [...(state.pendingModeSignals ?? defaults.pendingModeSignals)],
-    forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry
-      ?? defaults.forcedTaskBearingRoundsSinceEntry,
-  };
 }

@@ -15,8 +15,6 @@ interface PanelStub {
   clear: ReturnType<typeof vi.fn>;
   getPlan: ReturnType<typeof vi.fn>;
   setPlan: ReturnType<typeof vi.fn>;
-  renderGraph: ReturnType<typeof vi.fn>;
-  applyExecutionModeEvent: ReturnType<typeof vi.fn>;
 }
 
 interface EtlPrefsStub {
@@ -115,8 +113,6 @@ function makePanel(): PanelStub {
     clear: vi.fn(),
     getPlan: vi.fn(() => null),
     setPlan: vi.fn(),
-    renderGraph: vi.fn(),
-    applyExecutionModeEvent: vi.fn(),
   };
 }
 
@@ -200,9 +196,7 @@ describe('phase 6 — 桥接门控与偏好联动', () => {
   });
 
   it.each([
-    { type: 'execution_mode_enter', executionMode: { executionMode: 'forced' } },
     { type: 'execution_plan_init', plan: { planId: 'blocked-plan', steps: [] } },
-    { type: 'task_graph_init', plan: { planId: 'blocked-graph', steps: [] } },
   ])('connected 明确关闭能力后 $type 不得反向启用', (step) => {
     const etlPrefs = makeEtlPrefs({ showTransparencyPanel: true });
     const { bridge, capabilityEvents } = loadBridge(etlPrefs, panel);
@@ -223,6 +217,23 @@ describe('phase 6 — 桥接门控与偏好联动', () => {
     expect(bridge.isEnabled()).toBe(true);
     expect(panel.setPlan).toHaveBeenCalledTimes(1);
     expect(capabilityEvents).toEqual([true]);
+  });
+
+  it.each([
+    { type: 'execution_mode_enter', executionMode: { executionMode: 'forced' } },
+    { type: 'execution_mode_exit', executionMode: { executionMode: 'free' } },
+    { type: 'task_graph_init', plan: { planId: 'legacy-graph', steps: [] } },
+    { type: 'task_graph_update', plan: { planId: 'legacy-graph', steps: [] } },
+    { type: 'task_graph_done' },
+  ])('已删除的 $type 事件不再启用能力，也不触碰面板', (step) => {
+    const etlPrefs = makeEtlPrefs({ showTransparencyPanel: true });
+    const { bridge, capabilityEvents } = loadBridge(etlPrefs, panel);
+
+    expect(() => bridge.handleStep(step)).not.toThrow();
+
+    expect(bridge.isEnabled()).toBe(false);
+    expect(capabilityEvents).toEqual([]);
+    expect(panel.setPlan).not.toHaveBeenCalled();
   });
 
   it('每次 REST 同步读取当前活跃 session，缺失时回退 default', () => {

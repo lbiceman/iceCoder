@@ -90,8 +90,6 @@ const CODE_PHASES = new Set([
   'prep_compact',
   'prep_memory',
   'prep_build_msgs',
-  'graph_stop_check',
-  'mode_eval',
   'context_usage',
   'llm_precheck',
   'llm_serialize',
@@ -99,7 +97,6 @@ const CODE_PHASES = new Set([
   'llm_stream_filter',
   'post_salvage',
   'post_no_tools',
-  'post_supervisor',
 ]);
 
 export function summarizeHarnessTiming(): {

@@ -329,7 +329,7 @@ function extractLegacy(input: unknown, context: LegacyCheckpointAdapterContext):
       sessionNotes,
       memoryPayload: sanitizeOptionalJsonRecord(root.memoryPayload, warnings, 'memoryPayload'),
       explicitOutcomes: extractOutcomes(root, warnings),
-      resumable: extractLegacyResumable(root, runtime),
+      resumable: extractLegacyResumable(root),
       extensions: extractLegacyExtensions(root, runtime, warnings),
       warnings,
     };
@@ -415,15 +415,10 @@ const LEGACY_COMPLETION_KEYS = new Set([
 
 function extractLegacyResumable(
   root: Record<string, unknown>,
-  runtime: Record<string, unknown> | null,
 ): ProjectCheckpointV3['execution']['resumable'] | undefined {
-  const branchBudget = sanitizeBranchBudget(runtime?.branchBudget);
   const failedToolCallSignatures = sanitizeCountRecord(root.failedToolCallSignatures);
-  if (!branchBudget && !failedToolCallSignatures) return undefined;
-  return {
-    ...(branchBudget ? { branchBudget } : {}),
-    ...(failedToolCallSignatures ? { failedToolCallSignatures } : {}),
-  };
+  if (!failedToolCallSignatures) return undefined;
+  return { failedToolCallSignatures };
 }
 
 function extractLegacyExtensions(
@@ -466,30 +461,6 @@ function extractLegacyExtensions(
   }
   if (Object.keys(legacyApi).length > 0) extensions.legacyApi = legacyApi;
   return extensions;
-}
-
-function sanitizeBranchBudget(
-  value: unknown,
-): NonNullable<ProjectCheckpointV3['execution']['resumable']>['branchBudget'] | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  const fileEdits = sanitizeCountRecord(record.fileEdits);
-  const commandRetries = sanitizeCountRecord(record.commandRetries);
-  const errorRepeats = sanitizeCountRecord(record.errorRepeats);
-  if (!fileEdits || !commandRetries || !errorRepeats) return undefined;
-  if (!Number.isInteger(record.recoverTriggers) || Number(record.recoverTriggers) < 0) return undefined;
-  return {
-    fileEdits,
-    commandRetries,
-    errorRepeats,
-    recoverTriggers: Number(record.recoverTriggers),
-    ...(validStrings(record.writeBypassPaths).length > 0
-      ? { writeBypassPaths: validStrings(record.writeBypassPaths) }
-      : {}),
-    ...(validStrings(record.commandRetryBypassKeys).length > 0
-      ? { commandRetryBypassKeys: validStrings(record.commandRetryBypassKeys) }
-      : {}),
-  };
 }
 
 function sanitizeCountRecord(value: unknown): Record<string, number> | undefined {

@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { readMainConfigFile } from '../config/main-config-supervisor-mode.js';
+import { readMainConfigFile } from '../config/main-config.js';
 
 function normalizePath(path: string): string {
   return path.trim().replace(/\\/g, '/').toLowerCase();

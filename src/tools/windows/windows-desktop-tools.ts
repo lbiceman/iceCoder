@@ -10,7 +10,7 @@ import path from 'node:path';
 import {
   readUseWindowsFromMainConfig,
   resolveMainConfigPath,
-} from '../../config/main-config-supervisor-mode.js';
+} from '../../config/main-config.js';
 import type { RegisteredTool, ToolResult } from '../types.js';
 import { encodePngFromBottomUpBgra } from './png32.js';
 import {

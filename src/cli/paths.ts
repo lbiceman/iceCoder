@@ -120,9 +120,6 @@ export function applyRuntimeDataEnvDefaults(): void {
       'mcp.json',
     );
   }
-  if (!process.env.ICE_SUPERVISOR_CONFIG_PATH?.trim()) {
-    process.env.ICE_SUPERVISOR_CONFIG_PATH = path.join(dataDir, 'supervisor-config.json');
-  }
   if (!process.env.ICE_DEFAULT_WORK_DIR?.trim() && usesUserDataRoot()) {
     process.env.ICE_DEFAULT_WORK_DIR = resolveSharedDefaultWorkDir(dataDir);
   }
@@ -200,7 +197,6 @@ export function getTokenUsageLogPath(): string {
 export interface DataPaths {
   dataDir: string;
   configPath: string;
-  supervisorConfigPath: string;
   systemPromptPath: string;
   sessionsDir: string;
   memoryDir: string;
@@ -222,11 +218,6 @@ export function resolvePackagedDataDir(relativePath: string): string {
   return path.resolve(moduleDir, '../../data', relativePath);
 }
 
-export function resolveSupervisorConfigPath(): string {
-  applyRuntimeDataEnvDefaults();
-  return path.resolve(process.env.ICE_SUPERVISOR_CONFIG_PATH!);
-}
-
 /**
  * 解析所有数据路径。
  */
@@ -237,7 +228,6 @@ export async function resolveDataPaths(): Promise<DataPaths> {
   return {
     dataDir,
     configPath: path.resolve(process.env.ICE_CONFIG_PATH!),
-    supervisorConfigPath: resolveSupervisorConfigPath(),
     systemPromptPath: process.env.ICE_SYSTEM_PROMPT_PATH
       ? path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH)
       : path.join(dataDir, 'system-prompt.md'),
@@ -276,7 +266,6 @@ export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
 /** 惰性构造：shell-sandbox 与本文件互相导入，模块顶层读取黑名单常量会在循环加载时拿到 undefined。 */
 function createDefaultConfig(): IceCoderConfigFile {
   return {
-    supervisorMode: 'adaptive',
     shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
     providers: [
       {
@@ -404,44 +393,10 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
     await fs.writeFile(paths.systemPromptPath, DEFAULT_SYSTEM_PROMPT, 'utf-8');
   }
 
-  await ensureSupervisorConfigFile(paths.dataDir);
+  await fs.mkdir(path.join(paths.dataDir, 'runtime'), { recursive: true });
   await ensureDefaultSkillFiles(paths.skillsDir);
 
   return isFirstRun;
-}
-
-const SUPERVISOR_CONFIG_EXAMPLE = 'supervisor-config.example.json';
-
-/**
- * 若不存在则从包内示例写入 `{dataDir}/supervisor-config.json`（全局安装 → ~/.iceCoder/）。
- */
-export async function ensureSupervisorConfigFile(dataDir: string): Promise<void> {
-  const target = path.join(dataDir, 'supervisor-config.json');
-  if (await exists(target)) return;
-
-  const bundled = resolvePackagedDataExamplePath(SUPERVISOR_CONFIG_EXAMPLE);
-  let content: string;
-  if (await exists(bundled)) {
-    content = await fs.readFile(bundled, 'utf-8');
-  } else {
-    const localExample = path.join(REPO_DATA_DIR, SUPERVISOR_CONFIG_EXAMPLE);
-    const localConfig = path.join(REPO_DATA_DIR, 'supervisor-config.json');
-    if (await exists(localExample)) {
-      content = await fs.readFile(localExample, 'utf-8');
-    } else if (await exists(localConfig)) {
-      content = await fs.readFile(localConfig, 'utf-8');
-    } else {
-      console.warn(
-        `[iceCoder] 未找到 ${SUPERVISOR_CONFIG_EXAMPLE}，跳过写入 supervisor-config.json（将使用内置默认）`,
-      );
-      return;
-    }
-  }
-
-  await fs.mkdir(path.join(dataDir, 'runtime'), { recursive: true });
-  const normalized = content.endsWith('\n') ? content : `${content}\n`;
-  await fs.writeFile(target, normalized, 'utf-8');
-  console.log(`[iceCoder] 已初始化 ${target}`);
 }
 
 const BUNDLED_SKILLS_DIR = 'skills';

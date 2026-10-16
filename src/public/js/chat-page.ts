@@ -294,9 +294,6 @@ export const ChatPage = (() => {
       isWorkloadActive: isWorkloadActive(),
       contextMaxTokens: maxContextTokens,
       contextUsedTokens: usedInputTokens,
-      supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
-        ? window.AppRouter.getSupervisorMode()
-        : 'adaptive',
       connectionState: window.AppShell && typeof window.AppShell.getConnectionState === 'function'
         ? window.AppShell.getConnectionState()
         : 'disconnected',
@@ -482,12 +479,6 @@ export const ChatPage = (() => {
     if (text === '~telemetry') {
       Cmd.hide();
       Cmd.handleTelemetry(Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return true;
-    }
-
-    if (text === '~supervisor' || text.startsWith('~supervisor ')) {
-      Cmd.hide();
-      Cmd.handleSupervisor(text, Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
       return true;
     }
 
@@ -1269,7 +1260,7 @@ export const ChatPage = (() => {
       else if (runningTurn.petStatusText) sessionPet.setBubbleText(runningTurn.petStatusText);
     }
 
-    // 6. 执行计划 / 任务图：重放保存的 step 事件
+    // 6. 执行计划：重放保存的 step 事件
     if (Array.isArray(runningTurn.planEvents) && window.ChatExecutionPlanBridge
         && typeof window.ChatExecutionPlanBridge.handleStep === 'function') {
       for (let j = 0; j < runningTurn.planEvents.length; j++) {
@@ -2523,17 +2514,10 @@ export const ChatPage = (() => {
         remoteMode,
       });
     }
-    if (window.AppShell) {
-      if (typeof window.AppShell.addSupervisorModeListener === 'function') {
-        window.AppShell.addSupervisorModeListener(() => {
-          syncWelcomeState();
-        });
-      }
-      if (typeof window.AppShell.addConnectionChangeListener === 'function') {
-        window.AppShell.addConnectionChangeListener(() => {
-          syncWelcomeState();
-        });
-      }
+    if (window.AppShell && typeof window.AppShell.addConnectionChangeListener === 'function') {
+      window.AppShell.addConnectionChangeListener(() => {
+        syncWelcomeState();
+      });
     }
     if (File && typeof File.init === 'function') {
       File.init({
@@ -2600,9 +2584,6 @@ export const ChatPage = (() => {
       }
       if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
         window.DesktopPetBridge.attach(sessionPet);
-      }
-      if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
-        Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
       }
     }
 

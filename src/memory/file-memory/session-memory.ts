@@ -373,7 +373,7 @@ export interface SessionMemoryState {
 /**
  * 计算指定会话的 session-notes 路径。
  *
- * 多会话模式下每个会话独立存放（断点恢复需按会话隔离 runtime/plan fence）。
+ * 多会话模式下每个会话独立存放（断点恢复需按会话隔离 runtime fence）。
  * 旧路径 `data/sessions/session-notes.md`（全局共享）由迁移逻辑迁到
  * `data/sessions/default.session-notes.md`。
  */
@@ -844,27 +844,4 @@ function stripRuntimeEvidenceSection(notes: string): string {
     }
   }
   return [...lines.slice(0, startIdx), ...lines.slice(endIdx)].join('\n');
-}
-
-// ═══════════════════════════════════════════════
-// TaskGraph Fence Helpers (Phase 6)
-// ═══════════════════════════════════════════════
-
-export const ICECODER_GRAPH_FENCE_LANG = 'icecoder-graph';
-export const ICECODER_METRICS_FENCE_LANG = 'icecoder-metrics';
-export const ICECODER_DEBUG_FENCE_LANG = 'icecoder-debug';
-
-/** 将 TaskGraph 快照写入 session notes（追加 fence block） */
-export function writeGraphFence(notes: string, fence: string): string {
-  return notes.trimEnd() + '\n\n' + fence + '\n';
-}
-
-/** 将 GraphMetrics 写入 session notes */
-export function writeMetricsFence(notes: string, fence: string): string {
-  return notes.trimEnd() + '\n\n' + fence + '\n';
-}
-
-/** 将 GraphDebugDump 写入 session notes */
-export function writeDebugFence(notes: string, fence: string): string {
-  return notes.trimEnd() + '\n\n' + fence + '\n';
 }

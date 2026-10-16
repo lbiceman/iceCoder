@@ -3,18 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
-import { TaskState } from '../../src/harness/task-state.js';
 import {
-  buildDiagnosticGateMessage,
   checkToolPreflight,
   isDistArtifactPath,
-  shouldActivateBuildDiagnosticGate,
-  shouldClearBuildDiagnosticGate,
 } from '../../src/harness/harness-tool-preflight.js';
-import { appendVerificationEvidenceToBranchBlock } from '../../src/harness/rebuild-escalation.js';
-import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
-import type { UnifiedMessage } from '../../src/llm/types.js';
 import { CompletionFactsView } from '../../src/harness/completion-facts-view.js';
 
 describe('harness-tool-preflight', () => {
@@ -38,52 +30,6 @@ describe('harness-tool-preflight', () => {
     expect(decision.blocked).toBe(true);
     expect(decision.reason).toBe('dist_read');
     expect(isDistArtifactPath('build/out.js')).toBe(true);
-  });
-
-  it('blocks the failed command under diagnostic gate, not a toolchain allowlist', () => {
-    const budget = new BranchBudgetTracker({ commandRetryMax: 2 });
-    budget.recordFailedCommandAttempt('./scripts/ci.sh');
-    budget.recordFailedCommandAttempt('./scripts/ci.sh');
-    const blocked = checkToolPreflight({
-      toolName: 'run_command',
-      args: { command: './scripts/ci.sh' },
-      buildDiagnosticGateActive: true,
-      branchBudget: budget,
-    });
-    expect(blocked.blocked).toBe(true);
-
-    const allowed = checkToolPreflight({
-      toolName: 'run_command',
-      args: { command: 'npx tsc --noEmit 2>&1' },
-      buildDiagnosticGateActive: true,
-      branchBudget: budget,
-    });
-    expect(allowed.blocked).toBe(false);
-  });
-
-  it('activates diagnostic gate when build command hits branch budget', () => {
-    const budget = new BranchBudgetTracker({ commandRetryMax: 2 });
-    budget.recordFailedCommandAttempt('npm run build 2>&1');
-    budget.recordFailedCommandAttempt('npm run build 2>&1');
-    const tc = { name: 'run_command', arguments: { command: 'npm run build 2>&1' } };
-    const sig = toolCallSignature(tc);
-    expect(shouldActivateBuildDiagnosticGate({
-      branchBudget: budget,
-      executionFailedSignatures: [],
-      policyBlockedSignatures: [sig],
-      toolCalls: [tc],
-      signatureOf: toolCallSignature,
-    })).toBe(true);
-    expect(buildDiagnosticGateMessage()).toMatch(/Diagnostic Gate/);
-  });
-
-  it('clears diagnostic gate after successful src edit', () => {
-    const tc = { name: 'edit_file', arguments: { path: 'src/scenes/MainMenuScene.ts' } };
-    expect(shouldClearBuildDiagnosticGate({
-      toolCalls: [tc],
-      failedSignatures: [],
-      signatureOf: toolCallSignature,
-    })).toBe(true);
   });
 
   it('blocks repeated read_file when target missing on disk', () => {
@@ -183,26 +129,11 @@ describe('harness-tool-preflight', () => {
     expect(allowed.blocked).toBe(false);
   });
 
-  it('diagnostic gate block can attach verification digest', () => {
-    const messages: UnifiedMessage[] = [
-      {
-        role: 'assistant',
-        content: '',
-        toolCalls: [{ id: 'tc1', name: 'run_command', arguments: { command: 'npm test' } }],
-      },
-      {
-        role: 'tool',
-        toolCallId: 'tc1',
-        content: '工具执行错误: Command failed (exit code: 1)\n\nFAIL test/unit/tasks.test.ts',
-      },
-    ];
-    const gateMsg = checkToolPreflight({
+  it('does not pause a command just because it failed before', () => {
+    const decision = checkToolPreflight({
       toolName: 'run_command',
       args: { command: 'npm run build 2>&1' },
-      buildDiagnosticGateActive: true,
-    }).message ?? '';
-    const enriched = appendVerificationEvidenceToBranchBlock(gateMsg, messages);
-    expect(enriched).toContain('[Verification digest]');
-    expect(enriched).toContain('test/unit/tasks.test.ts');
+    });
+    expect(decision.blocked).toBe(false);
   });
 });

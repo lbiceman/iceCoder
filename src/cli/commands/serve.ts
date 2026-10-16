@@ -57,7 +57,6 @@ registerBootstrapSessionHints({
 });
 import { createUploadRouter, purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
-import { createSupervisorEventsRouter } from '../../web/routes/supervisor-events.js';
 import { createTokenUsageRouter } from '../../web/routes/token-usage.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
@@ -146,7 +145,6 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/sessions', router: createSessionsRouter({ listScheduledTasks: () => scheduledTaskStore.list() }) },
       { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
-      { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/token-usage', router: createTokenUsageRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },

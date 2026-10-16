@@ -1,20 +1,19 @@
 /**
  * 冰豆（Ice Bean）色板与 token 下标工具（浏览器与 Vitest 共用，ESM）
- * 圆环进度用 token 百分比；眼睛颜色对应 supervisorMode 三档（off / adaptive / strict）。
+ * 圆环进度用 token 百分比；眼睛颜色固定为 SESSION_PET_EYE_COLOR。
  */
 
 /** 会话指示器在用户界面中的显示名称（无障碍与文案统一入口） */
 export const SESSION_PET_DISPLAY_NAME = '冰豆';
 
-/** 与 SUPERVISOR_MODE_EYE_ORDER 一一对应：自由 / 自适应 / 严格 */
 export const SESSION_PET_PALETTE_COLORS = [
   '#88EDC7',
   '#86E0FF',
   '#F1A8B2',
 ];
 
-/** 眼睛色与 config.json supervisorMode 的固定顺序 */
-export const SUPERVISOR_MODE_EYE_ORDER = ['off', 'adaptive', 'strict'];
+/** 冰豆默认眼睛色 */
+export const SESSION_PET_EYE_COLOR = '#86E0FF';
 
 const DEFAULT_FALLBACK = '#FCD7E4';
 
@@ -46,20 +45,6 @@ export function eyeColorForTokenPct(pct, colors) {
 }
 
 /**
- * @param {'off'|'adaptive'|'strict'|string} mode
- * @param {string[]} [colors]
- * @returns {string}
- */
-export function supervisorModeToEyeColor(mode, colors) {
-  const arr = colors && colors.length > 0 ? colors : SESSION_PET_PALETTE_COLORS;
-  if (!arr.length) return DEFAULT_FALLBACK;
-  let idx = SUPERVISOR_MODE_EYE_ORDER.indexOf(mode);
-  if (idx < 0) idx = SUPERVISOR_MODE_EYE_ORDER.indexOf('adaptive');
-  if (idx < 0) idx = 0;
-  return arr[Math.min(idx, arr.length - 1)] || DEFAULT_FALLBACK;
-}
-
-/**
  * @param {string[]} [colors]
  * @returns {string}
  */
@@ -82,7 +67,7 @@ export function pickRandomPaletteColor(colors) {
  */
 export function buildSessionPetCanvasAriaLabel(o) {
   const ring =
-    '外圈圆环自顶端顺时针延伸，表示上下文占用比例。眼睛颜色对应当前监管模式（自由/自适应/严格）。';
+    '外圈圆环自顶端顺时针延伸，表示上下文占用比例。';
   const usage =
     '当前约 ' +
     o.tokenPct +

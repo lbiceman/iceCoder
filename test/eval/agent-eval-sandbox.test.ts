@@ -139,6 +139,14 @@ describe('agent-eval sandbox (scripted LLM + real tools)', () => {
     'local-read-only-no-file-change',
     'local-subagent-parallel-explore',
     'local-subagent-background-check',
+    'model-led-same-file-five-edits',
+    'model-led-rerun-failing-command',
+    'model-led-long-read-only-exploration',
+    'model-led-three-file-bugfix',
+    'model-led-retry-check-script',
+    'model-led-read-chain-then-fix',
+    'model-led-create-missing-module',
+    'model-led-caller-and-callee',
   ])('scripted local workspace case %s', async (id) => {
     process.env.ICE_EVAL_MODE = '1';
     const result = await runAgentEvalCase(caseById(id), {});

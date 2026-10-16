@@ -31,12 +31,10 @@ declare global {
     ToolDisplayHistory?: any;
     ModelConfigPanel?: any;
     McpConfigPanel?: any;
-    SupervisorConfigPanel?: any;
     SettingsPage?: any;
     ConfigPage?: any;
     SessionPet?: any;
     SESSION_PET_DISPLAY_NAME?: string;
-    IceSupervisorModeEyeColor?: any;
     DesktopPetBridge?: any;
     ChatWebSocket?: any;
     ChatSession?: any;

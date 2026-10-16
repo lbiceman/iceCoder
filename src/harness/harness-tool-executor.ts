@@ -23,16 +23,13 @@ import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
 import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
 import {
   extractRunCommand,
   extractToolTargetPath,
-} from './branch-budget-path.js';
-import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
+} from './tool-target-path.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
-import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 import {
   capturePreTurnWriteSnapshot,
   isIntentCheckpointWriteTool,
@@ -80,8 +77,6 @@ export interface ToolExecutorDeps {
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
   runtimeTelemetry?: RuntimeTelemetry;
-  /** Resilience v2：超限时硬拦截 write / 失败命令重试。 */
-  branchBudget?: BranchBudgetTracker;
   /** 同路径 missing-file preflight 拦截次数。 */
   missingFileAttempts?: Map<string, number>;
   /** Harness 策略拦截 / 恢复统计。 */
@@ -126,10 +121,7 @@ interface PolicyBlockContext {
   taskState?: TaskState;
   repoContext?: RepoContext;
   policyBlockedSignatures: string[];
-  enrichWithVerification?: boolean;
-  verificationOutputBuffer?: VerificationOutputBuffer;
   countAsMissingFile?: boolean;
-  budgetBlockPath?: string;
   outcome?: Extract<import('./types.js').ToolOutcome, 'policy_block' | 'user_denied'>;
 }
 
@@ -138,21 +130,11 @@ function emitHarnessPolicyBlock(
   ctx: PolicyBlockContext,
 ): void {
   const outcome = ctx.outcome ?? 'policy_block';
-  let blockMessage = ctx.baseMessage;
-  if (ctx.enrichWithVerification) {
-    blockMessage = appendVerificationEvidenceToBranchBlock(
-      blockMessage,
-      ctx.messages,
-      ctx.verificationOutputBuffer,
-    );
-  }
+  const blockMessage = ctx.baseMessage;
 
   ctx.deps.harnessPolicyStats && (ctx.deps.harnessPolicyStats.policyBlockCount += 1);
   if (ctx.countAsMissingFile && ctx.deps.harnessPolicyStats) {
     ctx.deps.harnessPolicyStats.missingFileBlockCount += 1;
-  }
-  if (ctx.policyReason === 'branch_budget_file') {
-    recordBudgetBlockByPath(ctx.deps.harnessPolicyStats, ctx.budgetBlockPath);
   }
 
   ctx.logger.toolResult(ctx.tc.name, false, blockMessage.length, ctx.errorLabel);
@@ -213,7 +195,6 @@ export interface ExecuteToolCallsStreamingArgs {
   repoContext?: RepoContext;
   chatFn?: ChatFunction;
   currentTools?: ToolDefinition[];
-  buildDiagnosticGateActive?: boolean;
   completionFacts?: CompletionFactsView;
   verificationOutputBuffer?: VerificationOutputBuffer;
   /** 本 Harness run 内已拒绝的 Shell mandatory-confirm 键。 */
@@ -221,14 +202,12 @@ export interface ExecuteToolCallsStreamingArgs {
 }
 
 export interface ToolExecutionStats {
-  /** 真实执行失败（用于熔断 / BranchBudget 计次 / 重复失败统计） */
+  /** 真实执行失败（用于熔断 / 重复失败统计） */
   failedCount: number;
   totalCount: number;
   failedSignatures: string[];
-  /** Harness 策略拒绝（preflight / BranchBudget / delegate gate），不计入 failedCount */
+  /** Harness 策略拒绝（preflight / delegate gate / 权限），不计入 failedCount */
   policyBlockedSignatures: string[];
-  /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
-  budgetBlockedFilePaths: string[];
   /** 通过执行前后工作区清单确认产生修改的 run_command 调用。 */
   workspaceMutatedRunCommandIds: string[];
   /** mutating run_command 的执行前 TaskState mutation version。 */
@@ -287,7 +266,6 @@ export async function executeToolCallsStreaming(
     repoContext,
     chatFn,
     currentTools,
-    buildDiagnosticGateActive,
     completionFacts,
     verificationOutputBuffer,
     shellMandatoryConfirmDenials,
@@ -310,8 +288,6 @@ export async function executeToolCallsStreaming(
   let directTotalCount = 0;
   const directFailedSignatures: string[] = [];
   const policyBlockedSignatures: string[] = [];
-  const budgetBlockedFilePaths: string[] = [];
-  const budgetBlockedPathSet = new Set<string>();
   const workspaceMutatedRunCommandIds = new Set<string>();
   const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
   const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
@@ -589,19 +565,16 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    // Harness preflight：dist 读取 / missing file / build diagnostic gate / shell sandbox
+    // Harness preflight：工作区边界 / dist 读取 / missing file / shell sandbox
     const preflight = checkToolPreflight({
       toolName: tc.name,
       args: tc.arguments,
-      branchBudget: deps.branchBudget,
       completionFacts,
-      buildDiagnosticGateActive,
       workspaceRoot: deps.workspaceRoot,
       lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
       missingFileAttempts: deps.missingFileAttempts,
     });
     if (preflight.blocked) {
-      const enrichGate = preflight.reason === 'build_diagnostic_gate';
       emitHarnessPolicyBlock({
         deps,
         tc,
@@ -616,8 +589,6 @@ export async function executeToolCallsStreaming(
         taskState,
         repoContext,
         policyBlockedSignatures,
-        enrichWithVerification: enrichGate,
-        verificationOutputBuffer,
         countAsMissingFile: preflight.reason === 'missing_file'
           || preflight.reason === 'missing_file_repeat',
       });
@@ -627,56 +598,6 @@ export async function executeToolCallsStreaming(
     }
 
     const targetPath = extractToolTargetPath(tc.name, tc.arguments);
-    const hadWriteBypass = targetPath ? deps.branchBudget?.hasWriteBypass(targetPath) : false;
-
-    // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，
-    // 不是 edit_file/write_file 引擎故障；长任务里多在 npm test 反复失败后、forced 段出现。
-    const branchBlock = deps.branchBudget?.checkToolBlock(
-      tc.name,
-      tc.arguments,
-      extractToolTargetPath,
-      extractRunCommand,
-      { workspaceRoot: deps.workspaceRoot },
-    );
-    if (branchBlock?.blocked) {
-      const budgetKey = branchBlock.key ?? targetPath;
-      if (branchBlock.dimension === 'file_edit' && budgetKey && !budgetBlockedPathSet.has(budgetKey)) {
-        budgetBlockedPathSet.add(budgetKey);
-        budgetBlockedFilePaths.push(budgetKey);
-      }
-      emitHarnessPolicyBlock({
-        deps,
-        tc,
-        iteration,
-        baseMessage: branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.',
-        errorLabel: 'Branch budget block',
-        policyReason: branchBlock.dimension === 'command_retry'
-          ? 'branch_budget_command'
-          : 'branch_budget_file',
-        messages,
-        onStep,
-        logger,
-        taskState,
-        repoContext,
-        policyBlockedSignatures,
-        enrichWithVerification: true,
-        verificationOutputBuffer,
-        budgetBlockPath: budgetKey,
-      });
-      directTotalCount++;
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (
-      hadWriteBypass
-      && targetPath
-      && deps.branchBudget
-      && !deps.branchBudget.hasWriteBypass(targetPath)
-    ) {
-      deps.harnessPolicyStats && (deps.harnessPolicyStats.writeBypassUsedCount += 1);
-    }
-
     const snapshotPaths = new Set<string>();
     if (targetPath && (isIntentCheckpointWriteTool(tc.name) || tc.name === 'read_file')) {
       snapshotPaths.add(targetPath);
@@ -919,7 +840,6 @@ export async function executeToolCallsStreaming(
     totalCount: results.length + directTotalCount,
     failedSignatures,
     policyBlockedSignatures,
-    budgetBlockedFilePaths,
     workspaceMutatedRunCommandIds: [...workspaceMutatedRunCommandIds],
     workspaceMutationVersionBeforeRunCommand,
   };

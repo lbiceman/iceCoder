@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Harness 核心循环引擎单元测试。
  */
 
@@ -25,7 +25,6 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
-import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
 
 // ═══ 测试工具 ═══
 
@@ -1745,38 +1744,6 @@ describe('Harness - 连续工具失败熔断', () => {
     )).toBe(false);
   });
 
-  it('adaptive 下 non_critical 连续失败仍注入证据包', async () => {
-    const tools = [makeTool('read_file')];
-    const failHandler = async () => ({ success: false, output: '', error: 'path is required' }) as ToolResult;
-    const executor = createToolExecutor(tools, failHandler);
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
-    const harness = new Harness(minConfig({
-      context: { systemPrompt: 'test', tools },
-      supervisorConfig,
-      globalPolicy: supervisorConfig.globalPolicy,
-    }), executor);
-
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc5', name: 'read_file' }]),
-      finalResponse('summary'),
-    ]);
-
-    const result = await harness.run(
-      '整理 Ant Design 文档成 md 放到桌面',
-      chatFn,
-    );
-
-    expect(result.messages.some(m =>
-      m.role === 'user'
-      && typeof m.content === 'string'
-      && m.content.includes('[Failure Evidence — 5 consecutive')
-    )).toBe(true);
-  });
-
   it('实质进展后移除 ephemeral 失败恢复消息', async () => {
     const tools = [makeTool('write_file')];
     let calls = 0;
@@ -1938,7 +1905,8 @@ describe('Harness - task checkpoint', () => {
       expect.objectContaining({ toolCallId: 'tc1', status: 'completed' }),
     ]));
     expect(checkpoint.completion.continuationCount).toBe(0);
-    expect(checkpoint.execution.resumable.branchBudget).toBeDefined();
+    expect(checkpoint.execution.resumable).not.toHaveProperty('branchBudget');
+    expect(checkpoint.execution.loopState).not.toHaveProperty('executionMode');
   });
 
   it('恢复时注入 active checkpoint', async () => {

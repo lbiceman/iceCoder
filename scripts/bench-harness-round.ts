@@ -25,8 +25,7 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../src/harness/token-budget-config.js';
-import { loadHarnessSupervisorRuntime } from '../src/harness/supervisor/supervisor-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../src/config/main-config-supervisor-mode.js';
+import { readSkipPermissionChecksFromMainConfig } from '../src/config/main-config.js';
 import { readVerificationExemptDirsFromMainConfig } from '../src/harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../src/harness/workspace-run-context.js';
 import { buildMcpRuntimeContext } from '../src/mcp/mcp-runtime-context.js';
@@ -77,10 +76,6 @@ async function buildHarnessConfig(
     logPrefix: '[bench]',
     systemPromptPath: ctx.paths.systemPromptPath,
     defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
-  });
-  const { supervisorConfig, globalPolicy, bridge: supervisorBridge } = await loadHarnessSupervisorRuntime({
-    dataDir: ctx.paths.dataDir,
-    mainConfigPath: ctx.paths.configPath,
   });
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
@@ -139,9 +134,6 @@ async function buildHarnessConfig(
     sessionId,
     workspaceRoot: wsCtx.effectiveWorkspaceRoot,
     verificationExemptDirs,
-    supervisorConfig,
-    globalPolicy,
-    supervisorBridge,
   };
 
   return {
@@ -165,8 +157,6 @@ function printSummary(title: string): void {
     'prep_compact',
     'prep_memory',
     'prep_build_msgs',
-    'graph_stop_check',
-    'mode_eval',
     'context_usage',
     'llm_precheck',
     'llm_serialize',
@@ -177,7 +167,6 @@ function printSummary(title: string): void {
     'llm_stream_filter',
     'post_salvage',
     'post_no_tools',
-    'post_supervisor',
     'tool_round',
     'round_wall',
     'run_total',

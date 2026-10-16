@@ -1,17 +1,19 @@
-# Harness、单轴监管与停时验收
+# Harness 主循环与停时验收
 
-> 版本：2026-09-16
-> 适用范围：iceCoder Harness 主循环、D′ 停时验收、L0/L1/L3 单轴监管
-> 收尾策略全文：`收尾策略-模型停手与验收门控.md`
+> 版本：2026-10-16（原 2026-09-16 版含 L0/L1/L3 单轴监管）
+> 适用范围：iceCoder Harness 主循环、D′ 停时验收
+> 收尾策略全文：`收尾策略-模型停手与验收门控-finish.md`
+>
+> **2026-10-16：** 三档监管 / 执行档（ModeDecisionEngine、ToolGate）/ 任务图（GraphExecutor）/ 分支预算（BranchBudget）已移除，详见 `docs/requirement/监管收束-愿景.md`。本文件名中的「L2与Gate」为历史遗留。
 
 ## 1. 架构
 
-Harness 将事实采集、结束提议和执行监管分开：
+Harness 将事实采集、结束提议和执行边界分开：
 
 - 事实采集器记录操作状态、风险与证据。
 - 模型无工具且写出正文，即提出结束。
-- 运行时只因确定性硬状态或过期验收延迟结束；验收命令走现有 `run_command` ToolGate，不另起子进程。
-- ModeDecisionEngine、ToolGate、BranchBudget 和 GraphExecutor 约束执行过程，不独立裁决任务完成。
+- 运行时只因确定性硬状态或过期验收延迟结束；验收命令以 `run_command` 走与普通工具轮相同的权限与执行链，不另起子进程。
+- 权限规则、Shell 沙箱 / HostGuard / 工作区写边界、连续失败阶梯和 circuit breaker 约束执行过程，不独立裁决任务完成。
 
 ```mermaid
 flowchart TD
@@ -23,7 +25,7 @@ flowchart TD
   Hard -->|clear| Fresh[Freshness]
   Plan --> Fresh
   Fresh -->|fresh or not required| Complete[model_done]
-  Fresh -->|stale| Run[run_command via ToolGate]
+  Fresh -->|stale| Run[run_command via normal tool path]
   Run -->|pass| Complete
   Run -->|fail once| Continue[ContinueOnce]
   Run -->|fail again| Terminal[failed or completed_unverified]
@@ -61,7 +63,7 @@ flowchart TD
 1. 硬状态（pending / 审批 / 用户拒绝 / 写失败 / 高风险缺回执）→ `paused` 或 `failed`。
 2. 无计划且有工程修改 → `completed_unverified`。
 3. 计划已 fresh → `completed`。
-4. 通过 ToolGate 执行一次计划。
+4. 经与普通工具轮相同的权限与执行链执行一次计划。
 5. 全绿 → `completed`；失败则注入短回执并只续一轮。
 6. 再失败：显式计划 `failed`，默认计划 `completed_unverified`。
 
@@ -78,17 +80,13 @@ flowchart TD
 
 ### 6.1 工具轮
 
-`harness-tool-round.ts` 只采集事实：归一化工具结果、失败摘要、监管信号。工具轮不独立裁决完成。
+`harness-tool-round.ts` 只采集事实：归一化工具结果、失败摘要、连续失败计数。工具轮不独立裁决完成。
 
 ### 6.2 无工具轮
 
 `harness-round-no-tools.ts` 把无工具正文当作结束提议，再跑硬状态与停时验收。
 
-### 6.3 任务图结束
-
-任务图不再有单独的 graph-stop 门控。图完成后仍走同一条无工具收尾路径，不能绕过硬状态或过期验收。
-
-### 6.4 Checkpoint
+### 6.3 Checkpoint
 
 Project Checkpoint V3 是运行时唯一事实源：
 
@@ -108,9 +106,9 @@ Project Checkpoint V3 是运行时唯一事实源：
 
 UI 必须区分这些终态，不能把 `completed_unverified` 折叠成普通成功。
 
-## 8. 单轴监管
+## 8. 执行边界
 
-执行监管保持独立：ModeDecisionEngine、ToolGate、BranchBudget、GraphExecutor、连续失败阶梯和 circuit breaker。它们可以阻止不安全操作，但不能创建另一套完成判定。停时验收必须复用 ToolGate，不能绕过审批。
+执行边界保持独立：权限规则（allow / confirm / deny）、Shell 沙箱 / HostGuard / 工作区写边界 / missing-file 预检、连续工具全失败阶梯（2~3 轮轻提示、4~6 轮失败证据包、7~9 轮强警告、≥10 轮 circuit breaker）。它们可以阻止不安全操作，但不能创建另一套完成判定。运行时不切换执行档位、不按步骤拦工具，也不因同一文件反复修改或同一命令反复失败而停手。停时验收必须复用普通工具的权限与执行链，不能绕过审批。
 
 ## 9. 关键源码
 
