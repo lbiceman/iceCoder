@@ -1,6 +1,7 @@
 /**
  * 把钩子、浮层和截图串起来。
  * 问号只落一次。矩形按这个落点补上，不再改问号的坐标。
+ * 连续问号只认最后一次。到点直接截图再发请求。浮层对截图不可见，问号不用先藏起来。
  */
 import { writeConsole } from '../console-output';
 import { QUESTION_SLICE, wheelSlice } from './geometry';
@@ -10,8 +11,6 @@ import { createPingOverlay, type PingOverlay } from './overlay';
 import { readScreenPingEnabled, readScreenPingSettings, writeScreenPingSettings } from './settings';
 import type { GestureEffect } from './gesture';
 
-/** 只等轮盘从画面上消失，好让截图不带轮盘。窗口一直开着。 */
-const CAPTURE_SETTLE_MS = 80;
 const WATCHDOG_INTERVAL_MS = 1000;
 const MARKER_TTL_MS = 30_000;
 /** 连续落问号时只解析最后一次。这段时间够再开一次轮盘。 */
@@ -36,13 +35,6 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
   let askGen = 0;
   let lastSlice: number | null = null;
   let markerTimer: ReturnType<typeof setTimeout> | null = null;
-  let askTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function clearAskTimer(): void {
-    if (!askTimer) return;
-    clearTimeout(askTimer);
-    askTimer = null;
-  }
 
   function clearMarkerTimer(): void {
     if (!markerTimer) return;
@@ -85,7 +77,6 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
     if (!view || !enabled) return;
     if (effect.type === 'open') {
       askGen += 1;
-      clearAskTimer();
       clearMarkerTimer();
       view.reveal();
       hook?.setMarkerOpen(false);
@@ -105,7 +96,6 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
       view.hideWheel();
       if (effect.type === 'dismiss') {
         askGen += 1;
-        clearAskTimer();
         view.reveal();
         closeMarker();
       }
@@ -127,23 +117,28 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
     const view = overlay;
     if (!view) return;
     const gen = ++askGen;
-    clearAskTimer();
     clearMarkerTimer();
     hook?.setMarkerOpen(true);
-    void captureThenPlace(view, gen, x, y);
+    void placeThenAsk(view, gen, x, y);
   }
 
-  async function captureThenPlace(view: PingOverlay, gen: number, x: number, y: number): Promise<void> {
+  async function placeThenAsk(view: PingOverlay, gen: number, x: number, y: number): Promise<void> {
     const { cropWidth, cropHeight } = readScreenPingSettings();
-    // 轮盘已经收起。窗口留着，等轮盘画完消失再截，避免把它拍进去。
-    await delay(CAPTURE_SETTLE_MS);
+    const due = Date.now() + ASK_DEBOUNCE_MS;
+    view.showMarker(x, y, 'wait', '');
+    await delay(32);
     if (!enabled || gen !== askGen) return;
+    view.showCrop(cropWidth, cropHeight);
+    const remain = due - Date.now();
+    if (remain > 0) await delay(remain);
+    if (!enabled || gen !== askGen) return;
+
     let shot: RegionShot;
     try {
       shot = captureRegionAround(x, y, cropWidth, cropHeight);
     } catch (err) {
       log(`capture failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (gen !== askGen) return;
+      if (!enabled || gen !== askGen) return;
       view.showMarker(x, y, 'error', '这块画面没有截下来');
       await delay(32);
       if (!enabled || gen !== askGen) return;
@@ -152,15 +147,7 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
       return;
     }
     if (!enabled || gen !== askGen) return;
-    view.showMarker(x, y, 'wait', '');
-    await delay(32);
-    if (!enabled || gen !== askGen) return;
-    view.showCrop(cropWidth, cropHeight);
-    askTimer = setTimeout(() => {
-      askTimer = null;
-      if (!enabled || gen !== askGen) return;
-      void askAt(view, gen, shot);
-    }, ASK_DEBOUNCE_MS);
+    void askAt(view, gen, shot);
   }
 
   async function askAt(view: PingOverlay, gen: number, shot: RegionShot): Promise<void> {
@@ -224,7 +211,6 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
   function stopHook(): void {
     enabled = false;
     askGen += 1;
-    clearAskTimer();
     clearMarkerTimer();
     if (watchdog) clearInterval(watchdog);
     watchdog = null;

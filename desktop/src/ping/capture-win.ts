@@ -1,5 +1,5 @@
 /**
- * 裁一块屏幕到 PNG。调用前要先藏起问号浮层，否则会把自己拍进去。
+ * 裁一块屏幕到 PNG。问号浮层已排除在截图外，画面上的问号和矩形不会进图。
  */
 import { nativeImage } from 'electron';
 import koffi from 'koffi';
