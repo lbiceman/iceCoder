@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUESTION_SLICE, cropAroundPoint, cropCssSize, normalizeCropPx, wheelSlice } from '../../desktop/src/ping/geometry.js';
+import { QUESTION_SLICE, cropAroundPoint, cropCssSize, normalizeCropPx, physicalToLocal, wheelSlice } from '../../desktop/src/ping/geometry.js';
 import { INITIAL_GESTURE, reduceGesture } from '../../desktop/src/ping/gesture.js';
 
 describe('问号轮盘几何', () => {
@@ -32,11 +32,33 @@ describe('问号轮盘几何', () => {
     expect(cropCssSize(2, 400)).toBe(200);
   });
 
+  it('宽和高可以不一样', () => {
+    const crop = cropAroundPoint(500, 400, { left: 0, top: 0, width: 1920, height: 1080 }, 400, 120);
+    expect(crop).toMatchObject({ x: 300, y: 340, width: 400, height: 120, anchorX: 200, anchorY: 60 });
+  });
+
   it('截图边长收进 80 到 800', () => {
     expect(normalizeCropPx('')).toBe(200);
     expect(normalizeCropPx('320')).toBe(320);
     expect(normalizeCropPx(10)).toBe(80);
     expect(normalizeCropPx(5000)).toBe(800);
+  });
+
+  it('物理像素换到浮层坐标时不取整，副屏和缩放都对着屏幕原点', () => {
+    const primary = {
+      id: 1,
+      dip: { x: 0, y: 0, width: 1920, height: 1080 },
+      phys: { x: 0, y: 0, width: 1920, height: 1080 },
+      scale: 1,
+    };
+    const hidpi = {
+      id: 2,
+      dip: { x: 1920, y: 0, width: 1920, height: 1080 },
+      phys: { x: 3840, y: 0, width: 3840, height: 2160 },
+      scale: 2,
+    };
+    expect(physicalToLocal(100.5, 40.25, [primary, hidpi])).toEqual({ id: 1, x: 100.5, y: 40.25 });
+    expect(physicalToLocal(4040, 200, [primary, hidpi])).toEqual({ id: 2, x: 100, y: 100 });
   });
 
   it('副屏负坐标仍然以落点为中心', () => {

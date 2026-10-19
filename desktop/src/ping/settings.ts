@@ -1,5 +1,5 @@
 /**
- * 屏幕问号开关和截图边长。跟数据目录指针一样放在共享壳目录，不进模型配置。
+ * 屏幕问号开关，以及截图矩形的宽和高。跟数据目录指针一样放在共享壳目录，不进模型配置。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,26 +10,40 @@ const FILE_NAME = 'screen-ping.json';
 
 export interface ScreenPingSettings {
   enabled: boolean;
-  cropPx: number;
+  cropWidth: number;
+  cropHeight: number;
 }
 
 function settingsPath(): string {
   return path.join(resolveSharedShellDir(), FILE_NAME);
 }
 
-function readRaw(): { enabled?: unknown; cropPx?: unknown } {
+function readRaw(): { enabled?: unknown; cropPx?: unknown; cropWidth?: unknown; cropHeight?: unknown } {
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as { enabled?: unknown; cropPx?: unknown };
+    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as {
+      enabled?: unknown;
+      cropPx?: unknown;
+      cropWidth?: unknown;
+      cropHeight?: unknown;
+    };
   } catch {
     return {};
   }
+}
+
+/** 旧配置只有正方形边长 cropPx，宽和高都用它。 */
+function readEdge(value: unknown, legacy: unknown): number {
+  if (value !== undefined) return normalizeCropPx(value, ASK_CROP_PX);
+  if (legacy !== undefined) return normalizeCropPx(legacy, ASK_CROP_PX);
+  return ASK_CROP_PX;
 }
 
 export function readScreenPingSettings(): ScreenPingSettings {
   const raw = readRaw();
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
-    cropPx: normalizeCropPx(raw.cropPx, ASK_CROP_PX),
+    cropWidth: readEdge(raw.cropWidth, raw.cropPx),
+    cropHeight: readEdge(raw.cropHeight, raw.cropPx),
   };
 }
 
@@ -41,7 +55,8 @@ export function writeScreenPingSettings(patch: Partial<ScreenPingSettings>): Scr
   const current = readScreenPingSettings();
   const next: ScreenPingSettings = {
     enabled: typeof patch.enabled === 'boolean' ? patch.enabled : current.enabled,
-    cropPx: patch.cropPx !== undefined ? normalizeCropPx(patch.cropPx, current.cropPx) : current.cropPx,
+    cropWidth: patch.cropWidth !== undefined ? normalizeCropPx(patch.cropWidth, current.cropWidth) : current.cropWidth,
+    cropHeight: patch.cropHeight !== undefined ? normalizeCropPx(patch.cropHeight, current.cropHeight) : current.cropHeight,
   };
   const file = settingsPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });

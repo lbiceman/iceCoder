@@ -842,8 +842,16 @@ body.setup-required .chat-sidebar-settings-btn {
   flex: none;
 }
 
+.settings-screen-ping-crop-axis {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #8b97a3);
+  font-size: 13px;
+}
+
 .settings-screen-ping-crop-field input {
-  width: 88px;
+  width: 72px;
   height: 32px;
   padding: 0 8px;
   border-radius: 8px;

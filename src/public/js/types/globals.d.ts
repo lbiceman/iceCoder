@@ -9,8 +9,8 @@ interface IceDesktopApi {
   onPetForceVisible?: (handler: (visible: boolean) => void) => void;
   petSetMousePassthrough?: (passthrough: boolean) => void;
   setDesktopPetEnabled?: (enabled: boolean) => void;
-  getScreenPing?: () => Promise<{ supported: boolean; enabled: boolean; cropPx: number }>;
-  setScreenPing?: (patch: { enabled?: boolean; cropPx?: number }) => Promise<{ supported: boolean; enabled: boolean; cropPx: number }>;
+  getScreenPing?: () => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
+  setScreenPing?: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }) => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
   [key: string]: unknown;
 }
 

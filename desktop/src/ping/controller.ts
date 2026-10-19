@@ -1,14 +1,16 @@
 /**
- * 把钩子、浮层和截图串起来：松手在问号上 → 藏起浮层 → 截 200px → 问模型 → 把回答画回落点。
+ * 把钩子、浮层和截图串起来。
+ * 问号只落一次。矩形按这个落点补上，不再改问号的坐标。
  */
 import { writeConsole } from '../console-output';
 import { QUESTION_SLICE, wheelSlice } from './geometry';
 import { createScreenPingHook, type ScreenPingHook } from './hook-win';
-import { captureRegionAround } from './capture-win';
+import { captureRegionAround, type RegionShot } from './capture-win';
 import { createPingOverlay, type PingOverlay } from './overlay';
 import { readScreenPingEnabled, readScreenPingSettings, writeScreenPingSettings } from './settings';
 import type { GestureEffect } from './gesture';
 
+/** 只等轮盘从画面上消失，好让截图不带轮盘。窗口一直开着。 */
 const CAPTURE_SETTLE_MS = 80;
 const WATCHDOG_INTERVAL_MS = 1000;
 const MARKER_TTL_MS = 30_000;
@@ -32,17 +34,14 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
   let overlay: PingOverlay | null = null;
   let watchdog: NodeJS.Timeout | null = null;
   let askGen = 0;
-  let captureToken = 0;
   let lastSlice: number | null = null;
   let markerTimer: ReturnType<typeof setTimeout> | null = null;
   let askTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingAsk: { x: number; y: number } | null = null;
 
   function clearAskTimer(): void {
     if (!askTimer) return;
     clearTimeout(askTimer);
     askTimer = null;
-    pendingAsk = null;
   }
 
   function clearMarkerTimer(): void {
@@ -88,6 +87,7 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
       askGen += 1;
       clearAskTimer();
       clearMarkerTimer();
+      view.reveal();
       hook?.setMarkerOpen(false);
       lastSlice = wheelSlice(effect.x - effect.originX, effect.y - effect.originY);
       view.showWheel(effect.originX, effect.originY, effect.x, effect.y, lastSlice);
@@ -104,7 +104,9 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
       lastSlice = null;
       view.hideWheel();
       if (effect.type === 'dismiss') {
+        askGen += 1;
         clearAskTimer();
+        view.reveal();
         closeMarker();
       }
       return;
@@ -113,61 +115,58 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
     lastSlice = null;
     view.hideWheel();
     const slice = wheelSlice(effect.x - effect.originX, effect.y - effect.originY);
-    if (slice !== QUESTION_SLICE) return;
+    if (slice == null) return;
+    if (slice !== QUESTION_SLICE) {
+      view.showSignal(effect.originX, effect.originY, slice);
+      return;
+    }
     scheduleAsk(effect.originX, effect.originY);
   }
 
   function scheduleAsk(x: number, y: number): void {
     const view = overlay;
     if (!view) return;
-    askGen += 1;
+    const gen = ++askGen;
     clearAskTimer();
     clearMarkerTimer();
-    pendingAsk = { x, y };
-    view.showMarker(x, y, 'wait', '', readScreenPingSettings().cropPx);
     hook?.setMarkerOpen(true);
-    askTimer = setTimeout(() => {
-      askTimer = null;
-      const point = pendingAsk;
-      pendingAsk = null;
-      if (!enabled || !point) return;
-      void askAt(point.x, point.y);
-    }, ASK_DEBOUNCE_MS);
+    void captureThenPlace(view, gen, x, y);
   }
 
-  async function askAt(originX: number, originY: number): Promise<void> {
-    const view = overlay;
-    if (!view) return;
-    const gen = ++askGen;
-    const token = ++captureToken;
-    const cropPx = readScreenPingSettings().cropPx;
-    clearMarkerTimer();
-    // 问号和黄框已经在落点上。截图只藏窗口，不要先拆掉标记再画一次。
-    view.hideForCapture();
+  async function captureThenPlace(view: PingOverlay, gen: number, x: number, y: number): Promise<void> {
+    const { cropWidth, cropHeight } = readScreenPingSettings();
+    // 轮盘已经收起。窗口留着，等轮盘画完消失再截，避免把它拍进去。
     await delay(CAPTURE_SETTLE_MS);
-    if (!enabled || token !== captureToken) return;
-    if (gen !== askGen) {
-      view.reveal();
-      return;
-    }
-    let shot: ReturnType<typeof captureRegionAround>;
+    if (!enabled || gen !== askGen) return;
+    let shot: RegionShot;
     try {
-      shot = captureRegionAround(originX, originY, cropPx);
+      shot = captureRegionAround(x, y, cropWidth, cropHeight);
     } catch (err) {
       log(`capture failed: ${err instanceof Error ? err.message : String(err)}`);
       if (gen !== askGen) return;
-      view.reveal();
-      if (gen !== askGen) return;
-      view.showMarker(originX, originY, 'error', '这块画面没有截下来', cropPx);
-      hook?.setMarkerOpen(true);
+      view.showMarker(x, y, 'error', '这块画面没有截下来');
+      await delay(32);
+      if (!enabled || gen !== askGen) return;
+      view.showCrop(cropWidth, cropHeight);
       armMarkerTimer();
       return;
     }
-    if (gen !== askGen) return;
-    view.reveal();
     if (!enabled || gen !== askGen) return;
-    view.showMarker(originX, originY, 'loading', '在看这块画面…', cropPx);
-    hook?.setMarkerOpen(true);
+    view.showMarker(x, y, 'wait', '');
+    await delay(32);
+    if (!enabled || gen !== askGen) return;
+    view.showCrop(cropWidth, cropHeight);
+    askTimer = setTimeout(() => {
+      askTimer = null;
+      if (!enabled || gen !== askGen) return;
+      void askAt(view, gen, shot);
+    }, ASK_DEBOUNCE_MS);
+  }
+
+  async function askAt(view: PingOverlay, gen: number, shot: RegionShot): Promise<void> {
+    if (!enabled || gen !== askGen) return;
+    clearMarkerTimer();
+    view.patchMarker('loading', '在看这块画面…');
     try {
       const response = await fetch(`${serverBaseUrl}/api/screen-ping/ask`, {
         method: 'POST',
@@ -187,17 +186,17 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
         const message = typeof payload.error === 'string' && payload.error.trim()
           ? payload.error.trim()
           : '没有问到回答';
-        view.showMarker(originX, originY, 'error', message, cropPx);
+        view.patchMarker('error', message);
         armMarkerTimer();
         return;
       }
       const text = typeof payload.text === 'string' ? payload.text.trim() : '';
-      view.showMarker(originX, originY, text ? 'answer' : 'error', text || '模型没有给出回答', cropPx);
+      view.patchMarker(text ? 'answer' : 'error', text || '模型没有给出回答');
       armMarkerTimer();
     } catch (err) {
       if (gen !== askGen) return;
       log(`ask failed: ${err instanceof Error ? err.message : String(err)}`);
-      view.showMarker(originX, originY, 'error', '提问失败，看一下模型配置', cropPx);
+      view.patchMarker('error', '提问失败，看一下模型配置');
       armMarkerTimer();
     }
   }

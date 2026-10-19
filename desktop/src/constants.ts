@@ -70,6 +70,8 @@ export const IPC = {
   /** 主进程 → 浮层：轮盘与落点回答。 */
   SCREEN_PING_WHEEL: 'screen-ping:wheel',
   SCREEN_PING_MARKER: 'screen-ping:marker',
+  /** 主进程 → 浮层：轮盘上除问号以外的标记。 */
+  SCREEN_PING_SIGNAL: 'screen-ping:signal',
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

@@ -13,4 +13,8 @@ contextBridge.exposeInMainWorld('pingOverlay', {
     const listener = (_event: IpcRendererEvent, payload: unknown) => cb(payload);
     ipcRenderer.on(IPC.SCREEN_PING_MARKER, listener);
   },
+  onSignal(cb: (payload: unknown) => void) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => cb(payload);
+    ipcRenderer.on(IPC.SCREEN_PING_SIGNAL, listener);
+  },
 });

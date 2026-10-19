@@ -87,14 +87,19 @@ export interface RegionShot {
   height: number;
 }
 
-/** 以物理像素落点为中心截一块，返回 PNG data URL。 */
-export function captureRegionAround(pointX: number, pointY: number, size?: number): RegionShot {
+/** 以物理像素落点为中心截一块矩形，返回 PNG data URL。 */
+export function captureRegionAround(
+  pointX: number,
+  pointY: number,
+  width?: number,
+  height?: number,
+): RegionShot {
   if (process.platform !== 'win32') {
     throw new Error('屏幕问号截图只在 Windows 上可用');
   }
   const win = native();
   const screen = virtualScreen(win);
-  const crop: CropRect = cropAroundPoint(pointX, pointY, screen, size);
+  const crop: CropRect = cropAroundPoint(pointX, pointY, screen, width, height);
   const hdc = win.getDC(null);
   if (!hdc) throw new Error(`GetDC failed (${win.getLastError()})`);
   let memory: unknown = null;

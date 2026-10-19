@@ -3,9 +3,9 @@
  * 窗口比屏幕少 1 像素，避免资源管理器把它当成全屏程序藏起任务栏。
  */
 import path from 'node:path';
-import { BrowserWindow, screen, type Display } from 'electron';
+import { BrowserWindow, screen, type Display, type Rectangle } from 'electron';
 import { IPC } from '../constants';
-import { cropCssSize } from './geometry';
+import { cropCssSize, physicalToLocal, type DisplayMap } from './geometry';
 
 export interface WheelView {
   show: boolean;
@@ -20,8 +20,16 @@ export interface MarkerView {
   y: number;
   phase: 'wait' | 'loading' | 'answer' | 'error';
   text: string;
-  /** 截图框边长，CSS 像素。 */
-  crop: number;
+  /** 截图框宽高，CSS 像素。问号先出现，框随后才画。 */
+  cropW: number;
+  cropH: number;
+  frame: boolean;
+}
+
+interface SignalView {
+  x: number;
+  y: number;
+  slice: number;
 }
 
 interface OverlaySlot {
@@ -30,6 +38,7 @@ interface OverlaySlot {
   ready: boolean;
   wheel: WheelView | null;
   marker: MarkerView | null;
+  pendingSignals: SignalView[];
 }
 
 function overlayHtmlPath(): string {
@@ -37,12 +46,28 @@ function overlayHtmlPath(): string {
   return path.join(__dirname, '..', '..', 'assets', 'ping-overlay.html');
 }
 
-function localPoint(display: Display, physicalX: number, physicalY: number): { x: number; y: number } {
-  const dip = screen.screenToDipPoint({ x: physicalX, y: physicalY });
+/** 比整屏少 1 像素，避免系统把浮层当成全屏程序藏起任务栏。原点仍是这块屏幕的左上角。 */
+function overlayBounds(display: Display): Rectangle {
   return {
-    x: Math.round(dip.x - display.bounds.x),
-    y: Math.round(dip.y - display.bounds.y),
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: Math.max(1, display.bounds.height - 1),
   };
+}
+
+function currentMaps(): DisplayMap[] {
+  return screen.getAllDisplays().map((display) => ({
+    id: display.id,
+    dip: {
+      x: display.bounds.x,
+      y: display.bounds.y,
+      width: display.bounds.width,
+      height: display.bounds.height,
+    },
+    phys: screen.dipToScreenRect(null, display.bounds),
+    scale: display.scaleFactor > 0 && Number.isFinite(display.scaleFactor) ? display.scaleFactor : 1,
+  }));
 }
 
 export interface PingOverlay {
@@ -50,8 +75,19 @@ export interface PingOverlay {
   showWheel(originX: number, originY: number, cursorX: number, cursorY: number, slice: number | null): void;
   setWheelSlice(slice: number | null): void;
   hideWheel(): void;
-  showMarker(originX: number, originY: number, phase: MarkerView['phase'], text: string, cropPx: number): void;
+  showMarker(
+    originX: number,
+    originY: number,
+    phase: MarkerView['phase'],
+    text: string,
+  ): void;
+  /** 问号和黄框已在落点上，只改气泡文字，不重画。 */
+  patchMarker(phase: MarkerView['phase'], text: string): void;
+  /** 问号已经在落点上，只补矩形，不移动问号。 */
+  showCrop(cropWidth: number, cropHeight: number): void;
   hideMarker(): void;
+  /** 轮盘上的普通标记。问号不走这里。 */
+  showSignal(originX: number, originY: number, slice: number): void;
   /** 截图前藏起浮层，避免把轮盘拍进去。 */
   hideForCapture(): void;
   reveal(): void;
@@ -92,12 +128,12 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   }
 
   function createSlot(display: Display): OverlaySlot {
-    const height = Math.max(1, display.bounds.height - 1);
+    const bounds = overlayBounds(display);
     const win = new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       transparent: true,
       frame: false,
       hasShadow: false,
@@ -128,10 +164,22 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
     // 窗口一直留着。拖动时再 show / 再置顶，透明窗会闪两下。
     if (typeof win.showInactive === 'function') win.showInactive();
     else win.show();
-    const slot: OverlaySlot = { displayId: display.id, win, ready: false, wheel: null, marker: null };
+    const slot: OverlaySlot = {
+      displayId: display.id,
+      win,
+      ready: false,
+      wheel: null,
+      marker: null,
+      pendingSignals: [],
+    };
+    // 混合缩放时第一帧的窗口位置会偏，标记就会跟着往右下挪。准备好后再钉一次。
+    win.once('ready-to-show', () => {
+      if (!win.isDestroyed()) win.setBounds(overlayBounds(display));
+    });
     win.webContents.on('did-finish-load', () => {
       slot.ready = true;
       push(slot);
+      flushSignals(slot);
     });
     void win.loadFile(overlayHtmlPath());
     return slot;
@@ -146,30 +194,56 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   }
 
   function slotFor(physicalX: number, physicalY: number): { slot: OverlaySlot; local: { x: number; y: number }; display: Display } | null {
-    const dip = screen.screenToDipPoint({ x: physicalX, y: physicalY });
-    const display = screen.getDisplayNearestPoint(dip);
+    const hit = physicalToLocal(physicalX, physicalY, currentMaps());
+    const display = (hit && screen.getAllDisplays().find((item) => item.id === hit.id))
+      || screen.getDisplayNearestPoint(screen.screenToDipPoint({ x: physicalX, y: physicalY }));
     let slot = slots.get(display.id);
     if (!slot || slot.win.isDestroyed()) {
       slot = createSlot(display);
       slots.set(display.id, slot);
     }
-    return { slot, local: localPoint(display, physicalX, physicalY), display };
+    const local = hit && hit.id === display.id ? { x: hit.x, y: hit.y } : { x: 0, y: 0 };
+    return { slot, local, display };
+  }
+
+  /**
+   * 窗口已经在屏幕上时不要再 setBounds。
+   * 问号截图会先 hide 再 show，系统会把无边框窗口往右下抬。
+   * 其它标记不藏窗口，所以位置是稳的。这里在显示之前把原点设好，显示之后不再改。
+   */
+  function showPinned(slot: OverlaySlot): void {
+    if (capturing || slot.win.isDestroyed() || slot.win.isVisible()) return;
+    const display = screen.getAllDisplays().find((item) => item.id === slot.displayId);
+    if (display) slot.win.setBounds(overlayBounds(display));
+    if (typeof slot.win.showInactive === 'function') slot.win.showInactive();
+    else slot.win.show();
+  }
+
+  function emitSignal(slot: OverlaySlot, payload: SignalView): void {
+    if (capturing || !slot.ready || slot.win.isDestroyed()) {
+      slot.pendingSignals.push(payload);
+      return;
+    }
+    slot.win.webContents.send(IPC.SCREEN_PING_SIGNAL, payload);
+  }
+
+  function flushSignals(slot: OverlaySlot): void {
+    if (capturing || !slot.ready || slot.win.isDestroyed()) return;
+    const queued = slot.pendingSignals.splice(0);
+    for (const payload of queued) slot.win.webContents.send(IPC.SCREEN_PING_SIGNAL, payload);
   }
 
   function push(slot: OverlaySlot): void {
     if (!slot.ready || slot.win.isDestroyed()) return;
     slot.win.webContents.send(IPC.SCREEN_PING_WHEEL, slot.wheel ?? { show: false, x: 0, y: 0, slice: null });
     slot.win.webContents.send(IPC.SCREEN_PING_MARKER, slot.marker ?? {
-      show: false, x: 0, y: 0, phase: 'loading', text: '', crop: 0,
+      show: false, x: 0, y: 0, phase: 'loading', text: '', cropW: 0, cropH: 0, frame: false,
     });
   }
 
   function revealSlot(slot: OverlaySlot): void {
     if (capturing || slot.win.isDestroyed()) return;
-    if (!slot.win.isVisible()) {
-      if (typeof slot.win.showInactive === 'function') slot.win.showInactive();
-      else slot.win.show();
-    }
+    showPinned(slot);
     push(slot);
   }
 
@@ -214,7 +288,7 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
       clearWheel();
       syncAll();
     },
-    showMarker(originX, originY, phase, text, cropPx) {
+    showMarker(originX, originY, phase, text) {
       clearMarker();
       const found = slotFor(originX, originY);
       if (!found) return;
@@ -224,23 +298,62 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
         y: found.local.y,
         phase,
         text,
-        crop: cropCssSize(found.display.scaleFactor, cropPx),
+        cropW: 0,
+        cropH: 0,
+        frame: false,
       };
       syncAll();
+    },
+    showCrop(cropWidth, cropHeight) {
+      for (const slot of slots.values()) {
+        if (!slot.marker?.show || capturing || !slot.ready || slot.win.isDestroyed()) continue;
+        const display = screen.getAllDisplays().find((item) => item.id === slot.displayId);
+        const scale = display && display.scaleFactor > 0 ? display.scaleFactor : 1;
+        const cropW = cropCssSize(scale, cropWidth);
+        const cropH = cropCssSize(scale, cropHeight);
+        slot.marker = { ...slot.marker, frame: true, cropW, cropH };
+        // 只带框的尺寸。框画在已经落下的问号上，消息里没有新的坐标。
+        slot.win.webContents.send(IPC.SCREEN_PING_MARKER, { frameOnly: true, cropW, cropH });
+      }
+    },
+    patchMarker(phase, text) {
+      for (const slot of slots.values()) {
+        if (!slot.marker?.show) continue;
+        slot.marker = { ...slot.marker, phase, text };
+        if (capturing || !slot.ready || slot.win.isDestroyed()) continue;
+        slot.win.webContents.send(IPC.SCREEN_PING_MARKER, slot.marker);
+      }
     },
     hideMarker() {
       clearMarker();
       syncAll();
     },
+    showSignal(originX, originY, slice) {
+      const found = slotFor(originX, originY);
+      if (!found) return;
+      showPinned(found.slot);
+      emitSignal(found.slot, { x: found.local.x, y: found.local.y, slice });
+    },
     hideForCapture() {
       capturing = true;
       for (const slot of slots.values()) {
+        slot.wheel = null;
+        slot.marker = null;
+        if (slot.ready && !slot.win.isDestroyed()) {
+          slot.win.webContents.send(IPC.SCREEN_PING_WHEEL, { show: false, x: 0, y: 0, slice: null });
+          slot.win.webContents.send(IPC.SCREEN_PING_MARKER, {
+            show: false, x: 0, y: 0, phase: 'loading', text: '', cropW: 0, cropH: 0, frame: false,
+          });
+        }
         if (!slot.win.isDestroyed() && slot.win.isVisible()) slot.win.hide();
       }
     },
     reveal() {
       capturing = false;
-      syncAll();
+      for (const slot of slots.values()) {
+        showPinned(slot);
+        flushSignals(slot);
+      }
     },
     destroy() {
       capturing = false;

@@ -185,29 +185,37 @@ function registerIpcHandlers(): void {
     return {
       supported: process.platform === 'win32',
       enabled: settings.enabled,
-      cropPx: settings.cropPx,
+      cropWidth: settings.cropWidth,
+      cropHeight: settings.cropHeight,
     };
   });
   ipcMain.handle(IPC.SCREEN_PING_SET, (_e, patch: unknown) => {
     if (!patch || typeof patch !== 'object') throw new Error('屏幕问号设置无效');
-    const body = patch as { enabled?: unknown; cropPx?: unknown };
-    const next: { enabled?: boolean; cropPx?: number } = {};
+    const body = patch as { enabled?: unknown; cropWidth?: unknown; cropHeight?: unknown };
+    const next: { enabled?: boolean; cropWidth?: number; cropHeight?: number } = {};
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== 'boolean') throw new Error('屏幕问号开关无效');
       next.enabled = body.enabled;
     }
-    if (body.cropPx !== undefined) {
-      if (typeof body.cropPx !== 'number' || !Number.isFinite(body.cropPx)) {
-        throw new Error('截图边长无效');
+    if (body.cropWidth !== undefined) {
+      if (typeof body.cropWidth !== 'number' || !Number.isFinite(body.cropWidth)) {
+        throw new Error('截图宽度无效');
       }
-      next.cropPx = body.cropPx;
+      next.cropWidth = body.cropWidth;
+    }
+    if (body.cropHeight !== undefined) {
+      if (typeof body.cropHeight !== 'number' || !Number.isFinite(body.cropHeight)) {
+        throw new Error('截图高度无效');
+      }
+      next.cropHeight = body.cropHeight;
     }
     const saved = writeScreenPingSettings(next);
     if (typeof next.enabled === 'boolean') screenPing?.setEnabled(saved.enabled);
     return {
       supported: process.platform === 'win32',
       enabled: saved.enabled,
-      cropPx: saved.cropPx,
+      cropWidth: saved.cropWidth,
+      cropHeight: saved.cropHeight,
     };
   });
 

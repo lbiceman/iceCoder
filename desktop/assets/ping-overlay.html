@@ -24,6 +24,7 @@
       margin: -300px 0 0 -300px;
       opacity: 0;
       transform: scale(.85);
+      transform-origin: center center;
       transition: opacity .12s ease-out, transform .12s ease-out;
     }
     #wheel.open { opacity: 1; transform: scale(1); }
@@ -38,6 +39,7 @@
     #wheel .icon.hot { filter: none; transform: scale(1.18); }
     .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
     .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
+    #signals { position: absolute; inset: 0; pointer-events: none; }
 
     .ping {
       position: absolute;
@@ -50,22 +52,14 @@
     }
     .ping.on { display: block; }
     .crop-frame {
+      display: none;
       position: absolute;
       box-sizing: border-box;
       border: 1.5px solid rgba(242, 214, 120, 0.78);
       background: rgba(242, 197, 24, 0.035);
-      box-shadow:
-        0 0 0 1px rgba(255, 248, 220, 0.16),
-        0 0 18px rgba(242, 197, 24, 0.22);
       pointer-events: none;
     }
-    .ping.on .crop-frame {
-      animation: crop-in .2s ease-out both;
-    }
-    @keyframes crop-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
+    .crop-frame.on { display: block; }
     .ping .ground {
       position: absolute;
       left: -28px;
@@ -92,20 +86,25 @@
     }
     .ping .ring.r2 { animation-delay: .22s; }
     .ping .ring.r3 { animation-delay: 1.4s; }
+    /* 图形底边贴在落点上。不缩放、不平移，出现之后位置不再变。 */
     .ping .art {
       position: absolute;
-      left: -34px;
-      top: -88px;
-      width: 68px;
-      height: 88px;
+      left: 0;
+      bottom: 0;
+      width: 64px;
+      height: 78px;
+      margin-left: -32px;
+      animation: none;
     }
     .ping .pop {
       position: absolute;
       inset: 0;
-      filter: drop-shadow(0 0 10px var(--c));
-      animation: pop .28s cubic-bezier(.2,1.6,.4,1) both, bob 1.6s ease-in-out .3s infinite;
+      filter: drop-shadow(0 0 8px var(--c));
+      transform: none;
+      animation: mark-in .12s linear both;
     }
-    .ping .pop svg { width: 100%; height: 100%; display: block; }
+    .ping .pop svg { width: 100%; height: 100%; display: block; overflow: visible; }
+    .ping.signal { display: block; animation: life 3.2s linear forwards; }
     .mark-card {
       position: absolute;
       left: 72px;
@@ -126,14 +125,15 @@
     .mark-card-text { white-space: pre-wrap; word-break: break-word; }
     .mark-card-hint { margin-top: 6px; color: #8b97a3; font-size: 11px; font-weight: 500; }
 
-    @keyframes pop { 0% { transform: scale(.4); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
-    @keyframes bob { 0%, 100% { translate: 0 0 } 50% { translate: 0 -5px } }
+    @keyframes mark-in { from { opacity: 0; transform: none } to { opacity: 1; transform: none } }
+    @keyframes life { 0%, 87% { opacity: 1 } 100% { opacity: 0 } }
     @keyframes ring { 0% { transform: scale(.25); opacity: .95 } 100% { transform: scale(1.35); opacity: 0 } }
     @keyframes ground { 0% { opacity: 0 } 10% { opacity: .75 } 85% { opacity: .55 } 100% { opacity: .45 } }
   </style>
 </head>
 <body>
   <div id="wheel"></div>
+  <div id="signals"></div>
   <div class="ping" id="mark">
     <div class="crop-frame" id="crop-frame"></div>
     <div class="ground"></div>
@@ -151,33 +151,35 @@
     const NS = 'http://www.w3.org/2000/svg';
     const QUESTION = 6;
 
-    function questionMark(gradId, width, height) {
-      var body = 'M62 46 C70 34 68 12 46 8 C22 4 8 22 16 42 C22 56 36 62 44 76 C46 82 40 88 32 86';
-      return '<svg class="q-art" width="' + width + '" height="' + height + '" viewBox="0 0 96 124">'
-        + '<defs><linearGradient id="' + gradId + '" x1="18" y1="6" x2="58" y2="118" gradientUnits="userSpaceOnUse">'
-        + '<stop offset="0" stop-color="#fff4a4"/>'
-        + '<stop offset=".38" stop-color="#ffe14a"/>'
-        + '<stop offset="1" stop-color="#e39a00"/>'
+    const MARK_BOX = '0 0 64 78';
+
+    function questionMark(gradId, width, height, align) {
+      return '<svg class="q-art" width="' + width + '" height="' + height + '" viewBox="' + MARK_BOX + '" preserveAspectRatio="' + (align || 'xMidYMid meet') + '" overflow="visible">'
+        + '<defs><linearGradient id="' + gradId + '" x1="32" y1="0" x2="32" y2="78" gradientUnits="userSpaceOnUse">'
+        + '<stop offset="0" stop-color="#fff4a8"/>'
+        + '<stop offset=".55" stop-color="#ffe14a"/>'
+        + '<stop offset="1" stop-color="#f0b400"/>'
         + '</linearGradient></defs>'
-        + '<path d="' + body + '" fill="none" stroke="#1a1204" stroke-width="30" stroke-linecap="round"/>'
-        + '<path d="' + body + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="22" stroke-linecap="round"/>'
-        + '<path d="M52 20 C44 12 30 12 24 22" fill="none" stroke="#fff8d2" stroke-width="5" stroke-linecap="round" opacity=".9"/>'
-        + '<polygon points="40,96 54,112 40,124 26,112" fill="#1a1204"/>'
-        + '<polygon points="40,100 50,112 40,120 30,112" fill="url(#' + gradId + ')"/>'
-        + '<polygon points="40,104 45,110 40,114 36,110" fill="#fff6c4" opacity=".85"/>'
+        + '<path fill="url(#' + gradId + ')" d="M32 2C48 2 58 12 58 26C58 38 48 44 40 52V58H24V48C24 44 30 40 36 36C46 30 46 24 46 20C46 14 40 10 32 10C24 10 18 14 18 22H6C6 8 16 2 32 2Z"/>'
+        + '<rect x="27" y="68" width="10" height="10" rx="1" fill="url(#' + gradId + ')"/>'
         + '</svg>';
     }
 
-    const ICONS = [
-      '<path d="M0-14 L13 12 H-13 Z" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linejoin="round"/><path d="M0-3 V6" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/>',
-      '<path d="M-11 8 C-2 -10 10 -8 12 -1" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/><path d="M5-7 H13 V1" fill="none" stroke="#e6d3a1" stroke-width="2.2"/>',
-      '<path d="M-3 14 V-10 L12 -2 Z" fill="#e6d3a1"/>',
-      '<path d="M0-13 V8 M-8 2 L0 12 L8 2" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
-      '<path d="M-11-9 L9 11 M9-9 L-11 11" stroke="#e6d3a1" stroke-width="2.2" stroke-linecap="round"/>',
-      '<path d="M-2 14 V-12 M-2-12 H11 L7-5 H-2" fill="none" stroke="#e6d3a1" stroke-width="2.2" stroke-linejoin="round"/>',
-      '',
-      '<ellipse cx="0" cy="0" rx="12" ry="7.5" fill="none" stroke="#e6d3a1" stroke-width="2.2"/><circle cx="0" cy="0" r="3" fill="#e6d3a1"/>',
+    /** 自上顺时针，和 lolPing 默认轮盘同一圈。第 7 个是问号。图形是自绘的，底边贴着落点。 */
+    const MARKS = [
+      { color: '#ff3b55', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round" d="M32 4 L62 76 H2 Z"/><path stroke="currentColor" stroke-width="3.5" stroke-linecap="round" d="M32 30 V52"/><circle cx="32" cy="62" r="2.4" fill="currentColor"/>' },
+      { color: '#35d27a', body: '<path fill="currentColor" d="M32 2 L56 28 H44 V78 H20 V28 H8 Z"/>' },
+      { color: '#2e8bff', body: '<path fill="currentColor" d="M18 2 H24 V78 H18 Z"/><path fill="currentColor" d="M24 8 H54 L44 24 H24 Z"/>' },
+      { color: '#f2b320', body: '<path fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" d="M8 32 L32 56 L56 32 M8 52 L32 76 L56 52"/>' },
+      { color: '#56d43c', body: '<circle cx="32" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3.5"/><path fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" d="M10 76 C10 48 54 48 54 76"/>' },
+      { color: '#56d43c', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" d="M4 48 Q32 16 60 48 Q32 104 4 48 Z"/><circle cx="32" cy="48" r="8" fill="currentColor"/>' },
+      { color: '#f2c518', body: '' },
+      { color: '#ff3b55', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" d="M4 46 Q32 14 60 46 Q32 106 4 46 Z"/><circle cx="32" cy="46" r="7" fill="currentColor"/><path stroke="#1a1208" stroke-width="2.4" stroke-linecap="round" d="M32 40 V52"/>' },
     ];
+
+    function markSvg(body, width, height, align) {
+      return '<svg viewBox="' + MARK_BOX + '" width="' + width + '" height="' + height + '" preserveAspectRatio="' + align + '" overflow="visible">' + body + '</svg>';
+    }
 
     function pt(r, deg) {
       const rad = deg * Math.PI / 180;
@@ -248,11 +250,10 @@
     for (let i = 0; i < 8; i++) {
       const [ix, iy] = pt(R_ICON, -90 + i * 45);
       const icon = el('g', { class: 'icon' + (i === QUESTION ? ' is-q' : ''), 'data-slice': String(i), transform: 'translate(' + ix + ' ' + iy + ')' });
-      if (i === QUESTION) {
-        icon.innerHTML = '<g transform="translate(-24 -24)">' + questionMark('qg-wheel', 48, 48) + '</g>';
-      } else {
-        icon.innerHTML = ICONS[i];
-      }
+      const art = i === QUESTION
+        ? questionMark('qg-wheel', 48, 48, 'xMidYMid meet')
+        : markSvg(MARKS[i].body, 48, 48, 'xMidYMid meet');
+      icon.innerHTML = '<g transform="translate(-24 -24)" style="color:#e6d3a1">' + art + '</g>';
       icons.push(icon);
     }
     el('circle', { r: R_IN + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: .6 });
@@ -272,7 +273,28 @@
     const markArt = document.getElementById('mark-art');
     const markCard = document.getElementById('mark-card');
     const markText = document.getElementById('mark-text');
-    markArt.innerHTML = questionMark('qg-mark', '100%', '100%');
+    markArt.innerHTML = questionMark('qg-mark', 64, 78, 'xMidYMax meet');
+
+    const signals = document.getElementById('signals');
+    function spawnSignal(payload) {
+      if (!payload || payload.slice == null || payload.slice === QUESTION) return;
+      const mark = MARKS[payload.slice];
+      if (!mark || !mark.body) return;
+      const node = document.createElement('div');
+      node.className = 'ping signal on';
+      node.style.left = payload.x + 'px';
+      node.style.top = payload.y + 'px';
+      node.style.setProperty('--c', mark.color);
+      node.style.color = mark.color;
+      node.innerHTML = '<div class="ground"></div><div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div>'
+        + '<div class="art"><div class="pop">' + markSvg(mark.body, '100%', '100%', 'xMidYMax meet') + '</div></div>';
+      signals.appendChild(node);
+      const remove = () => { if (node.parentNode) node.remove(); };
+      node.addEventListener('animationend', (event) => {
+        if (event.animationName === 'life') remove();
+      });
+      window.setTimeout(remove, 3400);
+    }
 
     let lastSlice = null;
     let audioCtx = null;
@@ -320,30 +342,7 @@
       paintSlice(payload.slice == null ? null : payload.slice);
     }
 
-    function setMarker(payload) {
-      if (!payload || !payload.show) {
-        mark.classList.remove('on');
-        return;
-      }
-      const crop = payload.crop > 0 ? payload.crop : 200;
-      const left = payload.x + 'px';
-      const top = payload.y + 'px';
-      const samePlace = mark.classList.contains('on')
-        && mark.style.left === left
-        && mark.style.top === top
-        && cropFrame.dataset.crop === String(crop);
-      if (!samePlace) {
-        mark.style.left = left;
-        mark.style.top = top;
-        const radius = Math.max(12, Math.round(crop * 0.12));
-        cropFrame.style.width = crop + 'px';
-        cropFrame.style.height = crop + 'px';
-        cropFrame.style.left = (-crop / 2) + 'px';
-        cropFrame.style.top = (-crop / 2) + 'px';
-        cropFrame.style.borderRadius = radius + 'px';
-        cropFrame.dataset.crop = String(crop);
-        mark.classList.add('on');
-      }
+    function paintCard(payload) {
       mark.classList.toggle('is-left', payload.x > window.innerWidth - 320);
       markCard.hidden = payload.phase === 'wait';
       markCard.classList.toggle('is-error', payload.phase === 'error');
@@ -351,12 +350,48 @@
       markText.textContent = payload.text || '';
     }
 
+    function paintFrame(payload) {
+      const cropW = payload.cropW > 0 ? payload.cropW : 200;
+      const cropH = payload.cropH > 0 ? payload.cropH : cropW;
+      const radius = Math.max(12, Math.round(Math.min(cropW, cropH) * 0.12));
+      cropFrame.style.width = cropW + 'px';
+      cropFrame.style.height = cropH + 'px';
+      cropFrame.style.left = (-cropW / 2) + 'px';
+      cropFrame.style.top = (-cropH / 2) + 'px';
+      cropFrame.style.borderRadius = radius + 'px';
+      cropFrame.classList.add('on');
+    }
+
+    let markPlaced = false;
+
+    function setMarker(payload) {
+      if (payload && payload.frameOnly) {
+        if (markPlaced) paintFrame(payload);
+        return;
+      }
+      if (!payload || !payload.show) {
+        markPlaced = false;
+        mark.classList.remove('on');
+        cropFrame.classList.remove('on');
+        return;
+      }
+      // 问号只落一次。后面的矩形和文字都不再写 left/top。
+      if (!markPlaced) {
+        mark.style.left = payload.x + 'px';
+        mark.style.top = payload.y + 'px';
+        mark.classList.add('on');
+        markPlaced = true;
+      }
+      paintCard(payload);
+    }
+
     const api = window.pingOverlay;
     if (api) {
       api.onWheel(setWheel);
       api.onMarker(setMarker);
+      if (api.onSignal) api.onSignal(spawnSignal);
     }
-    window.__pingPreview = { setWheel, setMarker };
+    window.__pingPreview = { setWheel, setMarker, spawnSignal };
   </script>
 </body>
 </html>

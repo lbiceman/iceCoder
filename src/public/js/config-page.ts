@@ -201,7 +201,7 @@ export const SettingsPage = (() => {
             '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
               '<div class="settings-etl-row-info">' +
                 '<span class="settings-etl-row-label">屏幕问号</span>' +
-                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。拖到左侧问号上松开左键。松在中心则取消。Esc 关闭回答。</span>' +
+                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。松开左键落下对应标记，标记底部停在按下的位置。左侧问号会截图并提问。松在中心则取消。Esc 关闭回答。</span>' +
               '</div>' +
               '<div class="settings-card-control">' +
                 '<label class="config-default-switch settings-etl-switch" title="屏幕问号">' +
@@ -212,11 +212,16 @@ export const SettingsPage = (() => {
             '</div>' +
             '<div class="settings-etl-row settings-screen-ping-crop" id="settings-screen-ping-crop-row" hidden>' +
               '<div class="settings-etl-row-info">' +
-                '<span class="settings-etl-row-label">截图边长</span>' +
-                '<span class="settings-etl-row-hint">问号周围正方形的边长，80–800 像素。黄框和发给模型的图用同一个尺寸。</span>' +
+                '<span class="settings-etl-row-label">截图区域</span>' +
+                '<span class="settings-etl-row-hint">问号周围矩形的宽和高，各 80–800 像素。黄框和发给模型的图用同一个尺寸。</span>' +
               '</div>' +
               '<div class="settings-card-control settings-screen-ping-crop-field">' +
-                '<input type="number" id="settings-screen-ping-crop" min="80" max="800" step="10" inputmode="numeric" aria-label="截图边长" />' +
+                '<label class="settings-screen-ping-crop-axis">宽' +
+                  '<input type="number" id="settings-screen-ping-crop-w" min="80" max="800" step="10" inputmode="numeric" aria-label="截图宽度" />' +
+                '</label>' +
+                '<label class="settings-screen-ping-crop-axis">高' +
+                  '<input type="number" id="settings-screen-ping-crop-h" min="80" max="800" step="10" inputmode="numeric" aria-label="截图高度" />' +
+                '</label>' +
                 '<span class="settings-screen-ping-crop-unit">px</span>' +
               '</div>' +
             '</div>' +
@@ -506,18 +511,21 @@ export const SettingsPage = (() => {
     const row = parentEl.querySelector('#settings-screen-ping-row');
     const cropRow = parentEl.querySelector('#settings-screen-ping-crop-row');
     const input = parentEl.querySelector('#settings-screen-ping');
-    const cropInput = parentEl.querySelector('#settings-screen-ping-crop');
+    const widthInput = parentEl.querySelector('#settings-screen-ping-crop-w');
+    const heightInput = parentEl.querySelector('#settings-screen-ping-crop-h');
     const hint = parentEl.querySelector('#settings-screen-ping-hint');
     const desktop = window.iceDesktop;
-    if (!row || !input || !cropRow || !cropInput || !desktop || typeof desktop.getScreenPing !== 'function') return;
+    if (!row || !input || !cropRow || !widthInput || !heightInput || !desktop || typeof desktop.getScreenPing !== 'function') return;
 
     row.hidden = false;
     cropRow.hidden = false;
     const apply = (state) => {
       input.checked = !!state.enabled;
       input.disabled = !state.supported;
-      cropInput.value = String(state.cropPx);
-      cropInput.disabled = !state.supported;
+      widthInput.value = String(state.cropWidth);
+      heightInput.value = String(state.cropHeight);
+      widthInput.disabled = !state.supported;
+      heightInput.disabled = !state.supported;
       if (!state.supported && hint) hint.textContent = '目前只在 Windows 桌面版可用';
     };
     desktop.getScreenPing().then(apply).catch(() => {
@@ -540,24 +548,31 @@ export const SettingsPage = (() => {
           if (window.Notification) window.Notification.error('更新失败');
         });
     });
-    const saveCrop = () => {
-      const raw = Number(cropInput.value);
+    const saveEdge = (kind) => {
+      const field = kind === 'width' ? widthInput : heightInput;
+      const raw = Number(field.value);
       if (!Number.isFinite(raw)) {
         desktop.getScreenPing().then(apply).catch(() => {});
         return;
       }
-      cropInput.disabled = true;
-      desktop.setScreenPing({ cropPx: raw })
+      const patch = kind === 'width' ? { cropWidth: raw } : { cropHeight: raw };
+      widthInput.disabled = true;
+      heightInput.disabled = true;
+      desktop.setScreenPing(patch)
         .then((state) => {
           apply(state);
-          if (window.Notification) window.Notification.success('截图边长已改为 ' + state.cropPx + ' px');
+          if (window.Notification) {
+            window.Notification.success('截图区域已改为 ' + state.cropWidth + ' × ' + state.cropHeight + ' px');
+          }
         })
         .catch(() => {
-          cropInput.disabled = false;
+          widthInput.disabled = false;
+          heightInput.disabled = false;
           if (window.Notification) window.Notification.error('更新失败');
         });
     };
-    cropInput.addEventListener('change', saveCrop);
+    widthInput.addEventListener('change', () => saveEdge('width'));
+    heightInput.addEventListener('change', () => saveEdge('height'));
   }
 
   function bindDataDirectorySettings(parentEl) {

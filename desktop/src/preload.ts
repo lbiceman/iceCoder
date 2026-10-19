@@ -33,9 +33,9 @@ const api = {
     ipcRenderer.send(IPC.PET_SET_DESKTOP_ENABLED, enabled),
 
   /** 屏幕问号轮盘。supported 为 false 时设置页只展示、不能开。 */
-  getScreenPing: (): Promise<{ supported: boolean; enabled: boolean; cropPx: number }> =>
+  getScreenPing: (): Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }> =>
     ipcRenderer.invoke(IPC.SCREEN_PING_GET),
-  setScreenPing: (patch: { enabled?: boolean; cropPx?: number }): Promise<{ supported: boolean; enabled: boolean; cropPx: number }> =>
+  setScreenPing: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }): Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }> =>
     ipcRenderer.invoke(IPC.SCREEN_PING_SET, patch),
 
   /** 工作区。 */
