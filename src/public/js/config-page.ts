@@ -201,7 +201,7 @@ export const SettingsPage = (() => {
             '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
               '<div class="settings-etl-row-info">' +
                 '<span class="settings-etl-row-label">屏幕问号</span>' +
-                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。松开左键落下对应标记，标记底部停在按下的位置。左侧问号会截图并提问。松在中心则取消。Esc 关闭回答。</span>' +
+                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。松开左键落下对应标记，标记底部停在按下的位置。左侧问号会截图并提问，正下方会把同一块截图放进输入框。松在中心则取消。Esc 关闭回答。</span>' +
               '</div>' +
               '<div class="settings-card-control">' +
                 '<label class="config-default-switch settings-etl-switch" title="屏幕问号">' +
@@ -213,14 +213,14 @@ export const SettingsPage = (() => {
             '<div class="settings-etl-row settings-screen-ping-crop" id="settings-screen-ping-crop-row" hidden>' +
               '<div class="settings-etl-row-info">' +
                 '<span class="settings-etl-row-label">截图区域</span>' +
-                '<span class="settings-etl-row-hint">问号周围矩形的宽和高，各 80–800 像素。黄框和发给模型的图用同一个尺寸。</span>' +
+                '<span class="settings-etl-row-hint">问号和正下方共用这块宽和高，单位是像素。</span>' +
               '</div>' +
               '<div class="settings-card-control settings-screen-ping-crop-field">' +
                 '<label class="settings-screen-ping-crop-axis">宽' +
-                  '<input type="number" id="settings-screen-ping-crop-w" min="80" max="800" step="10" inputmode="numeric" aria-label="截图宽度" />' +
+                  '<input type="number" id="settings-screen-ping-crop-w" min="1" step="1" inputmode="numeric" aria-label="截图宽度" />' +
                 '</label>' +
                 '<label class="settings-screen-ping-crop-axis">高' +
-                  '<input type="number" id="settings-screen-ping-crop-h" min="80" max="800" step="10" inputmode="numeric" aria-label="截图高度" />' +
+                  '<input type="number" id="settings-screen-ping-crop-h" min="1" step="1" inputmode="numeric" aria-label="截图高度" />' +
                 '</label>' +
                 '<span class="settings-screen-ping-crop-unit">px</span>' +
               '</div>' +

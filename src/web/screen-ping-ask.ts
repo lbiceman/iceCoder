@@ -62,7 +62,7 @@ export function parseScreenPingBody(body: unknown): ScreenPingAskInput {
   }
   const width = finiteInt(record.width, 200);
   const height = finiteInt(record.height, 200);
-  if (width < 1 || height < 1 || width > 2000 || height > 2000) {
+  if (width < 1 || height < 1) {
     throw new ScreenPingAskError('截图尺寸无效', 400);
   }
   return {

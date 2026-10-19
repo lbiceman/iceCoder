@@ -4,7 +4,7 @@
  * 连续问号只认最后一次。到点直接截图再发请求。浮层对截图不可见，问号不用先藏起来。
  */
 import { writeConsole } from '../console-output';
-import { QUESTION_SLICE, wheelSlice } from './geometry';
+import { PASTE_SLICE, QUESTION_SLICE, wheelSlice } from './geometry';
 import { createScreenPingHook, type ScreenPingHook } from './hook-win';
 import { captureRegionAround, type RegionShot } from './capture-win';
 import { createPingOverlay, type PingOverlay } from './overlay';
@@ -26,7 +26,11 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-export function createScreenPingController(opts: { serverBaseUrl: string }): ScreenPingController {
+export function createScreenPingController(opts: {
+  serverBaseUrl: string;
+  /** 正下方截图放进主窗口输入框。 */
+  onPasteShot?: (dataUrl: string) => void;
+}): ScreenPingController {
   const serverBaseUrl = opts.serverBaseUrl.replace(/\/$/, '');
   let enabled = false;
   let hook: ScreenPingHook | null = null;
@@ -106,11 +110,25 @@ export function createScreenPingController(opts: { serverBaseUrl: string }): Scr
     view.hideWheel();
     const slice = wheelSlice(effect.x - effect.originX, effect.y - effect.originY);
     if (slice == null) return;
-    if (slice !== QUESTION_SLICE) {
-      view.showSignal(effect.originX, effect.originY, slice);
+    if (slice === QUESTION_SLICE) {
+      scheduleAsk(effect.originX, effect.originY);
       return;
     }
-    scheduleAsk(effect.originX, effect.originY);
+    if (slice === PASTE_SLICE) {
+      void pasteShot(effect.originX, effect.originY);
+      return;
+    }
+    view.showSignal(effect.originX, effect.originY, slice);
+  }
+
+  async function pasteShot(x: number, y: number): Promise<void> {
+    const { cropWidth, cropHeight } = readScreenPingSettings();
+    try {
+      const shot = captureRegionAround(x, y, cropWidth, cropHeight);
+      opts.onPasteShot?.(shot.dataUrl);
+    } catch (err) {
+      log(`paste capture failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   function scheduleAsk(x: number, y: number): void {

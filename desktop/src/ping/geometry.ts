@@ -5,10 +5,8 @@
 
 /** 落点周围截图的默认宽和高（物理像素）。用户可在设置里分开改。 */
 export const ASK_CROP_PX = 200;
-export const ASK_CROP_MIN = 80;
-export const ASK_CROP_MAX = 800;
 
-/** 把输入收成合法的宽或高。空的或不是数字时用默认值。 */
+/** 把输入收成合法的宽或高。空的、不是数字或小于 1 时用默认值。不设上限。 */
 export function normalizeCropPx(value: unknown, fallback = ASK_CROP_PX): number {
   const raw = typeof value === 'number'
     ? value
@@ -16,7 +14,9 @@ export function normalizeCropPx(value: unknown, fallback = ASK_CROP_PX): number 
       ? Number(value.trim())
       : Number.NaN;
   if (!Number.isFinite(raw)) return fallback;
-  return Math.min(ASK_CROP_MAX, Math.max(ASK_CROP_MIN, Math.round(raw)));
+  const rounded = Math.round(raw);
+  if (rounded < 1) return fallback;
+  return rounded;
 }
 
 /** 把物理像素换成这块屏幕上的 CSS 像素，线和截图对齐。 */
@@ -30,8 +30,11 @@ export const WHEEL_CENTER_RADIUS = 86;
 
 export const WHEEL_SLICE_COUNT = 8;
 
-/** 正左扇区。 */
+/** 正左扇区。截图后问模型。 */
 export const QUESTION_SLICE = 6;
+
+/** 正下扇区。截图放进输入框。 */
+export const PASTE_SLICE = 4;
 
 /** 按住触发键后，移动超过这个距离才打开轮盘（物理像素）。 */
 export const DRAG_THRESHOLD_PX = 8;

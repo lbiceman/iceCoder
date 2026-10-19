@@ -287,6 +287,18 @@ function showAndFocusMain(): void {
   void petManager.enterEmbeddedMode(mainWindow);
 }
 
+/** 把主窗口拉到前台。浮层仍在上面，但是点击穿透，键盘会进到输入框。 */
+function focusMainForPaste(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.focus();
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.webContents.focus();
+  void petManager.enterEmbeddedMode(mainWindow);
+}
+
 async function gracefulShutdown(): Promise<void> {
   if (isQuitting) return;
   isQuitting = true;
@@ -349,7 +361,14 @@ async function bootstrap(): Promise<void> {
     return;
   }
   const url = `http://127.0.0.1:${port}`;
-  screenPing = createScreenPingController({ serverBaseUrl: url });
+  screenPing = createScreenPingController({
+    serverBaseUrl: url,
+    onPasteShot(dataUrl) {
+      focusMainForPaste();
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send(IPC.SCREEN_PING_PASTE, dataUrl);
+    },
+  });
   registerIpcHandlers();
 
   // 3) 将已显示的加载窗口导航至主应用，避免服务启动期间白屏。

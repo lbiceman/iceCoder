@@ -37,11 +37,13 @@ describe('问号轮盘几何', () => {
     expect(crop).toMatchObject({ x: 300, y: 340, width: 400, height: 120, anchorX: 200, anchorY: 60 });
   });
 
-  it('截图边长收进 80 到 800', () => {
+  it('截图宽高保留用户输入，小于 1 时用默认值', () => {
     expect(normalizeCropPx('')).toBe(200);
     expect(normalizeCropPx('320')).toBe(320);
-    expect(normalizeCropPx(10)).toBe(80);
-    expect(normalizeCropPx(5000)).toBe(800);
+    expect(normalizeCropPx(10)).toBe(10);
+    expect(normalizeCropPx(5000)).toBe(5000);
+    expect(normalizeCropPx(0)).toBe(200);
+    expect(normalizeCropPx(-4)).toBe(200);
   });
 
   it('物理像素换到浮层坐标时不取整，副屏和缩放都对着屏幕原点', () => {

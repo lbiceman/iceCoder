@@ -2722,6 +2722,39 @@ export const ChatPage = (() => {
     }
   }
 
+  function placeScreenShotInComposer(dataUrl) {
+    if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image/') !== 0) return;
+    if (window.AppRouter && typeof window.AppRouter.navigate === 'function') {
+      window.AppRouter.navigate('chat');
+    }
+    // 输入框跟着侧栏当前选中的会话，不切到「屏幕问号」。
+    const files = window.ChatFile;
+    if (files && typeof files.addPendingImageDataUrl === 'function') {
+      files.addPendingImageDataUrl(dataUrl);
+    }
+    const store = window.ChatSessionStore;
+    const selectedId = store && typeof store.getActiveSessionId === 'function'
+      ? store.getActiveSessionId()
+      : '';
+    if (selectedId) captureComposerDraft(selectedId);
+    const focusInput = () => {
+      const input = document.getElementById('chat-input');
+      if (input && typeof input.focus === 'function') input.focus();
+    };
+    focusInput();
+    window.requestAnimationFrame(focusInput);
+  }
+
+  if (window.iceDesktop && typeof window.iceDesktop.onScreenPingPaste === 'function') {
+    try {
+      window.iceDesktop.onScreenPingPaste(placeScreenShotInComposer);
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] 屏幕截图放入输入框失败', err);
+      }
+    }
+  }
+
   return {
     render,
     onActivate,

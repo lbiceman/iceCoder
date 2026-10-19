@@ -1,10 +1,9 @@
 /**
- * 把屏幕问号的截图和回答写进普通会话，侧栏不进「任务会话」。
- * 当前打开的是普通会话时就写在那里；否则归到标题为「屏幕问号」的普通会话。
+ * 把屏幕问号的截图和回答写进标题为「屏幕问号」的普通会话。
+ * 不跟侧栏当前选中的会话走，任务会话也不收。
  */
 
 import { randomUUID } from 'node:crypto';
-import { getActiveSessionId } from './chat-ws-runtime.js';
 import { appendMessages } from './chat-ws-persist.js';
 import { broadcastSessionUpdated, broadcastSessionsIndexUpdated } from './chat-ws-broadcast.js';
 import { buildSessionImageApiUrl, persistInlineImages } from './images-cache.js';
@@ -20,12 +19,7 @@ export const SCREEN_PING_SESSION_TITLE = '屏幕问号';
 
 export function chooseScreenPingSession(
   sessions: Pick<SessionMeta, 'id' | 'title' | 'scheduledTaskId'>[],
-  activeSessionId: string | null | undefined,
 ): { id: string } | { create: true } {
-  const active = activeSessionId
-    ? sessions.find((session) => session.id === activeSessionId)
-    : undefined;
-  if (active && !active.scheduledTaskId) return { id: active.id };
   const named = sessions.find((session) => !session.scheduledTaskId && session.title === SCREEN_PING_SESSION_TITLE);
   if (named) return { id: named.id };
   return { create: true };
@@ -33,7 +27,7 @@ export function chooseScreenPingSession(
 
 async function resolveScreenPingSessionId(): Promise<string> {
   const sessions = await loadSessionIndex();
-  const choice = chooseScreenPingSession(sessions, getActiveSessionId());
+  const choice = chooseScreenPingSession(sessions);
   if ('id' in choice) return choice.id;
   const created = await createSessionRecord(SCREEN_PING_SESSION_TITLE);
   return created.id;

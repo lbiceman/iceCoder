@@ -8,15 +8,11 @@ describe('屏幕问号写入哪个会话', () => {
     { id: 'ping-1', title: SCREEN_PING_SESSION_TITLE },
   ];
 
-  it('当前是普通会话时写进当前会话', () => {
-    expect(chooseScreenPingSession(sessions, 'chat-1')).toEqual({ id: 'chat-1' });
+  it('不论当前选中哪一个，都写进已有的屏幕问号会话', () => {
+    expect(chooseScreenPingSession(sessions)).toEqual({ id: 'ping-1' });
   });
 
-  it('当前是任务会话时改去已有的屏幕问号会话', () => {
-    expect(chooseScreenPingSession(sessions, 'task-1')).toEqual({ id: 'ping-1' });
-  });
-
-  it('没有普通会话可写时新建', () => {
-    expect(chooseScreenPingSession([sessions[0]], 'task-1')).toEqual({ create: true });
+  it('还没有屏幕问号会话时新建', () => {
+    expect(chooseScreenPingSession([sessions[0], sessions[1]])).toEqual({ create: true });
   });
 });

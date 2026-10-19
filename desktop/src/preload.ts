@@ -37,6 +37,12 @@ const api = {
     ipcRenderer.invoke(IPC.SCREEN_PING_GET),
   setScreenPing: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }): Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }> =>
     ipcRenderer.invoke(IPC.SCREEN_PING_SET, patch),
+  /** 正下方截图放进输入框。 */
+  onScreenPingPaste: (cb: (dataUrl: string) => void) => {
+    const listener = (_e: IpcRendererEvent, dataUrl: string) => cb(dataUrl);
+    ipcRenderer.on(IPC.SCREEN_PING_PASTE, listener);
+    return () => ipcRenderer.removeListener(IPC.SCREEN_PING_PASTE, listener);
+  },
 
   /** 工作区。 */
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_PICK),
