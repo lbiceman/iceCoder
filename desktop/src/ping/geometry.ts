@@ -1,5 +1,5 @@
 /**
- * 问号轮盘几何。扇区从正上方起顺时针 8 等分，问号在正左（与常见信号轮盘同一侧）。
+ * 问号轮盘几何。扇区从正上方起顺时针 4 等分：上、右、下、左。问号在正左。
  * 手势阈值、中心取消半径，以及物理像素到浮层坐标的换算，参照 lolPing（MIT）。图形是自绘的。
  */
 
@@ -28,13 +28,13 @@ export function cropCssSize(scaleFactor: number, physical = ASK_CROP_PX): number
 /** 中心圆半径。指针停在这里松手等于取消。 */
 export const WHEEL_CENTER_RADIUS = 86;
 
-export const WHEEL_SLICE_COUNT = 8;
+export const WHEEL_SLICE_COUNT = 4;
 
 /** 正左扇区。截图后问模型。 */
-export const QUESTION_SLICE = 6;
+export const QUESTION_SLICE = 3;
 
 /** 正下扇区。截图放进输入框。 */
-export const PASTE_SLICE = 4;
+export const PASTE_SLICE = 2;
 
 /** 按住触发键后，移动超过这个距离才打开轮盘（物理像素）。 */
 export const DRAG_THRESHOLD_PX = 8;
@@ -84,8 +84,8 @@ export function cropAroundPoint(
 
 /**
  * 相对轮盘中心的位移落在哪个扇区。
- * 屏幕坐标 y 向下。正上为 0，顺时针。中心圆内返回 null。
- * 角度算法与 lolPing 的 pickSlice 一致。
+ * 屏幕坐标 y 向下。正上为 0，顺时针：上、右、下、左。斜向并进最近的一边。
+ * 中心圆内返回 null。
  */
 export function wheelSlice(
   dx: number,
@@ -93,8 +93,9 @@ export function wheelSlice(
   center = WHEEL_CENTER_RADIUS,
 ): number | null {
   if (Math.hypot(dx, dy) < center) return null;
-  const deg = ((Math.atan2(dy, dx) * 180) / Math.PI + 90 + 22.5 + 360) % 360;
-  return Math.floor(deg / 45) % WHEEL_SLICE_COUNT;
+  const span = 360 / WHEEL_SLICE_COUNT;
+  const deg = ((Math.atan2(dy, dx) * 180) / Math.PI + 90 + span / 2 + 360) % 360;
+  return Math.floor(deg / span) % WHEEL_SLICE_COUNT;
 }
 
 export interface ScreenRect {

@@ -31,12 +31,20 @@
     #wheel svg { width: 600px; height: 600px; display: block; overflow: visible; }
     #wheel .wedge { transition: fill-opacity .08s; }
     #wheel .icon {
-      transition: filter .1s, transform .1s;
-      transform-box: fill-box;
-      transform-origin: center;
+      transition: filter .1s;
       filter: grayscale(1) sepia(.75) saturate(1.3) brightness(1.15);
     }
-    #wheel .icon.hot { filter: none; transform: scale(1.18); }
+    /* 只绕图标中心放大。平移留在更内一层的属性上：CSS transform 会盖掉同一元素的 transform 属性，图标就会挪位。 */
+    #wheel .icon .zoom {
+      transform-box: fill-box;
+      transform-origin: center;
+      transform: scale(1);
+      transition: transform .1s ease-out;
+    }
+    #wheel .icon.hot { filter: none; }
+    #wheel .icon.hot .zoom { transform: scale(1.12); }
+    #wheel .icon.is-alert,
+    #wheel .icon.is-way { filter: none; }
     .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
     .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
     #signals { position: absolute; inset: 0; pointer-events: none; }
@@ -149,7 +157,8 @@
   <script>
     const R_IN = 86, R_OUT = 188, R_EXT = 288, R_ICON = 137;
     const NS = 'http://www.w3.org/2000/svg';
-    const QUESTION = 6;
+    const SLICES = 4;
+    const QUESTION = 3;
 
     const MARK_BOX = '0 0 64 78';
 
@@ -165,16 +174,12 @@
         + '</svg>';
     }
 
-    /** 自上顺时针，和 lolPing 默认轮盘同一圈。第 7 个是问号。图形是自绘的，底边贴着落点。 */
+    /** 自上顺时针四个方向：危险感叹号、正在路上、旗、问号。图形自绘，底边贴着落点。 */
     const MARKS = [
-      { color: '#ff3b55', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round" d="M32 4 L62 76 H2 Z"/><path stroke="currentColor" stroke-width="3.5" stroke-linecap="round" d="M32 30 V52"/><circle cx="32" cy="62" r="2.4" fill="currentColor"/>' },
-      { color: '#35d27a', body: '<path fill="currentColor" d="M32 2 L56 28 H44 V78 H20 V28 H8 Z"/>' },
-      { color: '#56d43c', body: '<circle cx="32" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3.5"/><path fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" d="M10 76 C10 48 54 48 54 76"/>' },
-      { color: '#f2b320', body: '<path fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" d="M8 32 L32 56 L56 32 M8 52 L32 76 L56 52"/>' },
-      { color: '#2e8bff', body: '<path fill="currentColor" d="M18 2 H24 V78 H18 Z"/><path fill="currentColor" d="M24 8 H54 L44 24 H24 Z"/>' },
-      { color: '#56d43c', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" d="M4 48 Q32 16 60 48 Q32 104 4 48 Z"/><circle cx="32" cy="48" r="8" fill="currentColor"/>' },
-      { color: '#f2c518', body: '' },
-      { color: '#ff3b55', body: '<path fill="none" stroke="currentColor" stroke-width="3.5" d="M4 46 Q32 14 60 46 Q32 106 4 46 Z"/><circle cx="32" cy="46" r="7" fill="currentColor"/><path stroke="#1a1208" stroke-width="2.4" stroke-linecap="round" d="M32 40 V52"/>' },
+      { color: '#ff2a3c', ink: '#ff2a3c', cls: 'is-alert', body: '<path fill="currentColor" d="M24 2 H40 L36 46 H28 Z"/><rect x="26" y="56" width="12" height="16" rx="2.5" fill="currentColor"/>' },
+      { color: '#2e8bff', ink: '#2e8bff', cls: 'is-way', body: '<path fill="currentColor" d="M32 2 L58 34 H44 V76 H20 V34 H6 Z"/>' },
+      { color: '#2e8bff', ink: '#e6d3a1', cls: '', body: '<path fill="currentColor" d="M18 2 H24 V78 H18 Z"/><path fill="currentColor" d="M24 8 H54 L44 24 H24 Z"/>' },
+      { color: '#f2c518', ink: '#e6d3a1', cls: 'is-q', body: '' },
     ];
 
     function markSvg(body, width, height, align) {
@@ -223,37 +228,36 @@
       + '<stop offset="0" stop-color="#2c5d60"/><stop offset="1" stop-color="#11292c"/></radialGradient>';
 
     const wedges = [];
-    for (let i = 0; i < 8; i++) {
-      const mid = -90 + i * 45;
-      if (i % 2 === 0) el('path', { d: sector(R_OUT, R_EXT, mid - 22.5, mid + 22.5), fill: 'url(#ext)' });
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
+      el('path', { d: sector(R_OUT, R_EXT, mid - 45, mid + 45), fill: 'url(#ext)' });
     }
     el('circle', { r: (R_IN + R_OUT) / 2, fill: 'none', stroke: 'url(#ring)', 'stroke-width': R_OUT - R_IN, opacity: .92 });
-    for (let i = 0; i < 8; i++) {
-      const mid = -90 + i * 45;
-      const reach = i % 2 === 0 ? R_EXT : R_OUT;
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
       const wedge = el('path', {
-        d: sector(R_IN, reach, mid - 22.5, mid + 22.5),
+        d: sector(R_IN, R_EXT, mid - 45, mid + 45),
         fill: 'url(#hot)',
         'fill-opacity': 0,
-        class: 'wedge' + (i === QUESTION ? ' is-q' : ''),
+        class: 'wedge' + (MARKS[i].cls ? ' ' + MARKS[i].cls : ''),
         'data-slice': i,
       });
       wedges.push(wedge);
     }
-    for (let i = 0; i < 8; i++) {
-      const mid = -90 + i * 45;
-      const [x0, y0] = pt(R_IN, mid - 22.5);
-      const [x1, y1] = pt(R_OUT, mid - 22.5);
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
+      const [x0, y0] = pt(R_IN, mid - 45);
+      const [x1, y1] = pt(R_OUT, mid - 45);
       el('line', { x1: x0, y1: y0, x2: x1, y2: y1, stroke: '#a08a5c', 'stroke-opacity': .45, 'stroke-width': 1.2 });
     }
     const icons = [];
-    for (let i = 0; i < 8; i++) {
-      const [ix, iy] = pt(R_ICON, -90 + i * 45);
-      const icon = el('g', { class: 'icon' + (i === QUESTION ? ' is-q' : ''), 'data-slice': String(i), transform: 'translate(' + ix + ' ' + iy + ')' });
+    for (let i = 0; i < SLICES; i++) {
+      const [ix, iy] = pt(R_ICON, -90 + i * 90);
+      const icon = el('g', { class: 'icon' + (MARKS[i].cls ? ' ' + MARKS[i].cls : ''), 'data-slice': String(i), transform: 'translate(' + ix + ' ' + iy + ')' });
       const art = i === QUESTION
         ? questionMark('qg-wheel', 48, 48, 'xMidYMid meet')
         : markSvg(MARKS[i].body, 48, 48, 'xMidYMid meet');
-      icon.innerHTML = '<g transform="translate(-24 -24)" style="color:#e6d3a1">' + art + '</g>';
+      icon.innerHTML = '<g class="zoom"><g transform="translate(-24 -24)" style="color:' + MARKS[i].ink + '">' + art + '</g></g>';
       icons.push(icon);
     }
     el('circle', { r: R_IN + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: .6 });

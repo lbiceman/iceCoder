@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { QUESTION_SLICE, cropAroundPoint, cropCssSize, normalizeCropPx, physicalToLocal, wheelSlice } from '../../desktop/src/ping/geometry.js';
+import { PASTE_SLICE, QUESTION_SLICE, cropAroundPoint, cropCssSize, normalizeCropPx, physicalToLocal, wheelSlice } from '../../desktop/src/ping/geometry.js';
 import { INITIAL_GESTURE, reduceGesture } from '../../desktop/src/ping/gesture.js';
 
 describe('问号轮盘几何', () => {
-  it('八个方向对上扇区，正左是问号', () => {
+  it('四个正方向对上扇区，斜向并进最近的一边', () => {
     expect(wheelSlice(0, -120)).toBe(0);
-    expect(wheelSlice(120, -120)).toBe(1);
-    expect(wheelSlice(120, 0)).toBe(2);
-    expect(wheelSlice(120, 120)).toBe(3);
-    expect(wheelSlice(0, 120)).toBe(4);
-    expect(wheelSlice(-120, 120)).toBe(5);
+    expect(wheelSlice(120, 0)).toBe(1);
+    expect(wheelSlice(0, 120)).toBe(PASTE_SLICE);
     expect(wheelSlice(-120, 0)).toBe(QUESTION_SLICE);
-    expect(wheelSlice(-120, -120)).toBe(7);
+    expect(wheelSlice(40, -100)).toBe(0);
+    expect(wheelSlice(100, -40)).toBe(1);
+    expect(wheelSlice(40, 100)).toBe(PASTE_SLICE);
+    expect(wheelSlice(-100, 40)).toBe(QUESTION_SLICE);
+    expect(wheelSlice(-40, -100)).toBe(0);
   });
 
   it('中心圆内松手不算选中', () => {

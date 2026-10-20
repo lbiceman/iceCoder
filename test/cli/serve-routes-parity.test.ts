@@ -21,6 +21,7 @@ const REQUIRED_API_PREFIXES = [
   '/api/scheduled-tasks',
   '/api/mcp',
   '/api/workspace',
+  '/api/screen-ping',
   '/api/memory/dream',
   '/api/memory',
 ];
