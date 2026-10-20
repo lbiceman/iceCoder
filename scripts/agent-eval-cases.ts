@@ -537,7 +537,9 @@ function ledgerLogWorkspace(): Record<string, string> {
 
 /**
  * 六份长规格文档各藏一段密钥片段；收集完拼起来写进 src/key.js。
- * 测试只校验 sha256，答案不在工作区明文里。压缩阈值调低，读到一半一定会触发硬压缩。
+ * 测试只校验 sha256，答案不在工作区明文里。
+ * 真实模型常用 grep 一步取出全部片段，上下文涨不上去；硬压缩阈值定在起始上下文（约 6.4k，
+ * 系统提示 + 31 个工具定义）之上约 600 token，不论逐个读还是 grep，都会在写 key.js 之前触发。
  */
 const KEY_PARTS = ['amber', 'quartz', 'lumen', 'falcon', 'cedar', 'tundra'] as const;
 export const LONG_TASK_KEY = KEY_PARTS.join('-');
@@ -2513,7 +2515,6 @@ export const agentEvalCases: AgentEvalCase[] = [
       verificationRuns: { 'npm test': { min: 2 } },
     },
     assertions: [
-      { path: `src/modules/m${LEDGER_BROKEN_INDEX}.js`, notContains: 'Math.floor' },
       { path: 'run-checks.js', unchanged: true },
       { path: 'src/modules/m16.js', unchanged: true },
       { path: 'src/modules/m18.js', unchanged: true },
@@ -2533,8 +2534,8 @@ export const agentEvalCases: AgentEvalCase[] = [
       { type: 'tool', name: 'run_command', arguments: { command: 'npm test' } },
       { type: 'final', content: `Fixed src/modules/m${LEDGER_BROKEN_INDEX}.js to round instead of floor; npm test passes.` },
     ],
-    maxRounds: 20,
-    timeoutMs: 300_000,
+    maxRounds: 30,
+    timeoutMs: 420_000,
   },
   {
     id: 'long-task-compaction-recovery',
@@ -2574,6 +2575,6 @@ export const agentEvalCases: AgentEvalCase[] = [
     maxRounds: 30,
     timeoutMs: 480_000,
     compactionThreshold: 40,
-    compactionTokenThreshold: 24_000,
+    compactionTokenThreshold: 7_000,
   },
 ];

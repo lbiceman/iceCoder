@@ -154,18 +154,24 @@ export function formatComparison(input: {
     `| 分组 | 用例 | 通过 ${baseLabel} | 通过 ${newLabel} | token 中位 ${baseLabel} | token 中位 ${newLabel} | 变化 | 单次请求峰值 ${baseLabel} | 单次请求峰值 ${newLabel} | LLM 调用 ${baseLabel} | LLM 调用 ${newLabel} | 工具调用 ${baseLabel} | 工具调用 ${newLabel} | 补读 ${newLabel} | 发送前收紧 ${newLabel} |`,
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   );
-  const totals = { base: 0, next: 0, basePass: 0, nextPass: 0, baseRuns: 0, nextRuns: 0 };
+  const emptyTotals = () => ({ base: 0, next: 0, basePass: 0, nextPass: 0, baseRuns: 0, nextRuns: 0 });
+  const totals = emptyTotals();
+  const groupTotals: Array<{ group: string } & ReturnType<typeof emptyTotals>> = [];
   const failureNotes: string[] = [];
   for (const group of groups) {
+    const sub = { group: group.group, ...emptyTotals() };
+    groupTotals.push(sub);
     for (const id of group.cases) {
       const b = summarizeCase(baseByCase.get(id) ?? []);
       const n = summarizeCase(newByCase.get(id) ?? []);
-      totals.base += b.medianTokens;
-      totals.next += n.medianTokens;
-      totals.basePass += b.passes;
-      totals.nextPass += n.passes;
-      totals.baseRuns += b.runs;
-      totals.nextRuns += n.runs;
+      for (const acc of [totals, sub]) {
+        acc.base += b.medianTokens;
+        acc.next += n.medianTokens;
+        acc.basePass += b.passes;
+        acc.nextPass += n.passes;
+        acc.baseRuns += b.runs;
+        acc.nextRuns += n.runs;
+      }
       lines.push(
         `| ${group.group} | ${id} | ${b.passes}/${b.runs} | ${n.passes}/${n.runs} | ${b.medianTokens} | ${n.medianTokens} | ${deltaPct(b.medianTokens, n.medianTokens)} | ${b.medianPeakPrompt} | ${n.medianPeakPrompt} | ${b.medianLlmCalls} | ${n.medianLlmCalls} | ${b.medianToolCalls} | ${n.medianToolCalls} | ${n.rereads} | ${n.budgetShrinks} |`,
       );
@@ -180,6 +186,15 @@ export function formatComparison(input: {
     `| **合计** | | ${totals.basePass}/${totals.baseRuns} | ${totals.nextPass}/${totals.nextRuns} | ${totals.base} | ${totals.next} | ${deltaPct(totals.base, totals.next)} | | | | | | | | |`,
     '',
   );
+  if (groupTotals.length > 1) {
+    lines.push(
+      `| 分组 | 通过 ${baseLabel} | 通过 ${newLabel} | token 中位之和 ${baseLabel} | token 中位之和 ${newLabel} | 变化 |`,
+      '| --- | --- | --- | --- | --- | --- |',
+      ...groupTotals.map(g =>
+        `| ${g.group} | ${g.basePass}/${g.baseRuns} | ${g.nextPass}/${g.nextRuns} | ${g.base} | ${g.next} | ${deltaPct(g.base, g.next)} |`),
+      '',
+    );
+  }
   if (failureNotes.length > 0) {
     lines.push('失败原因（每次失败取前两条）：', '', ...failureNotes, '');
   }

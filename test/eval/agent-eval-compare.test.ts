@@ -54,6 +54,8 @@ describe('agent-eval compare', () => {
     const next = [record('new', { 'model-led-three-file-bugfix': 800 }), record('new', { 'model-led-three-file-bugfix': 900 })];
     const text = formatComparison({ base, next, suite: 'context' });
     expect(text).toContain('| 多文件修改 | model-led-three-file-bugfix | 2/2 | 2/2 | 1100 | 850 | -23% |');
+    expect(text).toContain('| 多文件修改 | 2/2 | 2/2 | 1100 | 850 | -23% |');
+    expect(text).toContain('| 长日志定位 | 0/0 | 0/0 | 0 | 0 |  |');
     expect(text).not.toContain('两边模型不一致');
 
     const other = next.map(r => ({ ...r, model: { providerId: 'q', model: 'other' } }));
