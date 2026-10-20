@@ -293,6 +293,8 @@ export async function executeToolCallsStreaming(
   const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
   const checkpointSessionId = deps.checkpointOwner?.sessionId ?? deps.sessionId;
   const checkpointSessionDir = deps.checkpointOwner?.sessionDir ?? deps.sessionDir;
+  const harnessOwnedDirs = [deps.sessionDir, checkpointSessionDir]
+    .filter((dir): dir is string => typeof dir === 'string' && dir.length > 0);
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -616,6 +618,7 @@ export async function executeToolCallsStreaming(
         tc.id,
         await listWorkspaceFileInventory(deps.workspaceRoot, {
           scopeRelPaths: inventoryScopeForToolCall(tc),
+          excludeDirs: harnessOwnedDirs,
         }),
       );
     }
@@ -713,6 +716,7 @@ export async function executeToolCallsStreaming(
       const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
         baseline: inventoryBefore,
         scopeRelPaths: inventoryBefore.scopeRelPaths,
+        excludeDirs: harnessOwnedDirs,
       });
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
