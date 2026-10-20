@@ -193,7 +193,7 @@ describe('maybeCompact · API 双轨硬压缩', () => {
           content: '',
           toolCalls: [{ id: `tc${i}`, name: 'run_command', arguments: {} }],
         },
-        { role: 'tool', toolCallId: `tc${i}`, content: `OUTPUT${i}`.repeat(80) },
+        { role: 'tool', toolCallId: `tc${i}`, content: `OUTPUT${i}`.repeat(200) },
       );
     }
     const apiPrompt = Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO) + 1_000;
@@ -220,7 +220,9 @@ describe('maybeCompact · API 双轨硬压缩', () => {
     expect(messages.length).toBe(beforeLen);
     expect(messages.some(m => typeof m.content === 'string' && m.content.includes('<context-summary>'))).toBe(false);
     const firstTool = messages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
-    expect(String(firstTool?.content ?? '')).toContain('[Old tool result cleared for context]');
+    expect(String(firstTool?.apiSealedContent ?? '')).toContain('[Old tool result cleared for context]');
+    expect(firstTool?.content).toBe('OUTPUT1'.repeat(200));
+    expect(String(firstTool?.apiSealedContent)).toContain('The original output was not saved');
   });
 });
 

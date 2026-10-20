@@ -2,10 +2,8 @@ import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { CompactRunOptions, ContextCompactor } from './context-compactor.js';
 import type { CompactionUsageOptions } from './context-compactor.js';
-import {
-  MICRO_COMPACTION_RATIO,
-  PROACTIVE_FORK_RATIO,
-} from './compaction-constants.js';
+import { resolveMicroCompactionLine } from './context-compactor.js';
+import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -32,6 +30,8 @@ export interface CompactionDeps extends ResilienceBridgeDeps {
   contextCompactor: ContextCompactor;
   memoryIntegration: HarnessMemoryIntegration;
   runtimeTelemetry?: RuntimeTelemetry;
+  /** 单次 LLM 输出上限；压缩线与发送前总量检查的输出预留 */
+  agentMaxOutputTokens?: number;
 }
 
 export interface MaybeCompactArgs {
@@ -134,6 +134,7 @@ export async function maybeCompact(
   const usageOptions: CompactionUsageOptions = {
     ...buildUsageOptions(args),
     contextWindowTokens,
+    outputReserveTokens: deps.agentMaxOutputTokens,
   };
   const tools = usageOptions.tools;
   const usage = resolveCompactionUsage({ messages, ...usageOptions });
@@ -159,6 +160,10 @@ export async function maybeCompact(
 
     messages.length = 0;
     messages.push(...compacted);
+    const lightClear = deps.contextCompactor.getLastLightClear?.();
+    if (lightClear && lightClear.cleared > 0) {
+      deps.runtimeTelemetry?.recordToolResultClear(lightClear);
+    }
 
     const afterUsage = resolveCompactionUsage({ messages, tools, lastApiPromptTokens: 0 });
     const afterTok = deps.contextCompactor.getEstimatedTokens(messages);
@@ -286,7 +291,7 @@ export async function maybeCompact(
     tools,
     lastApiPromptTokens: 0,
   });
-  const microLine = Math.floor(readEffectiveContextWindowTokens() * MICRO_COMPACTION_RATIO);
+  const microLine = resolveMicroCompactionLine(readEffectiveContextWindowTokens(), deps.agentMaxOutputTokens);
   if (afterHardUsage.effectiveUsed < microLine) {
     refundEmergencyCompact(state);
   }

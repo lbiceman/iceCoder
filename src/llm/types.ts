@@ -17,8 +17,47 @@ export interface ContentBlock {
 /**
  * 所有 LLM 交互中使用的统一消息格式。
  */
-/** 发送管道封存来源（tool 结果 budget / 子代理摘要） */
-export type ApiSealedBy = 'toolBudget' | 'subAgent';
+/**
+ * 发送管道封存来源：
+ * - toolBudget：旧版按 3000 字符常驻封存（仅存在于历史会话，加载时解除）
+ * - subAgent：旧子代理摘要
+ * - resultBudget：超限结果落盘失败，content 留原文、封存为注入视图
+ * - pressureClear：上下文压力下清理的旧结果占位
+ * - compaction：硬压缩为省空间缩短的视图
+ *
+ * 封存只改发给模型的视图，content 始终保留写入时的结果。
+ */
+export type ApiSealedBy = 'toolBudget' | 'subAgent' | 'resultBudget' | 'pressureClear' | 'compaction';
+
+/**
+ * 注入策略：full 原样；page 连续行分页；head/head_tail/tail 按字符裁剪；
+ * range_error 范围超限被拒；omitted 本轮上下文预算用尽，只注入恢复指引
+ */
+export type ToolResultStrategy = 'full' | 'page' | 'head' | 'head_tail' | 'tail' | 'range_error' | 'omitted';
+
+/** 工具结果注入上下文时的记录（随 checkpoint 持久化，用于重读识别与清理占位） */
+export interface ToolResultMeta {
+  toolName: string;
+  strategy: ToolResultStrategy;
+  originalChars: number;
+  originalTokens: number;
+  injectedChars: number;
+  injectedTokens: number;
+  /** read_file 路径（调用方原样） */
+  path?: string;
+  /** read_file 实际返回的行 */
+  lines?: { start: number; end: number; total: number };
+  /** read_file 请求范围内未返回的行 */
+  omittedLines?: Array<[number, number]>;
+  /** read_file 视图格式（硬压缩按行重新分页时用） */
+  page?: { numbered: boolean; headerLines: number; requestedEnd: number };
+  /** 字符裁剪时省略的区间 [start, end) */
+  omittedChars?: [number, number];
+  /** 完整原文落盘路径 */
+  spillPath?: string;
+  /** 本次读取补回了哪条结果省略 / 清理掉的内容 */
+  rereadOf?: string;
+}
 
 export interface UnifiedMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -31,6 +70,8 @@ export interface UnifiedMessage {
   apiSealedContent?: string;
   /** 封存来源；与 {@link apiSealedContent} 成对写入，避免靠正文 marker 推断 */
   apiSealedBy?: ApiSealedBy;
+  /** tool 消息：注入规模、省略范围与原文引用 */
+  toolResultMeta?: ToolResultMeta;
   /** C 类纠偏注入：硬压缩时保留在 recent 后缀，避免 lifecycle/recovery 提示被摘要丢弃 */
   preserveOnCompaction?: boolean;
   /** 连续失败阶梯 ephemeral 注入；meaningful_progress 后由 Harness 移除 */

@@ -5,6 +5,7 @@ import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-sn
 import type { ToolOutcome } from './types.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { CompletionReason, CompletionStatus } from './completion-state.js';
+import type { ToolResultStrategy } from '../llm/types.js';
 
 export type HarnessFailureSource = 'llm_summarize' | 'tool_output_spill' | 'checkpoint_save';
 
@@ -30,6 +31,77 @@ export type RuntimeTelemetryEvent =
       policyReason?: string;
       permission?: string;
       outputLength?: number;
+    }
+  | {
+      /** 工具结果未原样注入（分页 / 裁剪 / 范围超限）时记录一条 */
+      type: 'tool_result_budget';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      toolName: string;
+      toolCallId: string;
+      strategy: ToolResultStrategy;
+      originalChars: number;
+      originalTokens: number;
+      injectedChars: number;
+      injectedTokens: number;
+      capTokens?: number;
+      capChars?: number;
+      capSource: 'tier' | 'remaining' | 'chars';
+      path?: string;
+      omittedLines?: Array<[number, number]>;
+      omittedChars?: [number, number];
+      spilled: boolean;
+      spillFailed?: boolean;
+    }
+  | {
+      /** read_file 读到了先前被分页省略或被压力清理掉的行 */
+      type: 'tool_result_reread';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      toolCallId: string;
+      rereadOf: string;
+      reason: 'paged' | 'cleared' | 'spill';
+      path: string;
+      lines?: [number, number];
+      injectedTokens: number;
+    }
+  | {
+      /** 上下文压力下把旧工具结果换成占位 */
+      type: 'tool_result_clear';
+      timestamp: string;
+      sessionId: string;
+      cleared: number;
+      clearedTokens: number;
+      toolCallIds: string[];
+    }
+  | {
+      /** 每次调用模型前：当前历史里仍生效的节省与补读占用（逐次累加 = 会话实际节省） */
+      type: 'tool_result_savings';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      shapedSavedTokens: number;
+      clearedSavedTokens: number;
+      rereadTokens: number;
+      shapedResults: number;
+      clearedResults: number;
+      rereadResults: number;
+    }
+  | {
+      /** 发送前总量检查：超出硬上限时收紧本轮未发送的结果；仍超出记 overflow */
+      type: 'context_budget';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      totalTokens: number;
+      limitTokens: number;
+      shrunkResults: number;
+      shrunkTokens: number;
+      overflowTokens: number;
+      /** 本地估算到 provider 计数的校准系数（≥1） */
+      calibration?: number;
     }
   | {
       type: 'compaction';
@@ -95,6 +167,36 @@ export class RuntimeTelemetry {
 
   recordTool(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool' }>, 'type' | 'timestamp' | 'sessionId'>): void {
     this.append({ type: 'tool', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordToolResultBudget(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool_result_budget' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'tool_result_budget', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordToolResultReread(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool_result_reread' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'tool_result_reread', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordToolResultClear(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool_result_clear' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'tool_result_clear', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordToolResultSavings(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool_result_savings' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'tool_result_savings', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordContextBudget(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'context_budget' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'context_budget', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
   }
 
   recordCompaction(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'compaction' }>, 'type' | 'timestamp' | 'sessionId' | 'savedTokens'>): void {

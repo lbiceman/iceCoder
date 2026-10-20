@@ -1,8 +1,16 @@
 import type { UnifiedMessage, ToolCall, ToolDefinition } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
-import { getFailedRunCommandInlineChars, getMaxToolOutputChars } from '../tools/tool-output-limits.js';
-import { truncateHeadTail } from '../tools/head-tail-truncate.js';
+import { estimateStringTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
+import {
+  exceedsToolResultBudget,
+  findRereadTarget,
+  resolveToolResultBudget,
+  shapeToolResult,
+  shouldSpillToolResult,
+  toolResultNeedsSpill,
+} from './tool-result-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
@@ -89,6 +97,8 @@ export interface ToolExecutorDeps {
   checkpointOwner?: { sessionDir: string; sessionId: string };
   /** 子 Agent 执行前检查（写租约 / 只读 / git 限制）与命令改动回调 */
   agentScope?: import('./types.js').AgentToolScope;
+  /** 单次 LLM 输出上限；工具结果预算按「窗口 − 输出预留」计算 */
+  agentMaxOutputTokens?: number;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -650,6 +660,12 @@ export async function executeToolCallsStreaming(
   const processedIds = new Set<string>();
   let failedCount = directFailedCount;
   const failedSignatures: string[] = [...directFailedSignatures];
+  const contextWindowTokens = readEffectiveContextWindowTokens();
+  let usedContextTokens = resolveCompactionUsage({
+    messages,
+    tools: currentTools,
+    lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+  }).effectiveUsed;
 
   // 中断时 flush 只返回已跑完的工具；这些副作用已发生，照常写结果并记账，未完成的才补 interrupted。
   for (const sr of results) {
@@ -788,38 +804,106 @@ export async function executeToolCallsStreaming(
       toolArgs: observableToolArgs(tc),
     });
 
-    const toolMeta = getToolMetadata(tc.name);
-    const maxCap = getMaxToolOutputChars();
-    const defaultMax = toolMeta.maxResultSizeChars === Infinity
-      ? maxCap
-      : Math.min(toolMeta.maxResultSizeChars, maxCap);
-    const maxOutput = !result.success && tc.name === 'run_command'
-      ? Math.max(defaultMax, getFailedRunCommandInlineChars())
-      : defaultMax;
+    const budget = resolveToolResultBudget({
+      toolName: tc.name,
+      success: result.success,
+      contextWindowTokens,
+      effectiveUsedTokens: usedContextTokens,
+      metadataMaxChars: getToolMetadata(tc.name).maxResultSizeChars,
+      maxOutputTokens: deps.agentMaxOutputTokens,
+    });
+    const readRange = result.success ? result.readRange : undefined;
+    let spillPath: string | undefined;
+    if (shouldSpillToolResult(output, budget, readRange) && deps.sessionDir && deps.sessionId && tc.id) {
+      spillPath = await spillToolOutputToSession({
+        sessionDir: deps.sessionDir,
+        sessionId: deps.sessionId,
+        toolCallId: tc.id,
+        content: output,
+      }) ?? undefined;
+    }
+    const spillFailed = !spillPath
+      && exceedsToolResultBudget(output, budget)
+      && toolResultNeedsSpill(budget, readRange);
+    const shaped = shapeToolResult({ toolName: tc.name, output, budget, readRange, spillPath });
+    const meta = shaped.meta;
 
-    let truncatedOutput = output;
-    if (output.length > maxOutput) {
-      let spillPath: string | undefined;
-      if (deps.sessionDir && deps.sessionId && tc.id) {
-        spillPath = await spillToolOutputToSession({
-          sessionDir: deps.sessionDir,
-          sessionId: deps.sessionId,
+    const rawReadPath = tc.name === 'read_file' ? (tc.arguments?.path ?? tc.arguments?.filePath) : undefined;
+    const rereadPath = meta.path ?? (typeof rawReadPath === 'string' && rawReadPath.trim() ? rawReadPath : undefined);
+    if (rereadPath) {
+      const span: [number, number] | undefined = meta.lines
+        ? [meta.lines.start, meta.lines.end]
+        : meta.omittedLines?.[0];
+      const reread = findRereadTarget(messages, rereadPath, span);
+      if (reread) {
+        meta.rereadOf = reread.toolCallId;
+        deps.runtimeTelemetry?.recordToolResultReread({
+          round: iteration,
           toolCallId: tc.id,
-          content: output,
-        }) ?? undefined;
+          rereadOf: reread.toolCallId,
+          reason: reread.reason,
+          path: rereadPath,
+          ...(span ? { lines: span } : {}),
+          injectedTokens: meta.injectedTokens,
+        });
       }
-      truncatedOutput = truncateHeadTail(output, maxOutput, {
-        headRatio: !result.success && tc.name === 'run_command' ? 0.2 : 0.3,
-        spillPath,
-        marker: `\n...[输出已截断，原始长度 ${output.length} 字符]...\n`,
+    }
+    if (meta.strategy !== 'full') {
+      deps.runtimeTelemetry?.recordToolResultBudget({
+        round: iteration,
+        toolName: tc.name,
+        toolCallId: tc.id,
+        strategy: meta.strategy,
+        originalChars: meta.originalChars,
+        originalTokens: meta.originalTokens,
+        injectedChars: meta.injectedChars,
+        injectedTokens: meta.injectedTokens,
+        capTokens: budget.capTokens,
+        capChars: budget.capChars,
+        capSource: budget.source,
+        path: meta.path,
+        omittedLines: meta.omittedLines,
+        omittedChars: meta.omittedChars,
+        spilled: Boolean(spillPath),
+        ...(spillFailed ? { spillFailed: true } : {}),
+      });
+    } else if (result.readRangeRejected) {
+      const rejected = result.readRangeRejected;
+      deps.runtimeTelemetry?.recordToolResultBudget({
+        round: iteration,
+        toolName: tc.name,
+        toolCallId: tc.id,
+        strategy: 'range_error',
+        originalChars: 0,
+        originalTokens: rejected.requestedTokens,
+        injectedChars: output.length,
+        injectedTokens: estimateStringTokens(output),
+        capTokens: rejected.capTokens,
+        capSource: 'tier',
+        path: rejected.path,
+        omittedLines: [[rejected.startLine, rejected.endLine]],
+        spilled: false,
       });
     }
 
-    messages.push({
-      role: 'tool',
-      content: truncatedOutput,
-      toolCallId: tc.id,
-    });
+    const keepMeta = meta.strategy !== 'full' || tc.name === 'read_file' || Boolean(meta.spillPath);
+    // 落盘失败时不能只留裁剪版：content 保存原文，注入视图写进封存字段。
+    messages.push(spillFailed && shaped.view !== output
+      ? {
+        role: 'tool',
+        content: output,
+        toolCallId: tc.id,
+        apiSealedContent: shaped.view,
+        apiSealedBy: 'resultBudget',
+        toolResultMeta: meta,
+      }
+      : {
+        role: 'tool',
+        content: shaped.view,
+        toolCallId: tc.id,
+        ...(keepMeta ? { toolResultMeta: meta } : {}),
+      });
+    usedContextTokens += meta.injectedTokens + 4;
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);

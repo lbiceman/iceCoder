@@ -245,7 +245,7 @@ ${has('run_command') ? '- run_command example: `{ "command": "<command>" }`.' : 
 ${hasAny('patch_file', 'edit_file', 'append_file') ? '- If a large write is truncated, switch to a patch or smaller edits instead of repeating the same payload.' : ''}`,
     hasAny('read_file', 'open_file')
       ? `## File reading
-${has('read_file') ? '- read_file: workspace files; use offset/limit for large files.' : ''}
+${has('read_file') ? '- read_file: workspace files; use offset/limit for large files. Also use read_file (absolute path + offset/limit) for saved tool output ("Full output saved to: ...").' : ''}
 ${has('open_file') ? '- open_file: absolute paths outside the workspace.' : ''}`
       : '',
     hasAny('write_file', 'edit_file', 'patch_file', 'append_file', 'batch_edit_file')

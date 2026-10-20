@@ -8,12 +8,17 @@ import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
 import {
-  getReadFileDefaultMaxChars,
-  getReadFileDefaultMaxLines,
+  getReadFileMaxTokens,
   getWriteFileBlockChars,
   getWriteFileWarnChars,
   getWriteFileWarnLines,
 } from '../tool-output-limits.js';
+import {
+  formatReadFileCappedPage,
+  formatReadFileRange,
+  linesFittingTokens,
+} from '../read-file-page.js';
+import { estimateStringTokens } from '../../llm/token-estimator.js';
 import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
 import {
   buildFileChangeDiff,
@@ -86,7 +91,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       definition: {
         name: 'read_file',
         description:
-          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. Use immediately when you need to read a file\'s content. If the file does not exist (ENOENT), use write_file to create it — do not retry read_file on the same missing path.',
+          'Read file content. Returns full text when the file fits the read cap; otherwise returns a PARTIAL page of numbered lines starting at line 1, with the unread line ranges and the exact offset/limit for the next page — content past the page still exists. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. A range larger than the cap is rejected with the largest limit that fits. Use immediately when you need to read a file\'s content. If the file does not exist (ENOENT), use write_file to create it — do not retry read_file on the same missing path.',
         parameters: {
           type: 'object',
           properties: {
@@ -126,55 +131,61 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         }
         const encoding = (args.encoding || 'utf-8') as BufferEncoding;
         const content = await fs.readFile(resolvedPath, encoding);
+        const capTokens = getReadFileMaxTokens();
+        const allLines = content.split('\n');
+        const totalLines = allLines.length;
 
         if (args.offset !== undefined || args.limit !== undefined) {
-          const allLines = content.split('\n');
-          const totalLines = allLines.length;
           let start = (args.offset as number) || 1;
           if (start < 0) start = totalLines + start + 1;
           start = Math.max(1, Math.min(start, totalLines));
           const end = args.limit !== undefined
             ? Math.max(start, Math.min(start + (args.limit as number) - 1, totalLines))
             : totalLines;
-          const selectedLines = allLines.slice(start - 1, end);
-          const numbered = selectedLines
-            .map((line, idx) => `${start + idx}: ${line}`)
-            .join('\n');
+          const page = formatReadFileRange(rawPath, allLines, start, end);
+          const pageTokens = estimateStringTokens(page.output);
+          if (pageTokens > capTokens) {
+            const fit = linesFittingTokens(allLines, start, capTokens - 120);
+            return {
+              success: false,
+              output: '',
+              error: `Requested range ${start}-${end} of ${rawPath} (${totalLines} lines total) is ~${pageTokens} tokens, `
+                + `over the ${capTokens}-token read cap. From offset=${start} at most limit=${fit} fits; `
+                + `read it in pages of that size or grep for the section you need.`,
+              readRangeRejected: {
+                path: rawPath,
+                startLine: start,
+                endLine: end,
+                requestedTokens: pageTokens,
+                capTokens,
+              },
+            };
+          }
+          markFileRead(workDir, rawPath, sessionId);
+          return { success: true, output: page.output, readRange: page.range };
+        }
+
+        if (estimateStringTokens(content) <= capTokens) {
           markFileRead(workDir, rawPath, sessionId);
           return {
             success: true,
-            output: `${rawPath} (lines ${start}-${end}, total ${totalLines})\n${'─'.repeat(40)}\n${numbered}`,
+            output: content,
+            readRange: {
+              path: rawPath,
+              startLine: 1,
+              endLine: totalLines,
+              requestedEnd: totalLines,
+              totalLines,
+              numbered: false,
+              headerLines: 0,
+              capped: false,
+            },
           };
         }
 
-        // 无窗口参数：大文件软截断，避免整文件灌入主上下文（仍可通过 offset/limit 分段读取）
-        const maxLines = getReadFileDefaultMaxLines();
-        const maxChars = getReadFileDefaultMaxChars();
-        const allLines = content.split('\n');
-        let lines = allLines;
-        let truncated = false;
-        if (allLines.length > maxLines) {
-          lines = allLines.slice(0, maxLines);
-          truncated = true;
-        }
-        let body = lines.join('\n');
-        if (body.length > maxChars) {
-          body = body.slice(0, maxChars);
-          const lastNl = body.lastIndexOf('\n');
-          if (lastNl > maxChars * 0.4) body = body.slice(0, lastNl);
-          truncated = true;
-        }
-        if (!truncated) {
-          markFileRead(workDir, rawPath, sessionId);
-          return { success: true, output: content };
-        }
-        const totalLines = allLines.length;
-        const totalChars = content.length;
-        const header =
-          `${rawPath} (partial read: lines 1–${lines.length}/${totalLines}, chars ~${body.length}/${totalChars} — use offset and limit to read more)\n` +
-          `${'─'.repeat(40)}`;
+        const page = formatReadFileCappedPage(rawPath, allLines, 1, totalLines, capTokens);
         markFileRead(workDir, rawPath, sessionId);
-        return { success: true, output: `${header}\n${body}` };
+        return { success: true, output: page.output, readRange: page.range };
       },
     },
 

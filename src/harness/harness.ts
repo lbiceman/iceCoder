@@ -63,6 +63,7 @@ import { runHarnessToolRound, type ToolRoundDeps } from './harness-tool-round.js
 import { handleHarnessStop } from './harness-stop-handler.js';
 import { runWithWorkspaceTouchScope } from './workspace-command-touch.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
+import { releaseLegacyToolBudgetSeals } from './harness-message-budget.js';
 import {
   resolveVerificationExemptDirPrefixes,
   setVerificationExemptRuntime,
@@ -453,6 +454,7 @@ export class Harness {
     const messageContent = userContentBlocks ?? userMessage;
     if (existingMessages && existingMessages.length > 0) {
       messages = finalizeMessagesForApi(existingMessages.slice());
+      releaseLegacyToolBudgetSeals(messages);
       messages.push({ role: 'user', content: messageContent });
     } else {
       messages = this.contextAssembler.assembleInitialMessages(userMessage);

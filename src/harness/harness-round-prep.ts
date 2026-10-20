@@ -40,6 +40,10 @@ import type {
   StreamFunction,
 } from './types.js';
 import { timeAsync, timeSync } from './harness-timing.js';
+import { enforcePreSendBudget, resolveBudgetCalibration } from './context-budget-guard.js';
+import { measureLiveToolResultSavings } from './tool-result-budget.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
+import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../config/model-capabilities.js';
 export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
@@ -254,9 +258,42 @@ export async function prepareHarnessRound(
     state.taskSwitchInjected = true;
   }
 
-  const normalizedMsgs = timeSync('prep_build_msgs', () =>
+  let normalizedMsgs = timeSync('prep_build_msgs', () =>
     buildMessagesForLlm(msgs, { blocks: ephemeralBlocks }),
   );
+  const budgetCheck = enforcePreSendBudget({
+    canonical: msgs,
+    view: normalizedMsgs,
+    tools: currentTools,
+    contextWindowTokens: readEffectiveContextWindowTokens(),
+    maxOutputTokens: deps.agentMaxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
+    calibration: resolveBudgetCalibration(
+      deps.loopController.getState().lastInputTokens,
+      state.lastSentEstimatedTokens,
+    ),
+  });
+  state.lastSentEstimatedTokens = budgetCheck.estimatedTokens;
+  if (budgetCheck.shrunkResults > 0) {
+    normalizedMsgs = buildMessagesForLlm(msgs, { blocks: ephemeralBlocks });
+  }
+  if (budgetCheck.shrunkResults > 0 || budgetCheck.overflowTokens > 0) {
+    deps.runtimeTelemetry?.recordContextBudget({
+      round,
+      totalTokens: budgetCheck.totalTokens,
+      limitTokens: budgetCheck.limitTokens,
+      shrunkResults: budgetCheck.shrunkResults,
+      shrunkTokens: budgetCheck.shrunkTokens,
+      overflowTokens: budgetCheck.overflowTokens,
+      calibration: budgetCheck.calibration,
+    });
+    if (budgetCheck.overflowTokens > 0) {
+      console.warn(
+        `[harness] 请求仍超出上下文硬上限 ${budgetCheck.overflowTokens} tokens `
+        + `(total≈${budgetCheck.totalTokens}, limit=${budgetCheck.limitTokens})；交给 provider 报错后的紧急压缩`,
+      );
+    }
+  }
+  deps.runtimeTelemetry?.recordToolResultSavings({ round, ...measureLiveToolResultSavings(msgs) });
 
   if (deps.loopController.isAborted()) {
     return {

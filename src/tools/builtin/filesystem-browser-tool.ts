@@ -243,7 +243,7 @@ export function createFilesystemBrowserTools(workDir = process.cwd()): Registere
       definition: {
         name: 'open_file',
         // 读取目录外文件（需绝对路径）。目录内用 read_file。
-        description: 'Read files outside working directory (requires absolute path). Use read_file for files inside working directory. Auto-detects text/binary.',
+        description: 'Read files outside working directory (requires absolute path). Use read_file for files inside working directory, and for saved tool output logs ("Full output saved to: ...") because read_file supports offset/limit. Auto-detects text/binary.',
         parameters: {
           type: 'object',
           properties: {

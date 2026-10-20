@@ -105,6 +105,8 @@ export interface HarnessRunState {
   contextEmergencyCompactCount?: number;
   /** 配额用尽时为 true（旧 checkpoint 仅有此字段时视为已用尽） */
   contextEmergencyCompactUsed: boolean;
+  /** 上一次发送前总量检查的本地估算；与 provider 实际 prompt token 对比得到校准系数 */
+  lastSentEstimatedTokens?: number;
   /** 续跑 checkpoint 短摘要（emergency fork 复用） */
   activeCheckpointResumeSummary?: UnifiedMessage;
 }
