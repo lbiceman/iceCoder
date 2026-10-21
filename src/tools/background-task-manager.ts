@@ -244,7 +244,7 @@ export class BackgroundTaskManager extends EventEmitter {
    * @param options.label         任务标签（命令前 40 字）
    * @param options.prefixOutput  前台已收集的 stdout/stderr（作为环形缓冲 prefix）
    * @param options.hardTimeoutMs 后台 hard timeout（0 = 不限时，默认 0）
-   * @param options.reason        转后台原因（'soft_timeout' / 'explicit_background'）
+   * @param options.reason        转后台原因（'soft_timeout' / 'yield_cap' / 'explicit_background'）
    */
   adopt(
     child: ChildProcess,
@@ -253,7 +253,7 @@ export class BackgroundTaskManager extends EventEmitter {
       label?: string;
       prefixOutput?: string;
       hardTimeoutMs?: number;
-      reason?: 'soft_timeout' | 'explicit_background';
+      reason?: 'soft_timeout' | 'yield_cap' | 'explicit_background';
       lifespan?: TaskLifespan;
     },
   ): { taskId: string; error?: string } {
@@ -556,6 +556,44 @@ export class BackgroundTaskManager extends EventEmitter {
       isTerminal,
       processAlive: task.status === 'running' ? this.isProcessAlive(task) : false,
     };
+  }
+
+  /**
+   * 阻塞到任务离开 running，或等到 timeoutMs。
+   * 进程先结束则立刻返回；超时不杀进程。abort 只结束这次等待。
+   */
+  waitUntilTerminal(
+    taskId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<'terminal' | 'timeout' | 'aborted' | 'missing'> {
+    const task = this.tasks.get(taskId);
+    if (!task) return Promise.resolve('missing');
+    if (task.status !== 'running') return Promise.resolve('terminal');
+    if (signal?.aborted) return Promise.resolve('aborted');
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: 'terminal' | 'timeout' | 'aborted' | 'missing') => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.off('taskStatusChanged', onStatus);
+        signal?.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      const onStatus = (summary: RunningTaskSummary) => {
+        if (summary.taskId !== taskId || !summary.isTerminal) return;
+        finish('terminal');
+      };
+      const onAbort = () => finish('aborted');
+      const timer = setTimeout(() => finish('timeout'), Math.max(0, timeoutMs));
+      this.on('taskStatusChanged', onStatus);
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      const current = this.tasks.get(taskId);
+      if (!current) finish('missing');
+      else if (current.status !== 'running') finish('terminal');
+    });
   }
 
   /**

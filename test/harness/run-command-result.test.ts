@@ -27,7 +27,7 @@ describe('run-command-result', () => {
     });
   });
 
-  it.each(['background', 'escalated'])(
+  it.each(['background', 'escalated', 'yielded'])(
     'classifies %s mode as a background start',
     (mode) => {
       const output = JSON.stringify({ mode, taskId: 'bg_abc', status: 'started' });

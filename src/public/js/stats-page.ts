@@ -1,7 +1,8 @@
 // @ts-nocheck
 /**
  * Token 用量统计页：合计趋势 + 会话 / 子 Agent / 记忆（读独立 JSONL 账本）。
- * 日 / 当周 / 当月为滚动窗口：24 小时 / 7 天 / 30 天。
+ * 日 / 当周 / 当月 / 当年为滚动窗口：24 小时 / 7 天 / 30 天 / 365 天。
+ * 当年按自然月汇总，首尾月只计入这 365 天内的用量。
  */
 
 /* exported StatsPage */
@@ -12,6 +13,7 @@ export const StatsPage = (() => {
     { key: 'day', label: '日', hint: '最近 24 小时', days: 1 },
     { key: 'week', label: '当周', hint: '最近 7 天', days: 7 },
     { key: 'month', label: '当月', hint: '最近 30 天', days: 30 },
+    { key: 'year', label: '当年', hint: '最近 365 天', days: 365 },
   ];
 
   const CHART_COLOR_VARS = ['--chart-1', '--chart-2', '--chart-3'];
@@ -301,7 +303,8 @@ export const StatsPage = (() => {
     const legendEl = mainEl.querySelector('[data-role="memory-legend"]');
     if (!mount) return;
     unbindChart(memoryChart);
-    const buckets = memorySummary && Array.isArray(memorySummary.series) ? memorySummary.series : [];
+    const rawBuckets = memorySummary && Array.isArray(memorySummary.series) ? memorySummary.series : [];
+    const buckets = range.key === 'year' ? rollupMemoryByMonth(rawBuckets) : rawBuckets;
     if (!buckets.length) {
       mount.innerHTML = '<p class="stats-muted">暂无读取 / 写入 / 修改趋势。</p>';
       if (legendEl) legendEl.innerHTML = '';
@@ -314,6 +317,7 @@ export const StatsPage = (() => {
       { key: 'dream', label: '修改', color: colors[2], values: buckets.map((b) =>  num(b.dream)) },
     ];
     if (legendEl) legendEl.innerHTML = renderLegend(series);
+    const axis = axisFormats(range);
     memoryChart = bindAreaChart(mount, {
       id: 'memory',
       labels: buckets.map((b) =>  b.key),
@@ -321,8 +325,8 @@ export const StatsPage = (() => {
       stacked: false,
       filled: false,
       emptyText: '该时间范围暂无记忆读写',
-      formatX: range.key === 'day' ? formatHourTick : formatDayTick,
-      formatTipTitle: range.key === 'day' ? formatHourTip : formatDayTip,
+      formatX: axis.formatX,
+      formatTipTitle: axis.formatTipTitle,
     });
   }
 
@@ -379,6 +383,7 @@ export const StatsPage = (() => {
     const series = buildTokenSeries(buckets, colors);
     if (totalEl) totalEl.textContent = formatTokenCount(sumValues(totals));
     if (legendEl) legendEl.innerHTML = series.length > 1 ? renderLegend(series) : '';
+    const axis = axisFormats(range);
     trendChart = bindAreaChart(mount, {
       id: 'trend',
       labels: buckets.map((b) =>  b.key),
@@ -388,8 +393,8 @@ export const StatsPage = (() => {
       stacked: false,
       filled: false,
       emptyText: '该时间范围暂无用量',
-      formatX: range.key === 'day' ? formatHourTick : formatDayTick,
-      formatTipTitle: range.key === 'day' ? formatHourTip : formatDayTip,
+      formatX: axis.formatX,
+      formatTipTitle: axis.formatTipTitle,
     });
   }
 
@@ -727,9 +732,37 @@ export const StatsPage = (() => {
   function bucketsForRange(key) {
     const series = (summary && summary.series) || {};
     if (key === 'day') return Array.isArray(series.hourly) ? series.hourly : [];
+    if (key === 'year') return Array.isArray(series.monthly) ? series.monthly : [];
     const daily = Array.isArray(series.daily) ? series.daily : [];
     if (key === 'week') return daily.slice(Math.max(0, daily.length - 7));
     return daily.slice(Math.max(0, daily.length - 30));
+  }
+
+  function axisFormats(range) {
+    if (range.key === 'day') return { formatX: formatHourTick, formatTipTitle: formatHourTip };
+    if (range.key === 'year') return { formatX: formatMonthTick, formatTipTitle: formatMonthTip };
+    return { formatX: formatDayTick, formatTipTitle: formatDayTip };
+  }
+
+  function rollupMemoryByMonth(buckets) {
+    const out = [];
+    const map = new Map();
+    for (let i = 0; i < buckets.length; i++) {
+      const row = buckets[i];
+      const matched = /^(\d{4}-\d{2})/.exec(row && row.key || '');
+      if (!matched) continue;
+      const key = matched[1];
+      let bucket = map.get(key);
+      if (!bucket) {
+        bucket = { key, timestamp: row.timestamp, recall: 0, extract: 0, dream: 0 };
+        map.set(key, bucket);
+        out.push(bucket);
+      }
+      bucket.recall += num(row.recall);
+      bucket.extract += num(row.extract);
+      bucket.dream += num(row.dream);
+    }
+    return out;
   }
 
   function emptyKindTotals() {
@@ -823,6 +856,18 @@ export const StatsPage = (() => {
     const d = parseStamp(key);
     if (!d) return key;
     return (d.getMonth() + 1) + '/' + d.getDate();
+  }
+
+  function formatMonthTick(key) {
+    const matched = /^(\d{4})-(\d{2})/.exec(key || '');
+    if (!matched) return key;
+    return String(Number(matched[1]) % 100) + '/' + Number(matched[2]);
+  }
+
+  function formatMonthTip(key) {
+    const matched = /^(\d{4})-(\d{2})/.exec(key || '');
+    if (!matched) return key;
+    return matched[1] + '年' + Number(matched[2]) + '月';
   }
 
   function formatHourTip(key) {

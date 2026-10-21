@@ -640,7 +640,13 @@ export class AgentSpawner {
     this.emitUpdate(run, parent, true);
     void this.persistMeta(run);
 
-    const limits = resolveAgentLimits(run.type, { parentDeadline: parent.deadline, now: startedAt });
+    const limits = resolveAgentLimits(run.type, {
+      parentDeadline: parent.deadline,
+      now: startedAt,
+      maxRounds: parent.config.loop.maxRounds,
+      timeoutMs: parent.config.loop.timeout,
+      tokenBudget: parent.config.loop.tokenBudget,
+    });
     const childConfig = this.buildChildConfig(run, parent, limits);
     const executor = new AgentRecordingToolExecutor(parent.toolExecutor, this.createRecorder(run));
     const harness = this.options.harnessFactory(childConfig, executor);

@@ -298,11 +298,11 @@ export function createMemoryTelemetryRouter(): Router {
 
   /**
    * GET /api/memory/telemetry — 返回遥测报告
-   * 查询参数：days（默认 7）、format（text | json，默认 text）
+   * 查询参数：days（默认 7，最大 365）、format（text | json，默认 text）
    */
   router.get('/', async (req: Request, res: Response): Promise<void> => {
     try {
-      const days = Math.min(Math.max(parseInt(req.query.days as string) || 7, 1), 90);
+      const days = Math.min(Math.max(parseInt(req.query.days as string) || 7, 1), 365);
       const format = (req.query.format as string) || 'text';
 
       // 1. 读取 JSONL 日志

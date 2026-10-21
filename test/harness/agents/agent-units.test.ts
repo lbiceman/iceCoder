@@ -6,6 +6,11 @@ import path from 'node:path';
 import type { ToolDefinition } from '../../../src/llm/types.js';
 import { agentConfig, resolveAgentLimits } from '../../../src/harness/agents/agent-config.js';
 import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudget,
+} from '../../../src/harness/token-budget-config.js';
+import {
   EXPLORE_AGENT_TYPE,
   GENERAL_AGENT_TYPE,
   filterToolsForAgentType,
@@ -53,12 +58,24 @@ describe('agent-types', () => {
     expect(names.sort()).toEqual(['fs_operation', 'glob', 'grep', 'mcp_github_list_issues', 'read_file'].sort());
   });
 
-  it('默认上限与父剩余时长压缩', () => {
-    expect(resolveAgentLimits(GENERAL_AGENT_TYPE)).toMatchObject({ maxRounds: 2000, timeoutMs: 4 * 3600_000, tokenBudget: 20_000_000 });
-    expect(resolveAgentLimits(EXPLORE_AGENT_TYPE)).toMatchObject({ maxRounds: 300, timeoutMs: 30 * 60_000 });
+  it('上限与主 Harness 相同，并按父剩余时长压缩', () => {
+    const same = {
+      maxRounds: getHarnessMaxRoundsFromEnv(),
+      timeoutMs: getHarnessTimeoutMsFromEnv(),
+      tokenBudget: getHarnessTokenBudget(),
+    };
+    expect(resolveAgentLimits(GENERAL_AGENT_TYPE)).toMatchObject(same);
+    expect(resolveAgentLimits(EXPLORE_AGENT_TYPE)).toMatchObject(same);
+    expect(resolveAgentLimits(GENERAL_AGENT_TYPE, {
+      maxRounds: 80,
+      timeoutMs: 50_000,
+      tokenBudget: 123,
+    })).toMatchObject({ maxRounds: 80, timeoutMs: 50_000, tokenBudget: 123 });
     const now = 1_000_000;
     const limits = resolveAgentLimits(GENERAL_AGENT_TYPE, { parentDeadline: now + 30 * 60_000, now });
     expect(limits.timeoutMs).toBe(30 * 60_000 - agentConfig.parentDeadlineMarginMs);
+    expect(limits.maxRounds).toBe(same.maxRounds);
+    expect(limits.tokenBudget).toBe(same.tokenBudget);
   });
 });
 

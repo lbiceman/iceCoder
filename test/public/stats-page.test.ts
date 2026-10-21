@@ -131,7 +131,14 @@ function samplePayload(now = Date.now()) {
         all: emptyTotals(7000, 5600, 1400),
       },
     },
-    series: { hourly, daily },
+    series: {
+      hourly,
+      daily,
+      monthly: [
+        bucket('2025-10', Date.parse('2025-10-01T00:00:00'), 100, {}, 1, emptyByKind(80, 20, 1, 1)),
+        bucket('2026-10', Date.parse('2026-10-01T00:00:00'), 200, {}, 1, emptyByKind(150, 50, 1, 1)),
+      ],
+    },
   };
 }
 
@@ -165,6 +172,8 @@ async function loadStats(page: Page, payload: Record<string, unknown>) {
     window.fetch = (input: RequestInfo) => {
       const url = String(input);
       if (url.includes('/api/memory/telemetry')) {
+        const days = /[?&]days=(\d+)/.exec(url);
+        (window as unknown as { __telemetryDays?: string }).__telemetryDays = days ? days[1] : '';
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
@@ -247,7 +256,7 @@ describe('统计页 Token 图表', () => {
     expect(snapshot.supervisor).toBe(0);
     expect(snapshot.hint).not.toMatch(/监管/);
     expect(snapshot.io).toBe(0);
-    expect(snapshot.rangeLabels).toEqual(['日', '当周', '当月']);
+    expect(snapshot.rangeLabels).toEqual(['日', '当周', '当月', '当年']);
     expect(snapshot.table).toBe(0);
     expect(snapshot.overflow).toBe('hidden');
     expect(snapshot.rootOverflow).toBe('hidden');
@@ -317,5 +326,46 @@ describe('统计页 Token 图表', () => {
     expect(after.memorySvg).toBe(1);
     expect(Math.abs(after.metric - before.metric)).toBeLessThan(1);
     expect(Math.abs(after.chart - before.chart)).toBeLessThan(1);
+  });
+
+  it('当年汇总最近一年的 Token，并按月画趋势', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadStats(page, samplePayload());
+
+    await page.click('.stats-range-btn[data-range="year"]');
+    await page.waitForFunction(() => (window as unknown as { __telemetryDays?: string }).__telemetryDays === '365');
+    await page.waitForSelector('[data-chart="memory"] svg');
+
+    const view = await page.evaluate(() => {
+      const svg = document.querySelector('[data-chart="trend"] svg') as SVGSVGElement | null;
+      const rect = svg?.getBoundingClientRect();
+      if (svg && rect) {
+        svg.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: rect.left + rect.width - 4,
+          clientY: rect.top + 24,
+          bubbles: true,
+        }));
+      }
+      return {
+        pressed: document.querySelector('.stats-range-btn[data-range="year"]')?.getAttribute('aria-pressed'),
+        ticks: [...document.querySelectorAll('[data-chart="trend"] .stats-axis-label')].map((el) => el.textContent),
+        total: document.querySelector('[data-role="trend-total"]')?.textContent,
+        chat: document.querySelector('[data-role="trend-metrics"] .stats-aux-metric-value')?.textContent,
+        tip: document.querySelector('.stats-tooltip-title')?.textContent ?? '',
+        memoryTicks: [...document.querySelectorAll('[data-chart="memory"] .stats-axis-label')].map((el) => el.textContent),
+        rangeRight: document.querySelector('.stats-range')?.getBoundingClientRect().right ?? 0,
+        headerRight: document.querySelector('.stats-header')?.getBoundingClientRect().right ?? 0,
+      };
+    });
+
+    expect(view.pressed).toBe('true');
+    expect(view.ticks).toEqual(['25/10', '26/10']);
+    expect(view.total).toBe('300');
+    expect(view.chat).toBe('230');
+    expect(view.tip).toBe('2026年10月');
+    expect(view.memoryTicks.length).toBeGreaterThan(0);
+    expect(view.memoryTicks.every((tick) => /^\d{2}\/\d{1,2}$/.test(tick || ''))).toBe(true);
+    expect(view.rangeRight).toBeLessThanOrEqual(view.headerRight + 1);
   });
 });

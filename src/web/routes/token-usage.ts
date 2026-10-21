@@ -1,6 +1,6 @@
 /**
  * GET /api/token-usage — 汇总 token-usage.jsonl（与会话无关）。
- * day/week/month/byModel 供 ~tokens 弹框；series 供统计页图表。
+ * day/week/month/byModel 供 ~tokens 弹框；series（含月桶）供统计页图表。
  */
 
 import { Router, type Request, type Response } from 'express';

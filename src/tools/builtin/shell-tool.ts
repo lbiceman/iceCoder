@@ -19,11 +19,13 @@ import { buildShellChildEnv } from '../shell-host-guard.js';
 import { resolveShellExecutable } from '../shell-spawn-env.js';
 import {
   classifyShellCommand,
+  clampCommandYieldMs,
   pickBackgroundHardTimeout,
   pickForegroundTimeout,
   shellSoftEscalateEnabled,
   FOREGROUND_DEFAULT_TIMEOUT_MS,
   HARD_TIMEOUT_NONE,
+  MAX_COMMAND_YIELD_MS,
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
@@ -34,7 +36,7 @@ import {
 } from '../../memory/file-memory/memory-write-pipeline.js';
 import { HeadTailCharBuffer } from '../head-tail-truncate.js';
 
-/** 命令执行超时（毫秒）— 前台一次性命令默认 10 分钟 */
+/** 命令执行超时（毫秒）— 前台一次性命令单次最多 5 分钟 */
 const DEFAULT_TIMEOUT = FOREGROUND_DEFAULT_TIMEOUT_MS;
 
 /** 最大输出大小（字符；超限后保留头+尾，避免测试失败栈被丢掉） */
@@ -51,15 +53,15 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Watchers/installs/docker classified as long start in the background and return a taskId immediately — that start is not a completed run; poll with task_id + action:"check" until the process exits. Short commands (e.g. git status, ls) run foreground with a 10s cap. Other commands wait in the foreground until exit (10min cap). Use background:true for servers/dev watchers the classifier missed. Pass command as a top-level argument (alias: cmd). Use action:"list" to list background tasks. Use task_id + action:"stop" to kill a running background task. Avoid inline one-liners with long/complex scripts on Windows — write a script file and run it instead.',
+        'Execute shell commands (foreground or background). One blocking wait is at most 300000 ms (5 min) and returns as soon as the process exits. Short commands (e.g. git status, ls) run foreground with a 10s cap. Other commands wait in the foreground until exit or 5 minutes. If still running, the process is moved to the background and kept alive (not killed); the result includes a taskId. Watchers/installs/docker classified as long, or background:true, start in the background and return a taskId immediately — that start is not a completed run. Wait with task_id + action:"check": omit timeout to block up to 5 minutes, or pass timeout between 5000 and 300000. Do not poll every few seconds and do not start the command again. Use action:"list" to list background tasks. Use task_id + action:"stop" to kill a running background task. Pass command as a top-level argument (alias: cmd). Avoid inline one-liners with long/complex scripts on Windows — write a script file and run it instead.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute. Top-level field; alias: cmd. Not needed for list action' },
-          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 600000 = 10min). Background: unlimited by default; only honored when background:true AND timeout is explicitly set' },
+          timeout: { type: 'number', description: 'How long this call blocks, in ms. Foreground default and maximum are 300000 (5 min). For action:"check", omit to wait the full 5 minutes; values below 5000 are raised to 5000 and values above 300000 are cut to 300000. The wait ends early when the process exits. A foreground command still running at the end of the wait keeps running under the returned taskId. When background:true AND timeout is set, that value is a hard kill deadline for the background process and is not capped at 5 minutes.' },
           background: { type: 'boolean', description: 'Run command in background, returns task_id immediately', default: false },
           task_id: { type: 'string', description: 'Task ID for checking or stopping a background task' },
-          action: { type: 'string', description: 'For background management: "check" (query task status), "stop" (kill task), "list" (list all tasks)' },
+          action: { type: 'string', description: 'For background management: "check" (block until the task exits or timeout, max 5 min), "stop" (kill task), "list" (list all tasks)' },
           label: { type: 'string', description: 'Optional label for background task' },
           since: { type: 'number', description: 'For action:"check" — return only new output since this cursor (passed back from the previous check\'s `cursor` field). 0 = full output.' },
         },
@@ -85,13 +87,26 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
       if (action === 'check') {
         if (!taskId) return { success: false, output: '', error: 'task_id is required for check action' };
-        const status = bgManager.getStatus(taskId);
+        let status = bgManager.getStatus(taskId);
         if (!status) {
           return {
             success: false,
             output: '',
             error: `Task ${taskId} not found. Background tasks do not survive a server/session restart — run action=list for active tasks, or start the command again with background:true (omit task_id).`,
           };
+        }
+        let yieldMs: number | undefined;
+        if (status.status === 'running') {
+          yieldMs = clampCommandYieldMs(args.timeout, MAX_COMMAND_YIELD_MS);
+          const waited = await bgManager.waitUntilTerminal(taskId, yieldMs, signal);
+          if (waited === 'aborted') {
+            return {
+              success: false,
+              output: '',
+              error: `Wait for task ${taskId} was aborted. The process is still running; call action:"check" again.`,
+            };
+          }
+          status = bgManager.getStatus(taskId) ?? status;
         }
         const since = typeof args.since === 'number' && args.since >= 0
           ? args.since
@@ -116,6 +131,10 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (status.status === 'completed' && (status.exitCode === null || status.exitCode === 0)) {
           const summary = buildVerificationSuccessSummary(status.command, tailOutput);
           if (summary) result.summary = summary;
+        }
+        if (yieldMs !== undefined && status.status === 'running') {
+          result.yieldMs = yieldMs;
+          result.hint = `Still running after this ${yieldMs}ms wait (single wait max ${MAX_COMMAND_YIELD_MS / 1000}s). The process was not killed. Call action:"check" again to wait up to another 5 minutes; it returns as soon as the process exits. Do not poll more often and do not start the command again.`;
         }
         result.output = (incremental?.output || (since === 0 ? tailOutput : '')) || '(no new output)';
         return {
@@ -189,7 +208,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
             label: bgStatus?.label || label,
             timeout: hardTimeoutMs > 0 ? `${timeoutSec}s` : 'unlimited',
             classifiedAs: shellClass,
-            message: 'Task started in background. Use action:"check" with task_id to poll progress.',
+            message: 'Task started in background. This is not a completed run. Call action:"check" with this task_id to wait until it exits (one call waits at most 5 minutes and returns earlier if it exits). Do not poll every few seconds and do not start the command again.',
           }, null, 2),
         };
       }
@@ -220,8 +239,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
       const normalized = normalizeRunCommand(command, { workDir });
 
-      // auto 默认前台等到 exit（对齐 Claude Code Bash）。8s escalate 会把 npm test
-      // 变成 success:true + 额外一轮 check，墙钟明显长于「工具内等到结束」。
+      // auto 在本次等待内前台等到 exit（单次最多 5 分钟）。到点仍在跑则转入后台且不杀进程。
+      // 8s escalate 会把 npm test 变成「启动成功」+ 额外一轮 check。
       // ICE_SHELL_SOFT_ESCALATE=1 可恢复旧行为。
       const enableEscalate = shellClass === 'auto'
         && !explicitForeground
@@ -259,8 +278,73 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
           resolve(value);
         };
 
-        const hardTimer = setTimeout(() => {
+        let hardTimer: ReturnType<typeof setTimeout> | undefined;
+        let softTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const handOffToBackground = (reason: 'soft_timeout' | 'yield_cap') => {
+          if (settled || killed) return;
+          escalated = true;
+          if (hardTimer) clearTimeout(hardTimer);
+          if (softTimer) clearTimeout(softTimer);
+
+          // 卸载前台 listener，让 bg manager 重新挂
+          try { child.stdout?.removeAllListeners('data'); } catch { /* ignore */ }
+          try { child.stderr?.removeAllListeners('data'); } catch { /* ignore */ }
+          try { child.removeAllListeners('close'); } catch { /* ignore */ }
+          try { child.removeAllListeners('error'); } catch { /* ignore */ }
+
+          const prefix = stdoutCap.toString() + (stderrCap.toString() ? `\n[stderr]\n${stderrCap.toString()}` : '');
+          const labelArg = (args.label as string) || command.substring(0, 40);
+          const adoptResult = bgManager.adopt(child, {
+            command,
+            label: labelArg,
+            prefixOutput: prefix,
+            hardTimeoutMs: HARD_TIMEOUT_NONE,
+            reason,
+          });
+          unregisterForegroundShell(child);
+
+          if (adoptResult.error) {
+            // adopt 失败（如并发上限）：前台 listener 已卸载，无法干净回退。
+            // 直接终止，避免子进程变成无人收割的孤儿。
+            killed = true;
+            killShellProcessTree(child.pid ?? null, child);
+            const failedPartial = prefix.slice(-2000);
+            const why = reason === 'soft_timeout'
+              ? `命令运行超过 ${SOFT_TIMEOUT_MS}ms 且无法转入后台（${adoptResult.error}），已终止进程。`
+              : `命令在本次等待（${timeout}ms）后仍在运行，且无法转入后台（${adoptResult.error}），已终止进程。`;
+            safeResolve({
+              success: false,
+              output: failedPartial,
+              error: why,
+            });
+            return;
+          }
+
+          const partialOutput = prefix.slice(-2000);
+          const yielded = reason === 'yield_cap';
+          safeResolve({
+            success: true,
+            output: JSON.stringify({
+              mode: yielded ? 'yielded' : 'escalated',
+              taskId: adoptResult.taskId,
+              status: 'running',
+              reason,
+              partialOutput,
+              hint: yielded
+                ? `Still running after ${timeout}ms. A single wait is capped at ${MAX_COMMAND_YIELD_MS / 1000}s and the process was not killed. Call action:"check" with this taskId; that call waits up to 5 minutes and returns as soon as the process exits. Do not poll faster and do not run the command again.`
+                : `Command still running after ${SOFT_TIMEOUT_MS / 1000}s; moved to background. Do NOT retry. Wait with action:"check" and the taskId (one check waits at most 5 minutes).`,
+            }, null, 2),
+          });
+        };
+
+        hardTimer = setTimeout(() => {
           if (escalated || settled) return;
+          // auto 到点转入后台，进程继续跑。短命令和显式 background:false 仍按超时杀掉。
+          if (shellClass === 'auto' && !explicitForeground) {
+            handOffToBackground('yield_cap');
+            return;
+          }
           killed = true;
           killShellProcessTree(child.pid ?? null, child);
         }, timeout);
@@ -268,56 +352,10 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         else signal?.addEventListener('abort', onAbort, { once: true });
 
         // 软超时 escalate：仅 ICE_SHELL_SOFT_ESCALATE=1 的 auto 命令
-        let softTimer: ReturnType<typeof setTimeout> | null = null;
         if (enableEscalate) {
           softTimer = setTimeout(() => {
             if (settled || killed) return;
-            escalated = true;
-            clearTimeout(hardTimer);
-
-            // 卸载前台 listener，让 bg manager 重新挂
-            try { child.stdout?.removeAllListeners('data'); } catch { /* ignore */ }
-            try { child.stderr?.removeAllListeners('data'); } catch { /* ignore */ }
-            try { child.removeAllListeners('close'); } catch { /* ignore */ }
-            try { child.removeAllListeners('error'); } catch { /* ignore */ }
-
-            const prefix = stdoutCap.toString() + (stderrCap.toString() ? `\n[stderr]\n${stderrCap.toString()}` : '');
-            const labelArg = (args.label as string) || command.substring(0, 40);
-            const adoptResult = bgManager.adopt(child, {
-              command,
-              label: labelArg,
-              prefixOutput: prefix,
-              hardTimeoutMs: HARD_TIMEOUT_NONE,
-              reason: 'soft_timeout',
-            });
-            unregisterForegroundShell(child);
-
-            if (adoptResult.error) {
-              // adopt 失败（如并发上限）：此时前台 stdout/stderr/close listener 已卸载，
-              // 且 hardTimer 已清除，无法干净回退前台模式。为避免子进程变成无人收割、
-              // 无超时约束的孤儿进程，这里直接终止它，并以已捕获的部分输出 settle。
-              killed = true;
-              killShellProcessTree(child.pid ?? null, child);
-              const failedPartial = prefix.slice(-2000);
-              safeResolve({
-                success: false,
-                output: failedPartial,
-                error: `命令运行超过 ${SOFT_TIMEOUT_MS}ms 且无法转入后台（${adoptResult.error}），已终止进程。`,
-              });
-              return;
-            }
-
-            const partialOutput = prefix.slice(-2000);
-            safeResolve({
-              success: true,
-              output: JSON.stringify({
-                mode: 'escalated',
-                taskId: adoptResult.taskId,
-                reason: 'soft_timeout',
-                partialOutput,
-                hint: `Command still running after ${SOFT_TIMEOUT_MS / 1000}s; moved to background. Do NOT retry. Poll later with action:"check" and the taskId.`,
-              }, null, 2),
-            });
+            handOffToBackground('soft_timeout');
           }, SOFT_TIMEOUT_MS);
         }
 

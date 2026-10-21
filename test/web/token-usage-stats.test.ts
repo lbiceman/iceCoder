@@ -195,6 +195,36 @@ describe('aggregateTokenUsageSeries', () => {
     expect(series.daily[TOKEN_USAGE_SERIES_DAYS - 3].byKind.chat.totalTokens).toBe(0);
   });
 
+  it('groups the trailing 365 days into calendar months', () => {
+    const now = new Date(2026, 9, 21, 15, 30, 0, 0);
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const windowStart = new Date(today);
+    windowStart.setDate(windowStart.getDate() - 364);
+    const dayBefore = windowStart.getTime() - 1;
+    const september = new Date(2026, 8, 2, 12, 0, 0, 0);
+    const series = aggregateTokenUsageSeries([
+      { timestamp: now.getTime(), inputTokens: 10, outputTokens: 2, source: 'chat' },
+      { timestamp: windowStart.getTime(), inputTokens: 4, outputTokens: 1, source: 'chat' },
+      { timestamp: dayBefore, inputTokens: 100, outputTokens: 1, source: 'chat' },
+      { timestamp: september.getTime(), inputTokens: 7, outputTokens: 1, source: 'memory_dream' },
+    ], now.getTime());
+
+    const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const months = (today.getFullYear() - windowStart.getFullYear()) * 12
+      + (today.getMonth() - windowStart.getMonth()) + 1;
+    expect(series.monthly).toHaveLength(months);
+    expect(series.monthly[0]?.key).toBe(monthKey(windowStart));
+    expect(series.monthly.at(-1)?.key).toBe(monthKey(today));
+    expect(series.monthly[0]?.inputTokens).toBe(4);
+    expect(series.monthly[0]?.totalTokens).toBe(5);
+    const sep = series.monthly.find((b) => b.key === '2026-09');
+    expect(sep?.byKind.memory.totalTokens).toBe(8);
+    expect(sep?.byKind.chat.totalTokens).toBe(0);
+    expect(series.monthly.at(-1)?.inputTokens).toBe(10);
+    expect(series.monthly.reduce((sum, bucket) => sum + bucket.inputTokens, 0)).toBe(21);
+  });
+
   it('counts sub-agent calls separately from the parent session', () => {
     const now = new Date();
     now.setMinutes(30, 0, 0);

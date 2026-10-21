@@ -113,7 +113,7 @@ export function resolveToolTraceResultStatus(
   if (toolOutcome === 'policy_block') return 'warn';
   if (toolName === 'run_command') {
     const mode = parseRunCommandResultMode(toolOutput);
-    if (toolSuccess && (mode === 'background' || mode === 'escalated')) {
+    if (toolSuccess && (mode === 'background' || mode === 'escalated' || mode === 'yielded')) {
       return 'background';
     }
   }

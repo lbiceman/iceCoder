@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { createShellTool } from '../../src/tools/builtin/shell-tool.js';
-import { BackgroundTaskManager } from '../../src/tools/background-task-manager.js';
+import { BackgroundTaskManager, disposeBackgroundTaskManagerForSession } from '../../src/tools/background-task-manager.js';
 import { killShellProcessTree } from '../../src/tools/shell-process-kill.js';
 
 const isWindows = process.platform === 'win32';
@@ -119,6 +119,12 @@ describe('shell-tool — auto waits in foreground by default', () => {
     delete process.env.ICE_SHELL_SOFT_ESCALATE;
   });
 
+  afterEach(() => {
+    disposeBackgroundTaskManagerForSession('default');
+    disposeBackgroundTaskManagerForSession('yield-cap');
+    disposeBackgroundTaskManagerForSession('check-floor');
+  });
+
   it('waits for a 12s auto command instead of escalating at 8s', async () => {
     const tool = createShellTool(workDir);
 
@@ -160,21 +166,83 @@ describe('shell-tool — auto waits in foreground by default', () => {
     expect(result.output).not.toMatch(/"mode":\s*"escalated"/);
   }, 15_000);
 
-  it('explicit background:true still polls via action:"check"', async () => {
+  it('action:"check" blocks until the background process exits', async () => {
     const tool = createShellTool(workDir);
 
-    const startResult = await tool.handler({ command: sleepCmd(12), background: true });
+    const startResult = await tool.handler({ command: sleepCmd(3), background: true });
     const startParsed = JSON.parse(startResult.output);
     expect(startParsed.taskId).toMatch(/^bg_/);
 
+    const started = Date.now();
     const checkResult = await tool.handler({ action: 'check', task_id: startParsed.taskId });
-    expect(checkResult.output).toMatch(/running|completed/);
+    const elapsed = Date.now() - started;
 
-    await new Promise((r) => setTimeout(r, 14_000));
+    expect(elapsed).toBeGreaterThan(1_500);
+    expect(elapsed).toBeLessThan(8_000);
+    expect(checkResult.output).toMatch(/completed|failed/);
+    expect(checkResult.output).not.toMatch(/Still running after this/);
+  }, 20_000);
 
-    const finalCheck = await tool.handler({ action: 'check', task_id: startParsed.taskId });
-    expect(finalCheck.output).toMatch(/completed|failed/);
-  }, 30_000);
+  it('a short check timeout is raised to 5s and does not kill the process', async () => {
+    const tool = createShellTool(workDir, 'check-floor');
+
+    const startResult = await tool.handler({ command: sleepCmd(20), background: true });
+    const startParsed = JSON.parse(startResult.output);
+
+    const started = Date.now();
+    const checkResult = await tool.handler({
+      action: 'check',
+      task_id: startParsed.taskId,
+      timeout: 1_000,
+    });
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeGreaterThan(4_500);
+    expect(elapsed).toBeLessThan(8_000);
+    const parsed = JSON.parse(checkResult.output);
+    expect(parsed.status).toBe('running');
+    expect(parsed.yieldMs).toBe(5_000);
+    expect(parsed.hint).toMatch(/5 minutes/);
+  }, 20_000);
+
+  it('yields an auto command still running at the wait cap without killing it', async () => {
+    const tool = createShellTool(workDir, 'yield-cap');
+
+    const started = Date.now();
+    const result = await tool.handler({ command: sleepCmd(6), timeout: 1_500 });
+    const elapsed = Date.now() - started;
+
+    expect(result.success).toBe(true);
+    expect(elapsed).toBeGreaterThan(1_200);
+    expect(elapsed).toBeLessThan(3_500);
+    const parsed = JSON.parse(result.output);
+    expect(parsed.mode).toBe('yielded');
+    expect(parsed.status).toBe('running');
+    expect(parsed.taskId).toMatch(/^bg_/);
+
+    const checkStarted = Date.now();
+    const checkResult = await tool.handler({ action: 'check', task_id: parsed.taskId });
+    expect(Date.now() - checkStarted).toBeLessThan(8_000);
+    expect(checkResult.output).toMatch(/completed|failed/);
+  }, 20_000);
+
+  it('explicit background:false still kills when the foreground timeout fires', async () => {
+    const tool = createShellTool(workDir);
+
+    const started = Date.now();
+    const result = await tool.handler({
+      command: sleepCmd(6),
+      background: false,
+      timeout: 1_500,
+    });
+    const elapsed = Date.now() - started;
+
+    expect(result.success).toBe(false);
+    expect(elapsed).toBeGreaterThan(1_200);
+    expect(elapsed).toBeLessThan(4_000);
+    expect(result.error).toMatch(/timed out/i);
+    expect(result.output).not.toMatch(/"mode":\s*"yielded"/);
+  }, 15_000);
 });
 
 describe('shell-tool — opt-in soft timeout escalate', () => {
@@ -189,6 +257,7 @@ describe('shell-tool — opt-in soft timeout escalate', () => {
   afterEach(() => {
     if (prevEscalate === undefined) delete process.env.ICE_SHELL_SOFT_ESCALATE;
     else process.env.ICE_SHELL_SOFT_ESCALATE = prevEscalate;
+    disposeBackgroundTaskManagerForSession('default');
   });
 
   it('escalates a 12s sleep to background after ~8s when ICE_SHELL_SOFT_ESCALATE=1', async () => {
