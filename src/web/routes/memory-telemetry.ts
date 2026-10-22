@@ -58,8 +58,59 @@ export interface MemorySeriesBucket {
   key: string;
   timestamp: number;
   recall: number;
+  recallSelected: number;
+  recallLlm: number;
+  /** 读取耗时合计，图表按次数求平均。 */
+  recallMs: number;
   extract: number;
+  extractCache: number;
+  extractMs: number;
+  extractSkip: number;
   dream: number;
+  dreamModified: number;
+  dreamDeleted: number;
+  dreamEvicted: number;
+  dreamMs: number;
+  capEvict: number;
+  capFiles: number;
+  capMs: number;
+  sessionWrote: number;
+  sessionReject: number;
+  indexRebuild: number;
+  /** 写入跳过原因 → 次数 */
+  skips: Record<string, number>;
+}
+
+function readCount(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function emptyMemorySeriesBucket(key: string, timestamp: number): MemorySeriesBucket {
+  return {
+    key,
+    timestamp,
+    recall: 0,
+    recallSelected: 0,
+    recallLlm: 0,
+    recallMs: 0,
+    extract: 0,
+    extractCache: 0,
+    extractMs: 0,
+    extractSkip: 0,
+    dream: 0,
+    dreamModified: 0,
+    dreamDeleted: 0,
+    dreamEvicted: 0,
+    dreamMs: 0,
+    capEvict: 0,
+    capFiles: 0,
+    capMs: 0,
+    sessionWrote: 0,
+    sessionReject: 0,
+    indexRebuild: 0,
+    skips: {},
+  };
 }
 
 export function aggregateMemorySeries(
@@ -68,13 +119,7 @@ export function aggregateMemorySeries(
   now = Date.now(),
 ): MemorySeriesBucket[] {
   const hourly = days <= 1;
-  const buckets = makeTimeBuckets(days, now).map((slot) => ({
-    key: slot.key,
-    timestamp: slot.timestamp,
-    recall: 0,
-    extract: 0,
-    dream: 0,
-  }));
+  const buckets = makeTimeBuckets(days, now).map((slot) => emptyMemorySeriesBucket(slot.key, slot.timestamp));
   const map = new Map(buckets.map((bucket) => [bucket.key, bucket]));
   const windowStart = now - days * 86_400_000;
   const first = buckets[0];
@@ -86,9 +131,37 @@ export function aggregateMemorySeries(
       || (first && ts < first.timestamp ? first : null)
       || (last && ts > last.timestamp ? last : null);
     if (!bucket) continue;
-    if (entry.type === 'memory_recall') bucket.recall += 1;
-    else if (entry.type === 'memory_extract' && !entry.skipReason) bucket.extract += 1;
-    else if (entry.type === 'memory_dream' && entry.executed) bucket.dream += 1;
+    if (entry.type === 'memory_recall') {
+      bucket.recall += 1;
+      bucket.recallSelected += readCount(entry.selectedCount);
+      if (entry.usedLLM) bucket.recallLlm += 1;
+      bucket.recallMs += readCount(entry.durationMs);
+    } else if (entry.type === 'memory_extract') {
+      if (entry.skipReason) {
+        bucket.extractSkip += 1;
+        const reason = String(entry.skipReason);
+        bucket.skips[reason] = (bucket.skips[reason] || 0) + 1;
+      } else {
+        bucket.extract += 1;
+        if (entry.usedPromptCache) bucket.extractCache += 1;
+        bucket.extractMs += readCount(entry.durationMs);
+      }
+    } else if (entry.type === 'memory_dream' && entry.executed) {
+      bucket.dream += 1;
+      bucket.dreamModified += readCount(entry.filesModified);
+      bucket.dreamDeleted += readCount(entry.filesDeleted);
+      bucket.dreamEvicted += readCount(entry.filesEvicted);
+      bucket.dreamMs += readCount(entry.durationMs);
+    } else if (entry.type === 'memory_cap_evict') {
+      bucket.capEvict += 1;
+      bucket.capFiles += readCount(entry.filesEvicted);
+      bucket.capMs += readCount(entry.durationMs);
+    } else if (entry.type === 'session_memory') {
+      if (entry.wrote) bucket.sessionWrote += 1;
+      else bucket.sessionReject += 1;
+    } else if (entry.type === 'memory_index_rebuild') {
+      bucket.indexRebuild += 1;
+    }
   }
   return buckets;
 }

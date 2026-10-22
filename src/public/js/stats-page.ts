@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Token 用量统计页：合计趋势 + 会话 / 子 Agent / 记忆（读独立 JSONL 账本）。
+ * Token 用量统计页：上图保留会话 / 子 Agent / 记忆，并叠加当前范围内 Token 前三的模型。
  * 日 / 当周 / 当月 / 当年为滚动窗口：24 小时 / 7 天 / 30 天 / 365 天。
  * 当年按自然月汇总，首尾月只计入这 365 天内的用量。
  */
@@ -17,6 +17,27 @@ export const StatsPage = (() => {
   ];
 
   const CHART_COLOR_VARS = ['--chart-1', '--chart-2', '--chart-3'];
+  const MODEL_COLOR_VARS = ['--model-line-1', '--model-line-2', '--model-line-3'];
+  const MODEL_COLOR_FALLBACKS = ['#e38b9a', '#b794f6', '#67d4e8'];
+  const MEM_COLOR_VARS = [
+    '--mem-1', '--mem-2', '--mem-3', '--mem-4', '--mem-5', '--mem-6', '--mem-7', '--mem-8',
+    '--mem-9', '--mem-10', '--mem-11', '--mem-12', '--mem-13', '--mem-14', '--mem-15', '--mem-16',
+  ];
+  const MEM_COLOR_FALLBACKS = [
+    '#8eb4e8', '#b794f6', '#7ec8d4', '#8dce78', '#e09a4a', '#e38b9a', '#e0c56a', '#d4656a',
+    '#d48bc4', '#d4b86a', '#9a86d4', '#8cbe74', '#e0a0b0', '#74c4b0', '#9080d0', '#70b0c8',
+  ];
+  /** 修改是改动的文件数，和卡片上的「修改」一致；Dream 是执行次数。 */
+  const MEMORY_LINE_SPECS = [
+    { field: 'recall', label: '读取', scale: 'count' },
+    { field: 'extract', label: '写入', scale: 'count' },
+    { field: 'dreamModified', label: '修改', scale: 'count' },
+    { field: 'dream', label: 'Dream', scale: 'count', dashed: true, mem: 6 },
+    { field: 'recallMs', label: '读取耗时', scale: 'ms', unit: 'ms', dashed: true, mem: 2, avgOver: 'recall' },
+    { field: 'extractMs', label: '写入耗时', scale: 'ms', unit: 'ms', dashed: true, mem: 4, avgOver: 'extract' },
+    { field: 'recallLlm', label: 'LLM', scale: 'count', dashed: true, mem: 1 },
+  ];
+  const TOP_MODEL_COUNT = 3;
 
   let containerEl = null;
   let mainEl = null;
@@ -311,11 +332,7 @@ export const StatsPage = (() => {
       memoryChart = null;
       return;
     }
-    const series = [
-      { key: 'recall', label: '读取', color: colors[0], values: buckets.map((b) =>  num(b.recall)) },
-      { key: 'extract', label: '写入', color: colors[1], values: buckets.map((b) =>  num(b.extract)) },
-      { key: 'dream', label: '修改', color: colors[2], values: buckets.map((b) =>  num(b.dream)) },
-    ];
+    const series = buildMemorySeries(buckets, colors, memoryChartColors());
     if (legendEl) legendEl.innerHTML = renderLegend(series);
     const axis = axisFormats(range);
     memoryChart = bindAreaChart(mount, {
@@ -328,6 +345,44 @@ export const StatsPage = (() => {
       formatX: axis.formatX,
       formatTipTitle: axis.formatTipTitle,
     });
+  }
+
+  function buildMemorySeries(buckets, kindColors, memColors) {
+    const series = [];
+    for (let i = 0; i < MEMORY_LINE_SPECS.length; i++) {
+      const spec = MEMORY_LINE_SPECS[i];
+      const values = memoryLineValues(buckets, spec);
+      if (spec.hideZero && sumValues(values) <= 0) continue;
+      series.push({
+        key: spec.field,
+        label: spec.label,
+        color: memoryLineColor(spec, kindColors, memColors),
+        values,
+        dashed: !!spec.dashed,
+        scale: spec.scale,
+        unit: spec.unit || '',
+      });
+    }
+    return series;
+  }
+
+  function memoryLineValues(buckets, spec) {
+    if (spec.avgOver) {
+      return buckets.map((bucket) => {
+        const count = num(bucket && bucket[spec.avgOver]);
+        const sum = num(bucket && bucket[spec.field]);
+        return count > 0 ? Math.round(sum / count) : 0;
+      });
+    }
+    return buckets.map((bucket) => num(bucket && bucket[spec.field]));
+  }
+
+  function memoryLineColor(spec, kindColors, memColors) {
+    if (spec.field === 'recall') return kindColors[0];
+    if (spec.field === 'extract') return kindColors[1];
+    if (spec.field === 'dreamModified') return kindColors[2];
+    const idx = typeof spec.mem === 'number' ? spec.mem : 0;
+    return memColors[idx % memColors.length] || memColors[0];
   }
 
   function auxMetric(label, value, sub) {
@@ -378,18 +433,17 @@ export const StatsPage = (() => {
     if (!mount) return;
     unbindChart(trendChart);
     paintTrendMetrics(buckets);
-    const colors = chartColors();
     const totals = buckets.map((b) =>  Number(b.totalTokens) || 0);
-    const series = buildTokenSeries(buckets, colors);
+    const series = buildTokenSeries(buckets, chartColors()).concat(
+      buildTopModelSeries(buckets, modelChartColors()),
+    );
     if (totalEl) totalEl.textContent = formatTokenCount(sumValues(totals));
-    if (legendEl) legendEl.innerHTML = series.length > 1 ? renderLegend(series) : '';
+    if (legendEl) legendEl.innerHTML = renderLegend(series);
     const axis = axisFormats(range);
     trendChart = bindAreaChart(mount, {
       id: 'trend',
       labels: buckets.map((b) =>  b.key),
-      series: series.length
-        ? series
-        : [{ key: 'total', label: '合计', color: colors[0], values: totals }],
+      series,
       stacked: false,
       filled: false,
       emptyText: '该时间范围暂无用量',
@@ -440,11 +494,55 @@ export const StatsPage = (() => {
     ];
   }
 
+  /** 当前时间范围内按 Token 合计取前三名模型。虚线叠在原有三条之上，避免和会话曲线重合时被盖住。 */
+  function buildTopModelSeries(buckets, colors) {
+    const totals = new Map();
+    for (let i = 0; i < buckets.length; i++) {
+      const byModel = buckets[i] && buckets[i].byModel;
+      if (!byModel) continue;
+      const names = Object.keys(byModel);
+      for (let n = 0; n < names.length; n++) {
+        const name = names[n];
+        if (!name) continue;
+        const row = byModel[name];
+        const tokens = Number(row && row.totalTokens) || 0;
+        if (tokens <= 0) continue;
+        totals.set(name, (totals.get(name) || 0) + tokens);
+      }
+    }
+    const ranked = Array.from(totals, (entry) => ({ name: entry[0], tokens: entry[1] }));
+    ranked.sort((a, b) => {
+      if (b.tokens !== a.tokens) return b.tokens - a.tokens;
+      return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+    });
+    const top = ranked.slice(0, TOP_MODEL_COUNT);
+    const series = [];
+    for (let r = 0; r < top.length; r++) {
+      const name = top[r].name;
+      series.push({
+        key: name,
+        label: name,
+        color: colors[r] || colors[0],
+        dashed: true,
+        values: buckets.map((bucket) => {
+          const row = bucket && bucket.byModel ? bucket.byModel[name] : null;
+          return Number(row && row.totalTokens) || 0;
+        }),
+      });
+    }
+    return series;
+  }
+
   function renderLegend(series) {
     let html = '';
     for (let i = 0; i < series.length; i++) {
+      const label = escapeHtml(series[i].label);
+      const dashed = !!series[i].dashed;
+      const swatchStyle = dashed
+        ? `border-color:${series[i].color}`
+        : `background:${series[i].color}`;
       html +=
-        `<span class="stats-legend-item"><span class="stats-legend-swatch" style="background:${series[i].color}"></span>${escapeHtml(series[i].label)}</span>`;
+        `<span class="stats-legend-item" title="${label}"><span class="stats-legend-swatch${dashed ? ' is-dashed' : ''}" style="${swatchStyle}"></span><span class="stats-legend-label">${label}</span></span>`;
     }
     return html;
   }
@@ -488,35 +586,45 @@ export const StatsPage = (() => {
       }
     }
 
-    let maxY = 0;
-    for (s = 0; s < tops.length; s++) {
-      for (i = 0; i < n; i++) if (tops[s][i] > maxY) maxY = tops[s][i];
+    const scaleMax = {};
+    for (s = 0; s < series.length; s++) {
+      const scale = series[s].scale || 'count';
+      if (!Object.prototype.hasOwnProperty.call(scaleMax, scale)) scaleMax[scale] = 0;
+      for (i = 0; i < n; i++) if (tops[s][i] > scaleMax[scale]) scaleMax[scale] = tops[s][i];
     }
+    const scaleNames = Object.keys(scaleMax);
+    let maxY = 0;
+    for (i = 0; i < scaleNames.length; i++) if (scaleMax[scaleNames[i]] > maxY) maxY = scaleMax[scaleNames[i]];
     const empty = maxY <= 0;
-    if (empty) maxY = 1;
+    for (i = 0; i < scaleNames.length; i++) {
+      if (scaleMax[scaleNames[i]] <= 0) scaleMax[scaleNames[i]] = 1;
+    }
 
     const xs = [];
     for (i = 0; i < n; i++) {
       xs[i] = n === 1 ? pad.left + plotW / 2 : pad.left + (plotW * i) / (n - 1);
     }
-    function yOf(v) {
-      return pad.top + plotH - (v / maxY) * plotH;
+    function yAt(seriesIndex, v) {
+      const scale = series[seriesIndex].scale || 'count';
+      const max = scaleMax[scale] || 1;
+      return pad.top + plotH - (v / max) * plotH;
     }
 
     let defs = '';
     let areas = '';
     for (s = 0; s < series.length; s++) {
       const gid = `${uid}-g${s}`;
-      const topYs = tops[s].map(yOf);
-      const botYs = bottoms[s].map(yOf);
+      const topYs = tops[s].map((v) => yAt(s, v));
+      const botYs = bottoms[s].map((v) => yAt(s, v));
       if (filled) {
         defs +=
           `<linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stop-color="${series[s].color}" stop-opacity="0.8"/><stop offset="95%" stop-color="${series[s].color}" stop-opacity="0.08"/></linearGradient>`;
         areas +=
           `<path class="stats-area-fill" d="${areaPath(xs, topYs, botYs)}" fill="url(#${gid})"/>`;
       }
+      const dashClass = series[s].dashed ? ' is-dashed' : '';
       areas +=
-        `<path class="stats-area-stroke" d="${linePath(xs, topYs)}" stroke="${series[s].color}"/>`;
+        `<path class="stats-area-stroke${dashClass}" d="${linePath(xs, topYs)}" stroke="${series[s].color}"/>`;
     }
 
     let grid = '';
@@ -584,8 +692,14 @@ export const StatsPage = (() => {
       hoverLine.setAttribute('x1', String(x));
       hoverLine.setAttribute('x2', String(x));
       for (let d = 0; d < dots.length; d++) {
+        const rawDot = Number(series[d].values[idx]) || 0;
         dots[d].setAttribute('cx', String(x));
-        dots[d].setAttribute('cy', String(yOf(tops[d][idx])));
+        if (rawDot <= 0 && series.length > 2) {
+          dots[d].setAttribute('visibility', 'hidden');
+          continue;
+        }
+        dots[d].setAttribute('visibility', 'visible');
+        dots[d].setAttribute('cy', String(yAt(d, tops[d][idx])));
       }
       let rows = '';
       let shown = 0;
@@ -594,7 +708,7 @@ export const StatsPage = (() => {
         if (raw <= 0 && series.length > 2) continue;
         shown += 1;
         rows +=
-          `<div class="stats-tooltip-row"><span class="stats-tooltip-swatch" style="background:${series[r].color}"></span><span class="stats-tooltip-name">${escapeHtml(series[r].label)}</span><span class="stats-tooltip-value">${formatTokenCount(raw)}</span></div>`;
+          `<div class="stats-tooltip-row"><span class="stats-tooltip-swatch" style="background:${series[r].color}"></span><span class="stats-tooltip-name">${escapeHtml(series[r].label)}</span><span class="stats-tooltip-value">${formatSeriesValue(series[r], raw)}</span></div>`;
       }
       if (!shown) {
         rows =
@@ -754,15 +868,44 @@ export const StatsPage = (() => {
       const key = matched[1];
       let bucket = map.get(key);
       if (!bucket) {
-        bucket = { key, timestamp: row.timestamp, recall: 0, extract: 0, dream: 0 };
+        bucket = { key, timestamp: row.timestamp };
         map.set(key, bucket);
         out.push(bucket);
       }
-      bucket.recall += num(row.recall);
-      bucket.extract += num(row.extract);
-      bucket.dream += num(row.dream);
+      mergeMemoryBucket(bucket, row);
     }
     return out;
+  }
+
+  function mergeMemoryBucket(target, row) {
+    const keys = Object.keys(row || {});
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key === 'key' || key === 'timestamp') continue;
+      const value = row[key];
+      if (typeof value === 'number') {
+        target[key] = num(target[key]) + value;
+      } else if (key === 'skips' && value && typeof value === 'object') {
+        if (!target.skips) target.skips = {};
+        const reasons = Object.keys(value);
+        for (let r = 0; r < reasons.length; r++) {
+          target.skips[reasons[r]] = num(target.skips[reasons[r]]) + num(value[reasons[r]]);
+        }
+      }
+    }
+  }
+
+  function formatSeriesValue(series, raw) {
+    if (series && series.unit === 'ms') {
+      const ms = Math.max(0, Math.round(Number(raw) || 0));
+      if (ms >= 10000) {
+        const sec = ms / 1000;
+        const text = sec >= 100 ? String(Math.round(sec)) : String(Math.round(sec * 10) / 10);
+        return text + ' 秒';
+      }
+      return formatTokenCount(ms) + ' ms';
+    }
+    return formatTokenCount(raw);
   }
 
   function emptyKindTotals() {
@@ -824,6 +967,25 @@ export const StatsPage = (() => {
     for (let i = 0; i < CHART_COLOR_VARS.length; i++) {
       const value = styles.getPropertyValue(CHART_COLOR_VARS[i]).trim();
       out.push(value || '#6d8cff');
+    }
+    return out;
+  }
+
+  function modelChartColors() {
+    return readColorVars(MODEL_COLOR_VARS, MODEL_COLOR_FALLBACKS);
+  }
+
+  function memoryChartColors() {
+    return readColorVars(MEM_COLOR_VARS, MEM_COLOR_FALLBACKS);
+  }
+
+  function readColorVars(names, fallbacks) {
+    const root = containerEl && containerEl.querySelector('.stats-root');
+    const styles = getComputedStyle(root || document.documentElement);
+    const out = [];
+    for (let i = 0; i < names.length; i++) {
+      const value = styles.getPropertyValue(names[i]).trim();
+      out.push(value || fallbacks[i] || fallbacks[0]);
     }
     return out;
   }

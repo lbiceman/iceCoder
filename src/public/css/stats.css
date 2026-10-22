@@ -1,5 +1,26 @@
 /* Token 用量统计页：上排 Token 卡，下排记忆，不滚动 */
 .stats-root {
+  /* 前三模型用虚线：玫红 / 紫 / 青，避开会话蓝、子 Agent 琥珀、记忆绿 */
+  --model-line-1: oklch(0.74 0.15 12);
+  --model-line-2: oklch(0.70 0.16 310);
+  --model-line-3: oklch(0.78 0.12 200);
+  /* 记忆图附加线：和读取蓝、写入绿、修改琥珀错开 */
+  --mem-1: oklch(0.76 0.12 225);
+  --mem-2: oklch(0.72 0.15 305);
+  --mem-3: oklch(0.78 0.11 195);
+  --mem-4: oklch(0.78 0.14 130);
+  --mem-5: oklch(0.74 0.16 42);
+  --mem-6: oklch(0.74 0.14 8);
+  --mem-7: oklch(0.80 0.12 98);
+  --mem-8: oklch(0.68 0.17 25);
+  --mem-9: oklch(0.72 0.15 335);
+  --mem-10: oklch(0.76 0.13 85);
+  --mem-11: oklch(0.68 0.14 285);
+  --mem-12: oklch(0.74 0.11 115);
+  --mem-13: oklch(0.76 0.12 355);
+  --mem-14: oklch(0.74 0.12 175);
+  --mem-15: oklch(0.70 0.12 265);
+  --mem-16: oklch(0.72 0.10 210);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -7,6 +28,51 @@
   overflow: hidden;
   background: var(--surface-page);
   color: var(--text-primary);
+}
+
+[data-theme="light"] .stats-root,
+[data-theme="modern"] .stats-root {
+  --model-line-1: oklch(0.55 0.16 15);
+  --model-line-2: oklch(0.50 0.16 310);
+  --model-line-3: oklch(0.52 0.12 200);
+  --mem-1: oklch(0.52 0.12 225);
+  --mem-2: oklch(0.48 0.15 305);
+  --mem-3: oklch(0.50 0.11 195);
+  --mem-4: oklch(0.50 0.14 130);
+  --mem-5: oklch(0.52 0.16 42);
+  --mem-6: oklch(0.50 0.14 8);
+  --mem-7: oklch(0.52 0.12 98);
+  --mem-8: oklch(0.48 0.17 25);
+  --mem-9: oklch(0.48 0.15 335);
+  --mem-10: oklch(0.50 0.13 85);
+  --mem-11: oklch(0.46 0.14 285);
+  --mem-12: oklch(0.48 0.11 115);
+  --mem-13: oklch(0.50 0.12 355);
+  --mem-14: oklch(0.48 0.12 175);
+  --mem-15: oklch(0.46 0.12 265);
+  --mem-16: oklch(0.46 0.10 210);
+}
+
+[data-theme="fresh"] .stats-root {
+  --model-line-1: oklch(0.52 0.14 25);
+  --model-line-2: oklch(0.46 0.12 320);
+  --model-line-3: oklch(0.48 0.10 230);
+  --mem-1: oklch(0.48 0.10 220);
+  --mem-2: oklch(0.44 0.12 305);
+  --mem-3: oklch(0.46 0.10 195);
+  --mem-4: oklch(0.46 0.12 130);
+  --mem-5: oklch(0.48 0.14 42);
+  --mem-6: oklch(0.46 0.12 15);
+  --mem-7: oklch(0.48 0.11 90);
+  --mem-8: oklch(0.44 0.14 25);
+  --mem-9: oklch(0.44 0.12 335);
+  --mem-10: oklch(0.48 0.12 75);
+  --mem-11: oklch(0.42 0.12 285);
+  --mem-12: oklch(0.44 0.10 115);
+  --mem-13: oklch(0.46 0.11 355);
+  --mem-14: oklch(0.44 0.10 165);
+  --mem-15: oklch(0.42 0.10 265);
+  --mem-16: oklch(0.44 0.08 200);
 }
 
 .stats-header {
@@ -290,6 +356,10 @@
   stroke-width: 2;
 }
 
+.stats-area-stroke.is-dashed {
+  stroke-dasharray: 6 4;
+}
+
 .stats-axis-label {
   fill: var(--text-muted);
   font-size: 11px;
@@ -339,10 +409,29 @@
   min-height: 22px;
 }
 
+.stats-split .stats-legend {
+  max-height: 72px;
+}
+
+.stats-split .stats-legend-item {
+  min-width: 0;
+  max-width: 180px;
+}
+
 .stats-split .stats-legend:empty,
 .stats-card-main .stats-legend:empty {
   display: block;
   visibility: hidden;
+}
+
+.stats-card-main .stats-legend {
+  flex-wrap: wrap;
+  max-height: 56px;
+}
+
+.stats-card-main .stats-legend-item {
+  min-width: 0;
+  max-width: 240px;
 }
 
 .stats-legend-item {
@@ -353,11 +442,26 @@
   color: var(--text-secondary);
 }
 
+.stats-legend-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stats-legend-swatch {
   width: 8px;
   height: 8px;
   border-radius: 2px;
   flex-shrink: 0;
+}
+
+.stats-legend-swatch.is-dashed {
+  width: 14px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2px dashed;
+  background: transparent;
 }
 
 .stats-muted,
