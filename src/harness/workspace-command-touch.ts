@@ -559,3 +559,19 @@ export function diffInventoryTouchedPaths(
     incomplete: before.complete !== true || after.complete !== true,
   };
 }
+
+/**
+ * 单条命令新建文件超过这个数，按批量产物处理（解压素材、git clone、依赖安装）。
+ * 这些文件不逐个记为会话/子 Agent 改动：否则每个 intent 归档都要列出全部路径并按文本快照，
+ * 会话缓存随消息数成倍增长，回退时二进制文件也会被写成乱码。
+ */
+export const MAX_TRACKED_CREATED_FILES_PER_COMMAND = 200;
+
+export function limitTrackedCommandDiff<T extends { created: string[] }>(
+  diff: T,
+): T & { bulkCreatedSkipped: number } {
+  if (diff.created.length <= MAX_TRACKED_CREATED_FILES_PER_COMMAND) {
+    return { ...diff, bulkCreatedSkipped: 0 };
+  }
+  return { ...diff, created: [], bulkCreatedSkipped: diff.created.length };
+}

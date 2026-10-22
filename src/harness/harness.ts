@@ -25,7 +25,7 @@ import type {
   StreamFunction,
 } from './types.js';
 import { ContextAssembler } from './context-assembler.js';
-import { LoopController } from './loop-controller.js';
+import { LoopController, MAX_LOOP_ITERATIONS_WITHOUT_LLM } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
 import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { applyCheckpointResumeFork, stripResumeCheckpointMessages } from './checkpoint-resume-compact.js';
@@ -43,7 +43,7 @@ import { OperationOutcomeLedger } from './operation-outcome.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
-import { RuntimeTelemetry } from './runtime-telemetry.js';
+import { RuntimeTelemetry, SUB_AGENT_TELEMETRY_LIMITS } from './runtime-telemetry.js';
 import { CheckpointEngine } from './checkpoint-engine.js';
 import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { ensureTaskTool, stripTaskTool } from './agents/task-tool.js';
@@ -181,7 +181,11 @@ export class Harness {
     this.checkpointManager = config.sessionDir
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;
-    this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
+    this.runtimeTelemetry = new RuntimeTelemetry(
+      config.sessionDir,
+      config.sessionId,
+      config.agentScope ? SUB_AGENT_TELEMETRY_LIMITS : undefined,
+    );
 
     if (config.sessionDir) {
       this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
@@ -296,6 +300,24 @@ export class Harness {
       this.loopController.resetForNewRun();
       endTiming('run_init', runStartedAt);
       while (true) {
+        this.loopController.noteLoopIteration();
+        if (this.loopController.isStalled()) {
+          logger.error(`连续 ${MAX_LOOP_ITERATIONS_WITHOUT_LLM} 次循环未拿到模型响应，判定停滞并中断`);
+          return handleHarnessStop(phases.prep, {
+            reason: 'error',
+            messages: state.messages,
+            chatFn,
+            tools: state.tools,
+            logger,
+            onStep,
+            streamFn,
+            runtimeState: state,
+            finalContent: [
+              `任务停滞，已自动中断：连续 ${MAX_LOOP_ITERATIONS_WITHOUT_LLM} 次循环都没有成功调用模型（多为上下文压缩或重试在空转）。`,
+              '已完成的修改都保留着。发送「继续」会从当前进度接着做；若反复出现，请新开会话。',
+            ].join('\n'),
+          });
+        }
         const roundStartedAt = markTimingStart();
         const prep = await timeAsync('round_prep', () => prepareHarnessRound(phases.prep, {
           state,

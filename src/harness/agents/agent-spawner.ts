@@ -829,12 +829,12 @@ export class AgentSpawner {
   private onCommandWorkspaceChange(
     run: AgentRun,
     toolCall: ToolCall,
-    diff: { created: string[]; changed: string[]; deleted: string[] },
+    diff: { created: string[]; changed: string[]; deleted: string[]; bulkCreatedSkipped?: number },
   ): void {
     const tracking = run.commands.get(toolCall.id);
     const startedAt = tracking?.startedAt ?? this.now();
     const command = tracking?.command ?? String(toolCall.arguments?.command ?? toolCall.name);
-    let ownMutation = false;
+    let ownMutation = (diff.bulkCreatedSkipped ?? 0) > 0;
     const all = [
       ...diff.created.map(p => ({ p, kind: 'created' as const })),
       ...diff.changed.map(p => ({ p, kind: 'changed' as const })),

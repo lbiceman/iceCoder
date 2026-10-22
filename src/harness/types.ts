@@ -213,10 +213,13 @@ export interface AgentToolScope {
   checkBeforeTool(
     toolCall: import('../llm/types.js').ToolCall,
   ): { reason: string; message: string } | null;
-  /** run_command 前后工作区清单差异（无法事先加租约，只能事后发现）。 */
+  /**
+   * run_command 前后工作区清单差异（无法事先加租约，只能事后发现）。
+   * 批量新建的文件不在 created 里，只给数量 bulkCreatedSkipped。
+   */
   onCommandWorkspaceChange?(
     toolCall: import('../llm/types.js').ToolCall,
-    paths: { created: string[]; changed: string[]; deleted: string[] },
+    paths: { created: string[]; changed: string[]; deleted: string[]; bulkCreatedSkipped?: number },
   ): void;
 }
 

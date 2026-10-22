@@ -39,6 +39,8 @@ export interface HandleHarnessStopArgs {
   onStep?: (event: HarnessStepEvent) => void;
   streamFn?: StreamFunction;
   runtimeState?: HarnessRunState;
+  /** 给定时直接作为最终回复，不再请求模型总结（上下文可能已不可用）。 */
+  finalContent?: string;
 }
 
 /**
@@ -118,6 +120,25 @@ export async function handleHarnessStop(
 
     return {
       content: finalContent,
+      loopState: state,
+      messages: [...messages],
+      log: logger.getEntries(),
+      completionStatus,
+      completionReason,
+    };
+  }
+
+  if (args.finalContent) {
+    onStep?.({
+      type: 'final',
+      totalToolCalls: state.totalToolCalls,
+      content: args.finalContent,
+      stopReason: reason,
+      completionStatus,
+      completionReason,
+    });
+    return {
+      content: args.finalContent,
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),

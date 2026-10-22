@@ -21,11 +21,15 @@ import {
 } from './checkpoint-resume-compact.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
 import { logCacheSegmentReset } from './harness-cache-segment.js';
-import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
+import { MAX_PRE_LLM_COMPACTION_RETRIES, PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import { canUseEmergencyCompact, consumeEmergencyCompact } from './emergency-compact-quota.js';
+import {
+  canUseEmergencyCompact,
+  consumeEmergencyCompact,
+  settleEmergencyCompactAfterLlmResponse,
+} from './emergency-compact-quota.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { TokenBudgetTracker } from './token-budget.js';
@@ -113,6 +117,7 @@ export async function callHarnessLlm(
   if (
     deps.contextCompactor
     && canUseEmergencyCompact(state)
+    && (state.compactionRetriesWithoutLlm ?? 0) < MAX_PRE_LLM_COMPACTION_RETRIES
     && !deps.loopController.isAborted()
   ) {
     const ctxWindow = readEffectiveContextWindowTokens();
@@ -120,15 +125,17 @@ export async function callHarnessLlm(
     const usage = resolveCompactionUsage({
       messages: normalizedMsgs,
       tools: currentTools,
-      lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+      lastApiPromptTokens: deps.loopController.getLiveApiPromptTokens(),
     });
     if (usage.effectiveUsed >= proactiveLine) {
       consumeEmergencyCompact(state);
+      state.compactionRetriesWithoutLlm = (state.compactionRetriesWithoutLlm ?? 0) + 1;
       state.checkpointResumeForkApplied = true;
       const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
       const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
         aggressive: true,
       });
+      deps.loopController.markPromptTokensStale();
       logger.error(
         `Context near limit before LLM call; proactive compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
       );
@@ -214,6 +221,7 @@ export async function callHarnessLlm(
       endTiming('llm_wait', llmWaitStartedAt, round);
     }
     state.llmRetryCount = 0;
+    settleEmergencyCompactAfterLlmResponse(state);
   } catch (error) {
     // 用户中断：abort error 直接走 abort 路径，跳过重试 / 紧急压缩 / error final，
     // 让上层 round 立刻进入 handleHarnessStop(reason='user_abort')。
@@ -243,6 +251,7 @@ export async function callHarnessLlm(
         const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
           aggressive: true,
         });
+        deps.loopController.markPromptTokensStale();
         logger.error(
           `LLM context window exceeded; emergency compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
         );

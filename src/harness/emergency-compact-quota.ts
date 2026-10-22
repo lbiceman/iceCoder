@@ -23,7 +23,21 @@ export function consumeEmergencyCompact(state: HarnessRunState): boolean {
   return true;
 }
 
-/** 成功硬压缩且占用回到微压缩线以下时归还 1 次，不超过 max。 */
+/** 成功硬压缩且占用回到微压缩线以下：记下待返还，等模型真正响应后再返还。 */
+export function scheduleEmergencyCompactRefund(state: HarnessRunState | undefined): void {
+  if (!state) return;
+  state.emergencyCompactRefundPending = true;
+}
+
+/** 模型成功响应：清空主动收缩重试计数，兑现待返还的配额。 */
+export function settleEmergencyCompactAfterLlmResponse(state: HarnessRunState): void {
+  state.compactionRetriesWithoutLlm = 0;
+  if (!state.emergencyCompactRefundPending) return;
+  state.emergencyCompactRefundPending = false;
+  refundEmergencyCompact(state);
+}
+
+/** 归还 1 次，不超过 max。 */
 export function refundEmergencyCompact(state: HarnessRunState | undefined): void {
   if (!state) return;
   const current = usedCount(state);

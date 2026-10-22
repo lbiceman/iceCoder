@@ -6,7 +6,8 @@
 import type { BootstrapResult } from '../bootstrap.js';
 import { reloadLLMAdapter, watchConfigChanges } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
-import { getDefaultWorkDir } from '../paths.js';
+import { getDefaultWorkDir, getMcpCacheDir, getRuntimeDataDir } from '../paths.js';
+import { startStoragePruneSchedule } from '../../runtime/storage-prune.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { createServer, startServer } from '../../web/server.js';
 import { createConfigRouter } from '../../web/routes/config.js';
@@ -205,8 +206,14 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     onReady: (url) => broadcastTunnelReady({ url }),
   });
   const stopConfigWatch = watchConfigChanges(llmAdapter, paths.configPath);
+  const stopStoragePrune = startStoragePruneSchedule({
+    sessionsDir: path.resolve(process.env.ICE_SESSIONS_DIR!),
+    mcpCacheDir: getMcpCacheDir(),
+    runtimeDir: path.join(getRuntimeDataDir(), 'runtime'),
+  });
 
   const cleanup = () => {
+    stopStoragePrune();
     scheduledTaskScheduler.stop();
     unregisterScheduledTaskTool();
     disableOsSchedulerGuard();

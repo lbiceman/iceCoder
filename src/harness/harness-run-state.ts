@@ -105,6 +105,10 @@ export interface HarnessRunState {
   contextEmergencyCompactCount?: number;
   /** 配额用尽时为 true（旧 checkpoint 仅有此字段时视为已用尽） */
   contextEmergencyCompactUsed: boolean;
+  /** 硬压缩已回到微压缩线以下；等下一次模型真正响应后才返还 1 次配额 */
+  emergencyCompactRefundPending?: boolean;
+  /** 调用模型前因主动收缩而重试、尚未真正发出请求的连续次数 */
+  compactionRetriesWithoutLlm?: number;
   /** 上一次发送前总量检查的本地估算；与 provider 实际 prompt token 对比得到校准系数 */
   lastSentEstimatedTokens?: number;
   /** 续跑 checkpoint 短摘要（emergency fork 复用） */

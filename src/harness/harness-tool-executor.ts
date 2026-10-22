@@ -52,6 +52,7 @@ import {
   diffInventoryTouchedPaths,
   extractLikelyWritePathsFromCommand,
   isShellWorkspaceTouchTool,
+  limitTrackedCommandDiff,
   listWorkspaceFileInventory,
   rememberBackgroundCommandInventory,
   discardPreCommandInventories,
@@ -664,7 +665,7 @@ export async function executeToolCallsStreaming(
   let usedContextTokens = resolveCompactionUsage({
     messages,
     tools: currentTools,
-    lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+    lastApiPromptTokens: deps.loopController.getLiveApiPromptTokens(),
   }).effectiveUsed;
 
   // 中断时 flush 只返回已跑完的工具；这些副作用已发生，照常写结果并记账，未完成的才补 interrupted。
@@ -727,20 +728,28 @@ export async function executeToolCallsStreaming(
       ? takeBackgroundCommandInventory(commandInventoryScope, taskId)
       : undefined;
     const inventoryBefore = preInv ?? backgroundInv;
-    let commandInventoryDiff: ReturnType<typeof diffInventoryTouchedPaths> | undefined;
+    let commandInventoryDiff:
+      | (ReturnType<typeof diffInventoryTouchedPaths> & { bulkCreatedSkipped: number })
+      | undefined;
     if (inventoryBefore) {
       const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
         baseline: inventoryBefore,
         scopeRelPaths: inventoryBefore.scopeRelPaths,
         excludeDirs: harnessOwnedDirs,
       });
-      commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
+      const fullDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
+      commandInventoryDiff = limitTrackedCommandDiff(fullDiff);
+      if (commandInventoryDiff.bulkCreatedSkipped > 0) {
+        console.info(
+          `[harness] 命令新建 ${commandInventoryDiff.bulkCreatedSkipped} 个文件，按批量产物处理，不逐个记入会话改动`,
+        );
+      }
       deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
       const mutationVersionBefore = taskState?.snapshot().workspaceMutationVersion;
       const touchedPaths = [
-        ...commandInventoryDiff.created,
-        ...commandInventoryDiff.changed,
-        ...commandInventoryDiff.deleted,
+        ...fullDiff.created,
+        ...fullDiff.changed,
+        ...fullDiff.deleted,
       ].filter(touched =>
         !siblingToolMutationPaths.has(normalizeInventoryPath(touched)),
       );
