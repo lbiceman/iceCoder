@@ -665,6 +665,7 @@ export const ChatPage = (() => {
         newTurnMeta.preview = String(userMsg.content).replace(/\s+/g, ' ').trim().slice(0, 72);
       }
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
+      if (startNewTurnUi) commitLiveToolsForRender();
       if (startNewTurnUi && UI.maybeRepartitionTailIfNeeded) {
         UI.maybeRepartitionTailIfNeeded(
           Session.getMessages(),
@@ -722,6 +723,7 @@ export const ChatPage = (() => {
         if (Pet && typeof Pet.showThinking === 'function') {
           Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
         }
+        foldLiveToolsIntoHistory();
         if (UI && typeof UI.clearLiveToolRoundDom === 'function') UI.clearLiveToolRoundDom();
         if (UI && typeof UI.setLiveToolRoundActive === 'function') UI.setLiveToolRoundActive(true);
       }
@@ -791,6 +793,7 @@ export const ChatPage = (() => {
 
     Pet.removeThinking(isStreaming, WS.isProcessing());
     UI.clearReasoningStream();
+    foldLiveToolsIntoHistory();
     if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
 
     const messages = Session.getMessages();
@@ -1894,30 +1897,83 @@ export const ChatPage = (() => {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
 
+  /** 回合还在跑时推迟重绘；等空闲再拉磁盘上的工具记录，避免把尾部时间线清掉后不再画回来。 */
+  let historyRefreshRetryTimer = 0;
+  let historyRefreshFailureRetries = 0;
+
+  function commitLiveToolsForRender() {
+    if (Session && typeof Session.commitLiveToolBatchToTraces === 'function') {
+      Session.commitLiveToolBatchToTraces();
+    }
+  }
+
+  /** 时间线还挂在 live DOM 上时，先写入 toolTraces 再重绘，清 DOM 才不会把这一轮工具弄丢。 */
+  function foldLiveToolsIntoHistory() {
+    commitLiveToolsForRender();
+    if (!UI || typeof UI.isLiveToolRoundActive !== 'function' || !UI.isLiveToolRoundActive()) return;
+    if (typeof UI.renderMessagesOnly !== 'function') return;
+    UI.renderMessagesOnly(
+      Session.getMessages(),
+      Session.getToolTraces(),
+      Session.stripStatusTag,
+      false,
+      buildDisplayMap(),
+    );
+  }
+
+  function scheduleHistoryRefreshRetry(shouldScroll, fromFailure) {
+    if (historyRefreshRetryTimer) return;
+    if (fromFailure) {
+      historyRefreshFailureRetries += 1;
+      if (historyRefreshFailureRetries > 8) {
+        historyRefreshFailureRetries = 0;
+        return;
+      }
+    }
+    historyRefreshRetryTimer = setTimeout(() => {
+      historyRefreshRetryTimer = 0;
+      if (shouldSkipServerSnapshotSync()) {
+        scheduleHistoryRefreshRetry(shouldScroll, false);
+        return;
+      }
+      historyRefreshFailureRetries = 0;
+      refreshChatHistoryAfterTurn(shouldScroll, null, { force: true });
+    }, 400);
+  }
+
   function refreshChatHistoryAfterTurn(shouldScroll, done, opts) {
     opts = opts || {};
     if (!opts.force && shouldSkipServerSnapshotSync()) {
+      scheduleHistoryRefreshRetry(shouldScroll, false);
       if (done) done();
       return;
     }
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
     Session.fetchServerMessages((serverMsgs, result) => {
       if (result && result.ok === false) {
+        scheduleHistoryRefreshRetry(shouldScroll, true);
         if (done) done();
         return;
       }
       if (!opts.force && shouldSkipServerSnapshotSync()) {
+        scheduleHistoryRefreshRetry(shouldScroll, false);
         if (done) done();
         return;
       }
       const raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       const separated = Session.separateToolTraces(raw);
-      Session.applyServerChatSnapshot(
+      const applied = Session.applyServerChatSnapshot(
         separated,
         { fullRender: false, authoritative: true },
         isStreaming,
         WS.isProcessing(),
       );
+      // 快照没写进内存就重绘，会清掉尾部正在显示的工具，而 toolTraces 里还没有这一轮。
+      if (!applied) {
+        if (shouldSkipServerSnapshotSync()) scheduleHistoryRefreshRetry(shouldScroll, false);
+        if (done) done();
+        return;
+      }
       renderChatHistoryWithFetch(shouldScroll, () => {
         Session.saveMessages();
         if (done) done();
@@ -2003,6 +2059,7 @@ export const ChatPage = (() => {
       painted = true;
     }
     if (painted) {
+      commitLiveToolsForRender();
       if (UI.maybeRepartitionTailIfNeeded) {
         UI.maybeRepartitionTailIfNeeded(
           Session.getMessages(),

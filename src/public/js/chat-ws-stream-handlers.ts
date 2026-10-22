@@ -124,10 +124,10 @@ export const ChatWsStreamHandlers = (() => {
     }
 
     function scheduleRefreshAfterTurn() {
+      if (Session.commitLiveToolBatchToTraces) Session.commitLiveToolBatchToTraces();
       setTimeout(() => {
-        if (!ctx.shouldSkipServerSnapshotSync()) {
-          ctx.refreshChatHistoryAfterTurn('force');
-        }
+        // 仍在收尾或下一轮已开始时也要登记，空闲后再画；直接跳过会把本轮工具留在即将被清掉的 live DOM 里。
+        ctx.refreshChatHistoryAfterTurn('force');
       }, 50);
     }
 
@@ -331,6 +331,7 @@ export const ChatWsStreamHandlers = (() => {
         if (get('userStopped')) set('userStopped', false);
         set('isStreaming', false);
         Pet.removeThinking(get('isStreaming'), WS.isProcessing());
+        if (Session.commitLiveToolBatchToTraces) Session.commitLiveToolBatchToTraces();
         if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
         if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
         // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
@@ -352,9 +353,13 @@ export const ChatWsStreamHandlers = (() => {
       UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
       const msg = { role: 'agent', content: `[err] ${data.message}` };
       Session.appendMessage(msg);
+      if (Session.commitLiveToolBatchToTraces) Session.commitLiveToolBatchToTraces();
       UI.appendMessageEl(msg, Session.stripStatusTag);
       Session.saveMessages();
       Pet.removeThinking(get('isStreaming'), WS.isProcessing());
+      set('isStreaming', false);
+      UI.setStreamingState(false);
+      scheduleRefreshAfterTurn();
     }
 
     function tryMountToolDiff(toolCallId, diffSource) {
