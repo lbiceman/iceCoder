@@ -9,6 +9,7 @@ import {
   rewriteIntentCheckpoint,
 } from './intent-checkpoint-store.js';
 import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
+import { readSnapshotFileContent } from './snapshot-file-content.js';
 import {
   remapPathToWorkspace,
   remapSnapshotToWorkspace,
@@ -80,7 +81,7 @@ async function readWorkspaceFileOrNull(
   try {
     const stat = await fs.stat(abs);
     if (!stat.isFile()) return null;
-    return await fs.readFile(abs, 'utf-8');
+    return await readSnapshotFileContent(abs);
   } catch {
     return null;
   }

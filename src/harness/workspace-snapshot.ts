@@ -8,6 +8,7 @@ import path from 'node:path';
 import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import type { CombinedCheckpointFile } from './checkpoint-engine.js';
 import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
+import { decodeSnapshotContent, readSnapshotFileContent } from './snapshot-file-content.js';
 
 function toPosixRel(workspaceRoot: string, absPath: string): string | null {
   const root = path.resolve(workspaceRoot);
@@ -140,7 +141,7 @@ export async function captureWorkspaceFileSnapshot(
     try {
       const stat = await fs.stat(abs);
       if (stat.isFile()) {
-        snapshot[key] = await fs.readFile(abs, 'utf-8');
+        snapshot[key] = await readSnapshotFileContent(abs);
       } else {
         snapshot[key] = null;
       }
@@ -198,10 +199,15 @@ export async function applyWorkspaceFileSnapshot(
       warnOutsideWorkspace('write', rel);
       continue;
     }
+    const decoded = decodeSnapshotContent(content);
+    if (decoded.kind === 'skip') {
+      console.warn(`[workspace-snapshot] 保持现状不写回 ${rel}：${decoded.reason}`);
+      continue;
+    }
     try {
       // rename 换掉的是新 inode，原文件的权限位（如脚本的 +x）要手动带过去。
       const previousMode = await fs.stat(abs).then((s) => s.mode & 0o7777, () => undefined);
-      await writeFileAtomic(abs, content);
+      await writeFileAtomic(abs, decoded.kind === 'binary' ? decoded.data : decoded.text);
       if (previousMode !== undefined && process.platform !== 'win32') {
         await fs.chmod(abs, previousMode);
       }
