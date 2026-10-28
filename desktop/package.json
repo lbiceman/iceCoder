@@ -56,7 +56,7 @@
       "**/node_modules/@vscode/ripgrep/**",
       "**/node_modules/node-pty/**"
     ],
-    "afterPack": "scripts/stamp-win-icon.cjs",
+    "afterPack": "scripts/after-pack.cjs",
     "win": {
       "target": [
         {
@@ -64,7 +64,8 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "artifactName": "iceCoder-windows.${ext}"
+      "artifactName": "iceCoder-windows.${ext}",
+      "electronLanguages": ["en-US", "zh-CN"]
     },
     "nsis": {
       "oneClick": false,
@@ -85,7 +86,8 @@
         "deb"
       ],
       "icon": "assets/icon.png",
-      "category": "Development"
+      "category": "Development",
+      "electronLanguages": ["en-US", "zh-CN"]
     }
   }
 }

@@ -12,6 +12,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { BUNDLED_DATA_FILES } = require('../../scripts/bundled-data-files.cjs');
+const { SKIP_OCR_PACKAGES } = require('./prune-bundle.cjs');
+
+const skipRuntimePackages = new Set(SKIP_OCR_PACKAGES);
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const desktopRoot = path.resolve(__dirname, '..');
@@ -71,7 +74,7 @@ function collectTransitiveDependencies(rootNames, nodeModulesDir) {
 
   while (queue.length > 0) {
     const name = queue.shift();
-    if (collected.has(name)) continue;
+    if (collected.has(name) || skipRuntimePackages.has(name)) continue;
     collected.add(name);
 
     const pkgJsonPath = path.join(nodeModulesDir, name, 'package.json');
@@ -85,7 +88,8 @@ function collectTransitiveDependencies(rootNames, nodeModulesDir) {
     }
 
     for (const depName of Object.keys(pkg.dependencies || {})) {
-      if (!collected.has(depName)) queue.push(depName);
+      if (skipRuntimePackages.has(depName) || collected.has(depName)) continue;
+      queue.push(depName);
     }
   }
 
@@ -281,4 +285,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main };
+module.exports = { main, collectTransitiveDependencies };
