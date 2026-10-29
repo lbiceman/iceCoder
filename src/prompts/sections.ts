@@ -408,7 +408,7 @@ export function createShellGuideSection(): PromptSection {
 
 Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
 
-**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev or preview server, find the PID listening on that server's port and stop only that PID.`,
+**Never** kill processes by image name — not \`node\`, not \`iceCoder\`, not \`electron\` (\`taskkill /IM\`, \`Stop-Process -Name\`, \`killall\`, \`pkill\`, or filtering \`Get-Process\` by name then killing). The desktop app runs this agent inside \`iceCoder.exe\`, and any copy of iceCoder you launch to test has the same name, so a name-based kill terminates you. To stop something you started, keep its PID (\`Start-Process -PassThru\`, \`spawn().pid\`) and run \`taskkill /PID <pid> /T /F\` on that PID only. To stop a dev or preview server, find the PID listening on that server's port and stop only that PID.`,
     isStatic: true,
     priority: 45,
     enabled: true,

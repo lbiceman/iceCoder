@@ -5,6 +5,11 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { resolveWindowsSystemExecutable } from './shell-spawn-env.js';
+import { getProtectedHostPids, isHostListenPort, isProtectedHostPid } from './shell-host-guard.js';
+
+function protectedPidsPowerShellArray(): string {
+  return `@(${getProtectedHostPids().join(',')})`;
+}
 
 /** Windows：异步启动 CIM 进程树扫描兜底，不占用调用线程。 */
 function startWindowsCimFallback(rootPid: number, powershell: string): void {
@@ -15,10 +20,10 @@ function startWindowsCimFallback(rootPid: number, powershell: string): void {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        `$root=${rootPid};$seen=@{};$q=[Collections.Queue]::new();$q.Enqueue($root);`
+        `$root=${rootPid};$keep=${protectedPidsPowerShellArray()};$seen=@{};$q=[Collections.Queue]::new();$q.Enqueue($root);`
           + 'while($q.Count -gt 0){$p=$q.Dequeue();if($seen[$p]){continue};$seen[$p]=$true;'
           + 'Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" | ForEach-Object {$q.Enqueue([int]$_.ProcessId)}};'
-          + 'foreach($p in $seen.Keys){try{Stop-Process -Id $p -Force -ErrorAction SilentlyContinue}catch{}}',
+          + 'foreach($p in $seen.Keys){if($keep -contains $p){continue};try{Stop-Process -Id $p -Force -ErrorAction SilentlyContinue}catch{}}',
       ],
       { windowsHide: true, detached: true, stdio: 'ignore' },
     );
@@ -43,6 +48,10 @@ function startWindowsCimFallback(rootPid: number, powershell: string): void {
  * taskkill 成功即结束；启动失败或非零退出时异步启动 CIM 扫描兜底。
  */
 export function killWindowsProcessTree(rootPid: number): void {
+  if (isProtectedHostPid(rootPid)) {
+    console.warn(`[shell-kill] 拒绝终止宿主进程 pid=${rootPid}`);
+    return;
+  }
   const taskkill = resolveWindowsSystemExecutable('taskkill');
   const powershell = resolveWindowsSystemExecutable('powershell');
   try {
@@ -78,6 +87,10 @@ export function killWindowsProcessTree(rootPid: number): void {
 
 /** Windows：异步发起按监听端口终止 dev server。 */
 export function killProcessesOnPortWindows(port: number): void {
+  if (isHostListenPort(port)) {
+    console.warn(`[shell-kill] 端口 ${port} 是宿主自身的监听端口，跳过按端口终止`);
+    return;
+  }
   const powershell = resolveWindowsSystemExecutable('powershell');
   try {
     const killer = spawn(
@@ -86,8 +99,10 @@ export function killProcessesOnPortWindows(port: number): void {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        `$p=${port};Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue `
+        `$p=${port};$keep=${protectedPidsPowerShellArray()};`
+          + 'Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue '
           + '| Select-Object -ExpandProperty OwningProcess -Unique '
+          + '| Where-Object { $keep -notcontains $_ } '
           + '| ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }',
       ],
       { windowsHide: true, detached: true, stdio: 'ignore' },
@@ -138,6 +153,10 @@ export function killShellProcessTree(
   detectedPort?: number | null,
 ): void {
   const pid = rootPid ?? child?.pid ?? null;
+  if (pid && isProtectedHostPid(pid)) {
+    console.warn(`[shell-kill] 拒绝终止宿主进程 pid=${pid}`);
+    return;
+  }
   if (process.platform === 'win32') {
     if (pid) {
       killWindowsProcessTree(pid);

@@ -46,6 +46,7 @@ import { createScheduledTaskService } from '../../web/scheduled-task-service.js'
 import { SCHEDULED_TASK_TOOL_NAME, createScheduledTaskTool } from '../../web/scheduled-task-tool.js';
 import { registerSessionToolProvider } from '../../tools/session-tool-providers.js';
 import { enableOsSchedulerGuard } from '../../tools/shell-os-scheduler-guard.js';
+import { registerHostListenPort } from '../../tools/shell-host-guard.js';
 import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
 import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
 import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
@@ -175,6 +176,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   });
 
   const server = await startServer(app, port);
+  registerHostListenPort(port);
   attachChatWebSocket(server, {
     orchestrator,
     toolRegistry,
