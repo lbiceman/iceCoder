@@ -1760,6 +1760,41 @@ describe('Harness - 连续工具失败熔断', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
+  it('第 1 轮全失败不注入证据包，第 2 轮注入', async () => {
+    const tools = [makeTool('read_file')];
+    const failHandler = async () => ({ success: false, output: 'ENOENT: missing.ts', error: 'tool failed' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+
+    const once = await new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor).run(
+      'test',
+      createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+        finalResponse('summary'),
+      ]),
+    );
+    expect(once.messages.some(m =>
+      typeof m.content === 'string' && m.content.includes('[Failure Evidence —'),
+    )).toBe(false);
+
+    const twice = await new Harness(
+      minConfig({ context: { systemPrompt: 'test', tools } }),
+      createToolExecutor(tools, failHandler),
+    ).run(
+      'test',
+      createChatFn([
+        toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+        toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
+        finalResponse('summary'),
+      ]),
+    );
+    expect(twice.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('[Failure Evidence — 2 consecutive')
+      && m.content.includes('ENOENT: missing.ts'),
+    )).toBe(true);
+  });
+
   it('连续 5 轮工具全部失败后注入失败证据包', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;

@@ -3,7 +3,6 @@ import type { UnifiedMessage } from '../../src/llm/types.js';
 import { VerificationOutputBuffer } from '../../src/harness/verification-output-buffer.js';
 import {
   buildFailureEvidencePackMessage,
-  buildLightFailureHintMessage,
   buildStrongFailureWarningMessage,
   collectFailureEvidenceEntries,
   isFailedToolResultContent,
@@ -49,11 +48,10 @@ describe('failure-evidence-recovery', () => {
     expect(msg).toContain('[Failure Evidence — 4 consecutive');
     expect(msg).toContain('error output');
     expect(msg).toContain('Do NOT repeat');
+    expect(msg).toContain('retry the same listed mcp_');
   });
 
-  it('builds light and strong hint messages', () => {
-    expect(buildLightFailureHintMessage(2)).toMatch(/2 consecutive/);
-    expect(buildLightFailureHintMessage(2)).toMatch(/retry the same listed mcp_/);
+  it('builds strong hint messages', () => {
     expect(buildStrongFailureWarningMessage(7)).toMatch(/Warning: 7 consecutive/);
     expect(buildStrongFailureWarningMessage(7)).toMatch(/still-listed ready mcp_/);
   });

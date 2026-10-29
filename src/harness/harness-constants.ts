@@ -4,8 +4,6 @@ import { RECOVERY_BUDGET } from './recovery-budget.js';
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
 // ─── 连续工具失败提示干预阈值（见 RECOVERY_BUDGET.failureEvidenceLadder）───
-export const LIGHT_HINT_FAILURE_THRESHOLD_START = RECOVERY_BUDGET.failureEvidenceLadder.lightHintStart;
-export const LIGHT_HINT_FAILURE_THRESHOLD_END = RECOVERY_BUDGET.failureEvidenceLadder.lightHintEnd;
 export const FAILURE_EVIDENCE_THRESHOLD_START = RECOVERY_BUDGET.failureEvidenceLadder.evidenceStart;
 export const FAILURE_EVIDENCE_THRESHOLD_END = RECOVERY_BUDGET.failureEvidenceLadder.evidenceEnd;
 export const STRONG_WARNING_FAILURE_THRESHOLD = RECOVERY_BUDGET.failureEvidenceLadder.strongWarningStart;

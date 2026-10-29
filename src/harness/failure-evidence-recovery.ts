@@ -2,7 +2,7 @@
  * 连续工具失败阶梯：轻提示 / 证据包 / 强警告的收集、注入与 ephemeral 清理。
  *
  * 阶梯（consecutiveToolFailures）：
- *   1 静默 | 2~3 轻提示 | 4~6 证据包（刷新） | 7~9 强警告 | ≥10 熔断
+ *   1 静默 | 2~6 证据包（刷新） | 7~9 强警告 | ≥10 熔断
  */
 
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
@@ -151,6 +151,7 @@ export function buildFailureEvidencePackMessage(
   const lines = [
     `[Failure Evidence — ${failureCount} consecutive all-failed rounds]`,
     'Analyze the evidence below and change strategy. Do NOT repeat identical failed tool calls or commands.',
+    'An MCP transport/extension error is not a missing server: retry the same listed mcp_* tool once before switching tool families.',
     '',
   ];
 
@@ -167,14 +168,6 @@ export function buildFailureEvidencePackMessage(
     message = truncateTail(message, FAILURE_EVIDENCE_TOTAL_CHARS);
   }
   return message;
-}
-
-export function buildLightFailureHintMessage(failureCount: number): string {
-  return [
-    `[System] ${failureCount} consecutive round(s) with all tool calls failed.`,
-    'Check parameters, paths, and command syntax; do not repeat the identical call.',
-    'An MCP transport/extension error is not a missing server: retry the same listed mcp_* tool once before switching tool families.',
-  ].join(' ');
 }
 
 export function buildStrongFailureWarningMessage(failureCount: number): string {

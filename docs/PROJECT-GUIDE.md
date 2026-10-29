@@ -99,7 +99,7 @@ Key runtime protections:
 - Permission rules before tool execution (`skipPermissionChecks` never skips an explicit deny); shell sandbox, HostGuard, workspace write boundary, missing-file preflight
 - Confirmation-required tools are denied if no confirmation callback exists
 - Repeated failed tool signature detection (hint only)
-- All-tools-failed ladder: light hint at 2–3 rounds, failure-evidence bundle at 4–6, strong warning at 7–9, `circuit_breaker` at ≥10
+- All-tools-failed ladder: failure-evidence bundle at 2–6 rounds, strong warning at 7–9, `circuit_breaker` at ≥10. The first failed round keeps the tool result only.
 - Context compaction and post-compaction Runtime Recovery Context
 
 ### Tool planner

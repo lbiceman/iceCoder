@@ -15,8 +15,6 @@ export const RECOVERY_BUDGET: {
   stopHook: RecoveryLimit;
   verificationContinuation: RecoveryLimit;
   failureEvidenceLadder: {
-    lightHintStart: number;
-    lightHintEnd: number;
     evidenceStart: number;
     evidenceEnd: number;
     strongWarningStart: number;
@@ -31,9 +29,7 @@ export const RECOVERY_BUDGET: {
   stopHook: { max: 5, reset: '钩子不再要求继续，或工具轮出现有效进展' },
   verificationContinuation: { max: 1, reset: '验收计划指纹或工作区改动版本变化' },
   failureEvidenceLadder: {
-    lightHintStart: 2,
-    lightHintEnd: 3,
-    evidenceStart: 4,
+    evidenceStart: 2,
     evidenceEnd: 6,
     strongWarningStart: 7,
     circuitBreaker: 10,
