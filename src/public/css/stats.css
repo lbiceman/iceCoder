@@ -1,4 +1,4 @@
-/* Token 用量统计页：上排 Token 卡，下排记忆 / 监管，不滚动 */
+/* Token 用量统计页：上排 Token 卡，下排记忆，不滚动 */
 .stats-root {
   display: flex;
   flex-direction: column;
@@ -68,6 +68,7 @@
 }
 
 .stats-split-aux {
+  grid-template-columns: minmax(0, 1fr);
   flex: 1 1 0;
 }
 

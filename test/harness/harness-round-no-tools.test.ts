@@ -30,7 +30,6 @@ function makeState(
     emptyResponseRetryCount: 0,
     reasoningOnlyRecoveryCount: 0,
     consecutiveToolFailures: 0,
-    consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
@@ -42,18 +41,6 @@ function makeState(
     repoContext: new RepoContext(),
     runtimeStateHash: '',
     failedToolCallSignatures: new Map(),
-    branchBudgetWarnedThisRound: false,
-    verificationDigestInjectedThisRound: false,
-    stepReviewedThisRound: false,
-    executionMode: 'free',
-    executionModeLockRemaining: 0,
-    executionModeEnteredBy: [],
-    pendingModeSignals: [],
-    forcedTaskBearingRoundsSinceEntry: 0,
-    recoveryPendingSticky: false,
-    stableRoundsSinceLastFailure: 0,
-    filesChangedAtRoundStart: 0,
-    branchSwitchedThisRound: false,
   };
 }
 

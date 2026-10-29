@@ -40,7 +40,6 @@ import {
   getActiveSessionId,
   getCachedMessages,
   getSessionFile,
-  getSupervisorRuntime,
   isSessionTombstoned,
   saveTimerMap,
   setActiveSessionId,
@@ -199,7 +198,6 @@ export async function loadAssembledPrompt(workspaceRoot?: string): Promise<Assem
 export function startChatRuntimePrewarm(): void {
   prewarmChatRuntime({
     ensureMemoryInitialized,
-    getSupervisorRuntime,
     loadAssembledPrompt,
   });
 }

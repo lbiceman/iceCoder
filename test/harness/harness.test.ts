@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Harness 核心循环引擎单元测试。
  */
 
@@ -25,7 +25,6 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
-import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
 
 // ═══ 测试工具 ═══
 
@@ -1170,8 +1169,12 @@ describe('ContextCompactor - 微压缩', () => {
     expect(compacted.some(m => m.role === 'user' && m.content === '跑测试')).toBe(true);
     const t1 = compacted.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
     const t6 = compacted.find(m => m.role === 'tool' && m.toolCallId === 'tc6');
-    expect((t1!.content as string).startsWith('[Old tool result cleared for context]')).toBe(true);
+    expect(t1!.apiSealedBy).toBe('pressureClear');
+    expect((t1!.apiSealedContent as string).startsWith('[Old tool result cleared for context]')).toBe(true);
+    expect(t1!.content).toBe('VERYLONGOUTPUT'.repeat(100));
     expect(t6!.content).toContain('KEEPTHIS6');
+    expect(t6!.apiSealedContent).toBeUndefined();
+    expect(compactor.getLastLightClear()).toMatchObject({ cleared: 1, toolCallIds: ['tc1'] });
   });
 
   it('微压缩不清空失败的 run_command 输出', () => {
@@ -1368,9 +1371,27 @@ describe('Harness token budget config', () => {
 // 13. 工具输出截断
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 工具输出截断', () => {
-  it('超长工具输出被截断到 MAX_TOOL_OUTPUT', async () => {
+  it('放得下的工具输出原样注入，不按固定字符数裁剪', async () => {
     const tools = [makeTool('read_file')];
-    const hugeOutput = 'A'.repeat(50000);
+    const output = 'A'.repeat(30_000);
+    const executor = createToolExecutor(tools, async () => ({ success: true, output }));
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse('Done'),
+    ]);
+
+    const result = await harness.run('Read big file', chatFn);
+
+    const toolMsg = result.messages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+    expect(toolMsg!.content).toBe(output);
+    expect(toolMsg!.apiSealedContent).toBeUndefined();
+  });
+
+  it('超出 token 上限且无法落盘时，content 保留原文，注入视图写进封存字段', async () => {
+    const tools = [makeTool('read_file')];
+    const hugeOutput = 'A'.repeat(200_000);
     const executor = createToolExecutor(tools, async () => ({ success: true, output: hugeOutput }));
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
@@ -1381,12 +1402,39 @@ describe('Harness - 工具输出截断', () => {
 
     const result = await harness.run('Read big file', chatFn);
 
-    // read_file 的 maxResultSizeChars 是 Infinity，所以用 MAX_TOOL_OUTPUT=30000
     const toolMsg = result.messages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
-    expect(toolMsg).toBeDefined();
-    const content = toolMsg!.content as string;
-    expect(content.length).toBeLessThan(hugeOutput.length);
-    expect(content).toContain('输出已截断');
+    expect(toolMsg!.content).toBe(hugeOutput);
+    expect(toolMsg!.apiSealedBy).toBe('resultBudget');
+    expect(String(toolMsg!.apiSealedContent).length).toBeLessThan(hugeOutput.length);
+    expect(toolMsg!.apiSealedContent).toContain('输出已截断');
+    expect(toolMsg!.toolResultMeta).toMatchObject({ originalChars: 200_000, strategy: 'head_tail' });
+  });
+
+  it('分页读取记录省略行，补读省略行时标记为重读', async () => {
+    const tools = [makeTool('read_file')];
+    const range = (start: number, end: number, requestedEnd: number) => ({
+      path: 'src/tokens.css', startLine: start, endLine: end, requestedEnd, totalLines: 600,
+      numbered: true, headerLines: 3, capped: end < requestedEnd,
+    });
+    const executor = createToolExecutor(tools, async (args) => (
+      args.offset
+        ? { success: true, output: 'src/tokens.css (lines 301-600, total 600)\n---\n301: x', readRange: range(301, 600, 600) }
+        : { success: true, output: 'src/tokens.css (lines 1-300 of 600, PARTIAL)\nUnread\n---\n1: x', readRange: range(1, 300, 600) }
+    ));
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'p1', name: 'read_file', args: { path: 'src/tokens.css' } }]),
+      toolCallResponse([{ id: 'p2', name: 'read_file', args: { path: 'src/tokens.css', offset: 301, limit: 300 } }]),
+      finalResponse('Done'),
+    ]);
+
+    const result = await harness.run('Read themes', chatFn);
+
+    const p1 = result.messages.find(m => m.toolCallId === 'p1');
+    const p2 = result.messages.find(m => m.toolCallId === 'p2');
+    expect(p1!.toolResultMeta).toMatchObject({ strategy: 'page', omittedLines: [[301, 600]] });
+    expect(p2!.toolResultMeta).toMatchObject({ strategy: 'full', rereadOf: 'p1', lines: { start: 301, end: 600, total: 600 } });
   });
 });
 
@@ -1589,7 +1637,7 @@ describe('Harness - 边界情况', () => {
     expect(result.loopState.lastOutputTokens).toBe(80);
   });
 
-  it('工具结果预算裁剪对旧的长结果生效', async () => {
+  it('旧的长工具结果在后续轮次仍完整发送给模型', async () => {
     const tools = [makeTool('read_file')];
     const longOutput = 'x'.repeat(5000);
     const executor = createToolExecutor(tools, async () => ({ success: true, output: longOutput }));
@@ -1613,14 +1661,9 @@ describe('Harness - 边界情况', () => {
     // 至少有一些 tool 消息
     expect(toolMsgs.length).toBeGreaterThan(0);
 
-    // 原始消息保持完整（缓存友好 — 不就地修改已有消息）
-    // 裁剪只发生在发送给 LLM 的副本上
     const sentToolMsgs = lastSentMessages.filter((m: any) => m.role === 'tool');
-    if (sentToolMsgs.length > 6) {
-      const firstSentContent = sentToolMsgs[0].content as string;
-      expect(firstSentContent.length).toBeLessThan(longOutput.length);
-      expect(firstSentContent).toContain('工具结果已裁剪');
-    }
+    expect(sentToolMsgs.length).toBeGreaterThan(6);
+    expect(sentToolMsgs[0].content).toBe(longOutput);
   });
 
   it('log 包含结构化日志条目', async () => {
@@ -1743,38 +1786,6 @@ describe('Harness - 连续工具失败熔断', () => {
       typeof m.content === 'string'
       && m.content.includes('[System / Rebuild Escalation]')
     )).toBe(false);
-  });
-
-  it('adaptive 下 non_critical 连续失败仍注入证据包', async () => {
-    const tools = [makeTool('read_file')];
-    const failHandler = async () => ({ success: false, output: '', error: 'path is required' }) as ToolResult;
-    const executor = createToolExecutor(tools, failHandler);
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
-    const harness = new Harness(minConfig({
-      context: { systemPrompt: 'test', tools },
-      supervisorConfig,
-      globalPolicy: supervisorConfig.globalPolicy,
-    }), executor);
-
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
-      toolCallResponse([{ id: 'tc5', name: 'read_file' }]),
-      finalResponse('summary'),
-    ]);
-
-    const result = await harness.run(
-      '整理 Ant Design 文档成 md 放到桌面',
-      chatFn,
-    );
-
-    expect(result.messages.some(m =>
-      m.role === 'user'
-      && typeof m.content === 'string'
-      && m.content.includes('[Failure Evidence — 5 consecutive')
-    )).toBe(true);
   });
 
   it('实质进展后移除 ephemeral 失败恢复消息', async () => {
@@ -1938,7 +1949,8 @@ describe('Harness - task checkpoint', () => {
       expect.objectContaining({ toolCallId: 'tc1', status: 'completed' }),
     ]));
     expect(checkpoint.completion.continuationCount).toBe(0);
-    expect(checkpoint.execution.resumable.branchBudget).toBeDefined();
+    expect(checkpoint.execution.resumable).not.toHaveProperty('branchBudget');
+    expect(checkpoint.execution.loopState).not.toHaveProperty('executionMode');
   });
 
   it('恢复时注入 active checkpoint', async () => {

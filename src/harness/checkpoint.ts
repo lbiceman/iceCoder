@@ -17,7 +17,6 @@ import type {
   CompletionStatus,
 } from './completion-state.js';
 import type { OperationOutcome } from './operation-outcome.js';
-import type { BranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
 import type { VerificationPlan } from './verification-plan.js';
 import {
   createVerificationRuntimeState,
@@ -69,7 +68,6 @@ export interface TaskCheckpointUpdate {
     blockingSignature?: string;
   };
   resumableExecution?: {
-    branchBudget?: BranchBudgetSnapshot;
     failedToolCallSignatures?: Record<string, number>;
   };
 }

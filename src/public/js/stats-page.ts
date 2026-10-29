@@ -14,20 +14,6 @@ export const StatsPage = (() => {
     { key: 'month', label: '当月', hint: '最近 30 天', days: 30 },
   ];
 
-  const SIGNAL_LABELS = {
-    task_graph_active: '任务图进行中',
-    pending_steps: '未完成步骤',
-    multi_write: '多文件写入',
-    branch_switched: '分支切换',
-    checkpoint_resumed: '检查点恢复',
-    tool_failure: '工具失败',
-    recovery_pending: '等待恢复',
-    large_diff: '大范围改动',
-    explicit_impl: '明确实现',
-    engine_fail_safe: '引擎兜底',
-    unknown: '其他',
-  };
-
   const CHART_COLOR_VARS = ['--chart-1', '--chart-2', '--chart-3'];
 
   let containerEl = null;
@@ -38,12 +24,10 @@ export const StatsPage = (() => {
   let resizeObs = null;
   let summary = null;
   let memorySummary = null;
-  let supervisorSummary = null;
   let rangeKey = 'week';
   let chartSeq = 0;
   let trendChart = null;
   let memoryChart = null;
-  let supervisorChart = null;
   let resizeTimer = null;
   let lastChartW = -1;
   let lastChartH = -1;
@@ -69,23 +53,20 @@ export const StatsPage = (() => {
     lastChartH = -1;
     unbindChart(trendChart);
     unbindChart(memoryChart);
-    unbindChart(supervisorChart);
     trendChart = null;
     memoryChart = null;
-    supervisorChart = null;
     tooltipEl = null;
     mainEl = null;
     containerEl = null;
     summary = null;
     memorySummary = null;
-    supervisorSummary = null;
   }
 
   function render(parentEl) {
     destroy();
     containerEl = parentEl;
     parentEl.innerHTML =
-      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">统计</h1><p class="stats-hint">查看 Token 消耗、记忆活动与监管进出的近期趋势</p></div><div class="stats-range" role="group" aria-label="时间范围">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
+      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">统计</h1><p class="stats-hint">查看 Token 消耗与记忆活动的近期趋势</p></div><div class="stats-range" role="group" aria-label="时间范围">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
     mainEl = parentEl.querySelector('.stats-main');
     tooltipEl = parentEl.querySelector('.stats-tooltip');
     bindRangeButtons(containerEl);
@@ -138,7 +119,7 @@ export const StatsPage = (() => {
   function paintLoading() {
     if (!mainEl) return;
     mainEl.innerHTML =
-      `<section class="stats-card stats-card-main" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-aux-metrics">${skelMetrics(4)}</div><div class="stats-skel-chart"></div></section><div class="stats-split stats-split-aux"><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section></div>`;
+      `<section class="stats-card stats-card-main" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-aux-metrics">${skelMetrics(4)}</div><div class="stats-skel-chart"></div></section><div class="stats-split stats-split-aux"><section class="stats-card" aria-busy="true"><div class="stats-card-head"><span class="stats-skel is-label"></span></div><div class="stats-skel-chart"></div></section></div>`;
   }
 
   function paintError(message) {
@@ -158,10 +139,8 @@ export const StatsPage = (() => {
     if (!mainEl || !summary) return;
     unbindChart(trendChart);
     unbindChart(memoryChart);
-    unbindChart(supervisorChart);
     trendChart = null;
     memoryChart = null;
-    supervisorChart = null;
     if (resizeObs) {
       resizeObs.disconnect();
       resizeObs = null;
@@ -186,15 +165,6 @@ export const StatsPage = (() => {
           '<div class="stats-aux-metrics" data-role="memory-metrics"></div>' +
           '<div class="stats-chart" data-chart="memory"></div>' +
           '<div class="stats-legend" data-role="memory-legend"></div>' +
-        '</section>' +
-        '<section class="stats-card">' +
-          '<div class="stats-card-head">' +
-            '<span class="stats-card-label">监管</span>' +
-            '<span class="stats-card-value" data-role="supervisor-enter"></span>' +
-          '</div>' +
-          '<div class="stats-aux-metrics" data-role="supervisor-metrics"></div>' +
-          '<div class="stats-chart" data-chart="supervisor"></div>' +
-          '<div class="stats-legend" data-role="supervisor-legend"></div>' +
         '</section>' +
       '</div>';
 
@@ -267,45 +237,31 @@ export const StatsPage = (() => {
     const ctrl = auxAbort;
     paintAuxLoading();
     const days = daysForRange(rangeKey);
-    Promise.all([
-      fetchJson(`/api/memory/telemetry?days=${encodeURIComponent(String(days))}&format=json`, ctrl.signal)
-        .catch(() =>  null),
-      fetchJson(`/api/supervisor/events?days=${encodeURIComponent(String(days))}`, ctrl.signal)
-        .catch(() =>  null),
-    ]).then((pair) => {
-      if (ctrl !== auxAbort) return;
-      memorySummary = pair[0];
-      supervisorSummary = pair[1];
-      paintAux();
-    });
+    fetchJson(`/api/memory/telemetry?days=${encodeURIComponent(String(days))}&format=json`, ctrl.signal)
+      .catch(() =>  null)
+      .then((body) => {
+        if (ctrl !== auxAbort) return;
+        memorySummary = body;
+        paintAux();
+      });
   }
 
   function paintAuxLoading() {
     const memoryEl = mainEl && mainEl.querySelector('[data-role="memory-metrics"]');
-    const supervisorEl = mainEl && mainEl.querySelector('[data-role="supervisor-metrics"]');
-    const html = skelMetrics();
-    if (memoryEl) memoryEl.innerHTML = html;
-    if (supervisorEl) supervisorEl.innerHTML = html;
-    paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="memory"]'), 'memory');
-    paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="supervisor"]'), 'supervisor');
+    if (memoryEl) memoryEl.innerHTML = skelMetrics();
+    paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="memory"]'));
     hideTooltip();
   }
 
-  function paintChartSkeleton(mount, which) {
-    if (which === 'memory') {
-      unbindChart(memoryChart);
-      memoryChart = null;
-    } else {
-      unbindChart(supervisorChart);
-      supervisorChart = null;
-    }
+  function paintChartSkeleton(mount) {
+    unbindChart(memoryChart);
+    memoryChart = null;
     if (!mount) return;
     mount.innerHTML = '<div class="stats-skel-chart"></div>';
   }
 
   function paintAux() {
     paintMemoryPanel();
-    paintSupervisorPanel();
     paintAuxCharts();
   }
 
@@ -335,33 +291,9 @@ export const StatsPage = (() => {
         auxMetric('修改', formatTokenCount(num(dream.totalModified)), `Dream ${formatTokenCount(num(dream.count))} 次`);
   }
 
-  function paintSupervisorPanel() {
-    if (!mainEl) return;
-    const panel = mainEl.querySelector('[data-role="supervisor-metrics"]');
-    const enterEl = mainEl.querySelector('[data-role="supervisor-enter"]');
-    if (!panel) return;
-    const mode = supervisorSummary && supervisorSummary.executionMode ? supervisorSummary.executionMode : {};
-    const enter = num(mode.enter);
-    const exit = num(mode.exit);
-    const bySignal = supervisorBySignal(mode);
-    const keys = Object.keys(bySignal).sort((a, b) =>  num(bySignal[b]) - num(bySignal[a]));
-    if (enterEl) enterEl.textContent = enter ? (`${formatTokenCount(enter)} 次`) : '';
-    if (!supervisorSummary) {
-      panel.innerHTML = '<p class="stats-muted">暂无监管触发记录。</p>';
-      return;
-    }
-    panel.innerHTML =
-        auxMetric('进入', formatTokenCount(enter), 'forced') +
-        auxMetric('退出', formatTokenCount(exit), '回到 free') +
-        auxMetric('触发源', formatTokenCount(keys.length), keys.length ? signalLabel(keys[0]) : '暂无');
-  }
-
   function paintAuxCharts() {
     if (!mainEl) return;
-    const range = currentRange();
-    const colors = chartColors();
-    paintMemoryChart(range, colors);
-    paintSupervisorChart(range, colors);
+    paintMemoryChart(currentRange(), chartColors());
   }
 
   function paintMemoryChart(range, colors) {
@@ -394,36 +326,6 @@ export const StatsPage = (() => {
     });
   }
 
-  function paintSupervisorChart(range, colors) {
-    const mount = mainEl.querySelector('[data-chart="supervisor"]');
-    const legendEl = mainEl.querySelector('[data-role="supervisor-legend"]');
-    if (!mount) return;
-    unbindChart(supervisorChart);
-    const mode = supervisorSummary && supervisorSummary.executionMode ? supervisorSummary.executionMode : {};
-    const buckets = Array.isArray(mode.series) ? mode.series : [];
-    if (!buckets.length) {
-      mount.innerHTML = '<p class="stats-muted">暂无监管触发趋势。</p>';
-      if (legendEl) legendEl.innerHTML = '';
-      supervisorChart = null;
-      return;
-    }
-    const series = [
-      { key: 'enter', label: '进入', color: colors[2], values: buckets.map((b) =>  num(b.enter)) },
-      { key: 'exit', label: '退出', color: colors[0], values: buckets.map((b) =>  num(b.exit)) },
-    ];
-    if (legendEl) legendEl.innerHTML = renderLegend(series);
-    supervisorChart = bindAreaChart(mount, {
-      id: 'supervisor',
-      labels: buckets.map((b) =>  b.key),
-      series,
-      stacked: false,
-      filled: false,
-      emptyText: '该时间范围暂无监管触发',
-      formatX: range.key === 'day' ? formatHourTick : formatDayTick,
-      formatTipTitle: range.key === 'day' ? formatHourTip : formatDayTip,
-    });
-  }
-
   function auxMetric(label, value, sub) {
     return (
       `<div class="stats-aux-metric"><div class="stats-aux-metric-label">${escapeHtml(label)}</div><div class="stats-aux-metric-value">${escapeHtml(value)}</div><div class="stats-aux-metric-sub">${escapeHtml(sub)}</div></div>`
@@ -445,28 +347,6 @@ export const StatsPage = (() => {
     let html = '';
     for (let i = 0; i < n; i++) html += skelMetric();
     return html;
-  }
-
-  function supervisorBySignal(mode) {
-    if (mode.bySignal && typeof mode.bySignal === 'object' && Object.keys(mode.bySignal).length) {
-      return mode.bySignal;
-    }
-    const out = {};
-    const recent = Array.isArray(mode.recent) ? mode.recent : [];
-    for (let i = 0; i < recent.length; i++) {
-      const ev = recent[i];
-      if (!ev || ev.type !== 'execution_mode_enter') continue;
-      const payload = ev.payload || {};
-      const signal = payload.enteredByPrimary
-        || (Array.isArray(payload.enteredBy) && payload.enteredBy[0])
-        || 'unknown';
-      out[signal] = (out[signal] || 0) + 1;
-    }
-    return out;
-  }
-
-  function signalLabel(key) {
-    return SIGNAL_LABELS[key] || key || '其他';
   }
 
   function observeCharts() {

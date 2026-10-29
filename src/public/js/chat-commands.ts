@@ -39,14 +39,12 @@ export const ChatCommands = (() => {
   const TILDE_PC_COMMANDS = [
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   const TILDE_REMOTE_COMMANDS = [
     { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   let cmdSelectedIndex = 0;
@@ -363,114 +361,6 @@ export const ChatCommands = (() => {
       });
   }
 
-  function parseSupervisorCommand(text) {
-    let days = 7;
-    let event = '';
-    let m = String(text || '').match(/days=(\d+)/i);
-    if (m) days = Math.min(Math.max(parseInt(m[1], 10) || 7, 1), 90);
-    m = String(text || '').match(/event=([^\s]+)/i);
-    if (m) event = m[1];
-    return { days, event };
-  }
-
-  function supervisorSignalLabel(key) {
-    const labels = {
-      task_graph_active: '任务图进行中',
-      pending_steps: '未完成步骤',
-      multi_write: '多文件写入',
-      branch_switched: '分支切换',
-      checkpoint_resumed: '检查点恢复',
-      tool_failure: '工具失败',
-      recovery_pending: '等待恢复',
-      large_diff: '大范围改动',
-      explicit_impl: '明确实现',
-      engine_fail_safe: '引擎兜底',
-      unknown: '其他',
-    };
-    return labels[key] || key || '其他';
-  }
-
-  /** 兼容统计页用的 JSON：没有 report 时从 executionMode 拼文本，不改接口默认结构。 */
-  function formatSupervisorReportFromJson(body) {
-    const mode = body && body.executionMode ? body.executionMode : null;
-    if (!mode) return '';
-    const days = typeof body.days === 'number' ? body.days : 7;
-    const enter = typeof mode.enter === 'number' ? mode.enter : 0;
-    const exit = typeof mode.exit === 'number' ? mode.exit : 0;
-    const lines = ['📊 **执行模式报告**（最近 ' + days + ' 天）', ''];
-    if (!enter && !exit) {
-      lines.push('暂无监管触发记录。');
-      return lines.join('\n');
-    }
-    lines.push('**进入** ' + enter + ' 次 | 退出 ' + exit + ' 次');
-    const byMode = mode.byMode && typeof mode.byMode === 'object' ? mode.byMode : {};
-    const modeKeys = Object.keys(byMode).sort((a, b) => (byMode[b] || 0) - (byMode[a] || 0));
-    if (modeKeys.length) {
-      lines.push('**按模式** ' + modeKeys.map((k) => k + ':' + byMode[k]).join(' '));
-    }
-    const bySignal = mode.bySignal && typeof mode.bySignal === 'object' ? mode.bySignal : {};
-    const signalKeys = Object.keys(bySignal).sort((a, b) => (bySignal[b] || 0) - (bySignal[a] || 0));
-    if (signalKeys.length) {
-      lines.push('**触发源** ' + signalKeys.map((k) => supervisorSignalLabel(k) + ':' + bySignal[k]).join(' '));
-    }
-    const recent = Array.isArray(mode.recent) ? mode.recent.slice(-8) : [];
-    if (recent.length) {
-      lines.push('');
-      lines.push('**最近**');
-      for (let i = 0; i < recent.length; i++) {
-        const ev = recent[i];
-        const payload = ev && ev.payload ? ev.payload : {};
-        const verb = ev && ev.type === 'execution_mode_enter' ? '进入' : '退出';
-        const em = payload.executionMode || (verb === '进入' ? 'forced' : 'free');
-        const primary = payload.enteredByPrimary
-          || (Array.isArray(payload.enteredBy) ? payload.enteredBy[0] : '');
-        const reason = verb === '进入' && primary ? (' · ' + supervisorSignalLabel(primary)) : '';
-        const round = payload.round ? (' · 第 ' + payload.round + ' 轮') : '';
-        lines.push('- ' + verb + ' ' + em + reason + round);
-      }
-    }
-    return lines.join('\n');
-  }
-
-  function handleSupervisor(text, messages, appendFn, saveFn) {
-    const opts = parseSupervisorCommand(text);
-    const pendingMsg = { role: 'agent', content: '正在获取 Supervisor 报告…' };
-    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-      window.ChatSession.stampMessageTimestamps(pendingMsg);
-    }
-    messages.push(pendingMsg);
-    appendFn(pendingMsg);
-    saveFn();
-
-    let qs = `?days=${encodeURIComponent(String(opts.days))}&format=text`;
-    if (opts.event) qs += `&event=${encodeURIComponent(opts.event)}`;
-
-    fetchJsonWithTimeout(`/api/supervisor/events${qs}`, 30000)
-      .then((body) => {
-        const report = (body && body.success && body.report)
-          ? body.report
-          : (body && body.success && formatSupervisorReportFromJson(body))
-            || ('Supervisor 报告获取失败：' + ((body && body.error) || '未知错误'));
-        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
-          const stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
-          window.ChatUI.updateMessageContent(pendingMsg, report, stripFn || function (s) { return s; });
-        } else {
-          pendingMsg.content = report;
-        }
-        saveFn();
-      })
-      .catch((err) => {
-        const errText = 'Supervisor 报告获取失败：' + (err && err.message ? err.message : '网络错误');
-        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
-          const stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
-          window.ChatUI.updateMessageContent(pendingMsg, errText, stripFn || function (s) { return s; });
-        } else {
-          pendingMsg.content = errText;
-        }
-        saveFn();
-      });
-  }
-
   function formatTokenCount(n) {
     const num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
     try {
@@ -568,7 +458,6 @@ export const ChatCommands = (() => {
     handleInput,
     applySelection,
     handleTelemetry,
-    handleSupervisor,
     handleTokenStats,
   };
 })();

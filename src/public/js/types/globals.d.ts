@@ -9,6 +9,9 @@ interface IceDesktopApi {
   onPetForceVisible?: (handler: (visible: boolean) => void) => void;
   petSetMousePassthrough?: (passthrough: boolean) => void;
   setDesktopPetEnabled?: (enabled: boolean) => void;
+  onScreenPingPaste?: (handler: (dataUrl: string) => void) => void;
+  getScreenPing?: () => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
+  setScreenPing?: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }) => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
   [key: string]: unknown;
 }
 
@@ -31,12 +34,10 @@ declare global {
     ToolDisplayHistory?: any;
     ModelConfigPanel?: any;
     McpConfigPanel?: any;
-    SupervisorConfigPanel?: any;
     SettingsPage?: any;
     ConfigPage?: any;
     SessionPet?: any;
     SESSION_PET_DISPLAY_NAME?: string;
-    IceSupervisorModeEyeColor?: any;
     DesktopPetBridge?: any;
     ChatWebSocket?: any;
     ChatSession?: any;

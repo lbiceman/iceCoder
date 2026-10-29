@@ -29,11 +29,6 @@ export interface CheckAgentInput {
   waitMs: number;
 }
 
-/** TaskGraph / ToolGate 不按节点约束、不计重复次数的工具。 */
-export function isNeutralAgentTool(toolName: string): boolean {
-  return toolName === TASK_TOOL_NAME || toolName === CHECK_AGENT_TOOL_NAME;
-}
-
 export function createTaskToolDefinition(
   types: readonly AgentTypeDefinition[] = BUILTIN_AGENT_TYPES,
 ): ToolDefinition {

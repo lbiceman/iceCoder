@@ -105,7 +105,7 @@ function makePlan() {
 }
 
 describe('ETL bridge 生命周期', () => {
-  it('execution_mode_exit 保留计划与面板，不再渲染旧 Supervisor 时间轴节点', async () => {
+  it('旧执行档 / 任务图事件被忽略，不改计划、不渲染监管 UI', async () => {
     const page = await loadLifecycle();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
@@ -113,36 +113,37 @@ describe('ETL bridge 生命周期', () => {
       bridge.handleStep({
         type: 'execution_mode_enter',
         ts: plan.createdAt + 500,
-        executionMode: {
-          executionMode: 'forced',
-          primaryReasonHuman: '需要执行修改',
-          enteredBy: ['explicit_impl'],
-          round: 1,
-        },
+        executionMode: { executionMode: 'forced', enteredBy: ['explicit_impl'], round: 1 },
       });
+      bridge.handleStep({
+        type: 'task_graph_init',
+        plan: { ...plan, planId: 'legacy-graph', goal: '旧任务图' },
+      });
+      bridge.handleStep({ type: 'task_graph_node', nodeId: 'step-0', nodeIndex: 3 });
+      bridge.handleStep({ type: 'task_graph_branch', message: '分支切换' });
+      bridge.handleStep({ type: 'task_graph_done', ts: plan.createdAt + 900 });
       bridge.handleStep({
         type: 'execution_mode_exit',
         ts: plan.createdAt + 1000,
-        executionMode: {
-          executionMode: 'free',
-          enteredBy: ['explicit_impl'],
-          enteredByPrimary: 'explicit_impl',
-          primaryReasonHuman: '恢复模型执行',
-          round: 1,
-          forcedTaskBearingRoundsSinceEntry: 1,
-          forcedMinDwellRounds: 1,
-        },
+        executionMode: { executionMode: 'free' },
       });
+      const panelEl = document.getElementById('exec-transparency-panel');
       return {
         planId: (window as any).ChatExecutionPlan.getPlan()?.planId,
+        progress: (window as any).ChatExecutionPlan.getPlan()?.progress,
         open: document.body.classList.contains('etl-panel-open'),
+        hasBanner: !!document.querySelector('.exec-plan-mode-banner'),
         hasLegacySupervisor: !!document.querySelector('.etl-tl-node--supervisor'),
+        text: panelEl ? panelEl.textContent || '' : '',
       };
     }, makePlan());
 
     expect(result.planId).toBe('lifecycle-plan');
+    expect(result.progress).toBe(0);
     expect(result.open).toBe(true);
+    expect(result.hasBanner).toBe(false);
     expect(result.hasLegacySupervisor).toBe(false);
+    expect(result.text).not.toMatch(/监管|forced/);
     await page.close();
   });
 
@@ -183,29 +184,6 @@ describe('ETL bridge 生命周期', () => {
     await page.close();
   });
 
-  it('task_graph_done 保留完成计划并定格展示', async () => {
-    const page = await loadLifecycle();
-    const result = await page.evaluate((plan) => {
-      const bridge = (window as any).ChatExecutionPlanBridge;
-      bridge.handleStep({ type: 'task_graph_init', plan });
-      bridge.handleStep({ type: 'task_graph_done', ts: plan.createdAt + 3000 });
-      return {
-        planId: (window as any).ChatExecutionPlan.getPlan()?.planId,
-        progress: (window as any).ChatExecutionPlan.getPlan()?.progress,
-        open: document.body.classList.contains('etl-panel-open'),
-        status: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
-      };
-    }, makePlan());
-
-    expect(result).toEqual({
-      planId: 'lifecycle-plan',
-      progress: 100,
-      open: true,
-      status: '✅ 已完成 · 用时 00:03',
-    });
-    await page.close();
-  });
-
   it('宠物终态通知不清完成计划，仅新任务开始时清旧状态', async () => {
     const page = await browser.newPage();
     openPages.add(page);
@@ -216,8 +194,6 @@ describe('ETL bridge 生命周期', () => {
         clear: () => { clearCount += 1; },
         getPlan: () => ({ planId: 'done-plan', progress: 100, steps: [] }),
         isPlanComplete: () => true,
-        isPlanLive: () => false,
-        getExecutionModeChip: () => '',
       };
       window.eval(source);
       const pet = {
@@ -233,7 +209,6 @@ describe('ETL bridge 生命周期', () => {
         type: 'execution_plan_update',
         patch: { progress: 100 },
       }, false, false);
-      bridge.applyHarnessStepToPet({ type: 'task_graph_done' }, false, false);
       bridge.applyHarnessStepToPet({
         type: 'final',
         stopReason: 'model_done',
@@ -330,7 +305,7 @@ describe('ETL bridge 生命周期', () => {
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       const panel = (window as any).ChatExecutionPlan;
-      bridge.handleStep({ type: 'task_graph_init', plan: {
+      bridge.handleStep({ type: 'execution_plan_init', plan: {
         ...plan,
         goal: '上一轮反构图目标',
         intent: 'troubleshoot',
@@ -388,7 +363,7 @@ describe('ETL bridge 生命周期', () => {
         }
         return { ok: true, json: async () => ({ plan }) };
       };
-      bridge.handleStep({ type: 'task_graph_init', plan });
+      bridge.handleStep({ type: 'execution_plan_init', plan });
       panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 40));
       bridge.notifyNewTurnStarted();

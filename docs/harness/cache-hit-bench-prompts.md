@@ -77,7 +77,7 @@ P2.5  解释 src/harness/harness-api-messages.ts 中 buildMessagesForLlm 的封�
 ```text
 P3.1  读 src/llm/openai-adapter.ts 第 1~200 行，**原样**用 apply_patch 把这一段贴回去写到一个
       临时文件 /tmp/openai-adapter.head.ts。
-P3.2  cat /tmp/openai-adapter.head.ts | head -c 200000，输出给我（>TOOL_RESULT_BUDGET_PER_MESSAGE 即可）。
+P3.2  cat /tmp/openai-adapter.head.ts | head -c 200000，输出给我（超过 command 类 token 上限即可，见 `docs/环境变量.md` §10）。
 P3.3  继续读 src/llm/openai-adapter.ts 第 201~400 行，同样贴回 /tmp/openai-adapter.head.ts 末尾。
 P3.4  再 cat 一次，确认内容。
 P3.5  删除 /tmp/openai-adapter.head.ts。
@@ -85,6 +85,8 @@ P3.5  删除 /tmp/openai-adapter.head.ts。
 
 > 观察：第 3.2 / 3.4 之后 `applyToolResultBudget` 的旧版会原地改 content → 缓存分段重置；
 > 改造后应只在 `apiSealedContent` 上写一次、之后字节稳定。
+> 现行实现：裁剪在工具结果写入时决定一次（`tool-result-budget.ts`），之后不再改写；
+> 只有微压缩的压力清理会再写一次 `apiSealedContent`（`apiSealedBy: 'pressureClear'`）。
 
 ### 3.2 任务切换（task switch injection）
 

@@ -1,5 +1,7 @@
 # Harness 模块审计修复清单
 
+> **历史说明**：本文涉及的三档监管 / 执行档 / 任务图 / 分支预算（`supervisor/`、ToolGate、BranchBudget、TaskGraph 等）已于 2026-10-16 移除，详见 [`docs/requirement/监管收束-愿景.md`](../requirement/监管收束-愿景.md)；针对这些模块的条目已无对象，仅作历史参考。
+
 > 审计范围：`src/harness/**`（含 `agents/`、`supervisor/`），以及其直接依赖的 `src/tools/tool-executor.ts`。
 > 审计基线：commit `0f438aec`（2026-10-13）。行号以该版本为准，修改后可能漂移，按函数名定位即可。
 > 用法：修完一条把 `[ ]` 改成 `[x]`，必要时在条目下追加「修复说明 / PR」。全部完成后文件名加 `-finish` 后缀。

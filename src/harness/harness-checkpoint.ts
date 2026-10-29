@@ -9,7 +9,6 @@ import type { TaskState } from './task-state.js';
 import type { StopReason } from './types.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { CompletionFactsView } from './completion-facts-view.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type { CompletionCondition } from './completion-condition.js';
 import type {
@@ -19,7 +18,6 @@ import type {
 import type { VerificationPlanResolution } from './verification-plan.js';
 import type { VerificationRuntimeState } from './verification-state.js';
 import { isVerificationFresh } from './verification-state.js';
-import { buildExecutionModeCheckpointState } from './harness-resilience.js';
 
 export interface CheckpointDeps {
   checkpointManager?: TaskCheckpointManager;
@@ -33,7 +31,6 @@ export interface CheckpointRuntimeState {
   taskState: TaskState;
   repoContext: RepoContext;
   failedToolCallSignatures: Map<string, number>;
-  branchBudget?: BranchBudgetTracker;
   operationOutcomes?: OperationOutcomeLedger;
   restoredCompletionConditions?: CompletionCondition[];
   completionGateBlockingSignature?: string;
@@ -88,7 +85,6 @@ export async function saveTaskCheckpoint(
             ?? runtimeState.completionGateBlockingSignature,
         },
         resumableExecution: {
-          branchBudget: runtimeState.branchBudget?.snapshot(),
           failedToolCallSignatures: Object.fromEntries(runtimeState.failedToolCallSignatures),
         },
       };
@@ -117,11 +113,7 @@ function resilienceOverlayInput(
   const run = runtimeState as HarnessRunState;
   const input: CheckpointSaveInput = {
     trigger,
-    branchBudget: runtimeState.branchBudget,
-    executionModeState: buildExecutionModeCheckpointState(run),
     verificationOutputTail: run.verificationOutputBuffer?.snapshot(),
-    rebuildEscalationInjections: run.rebuildEscalationInjections ?? 0,
-    parallelBudgetBlockHintInjected: run.parallelBudgetBlockHintInjected ?? false,
     lastStopReason: stopReason,
   };
   engine.stage(input);

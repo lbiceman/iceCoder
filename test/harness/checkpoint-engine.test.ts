@@ -4,7 +4,6 @@ import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { CheckpointEngine } from '../../src/harness/checkpoint-engine.js';
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
   type RuntimeCheckpointV2,
 } from '../../src/types/runtime-checkpoint.js';
@@ -85,47 +84,29 @@ describe('CheckpointEngine - save', () => {
     expect(backup.version).toBe(1);
   });
 
-  it('合并 branchBudget 快照', async () => {
+  it('不再写入写次数、执行档与 recovery signal', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
-    const budget = new BranchBudgetTracker();
-    budget.recordFileEdit('a.ts');
-    budget.recordFileEdit('a.ts');
-    budget.recordFailedCommandAttempt('npm test');
-    budget.markRecoveryTriggered();
+    await engine.save({
+      trigger: 'tool_failed',
+      appendFailure: { signature: 'run_command:npm test', count: 1, at: 1 },
+    });
 
-    await engine.save({ trigger: 'tool_failed', branchBudget: budget });
-    const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.extensions.runtimeResilience.branchBudget.fileEdits['a.ts']).toBe(2);
-    expect(raw.extensions.runtimeResilience.branchBudget.commandRetries['npm test']).toBe(1);
-    expect(raw.extensions.runtimeResilience.branchBudget.recoverTriggers).toBe(1);
+    const resilience = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'))
+      .extensions.runtimeResilience;
+    expect(resilience).not.toHaveProperty('branchBudget');
+    expect(resilience).not.toHaveProperty('executionModeState');
+    expect(resilience).not.toHaveProperty('recoverySignals');
+    expect(resilience.recentFailures).toHaveLength(1);
   });
 
-  it('保存调用方提供的 execution-mode 状态', async () => {
+  it('只有失败 / 验收失败 / 压缩 / 收尾触发器单独落盘', () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
-
-    await engine.save({
-      trigger: 'step_completed',
-      executionModeState: {
-        executionMode: 'forced',
-        executionModeLockRemaining: 1,
-        executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
-        executionModeEnteredByPrimary: 'checkpoint_resumed',
-        executionModeEnteredAtRound: 7,
-        pendingModeSignals: ['tool_failure'],
-        forcedTaskBearingRoundsSinceEntry: 1,
-      },
-    });
-
-    const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.extensions.runtimeResilience.executionModeState).toMatchObject({
-      executionMode: 'forced',
-      executionModeLockRemaining: 1,
-      executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
-      executionModeEnteredByPrimary: 'checkpoint_resumed',
-      executionModeEnteredAtRound: 7,
-      pendingModeSignals: ['tool_failure'],
-      forcedTaskBearingRoundsSinceEntry: 1,
-    });
+    expect(engine.shouldPersistOnTrigger('tool_failed')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('verification_failed')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('compaction')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('final_draft')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('step_completed')).toBe(false);
+    expect(engine.shouldPersistOnTrigger('verification_started')).toBe(false);
   });
 
   it('多次 appendTool 累积并限制最大条数', async () => {
@@ -174,28 +155,6 @@ describe('CheckpointEngine - save', () => {
     expect(loaded?.verificationOutputTail).toEqual(tail);
   });
 
-  it('persists rebuild escalation counters and branch bypass paths', async () => {
-    const engine = new CheckpointEngine(tmp, 'sess-1');
-    const budget = new BranchBudgetTracker({ fileEditMax: 2 });
-    budget.recordFileEdit('src/a.ts');
-    budget.recordFileEdit('src/a.ts');
-    budget.grantWriteBypass('src/a.ts');
-
-    await engine.save({
-      trigger: 'verification_failed',
-      branchBudget: budget,
-      rebuildEscalationInjections: 2,
-      parallelBudgetBlockHintInjected: true,
-    });
-
-    const loaded = await engine.loadV2();
-    expect(loaded?.rebuildEscalationInjections).toBe(2);
-    expect(loaded?.parallelBudgetBlockHintInjected).toBe(true);
-    expect(loaded?.branchBudget.writeBypassPaths).toEqual(['src/a.ts']);
-
-    const restored = BranchBudgetTracker.fromSnapshot(loaded!.branchBudget);
-    expect(restored.wouldBlockFileEdit('src/a.ts')).toBe(false);
-  });
 });
 
 describe('CheckpointEngine - restore', () => {
@@ -216,23 +175,12 @@ describe('CheckpointEngine - restore', () => {
 
   it('save → loadV2 完整往返保留状态', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
-    const budget = new BranchBudgetTracker();
-    budget.recordFileEdit('x.ts');
-    budget.recordFailedCommandAttempt('ls');
-    budget.markRecoveryTriggered();
 
     await engine.save({
       trigger: 'step_completed',
-      branchBudget: budget,
       currentStepId: 'step-02',
       currentStepTitle: '编辑文件',
       appendTool: { toolName: 'edit_file', success: true, signature: 'sig-1', at: 10 },
-      appendRecoverySignal: {
-        source: 'branch_budget',
-        message: 'switch strategy',
-        at: 11,
-        consumed: false,
-      },
     });
 
     const engine2 = new CheckpointEngine(tmp, 'sess-1');
@@ -241,63 +189,53 @@ describe('CheckpointEngine - restore', () => {
     const r = v2 as RuntimeCheckpointV2;
     expect(r.currentStepId).toBe('step-02');
     expect(r.verificationPending).toBe(false);
-    expect(r.branchBudget.fileEdits['x.ts']).toBe(1);
-    expect(r.branchBudget.commandRetries['ls']).toBe(1);
-    expect(r.branchBudget.recoverTriggers).toBe(1);
     expect(r.recentTools[0].toolName).toBe('edit_file');
-    expect(r.recoverySignals[0].message).toBe('switch strategy');
   });
 
-  it('save → loadV2 保留 execution-mode 扩展字段', async () => {
+  it('旧 runtimeV2 带写次数 / 执行档 / recovery signal 仍可打开，并丢弃这些字段', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
+    await fs.writeFile(engine.checkpointPath, JSON.stringify({
+      ...buildV1Checkpoint(),
+      runtimeV2: {
+        runtimeVersion: 2,
+        branchBudget: { fileEdits: { 'x.ts': 3 }, commandRetries: { ls: 2 }, errorRepeats: {}, recoverTriggers: 1 },
+        recentTools: [{ toolName: 'edit_file', success: true, signature: 'sig-1', at: 10 }],
+        recentFailures: [],
+        recoverySignals: [{ source: 'branch_budget', message: 'switch strategy', at: 11, consumed: false }],
+        verificationPending: false,
+        executionModeState: { executionMode: 'forced', executionModeEnteredBy: ['tool_failure'] },
+        rebuildEscalationInjections: 2,
+        parallelBudgetBlockHintInjected: true,
+        lastTrigger: 'tool_failed',
+        v2UpdatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    }, null, 2), 'utf-8');
 
-    const saved = await engine.save({ trigger: 'manual' });
-    saved.executionModeState = {
-      executionMode: 'forced',
-      executionModeLockRemaining: 2,
-      executionModeEnteredBy: ['checkpoint_resumed'],
-      executionModeEnteredByPrimary: 'checkpoint_resumed',
-      executionModeEnteredAtRound: 4,
-      pendingModeSignals: ['tool_failure'],
-      forcedTaskBearingRoundsSinceEntry: 1,
+    const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
+
+    expect(restored?.recentTools[0]?.signature).toBe('sig-1');
+    expect(restored).not.toHaveProperty('branchBudget');
+    expect(restored).not.toHaveProperty('executionModeState');
+    expect(restored).not.toHaveProperty('recoverySignals');
+    expect(restored).not.toHaveProperty('rebuildEscalationInjections');
+  });
+
+  it('旧 V3 文件里的 runtimeResilience 带写次数时仍可打开', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    await engine.save({ trigger: 'tool_failed' });
+    const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
+    raw.extensions.runtimeResilience.branchBudget = {
+      fileEdits: { 'a.ts': 3 }, commandRetries: {}, errorRepeats: {}, recoverTriggers: 0,
     };
-    await fs.writeFile(engine.checkpointPath, JSON.stringify({
-      ...buildV1Checkpoint(),
-      runtimeV2: saved,
-    }, null, 2), 'utf-8');
+    raw.extensions.runtimeResilience.executionModeState = { executionMode: 'forced' };
+    raw.execution.resumable = {
+      branchBudget: { fileEdits: { 'a.ts': 3 }, commandRetries: {}, errorRepeats: {}, recoverTriggers: 0 },
+    };
+    await fs.writeFile(engine.checkpointPath, JSON.stringify(raw), 'utf-8');
 
     const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
-
-    expect(restored?.executionModeState).toMatchObject({
-      executionMode: 'forced',
-      executionModeLockRemaining: 2,
-      executionModeEnteredBy: ['checkpoint_resumed'],
-      pendingModeSignals: ['tool_failure'],
-      forcedTaskBearingRoundsSinceEntry: 1,
-    });
-  });
-
-  it('部分 executionModeState 字段缺失时仍可 loadV2 并补安全默认值', async () => {
-    const engine = new CheckpointEngine(tmp, 'sess-1');
-    const saved = await engine.save({ trigger: 'manual' });
-    saved.executionModeState = {
-      executionMode: 'forced',
-    } as any;
-    await fs.writeFile(engine.checkpointPath, JSON.stringify({
-      ...buildV1Checkpoint(),
-      runtimeV2: saved,
-    }, null, 2), 'utf-8');
-
-    const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
-
-    expect(restored?.executionModeState).toMatchObject({
-      executionMode: 'forced',
-      executionModeLockRemaining: 0,
-      executionModeEnteredBy: [],
-      executionModeEnteredAtRound: null,
-      pendingModeSignals: [],
-      forcedTaskBearingRoundsSinceEntry: 0,
-    });
+    expect(restored?.lastTrigger).toBe('tool_failed');
+    expect(restored).not.toHaveProperty('branchBudget');
   });
 
   it('损坏的 JSON → loadV2 返回 null 而不抛', async () => {
@@ -326,52 +264,21 @@ describe('CheckpointEngine - restore', () => {
   });
 });
 
-describe('CheckpointEngine - recovery signals', () => {
+describe('CheckpointEngine - memory', () => {
   let tmp: string;
   beforeEach(async () => { tmp = await makeTempDir(); });
   afterEach(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
-
-  it('pendingRecoverySignals 仅返回未消费的', async () => {
-    const engine = new CheckpointEngine(tmp, 'sess-1');
-    await engine.save({
-      trigger: 'tool_failed',
-      appendRecoverySignal: { source: 'branch_budget', message: 'a', at: 1, consumed: false },
-    });
-    await engine.save({
-      trigger: 'tool_failed',
-      appendRecoverySignal: { source: 'branch_budget', message: 'b', at: 2, consumed: false },
-    });
-    expect(engine.pendingRecoverySignals().length).toBe(2);
-
-    engine.markRecoverySignalsConsumed(s => s.message === 'a');
-    expect(engine.pendingRecoverySignals().map(s => s.message)).toEqual(['b']);
-  });
-
-  it('discardPendingRecoverySignals marks all unconsumed without returning them', async () => {
-    const engine = new CheckpointEngine(tmp, 'sess-1');
-    await engine.save({
-      trigger: 'tool_failed',
-      appendRecoverySignal: { source: 'branch_budget', message: 'a', at: 1, consumed: false },
-    });
-    await engine.save({
-      trigger: 'tool_failed',
-      appendRecoverySignal: { source: 'branch_budget', message: 'b', at: 2, consumed: false },
-    });
-    engine.discardPendingRecoverySignals();
-    expect(engine.pendingRecoverySignals()).toEqual([]);
-  });
 
   it('resetMemory 清空内存状态但不影响磁盘文件', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     await engine.save({
       trigger: 'tool_failed',
-      appendRecoverySignal: { source: 'branch_budget', message: 'x', at: 1, consumed: false },
+      appendTool: { toolName: 'run_command', success: false, signature: 'x', at: 1 },
     });
     engine.resetMemory();
-    expect(engine.getV2State().recoverySignals).toEqual([]);
-    // 磁盘文件保留
+    expect(engine.getV2State().recentTools).toEqual([]);
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.extensions.runtimeResilience.recoverySignals.length).toBe(1);
+    expect(raw.extensions.runtimeResilience.recentTools.length).toBe(1);
   });
 });
 

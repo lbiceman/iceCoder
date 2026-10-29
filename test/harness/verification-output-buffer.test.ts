@@ -4,7 +4,7 @@ import {
   extractRunCommandsFromDelegateTask,
   VerificationOutputBuffer,
 } from '../../src/harness/verification-output-buffer.js';
-import { findLastFailedVerification } from '../../src/harness/rebuild-escalation.js';
+import { findLastFailedVerification } from '../../src/harness/failure-evidence-recovery.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
 describe('verification-output-buffer', () => {
@@ -19,7 +19,7 @@ describe('verification-output-buffer', () => {
     expect(entry?.outputBody).toMatch(/error TS2304/);
   });
 
-  it('findLastFailedVerification falls back to buffer when chat only has BranchBudget block', () => {
+  it('findLastFailedVerification falls back to buffer when the chat result has no output body', () => {
     const buffer = new VerificationOutputBuffer();
     buffer.recordFailed(
       'npm run build 2>&1',
@@ -35,7 +35,7 @@ describe('verification-output-buffer', () => {
       {
         role: 'tool',
         toolCallId: 'tc1',
-        content: '[BranchBudget / Blocked] 工具未执行：该命令已失败 2 次（拦截阈值 2）。',
+        content: 'Tool execution error: Command failed (exit code: 1)\n\n',
       },
     ];
 

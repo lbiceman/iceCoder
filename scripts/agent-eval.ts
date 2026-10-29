@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import type { ChatFunction } from '../src/harness/types.js';
-import { agentEvalCases, type AgentEvalCase } from './agent-eval-cases.js';
+import { AGENT_EVAL_SUITES, agentEvalCases, type AgentEvalCase } from './agent-eval-cases.js';
+import type { CaseStats } from './agent-eval-runner.js';
 
 interface EvalMetrics {
   task_success_rate: number;
@@ -23,6 +24,7 @@ interface CaseResult {
   passed: boolean;
   metrics: EvalMetrics;
   failures: string[];
+  stats?: CaseStats;
   workspace?: string;
   taskCallCount?: number;
   agents?: Array<{ type: string; status: string; rounds: number; toolCalls: number; description: string }>;
@@ -44,9 +46,20 @@ const METRIC_KEYS: Array<keyof EvalMetrics> = [
 interface CliArgs {
   mode: 'real' | 'mock' | 'local';
   caseId?: string;
+  category?: string;
+  suite?: string;
+  repeat: number;
+  /** 写进历史记录，区分新旧版本 */
+  label?: string;
   format: 'json' | 'markdown';
   keepWorkspaces: boolean;
   help: boolean;
+}
+
+/** 真实模式用的模型；只记录 id / model，绝不记录密钥 */
+interface EvalModelInfo {
+  providerId: string;
+  model: string;
 }
 
 async function main(): Promise<void> {
@@ -57,33 +70,44 @@ async function main(): Promise<void> {
   }
 
   const selectedCases = args.mode === 'local'
-    ? selectLocalCases(selectCases(args.caseId))
-    : selectCases(args.caseId);
-  const results = args.mode === 'real'
-    ? await runRealEval(selectedCases, args)
-    : args.mode === 'local'
-      ? await runLocalEval(selectedCases, args)
-      : await runMockEval(selectedCases, args);
-  const metrics = aggregate(results);
-  const report = {
-    timestamp: new Date().toISOString(),
-    mode: args.mode,
-    caseCount: selectedCases.length,
-    metrics,
-    results,
-  };
+    ? selectLocalCases(selectCases(args.caseId, args.category, args.suite))
+    : selectCases(args.caseId, args.category, args.suite);
+  const real = args.mode === 'real' ? await createRealChatFunction() : undefined;
+  let failed = false;
+  for (let run = 1; run <= args.repeat; run++) {
+    if (args.repeat > 1) console.error(`[agent-eval] repeat ${run}/${args.repeat}`);
+    const results = real
+      ? await runRealEval(selectedCases, args, real.chatFn)
+      : args.mode === 'local'
+        ? await runLocalEval(selectedCases, args)
+        : await runMockEval(selectedCases, args);
+    const metrics = aggregate(results);
+    const report = {
+      timestamp: new Date().toISOString(),
+      mode: args.mode,
+      ...(args.label ? { label: args.label } : {}),
+      ...(args.suite ? { suite: args.suite } : {}),
+      ...(args.repeat > 1 ? { run, repeat: args.repeat } : {}),
+      ...(real ? { model: real.model } : {}),
+      ...(process.env.ICE_CONTEXT_WINDOW ? { contextWindow: Number(process.env.ICE_CONTEXT_WINDOW) } : {}),
+      caseCount: selectedCases.length,
+      metrics,
+      results,
+    };
 
-  console.log(formatReport(report, args.format));
-  await appendHistory(report);
+    console.log(formatReport(report, args.format));
+    await appendHistory(report);
 
-  const includesCompressionCase = results.some(result => result.category === 'compression');
-  if (results.some(result => !result.passed)
-    || metrics.task_success_rate < 1
-    || (includesCompressionCase && metrics.compaction_recovery_success_rate < 0.95)
-    || metrics.no_tool_final_rate > 0
-    || metrics.memory_interference_rate > 0) {
-    process.exitCode = 1;
+    const includesCompressionCase = results.some(result => result.category === 'compression');
+    if (results.some(result => !result.passed)
+      || metrics.task_success_rate < 1
+      || (includesCompressionCase && metrics.compaction_recovery_success_rate < 0.95)
+      || metrics.no_tool_final_rate > 0
+      || metrics.memory_interference_rate > 0) {
+      failed = true;
+    }
   }
+  if (failed) process.exitCode = 1;
 }
 
 async function runMockEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseResult[]> {
@@ -146,10 +170,9 @@ function selectLocalCases(cases: AgentEvalCase[]): AgentEvalCase[] {
   return local;
 }
 
-async function runRealEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseResult[]> {
+async function runRealEval(cases: AgentEvalCase[], args: CliArgs, chatFn: ChatFunction): Promise<CaseResult[]> {
   await ensureWebStreamsGlobals();
   const { runAgentEvalCase } = await import('./agent-eval-runner.js');
-  const chatFn = await createRealChatFunction();
   const results: CaseResult[] = [];
   const previousEvalMode = process.env.ICE_EVAL_MODE;
   // Agent 回归不评测后台记忆提取；关闭它可避免额外模型调用和临时沙箱删除后的悬挂写入。
@@ -216,7 +239,8 @@ async function ensureWebStreamsGlobals(): Promise<void> {
   globalThis.TransformStream ??= webStreams.TransformStream as typeof globalThis.TransformStream;
 }
 
-async function createRealChatFunction(): Promise<ChatFunction> {
+async function createRealChatFunction(): Promise<{ chatFn: ChatFunction; model: EvalModelInfo }> {
+  await ensureWebStreamsGlobals();
   const [{ resolveDataPaths, ensureDataDir }, { loadConfig, initializeLLMAdapter }] = await Promise.all([
     import('../src/cli/paths.js'),
     import('../src/cli/bootstrap.js'),
@@ -227,11 +251,28 @@ async function createRealChatFunction(): Promise<ChatFunction> {
   if (providers.length === 0) {
     throw new Error('No LLM provider configured. Use --mode=mock for a no-API smoke run.');
   }
+  // 固定对比用的模型：ICE_AGENT_EVAL_PROVIDER 指定 provider id，否则用配置里的默认 provider
+  const pinnedId = process.env.ICE_AGENT_EVAL_PROVIDER?.trim();
+  const pick = pinnedId
+    ? providers.find(provider => provider.id === pinnedId)
+    : providers.find(provider => provider.isDefault) ?? providers[0];
+  if (!pick) {
+    throw new Error(`ICE_AGENT_EVAL_PROVIDER=${pinnedId} not found. Available: ${providers.map(p => p.id).join(', ')}`);
+  }
   const llmAdapter = initializeLLMAdapter(providers);
-  return (messages, options) => llmAdapter.chat(messages, {
-    ...options,
-    requestTimeoutMs: Number(process.env.ICE_AGENT_EVAL_REQUEST_TIMEOUT_MS ?? 120_000),
-  });
+  llmAdapter.setDefaultProvider(pick.id);
+  const model: EvalModelInfo = {
+    providerId: pick.id,
+    model: pick.activeModelName ?? pick.modelName.split(',')[0]!.trim(),
+  };
+  console.error(`[agent-eval] provider=${model.providerId} model=${model.model} hasKey=${Boolean(pick.apiKey)}`);
+  return {
+    model,
+    chatFn: (messages, options) => llmAdapter.chat(messages, {
+      ...options,
+      requestTimeoutMs: Number(process.env.ICE_AGENT_EVAL_REQUEST_TIMEOUT_MS ?? 120_000),
+    }),
+  };
 }
 
 async function appendHistory(report: unknown): Promise<void> {
@@ -240,11 +281,27 @@ async function appendHistory(report: unknown): Promise<void> {
   await fs.appendFile(historyPath, `${JSON.stringify(report)}\n`, 'utf-8');
 }
 
-function selectCases(caseId: string | undefined): AgentEvalCase[] {
-  if (!caseId) return agentEvalCases;
-  const selected = agentEvalCases.filter(testCase => testCase.id === caseId);
-  if (selected.length === 0) {
-    throw new Error(`Unknown eval case: ${caseId}. Available: ${agentEvalCases.map(testCase => testCase.id).join(', ')}`);
+function selectCases(caseId: string | undefined, category: string | undefined, suite?: string): AgentEvalCase[] {
+  if (suite) {
+    const groups = AGENT_EVAL_SUITES[suite];
+    if (!groups) throw new Error(`Unknown eval suite: ${suite}. Available: ${Object.keys(AGENT_EVAL_SUITES).join(', ')}`);
+    return groups.flatMap(group => group.cases).map(id => {
+      const found = agentEvalCases.find(testCase => testCase.id === id);
+      if (!found) throw new Error(`Suite ${suite} references unknown case ${id}`);
+      return found;
+    });
+  }
+  const byCategory = category
+    ? agentEvalCases.filter(testCase => testCase.category === category)
+    : agentEvalCases;
+  if (category && byCategory.length === 0) {
+    throw new Error(`Unknown eval category: ${category}.`);
+  }
+  if (!caseId) return byCategory;
+  const ids = new Set(caseId.split(',').map(id => id.trim()).filter(Boolean));
+  const selected = byCategory.filter(testCase => ids.has(testCase.id));
+  if (selected.length !== ids.size) {
+    throw new Error(`Unknown eval case: ${caseId}. Available: ${byCategory.map(testCase => testCase.id).join(', ')}`);
   }
   return selected;
 }
@@ -270,6 +327,14 @@ function formatReport(report: {
     `- memory_interference_rate: ${roundMetric(report.metrics.memory_interference_rate)}`,
     `- compaction_recovery_success_rate: ${roundMetric(report.metrics.compaction_recovery_success_rate)}`,
     '',
+    '| case | result | rounds | LLM calls | tools | failed | blocked | writes | max same-file writes | run_command | tokens | seconds | stop |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...report.results.map(result => {
+      const s = result.stats;
+      if (!s) return `| ${result.id} | ${result.passed ? 'PASS' : 'FAIL'} | | | | | | | | | | | |`;
+      return `| ${result.id} | ${result.passed ? 'PASS' : 'FAIL'} | ${s.rounds} | ${s.llmCalls} | ${s.toolCalls} | ${s.failedToolResults} | ${s.policyBlocks} | ${s.writeCalls} | ${s.maxSameFileWrites} | ${s.runCommands} | ${s.totalTokens} | ${(s.durationMs / 1000).toFixed(1)} | ${s.stopReason ?? ''} |`;
+    }),
+    '',
   ];
 
   for (const result of report.results) {
@@ -282,6 +347,20 @@ function formatReport(report: {
       lines.push(`- compaction_recovery_success_rate: ${roundMetric(result.metrics.compaction_recovery_success_rate)}`);
     }
     lines.push(`- tokens_per_successful_task: ${roundMetric(result.metrics.tokens_per_successful_task)}`);
+    const st = result.stats;
+    if (st?.inputTokens !== undefined) {
+      lines.push(
+        `- tokens: input=${st.inputTokens} output=${st.outputTokens ?? 0} cache_read=${st.cacheReadTokens ?? 0} peak_prompt=${st.peakPromptTokens ?? 0}`,
+      );
+    }
+    const tr = result.stats?.toolResults;
+    if (tr && (tr.shaped > 0 || tr.savedTokens > 0 || tr.budgetShrinks > 0 || tr.budgetOverflows > 0)) {
+      lines.push(
+        `- tool_results: shaped=${tr.shaped} rereads(paged/cleared/spill)=${tr.rereads.paged}/${tr.rereads.cleared}/${tr.rereads.spill} `
+        + `saved_tokens=${tr.savedTokens} reread_tokens=${tr.rereadTokens} net=${tr.savedTokens - tr.rereadTokens} `
+        + `budget_shrinks=${tr.budgetShrinks} overflows=${tr.budgetOverflows}`,
+      );
+    }
     if (typeof result.taskCallCount === 'number') {
       lines.push(`- task_call_count: ${result.taskCallCount}`);
     }
@@ -321,9 +400,17 @@ function parseArgs(): CliArgs {
   if (formatArg !== 'json' && formatArg !== 'markdown') {
     throw new Error(`Invalid --format: ${formatArg}. Expected "json" or "markdown".`);
   }
+  const repeat = Number(getArg('--repeat') ?? 1);
+  if (!Number.isInteger(repeat) || repeat < 1) {
+    throw new Error(`Invalid --repeat: ${getArg('--repeat')}. Expected a positive integer.`);
+  }
   return {
     mode: modeArg,
     caseId: getArg('--case'),
+    category: getArg('--category'),
+    suite: getArg('--suite'),
+    repeat,
+    label: getArg('--label'),
     format: formatArg,
     keepWorkspaces: hasFlag('--keep-workspaces'),
     help: hasFlag('--help') || hasFlag('-h'),
@@ -343,7 +430,11 @@ Options:
   --mode=<real|mock|local> real drives Harness with configured LLM;
                            mock is no-API smoke, but still runs scripted local cases for real;
                            local runs only scriptedTurns cases with real tools in isolated workspaces
-  --case=<id>              run one case
+  --case=<id[,id...]>      run the listed case(s)
+  --category=<name>        run one category (e.g. model-led)
+  --suite=<name>           run a fixed comparison suite (e.g. context); overrides --case/--category
+  --repeat=<n>             run the selection n times; each run is one history record
+  --label=<text>           tag history records (e.g. new / base) for agent-eval-compare
   --format=<json|markdown> output format
   --keep-workspaces        keep temp workspaces for debugging
   --help, -h               show help

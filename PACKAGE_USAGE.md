@@ -39,7 +39,6 @@ CI 环境默认不自增（避免流水线改脏版本）；本地可用 `ICE_BU
 |------|------|
 | `dist/` | 编译后的 Node 入口、CLI、Harness、Web 服务 |
 | `data/config.example.json` | API 配置模板 |
-| `data/supervisor-config.example.json` | 双模监管参数模板 |
 | `data/skills/创建技能.md` | 技能创建指引 |
 | `data/system-prompt.md` | 系统提示词模板 |
 | `package.json` | 依赖与 `bin` |
@@ -132,7 +131,7 @@ cp data/config.example.json data/config.json
 
 `modelName` 支持英文逗号分隔多个模型；聊天页切换会更新 `activeModelName`。`supportsVision` 控制是否先发多模态图片（默认 `true`，API 拒绝时自动去图重试）。厂商额外 HTTP 头写在 provider 的 `headers`（字面量或 `{{sessionId}}` / `{{providerId}}` / `{{model}}`）。详见 [`docs/使用文档.md`](./docs/使用文档.md#配置)。
 
-环境变量（`ICE_DATA_DIR`、`ICE_SKILLS_DIR`、`ICE_SUPERVISOR_SHADOW` 等）见 [`docs/环境变量.md`](./docs/环境变量.md)。监管档位写在 `data/config.json` 的 **`supervisorMode`**（`off` / `adaptive` / `strict`）。
+环境变量（`ICE_DATA_DIR`、`ICE_SKILLS_DIR` 等）见 [`docs/环境变量.md`](./docs/环境变量.md)。
 
 ## 运行方式
 
@@ -227,7 +226,7 @@ npm install -g ./ice-coder-<version>.tgz --force
 1. **API Key**：仅保存在使用者本机 `data/config.json` 或 `~/.iceCoder/` 对应配置路径，勿泄露。
 2. **包版本**：`package.json` 中 `name` 为 `ice-coder`，`bin` 为 `iceCoder`；每次 `npm run build` 会自增 patch，tgz 形如 `ice-coder-1.0.1.tgz`。
 3. **依赖**：安装 tgz 时会解析 `package.json` 的 `dependencies`；开发依赖（Vitest、Vite 等）不会装入生产安装。
-4. **监管档位**：`data/config.json` 可配置 `supervisorMode`（`off` / `adaptive` / `strict`），详见 [`docs/双模机制详解.md`](./docs/双模机制详解.md)。
+4. **旧配置**：三档监管已于 2026-10-16 移除；旧 `config.json` 里残留的 `supervisorMode` 会被忽略，`~/.iceCoder/supervisor-config.json` 不再读取，可自行删除。
 
 ## 相关链接
 

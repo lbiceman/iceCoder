@@ -59,6 +59,27 @@ export interface ListWorkspaceInventoryOptions {
   baseline?: WorkspaceFileInventory;
   /** 只扫描这些相对路径；为空则全树。 */
   scopeRelPaths?: readonly string[];
+  /**
+   * 不计入清单的绝对目录（如会话目录）。checkpoint / 工具输出落盘是 Harness 自己写的，
+   * 会话目录在工作区内时，异步写入会被误判为命令改动了工作区。
+   */
+  excludeDirs?: readonly string[];
+}
+
+function normalizeDirKey(dir: string): string {
+  const resolved = path.resolve(dir);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isInsideExcludedDir(abs: string, excluded: ReadonlySet<string>): boolean {
+  if (excluded.size === 0) return false;
+  let current = normalizeDirKey(abs);
+  for (;;) {
+    if (excluded.has(current)) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 interface BackgroundInventoryEntry {
@@ -280,9 +301,11 @@ async function collectInventoryFiles(
   root: string,
   dir: string,
   out: WorkspaceFileInventory,
+  excluded: ReadonlySet<string>,
 ): Promise<Array<{ abs: string; rel: string }>> {
   const files: Array<{ abs: string; rel: string }> = [];
   const walk = async (current: string): Promise<void> => {
+    if (isInsideExcludedDir(current, excluded)) return;
     let entries: import('node:fs').Dirent[];
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
@@ -349,11 +372,13 @@ export async function listWorkspaceFileInventory(
     ?? (!scope && touch.lastFullInventory?.root === root ? touch.lastFullInventory.inventory : undefined);
   const out = emptyInventory(scope);
   const reads = { n: 0 };
+  const excluded = new Set((options?.excludeDirs ?? []).map(normalizeDirKey));
 
   if (scope) {
     const files: Array<{ abs: string; rel: string }> = [];
     for (const rel of scope) {
       const abs = path.join(root, ...rel.split('/'));
+      if (isInsideExcludedDir(abs, excluded)) continue;
       let stat: import('node:fs').Stats;
       try {
         stat = await fs.stat(abs);
@@ -363,14 +388,14 @@ export async function listWorkspaceFileInventory(
         continue;
       }
       if (stat.isDirectory()) {
-        files.push(...await collectInventoryFiles(root, abs, out));
+        files.push(...await collectInventoryFiles(root, abs, out, excluded));
       } else if (stat.isFile()) {
         files.push({ abs, rel });
       }
     }
     await fillInventoryFiles(files, out, baseline, reads, true);
   } else {
-    const files = await collectInventoryFiles(root, root, out);
+    const files = await collectInventoryFiles(root, root, out, excluded);
     await fillInventoryFiles(files, out, baseline, reads, false);
     if (out.complete) touch.lastFullInventory = { root, inventory: cloneInventory(out) };
   }

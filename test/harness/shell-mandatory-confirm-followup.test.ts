@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractRunCommand } from '../../src/harness/branch-budget-path.js';
+import { extractRunCommand } from '../../src/harness/tool-target-path.js';
 import { checkToolPreflight } from '../../src/harness/harness-tool-preflight.js';
 
 describe('extractRunCommand', () => {

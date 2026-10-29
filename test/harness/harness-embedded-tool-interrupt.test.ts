@@ -8,7 +8,6 @@ import { LoopController } from '../../src/harness/loop-controller.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
 import { StopHookManager } from '../../src/harness/stop-hooks.js';
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 
 const CHANNEL_SAMPLE = `[调用工具: run_command]]<]minimax[>[<task_id>bg_46rq7i]<]minimax[>[</task_id>]<]minimax[>[<action>check]<]minimax[>[</action>]<]minimax[>[<since>0]<]minimax[>[</since>]<]minimax[>[</invoke>]<]minimax[>[</tool_call>`;
 
@@ -35,7 +34,6 @@ function makeState(): HarnessRunState {
     reasoningOnlyRecoveryCount: 0,
     maxOutputTokensRecoveryCount: 0,
     consecutiveToolFailures: 0,
-    stableRoundsSinceLastFailure: 0,
     justCompacted: false,
     amnesiaRecoveryCount: 0,
     taskSwitchInjected: false,
@@ -71,7 +69,6 @@ describe('handleNoToolCalls · embedded text after API tools', () => {
       loopController: new LoopController({ maxRounds: 10 }),
       memoryIntegration: { getSessionMemoryForCompact: async () => null, injectMemoryContext: async () => {} },
       stopHookManager: new StopHookManager(),
-      graphExecutor: new GraphExecutor(),
       sessionDir: undefined,
       checkpointManager: undefined,
       checkpointEngine: undefined,

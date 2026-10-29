@@ -63,7 +63,6 @@ describe('欢迎页门控卡片', () => {
       const dash = document.getElementById('dash')!;
       (window as any).ChatWelcome.syncDashboard(dash, {
         connectionState: 'connected',
-        supervisorMode: 'off',
       });
       const value = document.querySelector('[data-welcome-pipeline]') as HTMLElement | null;
       const label = value?.parentElement?.querySelector('.chat-welcome-stat-label');

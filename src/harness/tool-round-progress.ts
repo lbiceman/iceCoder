@@ -1,6 +1,5 @@
 import type { ToolCall } from '../llm/types.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
-import { extractToolTargetPath, isFileWriteTool } from './branch-budget-path.js';
+import { isFileWriteTool } from './tool-target-path.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
 
@@ -8,7 +7,6 @@ export interface ToolRoundProgressInput {
   executableToolCalls: ToolCall[];
   failedSignatures: string[];
   policyBlockedSignatures?: string[];
-  branchBudget?: BranchBudgetTracker;
   /** 按 toolCall.id 对照 classifyRunCommandResult；不看命令是否像测试。 */
   runCommandClassifications?: ReadonlyMap<string, RunCommandResultClassification>;
 }
@@ -38,14 +36,7 @@ function isMeaningfulSuccessfulTool(
   call: ToolCall,
   input: ToolRoundProgressInput,
 ): boolean {
-  if (isFileWriteTool(call.name)) {
-    const over = input.branchBudget?.shouldBranchRecover();
-    if (over?.triggered && over.dimension === 'file_edit' && over.key) {
-      const path = extractToolTargetPath(call.name, call.arguments);
-      if (path && path === over.key) return false;
-    }
-    return true;
-  }
+  if (isFileWriteTool(call.name)) return true;
   if (call.name === 'run_command') {
     return isCompletedRunCommand(input.runCommandClassifications?.get(call.id));
   }

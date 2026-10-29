@@ -6,6 +6,7 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
 import { isSystemInjectedUserContent } from './harness-message-utils.js';
+import { normalizeToolPath, SPILL_ALWAYS_MIN_CHARS, spillReadHint } from './tool-result-budget.js';
 
 /** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
 export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
@@ -156,7 +157,120 @@ export function buildRecentDialogueFocusContent(
   return parts.join('\n');
 }
 
-/** 微压缩：清空过时工具正文（返回新消息数组） */
+/** 会改写文件内容、使之前读到的内容过时的工具 */
+const FILE_MUTATING_TOOLS = new Set<string>([
+  'write_file',
+  'edit_file',
+  'append_file',
+  'batch_edit_file',
+  'patch_file',
+]);
+
+function toolArgPath(args: Record<string, unknown> | undefined): string | undefined {
+  const value = args?.path ?? args?.file_path ?? args?.filePath;
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function readLineSpan(msg: UnifiedMessage, args: Record<string, unknown> | undefined): [number, number] {
+  const lines = msg.toolResultMeta?.lines;
+  if (lines) return [lines.start, lines.end];
+  const offset = typeof args?.offset === 'number' && args.offset > 0 ? args.offset : 1;
+  const limit = typeof args?.limit === 'number' && args.limit > 0 ? args.limit : Infinity;
+  return [offset, offset + limit - 1];
+}
+
+/**
+ * 已被后来的读取（覆盖同一范围）或对同一文件的改写取代的 read_file 结果下标。
+ * 只有这些旧读取会在微压缩中清理；未被取代的文件内容保留。
+ */
+function findSupersededReads(
+  messages: UnifiedMessage[],
+  toolCallIdToName: Map<string, string>,
+  toolCallArgs: Map<string, Record<string, unknown>>,
+): Set<number> {
+  const reads: Array<{ idx: number; path: string; span: [number, number]; returnedLines: boolean }> = [];
+  const writes: Array<{ idx: number; path: string }> = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || !msg.toolCallId) continue;
+    const name = toolCallIdToName.get(msg.toolCallId);
+    const args = toolCallArgs.get(msg.toolCallId);
+    const rawPath = msg.toolResultMeta?.path ?? toolArgPath(args);
+    if (!name || !rawPath) continue;
+    const path = normalizeToolPath(rawPath);
+    if (name === 'read_file') {
+      // 有 meta 却没有 lines 的是失败读取（如范围超限被拒），不能取代旧读取；无 meta 的为历史消息
+      const returnedLines = msg.toolResultMeta ? Boolean(msg.toolResultMeta.lines) : true;
+      reads.push({ idx: i, path, span: readLineSpan(msg, args), returnedLines });
+    } else if (FILE_MUTATING_TOOLS.has(name)) {
+      writes.push({ idx: i, path });
+    }
+  }
+
+  const superseded = new Set<number>();
+  for (const read of reads) {
+    const rewritten = writes.some(w => w.idx > read.idx && w.path === read.path);
+    const reread = reads.some(r =>
+      r.idx > read.idx
+      && r.returnedLines
+      && r.path === read.path
+      && r.span[0] <= read.span[0]
+      && r.span[1] >= read.span[1]);
+    if (rewritten || reread) superseded.add(read.idx);
+  }
+  return superseded;
+}
+
+/** 发给模型的视图（封存优先） */
+export function toolResultViewText(msg: UnifiedMessage): string {
+  if (typeof msg.apiSealedContent === 'string') return msg.apiSealedContent;
+  return typeof msg.content === 'string' ? msg.content : '';
+}
+
+/**
+ * 被清理的工具结果的占位：声明它不是工具输出，并给出唯一可靠的找回方式。
+ * - read_file：按路径和行号重读（拿到的是文件当前内容）；
+ * - 有落盘原文：给出路径和读取方式；
+ * - 都没有：明确说原文没有保存，只能重新执行工具。
+ */
+export function buildClearedToolResultStub(input: {
+  msg: UnifiedMessage;
+  toolName: string;
+  args?: Record<string, unknown>;
+  /** 清理原因，接在工具名后面 */
+  reason?: string;
+}): string {
+  const { msg, toolName, args, reason } = input;
+  const meta = msg.toolResultMeta;
+  const size = `~${toolResultViewText(msg).length} chars`;
+  const why = reason ? ` ${reason}.` : '';
+  if (toolName === 'read_file') {
+    const path = meta?.path ?? toolArgPath(args) ?? '(unknown)';
+    const lines = meta?.lines;
+    const span = lines ? `lines ${lines.start}-${lines.end} of ${lines.total}` : 'lines as in the original call';
+    const reread = lines
+      ? `read_file path=${path} offset=${lines.start} limit=${lines.end - lines.start + 1}`
+      : `read_file path=${path} (offset/limit)`;
+    return `${OLD_TOOL_STUB} read_file path=${path} ${span} (${size}).${why} `
+      + `This placeholder is NOT the file content. To see it again: ${reread} — `
+      + 'this returns the file\'s CURRENT content, which may differ if the file changed since.';
+  }
+  const status = typeof msg.content === 'string' && /^(Tool execution error|工具执行错误|工具调用被拒绝)/.test(msg.content)
+    ? 'failed'
+    : 'succeeded';
+  const head = `${OLD_TOOL_STUB} tool=${toolName} status=${status} (${size}).${why} This placeholder is NOT the tool output.`;
+  if (meta?.spillPath) {
+    return `${head} Full original output saved at: ${meta.spillPath} — read it with ${spillReadHint(meta.spillPath)}.`;
+  }
+  return `${head} The original output was not saved; re-run the tool if you need it.`;
+}
+
+/**
+ * 微压缩：把过时工具结果换成占位（返回新消息数组）。
+ *
+ * 占位写进 apiSealedContent（apiSealedBy: 'pressureClear'），content 保留原结果，
+ * 占位里写明找回方式（重读文件范围 / 落盘路径）。清掉的不会再展开。
+ */
 export function applyLightMicrocompactToolClear(
   messages: UnifiedMessage[],
   options: {
@@ -165,25 +279,43 @@ export function applyLightMicrocompactToolClear(
     toolCallIdToName: Map<string, string>;
     msgAssistantRound: Map<number, number>;
     currentAssistantRound: number;
+    /** toolCallId → 调用参数（识别被取代的 read_file 需要路径与范围） */
+    toolCallArgs?: Map<string, Record<string, unknown>>;
   },
 ): UnifiedMessage[] {
   const { keepLastAssistantToolRounds, toolCallIdToName, msgAssistantRound, currentAssistantRound } =
     options;
+  const toolCallArgs = options.toolCallArgs ?? new Map<string, Record<string, unknown>>();
+  const supersededReads = findSupersededReads(messages, toolCallIdToName, toolCallArgs);
 
   return messages.map((msg, idx) => {
     if (msg.role !== 'tool' || typeof msg.content !== 'string') return msg;
+    if (msg.apiSealedBy === 'pressureClear') return msg;
     const r = msgAssistantRound.get(idx) ?? 0;
     if (currentAssistantRound - r <= keepLastAssistantToolRounds) return msg;
 
     const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
-    if (!toolName || FILE_TOOLS_NEVER_MICROCLEAR.has(toolName)) return msg;
-    if (!LIGHT_MICROCLEAR_TOOLS.has(toolName)) return msg;
-    if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content)) return msg;
+    if (!toolName) return msg;
+    const args = msg.toolCallId ? toolCallArgs.get(msg.toolCallId) : undefined;
 
-    const len = msg.content.length;
+    let stub: string;
+    if (toolName === 'read_file') {
+      if (!supersededReads.has(idx)) return msg;
+      stub = buildClearedToolResultStub({ msg, toolName, args, reason: 'Superseded by a later read or edit of this file' });
+    } else {
+      if (FILE_TOOLS_NEVER_MICROCLEAR.has(toolName)) return msg;
+      if (!LIGHT_MICROCLEAR_TOOLS.has(toolName)) return msg;
+      if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content)) return msg;
+      // 没落盘的短结果清掉就找不回，省下的也不多
+      if (!msg.toolResultMeta?.spillPath && toolResultViewText(msg).length <= SPILL_ALWAYS_MIN_CHARS) return msg;
+      stub = buildClearedToolResultStub({ msg, toolName, args });
+    }
+    if (stub.length >= toolResultViewText(msg).length) return msg;
+
     return {
       ...msg,
-      content: `${OLD_TOOL_STUB} tool=${toolName} (~${len} chars removed)`,
+      apiSealedContent: stub,
+      apiSealedBy: 'pressureClear' as const,
     };
   });
 }

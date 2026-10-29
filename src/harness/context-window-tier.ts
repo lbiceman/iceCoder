@@ -5,7 +5,7 @@
 
 import * as fs from 'fs';
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
-import { resolveMainConfigPath } from '../config/main-config-supervisor-mode.js';
+import { resolveMainConfigPath } from '../config/main-config.js';
 import type { IceCoderConfigFile } from '../web/types.js';
 import { parseModelNames } from '../config/parse-model-names.js';
 

@@ -24,7 +24,6 @@ describe('TaskCheckpointManager · resume summary', () => {
         totalInputTokens: 10,
         totalOutputTokens: 5,
         stopReason: undefined,
-        executionMode: 'free',
       },
       messages: [{ role: 'user', content: 'Fix build' }] as UnifiedMessage[],
     });
@@ -60,7 +59,6 @@ describe('TaskCheckpointManager · resume summary', () => {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         stopReason: undefined,
-        executionMode: 'free',
       },
       messages: [{ role: 'user', content: nested }] as UnifiedMessage[],
     });

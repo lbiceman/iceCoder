@@ -85,11 +85,6 @@ export interface IceEtlPrefs {
 export interface IceCoderConfigFile {
   providers: ProviderConfig[];
   /**
-   * 双模监管档位（Web 顶栏与配置页可改）。
-   * `off` | `adaptive` | `strict`；未设置时由 supervisor-config.json 的 `mode` 兜底。
-   */
-  supervisorMode?: 'off' | 'adaptive' | 'strict';
-  /**
    * 为 `true` 时跳过 Harness 工具权限检查（deny/confirm/破坏性确认），直接执行工具。
    * 字段缺失或为 `false` 时走默认权限规则。
    */
@@ -99,6 +94,11 @@ export interface IceCoderConfigFile {
    * 显式 `false` 时不暴露工具、不注入这段提示词。
    */
   enableSubAgents?: boolean;
+  /**
+   * 是否把 Windows 键鼠/截屏工具和使用说明发给模型。
+   * 缺失或非 `true` 时不注入。仅 Windows 会真正注册这些工具。
+   */
+  useWindows?: boolean;
   /**
    * Shell 协作强制确认规则（字符串正则，不含首尾 `/`）。
    * 缺失时使用内置默认；空数组 `[]` 表示仅保留不可配置的 hard block / 宿主保护。

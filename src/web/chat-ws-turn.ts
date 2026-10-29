@@ -41,7 +41,12 @@ import {
 import {
   readEnableSubAgentsFromMainConfig,
   readSkipPermissionChecksFromMainConfig,
-} from '../config/main-config-supervisor-mode.js';
+} from '../config/main-config.js';
+import { isSessionUnattended } from './chat-ws-confirm.js';
+import {
+  applyUseWindowsToolOffering,
+  windowsDesktopUnattendedDenyRule,
+} from '../tools/windows/windows-actions.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
 import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
@@ -112,7 +117,6 @@ import {
   getCachedMessages,
   getFileBrowserState,
   getSessionDeferredToolCalls,
-  getSupervisorRuntime,
   isSessionTombstoned,
   recordSessionDeferredToolCall,
   sessionAbortControllers,
@@ -457,7 +461,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const abortController = new AbortController();
   sessionAbortControllers.set(runSessionId, abortController);
 
-  const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
   const enableSubAgents = await readEnableSubAgentsFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
@@ -478,6 +481,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   });
   toolDefs = sessionToolCtx.toolDefs;
   const runtimeToolsDisabled = shouldDisableRuntimeTools();
+  const unattended = isSessionUnattended(runSessionId);
+  toolDefs = await applyUseWindowsToolOffering(toolDefs, MAIN_CONFIG_PATH, { unattended });
   const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
   const promptToolNames = runtimeToolsDisabled
     ? []
@@ -555,6 +560,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     },
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
+      ...(unattended ? [windowsDesktopUnattendedDenyRule()] : []),
     ],
     skipPermissionChecks,
     compactionThreshold: 40,
@@ -568,8 +574,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     sessionId: runSessionId,
     workspaceRoot: effectiveWorkspace,
     verificationExemptDirs,
-    supervisorConfig: supervisorRuntime.supervisorConfig,
-    globalPolicy: supervisorRuntime.globalPolicy,
     shellCollabActive: runtimeToolsDisabled ? false : sessionToolCtx.shellCollabActive,
     planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),

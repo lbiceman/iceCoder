@@ -29,6 +29,10 @@ export interface ToolResult {
   effect?: ToolEffect;
   risk?: ToolRisk;
   receipt?: ToolReceipt;
+  /** read_file 实际返回的行范围；Harness 据此记录省略区间、分页与重读 */
+  readRange?: import('./read-file-page.js').ReadFileRange;
+  /** read_file 显式范围超过 token 上限被拒（用于观测） */
+  readRangeRejected?: { path: string; startLine: number; endLine: number; requestedTokens: number; capTokens: number };
 }
 
 /**

@@ -63,6 +63,17 @@ export const IPC = {
   TASK_DONE_NOTIFY: 'task:done-notify',
   /** 用户点击系统通知后，主进程通知渲染层切到对应会话。 */
   TASK_DONE_NOTIFY_CLICK: 'task:done-notify-click',
+
+  /** 屏幕问号轮盘开关（设置页 ↔ 主进程）。 */
+  SCREEN_PING_GET: 'screen-ping:get',
+  SCREEN_PING_SET: 'screen-ping:set',
+  /** 主进程 → 浮层：轮盘与落点回答。 */
+  SCREEN_PING_WHEEL: 'screen-ping:wheel',
+  SCREEN_PING_MARKER: 'screen-ping:marker',
+  /** 主进程 → 浮层：轮盘上除问号以外的标记。 */
+  SCREEN_PING_SIGNAL: 'screen-ping:signal',
+  /** 主进程 → 主窗口：把截图放进输入框。 */
+  SCREEN_PING_PASTE: 'screen-ping:paste',
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

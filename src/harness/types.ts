@@ -7,16 +7,6 @@
 import type { UnifiedMessage, ToolDefinition, LLMResponse, LLMOptions } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
-import type { TaskGraphView, TaskGraphPatch } from '../types/task-graph-view.js';
-import type {
-  ExecutionMode,
-  ExecutionModeTelemetryPayload,
-  ForcedDegradedTier,
-  GlobalModePolicy,
-  ModeDecision,
-  ModeSignal,
-  ResolvedSupervisorConfig,
-} from '../types/supervisor.js';
 import type { CompletionReason, CompletionStatus } from './completion-state.js';
 
 // ─── 上下文组装 ───
@@ -103,7 +93,7 @@ export type StopReason =
   | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
-  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（Web 冰豆 crying + 固定 final 文案）
+  | 'user_checkpoint'    // 需要人工接管（旧会话兼容；Web 冰豆 crying + 固定 final 文案）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
   | 'completion_paused'  // 通用收尾仍有未决操作/审批/必要回执
@@ -139,32 +129,6 @@ export interface LoopState {
   startTime: number;
   /** 停止原因（循环结束后设置） */
   stopReason?: StopReason;
-  /** TaskGraph (Phase 7) */
-  graphGoal?: string;
-  graphIntent?: string;
-  graphStatus?: string;
-  nodeId?: string;
-  nodeIndex?: number;
-  reason?: string;
-  message?: string;
-  /** Execution Free/Forced 执行边界。 */
-  executionMode?: ExecutionMode;
-  /** Forced enter 后的防抖锁剩余轮数。 */
-  executionModeLockRemaining?: number;
-  /** 上次进入 forced 的触发信号，按优先级排序。 */
-  executionModeEnteredBy?: ModeSignal[];
-  /** 上次进入 forced 的主触发信号。 */
-  executionModeEnteredByPrimary?: ModeSignal;
-  /** 上次进入 forced 的 round。 */
-  executionModeEnteredAtRound?: number;
-  /** Forced 下当前退化层。 */
-  forcedDegradedTier?: ForcedDegradedTier;
-  /** 最近一次模式决策，供 telemetry/checkpoint 观察。 */
-  lastModeDecision?: ModeDecision;
-  /** 本轮待评估 ModeSignal；后续任务保持 append-only。 */
-  pendingModeSignals?: ModeSignal[];
-  /** I10：进入 forced 后已完成的 task-bearing round 数。 */
-  forcedTaskBearingRoundsSinceEntry?: number;
 }
 
 // ─── Harness 核心 ───
@@ -219,10 +183,6 @@ export interface HarnessConfig {
   verificationExemptDirs?: string[];
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
-  /** 可选注入的全局模式策略。 */
-  globalPolicy?: GlobalModePolicy;
-  /** 可选 supervisor 配置。未传入时按 off 处理。 */
-  supervisorConfig?: ResolvedSupervisorConfig;
   /**
    * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；
    * 不传时不暴露 task，Shell 协作 / 规划模式 / CLI 行为不变。子 Harness 不传，禁止嵌套。
@@ -263,8 +223,7 @@ export interface AgentToolScope {
 /**
  * Harness 循环中每一步的事件回调。
  *
- * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 保留给前端兼容（Phase 13）；
- * 新事件 `task_graph_*` 由 TaskGraph 驱动。
+ * `execution_plan_clear` 在每次 run 开始时发出，前端据此重置工作台。
  */
 export type ToolOutcome = 'executed' | 'policy_block' | 'user_denied' | 'execution_fail';
 
@@ -294,16 +253,7 @@ export interface HarnessStepEvent {
     | 'stream_retry_discard'
     | 'tool_output'
     | 'memory_event'
-    | 'execution_plan_init'
-    | 'execution_plan_update'
     | 'execution_plan_clear'
-    | 'task_graph_init'
-    | 'task_graph_node'
-    | 'task_graph_update'
-    | 'task_graph_branch'
-    | 'task_graph_done'
-    | 'execution_mode_enter'
-    | 'execution_mode_exit'
     | 'agent_update';
   /** 子 Agent 转发的事件带上来源；主 Agent 自身事件为空 */
   agentId?: string;
@@ -330,14 +280,6 @@ export interface HarnessStepEvent {
   stopReason?: StopReason;
   completionStatus?: CompletionStatus;
   completionReason?: CompletionReason;
-  /** TaskGraph (Phase 7) */
-  graphGoal?: string;
-  graphIntent?: string;
-  graphStatus?: string;
-  nodeId?: string;
-  nodeIndex?: number;
-  reason?: string;
-  message?: string;
   /** 本轮 LLM 调用的 token 用量 */
   tokenUsage?: { inputTokens: number; outputTokens: number };
   /** 累计 token 用量（含 effectiveUsed / contextWindow 供圆环对齐） */
@@ -346,14 +288,6 @@ export interface HarnessStepEvent {
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */
   memoryDetail?: string;
-  /** TaskGraph 全量视图（execution_plan_init / task_graph_init） */
-  plan?: TaskGraphView;
-  /** 执行计划 ID（仅 type === 'execution_plan_update'） */
-  planId?: string;
-  /** TaskGraph 增量补丁（仅 type === 'execution_plan_update'） */
-  patch?: TaskGraphPatch;
-  /** Execution Mode telemetry payload（仅 execution_mode_enter / execution_mode_exit） */
-  executionMode?: ExecutionModeTelemetryPayload;
 }
 
 /**

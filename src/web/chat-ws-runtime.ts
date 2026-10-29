@@ -9,8 +9,6 @@ import {
   beginSessionHarnessRun,
   endSessionHarnessRun,
 } from '../harness/harness-runtime-registry.js';
-import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
-import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-config.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { AgentSpawner } from '../harness/agents/agent-spawner.js';
@@ -62,23 +60,6 @@ export function endSessionBatch(sessionId: string): void {
   if (next === 0) sessionActiveBatchCounts.delete(sessionId);
   else sessionActiveBatchCounts.set(sessionId, next);
   endSessionHarnessRun(sessionId);
-}
-
-/** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
-let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
-
-registerSupervisorRuntimeReset(() => {
-  supervisorRuntimePromise = null;
-});
-
-export function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime> {
-  if (!supervisorRuntimePromise) {
-    supervisorRuntimePromise = loadHarnessSupervisorRuntime({
-      dataDir: DATA_DIR,
-      mainConfigPath: MAIN_CONFIG_PATH,
-    });
-  }
-  return supervisorRuntimePromise;
 }
 
 /**

@@ -14,7 +14,6 @@ const REQUIRED_API_PREFIXES = [
   '/api/sessions',
   '/api/chat',
   '/api/memory/telemetry',
-  '/api/supervisor/events',
   '/api/token-usage',
   '/api/memory/files',
   '/api/skills',
@@ -22,6 +21,7 @@ const REQUIRED_API_PREFIXES = [
   '/api/scheduled-tasks',
   '/api/mcp',
   '/api/workspace',
+  '/api/screen-ping',
   '/api/memory/dream',
   '/api/memory',
 ];

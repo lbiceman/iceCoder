@@ -8,7 +8,6 @@
  */
 const BUNDLED_DATA_FILES = [
   'data/config.example.json',
-  'data/supervisor-config.example.json',
   'data/skills/创建技能.md',
   'data/system-prompt.md',
 ];

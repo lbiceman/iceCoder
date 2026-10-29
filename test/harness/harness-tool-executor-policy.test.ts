@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { executeToolCallsStreaming } from '../../src/harness/harness-tool-executor.js';
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { emptyHarnessPolicyStats } from '../../src/harness/harness-policy-stats.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import type { ToolCall, UnifiedMessage } from '../../src/llm/types.js';
@@ -40,45 +39,39 @@ describe('harness-tool-executor policy blocks', () => {
     expect(stats.policyBlockedSignatures).toHaveLength(0);
   });
 
-  it('blocks repeated missing read_file as policy_block', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ice-exec-budget-'));
+  it('executes every write to the same file, with no per-file edit cap', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-exec-repeat-'));
     const relPath = 'src/scenes/ShopScene.ts';
     mkdirSync(join(root, 'src', 'scenes'), { recursive: true });
-    writeFileSync(join(root, relPath.replace(/\//g, '\\')), 'export {};\n');
-    const tc: ToolCall = {
-      id: 'tc-write',
+    writeFileSync(join(root, 'src', 'scenes', 'ShopScene.ts'), 'export {};\n');
+    const toolCalls: ToolCall[] = [1, 2, 3, 4, 5].map(n => ({
+      id: `tc-write-${n}`,
       name: 'write_file',
-      arguments: { path: relPath, content: 'updated' },
-    };
+      arguments: { path: relPath, content: `v${n}` },
+    }));
     const messages: UnifiedMessage[] = [];
-    const loopController = new LoopController({ maxRounds: 1 });
-    const execute = vi.fn();
+    const executeTool = vi.fn().mockResolvedValue({ success: true, output: 'written' });
     const statsObj = emptyHarnessPolicyStats();
-    const budget = new BranchBudgetTracker({ fileEditMax: 2 });
-    budget.bindWorkspaceRoot(root);
-    budget.recordFileEdit(relPath);
-    budget.recordFileEdit(relPath);
 
     const stats = await executeToolCallsStreaming(
       {
-        toolExecutor: { execute } as never,
-        loopController,
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 1 }),
         permissionRules: [],
         workspaceRoot: root,
         lockedWorkspaceRoot: root,
-        branchBudget: budget,
         harnessPolicyStats: statsObj,
       },
       {
-        toolCalls: [tc],
+        toolCalls,
         messages,
         logger: { toolCall: () => {}, toolResult: () => {} } as never,
       },
     );
 
-    const budgetKey = process.platform === 'win32' ? relPath.toLowerCase() : relPath;
-    expect(execute).not.toHaveBeenCalled();
-    expect(statsObj.budgetBlockByPath[budgetKey]).toBe(1);
-    expect(stats.budgetBlockedFilePaths).toEqual([budgetKey]);
+    expect(executeTool).toHaveBeenCalledTimes(5);
+    expect(stats.policyBlockedSignatures).toHaveLength(0);
+    expect(statsObj.policyBlockCount).toBe(0);
   });
 });
+

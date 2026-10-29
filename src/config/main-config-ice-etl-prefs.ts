@@ -4,7 +4,7 @@
 
 import { promises as fs } from 'node:fs';
 import type { IceCoderConfigFile, IceEtlPrefs } from '../web/types.js';
-import { readMainConfigFile } from './main-config-supervisor-mode.js';
+import { readMainConfigFile } from './main-config.js';
 
 export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   showTransparencyPanel: true,

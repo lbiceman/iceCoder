@@ -330,17 +330,12 @@ describe('ETL 真实 Observer 链路', () => {
     ))).toBe('session-b-plan');
   });
 
-  it('connected capability=false 后注入计划与执行模式事件仍不挂载', async () => {
+  it('connected capability=false 后注入计划事件仍不挂载', async () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       bridge.notifyConnected({ features: { executionPlan: false } });
-      bridge.handleStep({
-        type: 'execution_mode_enter',
-        executionMode: { executionMode: 'forced', enteredBy: ['explicit_impl'] },
-      });
       bridge.handleStep({ type: 'execution_plan_init', plan });
-      bridge.handleStep({ type: 'task_graph_init', plan: { ...plan, planId: 'blocked-graph' } });
       return {
         enabled: bridge.isEnabled(),
         plan: (window as any).ChatExecutionPlan.getPlan(),
@@ -391,13 +386,13 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('task_graph_update 全量投影保留 Footer 消费的时间字段', async () => {
+  it('execution_plan_init 计划保留 Footer 消费的时间字段', async () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       (window as any).ChatExecutionPlan.beginTurnTimer(10_000);
       bridge.notifyConnected({ features: { executionPlan: true } });
-      bridge.handleStep({ type: 'task_graph_update', plan });
+      bridge.handleStep({ type: 'execution_plan_init', plan });
       (window as any).ChatExecutionPlan.endTurnTimer(15_000);
       const projected = (window as any).ChatExecutionPlan.getPlan();
       return {
@@ -478,22 +473,12 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('真实顺序保留完成态与 exit resume，并按 toolCallId 处理并发工具', async () => {
+  it('真实顺序保留完成态，并按 toolCallId 处理并发工具', async () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       bridge.notifyConnected({ features: { executionPlan: true } });
       bridge.handleStep({ type: 'execution_plan_init', plan });
-      bridge.handleStep({
-        type: 'execution_mode_enter',
-        ts: plan.createdAt + 500,
-        executionMode: {
-          executionMode: 'forced',
-          primaryReasonHuman: '执行修改',
-          enteredBy: ['explicit_impl'],
-          round: 1,
-        },
-      });
       bridge.handleStep({
         type: 'tool_call',
         toolCallId: 'call-a',
@@ -513,15 +498,14 @@ describe('ETL 真实 Observer 链路', () => {
         status: 'done',
         ts: plan.createdAt + 3000,
       });
-      bridge.handleStep({ type: 'task_graph_done', ts: plan.createdAt + 5000 });
       bridge.handleStep({
-        type: 'execution_mode_exit',
-        ts: plan.createdAt + 5000,
-        executionMode: {
-          executionMode: 'free',
-          primaryReasonHuman: '恢复模型执行',
-          enteredBy: ['explicit_impl'],
-          round: 1,
+        type: 'execution_plan_update',
+        planId: plan.planId,
+        patch: {
+          stepPatches: [{ id: 'step-0', status: 'done', endedAt: plan.createdAt + 5000 }],
+          activeStepId: null,
+          progress: 100,
+          updatedAt: plan.createdAt + 5000,
         },
       });
       const tool = (id: string) => {
@@ -896,7 +880,8 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.afterSend.liveRounds).toBe(0);
     expect(result.afterSend.footer).toBe('1');
     expect(result.afterSend.chapterEmpty).toBe(true);
-    expect(result.currentRoundText).toMatch(/glob|查找匹配/i);
+    expect(result.currentRoundText).toMatch(/查找/);
+    expect(result.currentRoundText).toContain('src/**/*.ts');
     expect(result.currentRoundText).not.toContain('previous.ts');
     expect(result.elapsed).toBe('5秒');
     expect(result.chaptersAfter).toBeGreaterThanOrEqual(2);
@@ -934,7 +919,7 @@ describe('ETL 真实 Observer 链路', () => {
           planEvents: [
             { type: 'execution_plan_clear' },
             {
-              type: 'task_graph_init',
+              type: 'execution_plan_init',
               plan: {
                 planId: 'rt-restore-plan',
                 progress: 50,
@@ -970,7 +955,7 @@ describe('ETL 真实 Observer 链路', () => {
       Date.now = () => 100_500;
       emit('step', {
         step: {
-          type: 'task_graph_init',
+          type: 'execution_plan_init',
           plan: { ...basePlan, goal: '实现轮次时间轴', intent: 'edit' },
         },
       });
@@ -1063,7 +1048,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.overview).toContain('意图：实现');
     expect(result.iterations).toEqual(['1', '2', '3']);
     expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
-    expect(result.roundTexts[0]).toMatch(/run_command|Run Command|运行命令|Run Integration Test/i);
+    expect(result.roundTexts[0]).toMatch(/npm test|运行命令|run_command|Run Command/i);
     expect(result.roundTexts[1]).toMatch(/read_file|Read File|读取/i);
     expect(result.finalMarker).toBe('3');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
@@ -1087,7 +1072,7 @@ describe('ETL 真实 Observer 链路', () => {
       now = 100_500;
       emit('step', {
         step: {
-          type: 'task_graph_init',
+          type: 'execution_plan_init',
           plan: { ...basePlan, goal: '多轮执行流裁剪', intent: 'edit' },
         },
       });

@@ -61,10 +61,12 @@ export function estimateStringTokens(text: string): number {
 /** 每条消息的固定结构开销（role 标记 + 分隔符） */
 const MESSAGE_OVERHEAD_TOKENS = 4;
 
-/** 单条消息的 token 估算（正文 + 工具参数 + 结构开销）。 */
+/** 单条消息的 token 估算（正文 + 工具参数 + 结构开销）。按实际发给 API 的视图计：有封存正文时以封存为准。 */
 export function estimateMessageTokens(msg: UnifiedMessage): number {
   let tokens = MESSAGE_OVERHEAD_TOKENS;
-  if (typeof msg.content === 'string') {
+  if (typeof msg.apiSealedContent === 'string') {
+    tokens += estimateStringTokens(msg.apiSealedContent);
+  } else if (typeof msg.content === 'string') {
     tokens += estimateStringTokens(msg.content);
   } else if (Array.isArray(msg.content)) {
     for (const block of msg.content) {

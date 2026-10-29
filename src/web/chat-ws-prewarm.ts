@@ -79,13 +79,11 @@ export function resetAssembledChatPromptCache(): void {
 
 export interface ChatRuntimePrewarmHooks {
   ensureMemoryInitialized: () => Promise<void>;
-  getSupervisorRuntime: () => Promise<unknown>;
   loadAssembledPrompt: () => Promise<AssembledPrompt>;
 }
 
-/**  fire-and-forget：记忆 / Supervisor / 提示词并行预热。 */
+/**  fire-and-forget：记忆 / 提示词并行预热。 */
 export function prewarmChatRuntime(hooks: ChatRuntimePrewarmHooks): void {
   void hooks.ensureMemoryInitialized().catch(() => {});
-  void hooks.getSupervisorRuntime().catch(() => {});
   void hooks.loadAssembledPrompt().catch(() => {});
 }

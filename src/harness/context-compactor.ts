@@ -24,12 +24,13 @@
  * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
-import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
+import type { ToolDefinition, ToolResultMeta, UnifiedMessage } from '../llm/types.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 import {
   estimateMessageTokens,
   estimateMessagesTokens,
+  estimateStringTokens,
   resolveCompactionUsage,
   type CompactionUsageSnapshot,
 } from '../llm/token-estimator.js';
@@ -44,13 +45,17 @@ import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
 import {
   applyLightMicrocompactToolClear,
+  buildClearedToolResultStub,
   buildCompactBoundaryContent,
   buildRecentDialogueFocusContent,
   FILE_TOOLS_PRESERVE_FULL_OUTPUT,
   isSyntheticUserBlockContent,
   shouldPreserveMessageOnCompaction,
+  toolResultViewText,
   truncateSessionNotesForCompact,
 } from './compaction-strategy.js';
+import { EPHEMERAL_RESERVE_TOKENS, SPILL_ALWAYS_MIN_CHARS, readFileRangeMeta, spillReadHint } from './tool-result-budget.js';
+import { repageReadFileOutput, type ReadFileRange } from '../tools/read-file-page.js';
 import {
   findCheckpointAnchorIndex,
   isResumeCheckpointContent,
@@ -127,6 +132,60 @@ function keepIdentifyingToolArgs(args: Record<string, unknown> | undefined): Rec
   return kept;
 }
 
+type CompactedView = string | { view: string; meta?: ToolResultMeta };
+
+/** 硬压缩只改发给模型的视图（apiSealedContent），content 保留写入时的结果 */
+function sealCompactedView(msg: UnifiedMessage, next: CompactedView): UnifiedMessage {
+  const view = typeof next === 'string' ? next : next.view;
+  const meta = typeof next === 'string' ? undefined : next.meta;
+  if (view === toolResultViewText(msg)) return msg;
+  return {
+    ...msg,
+    apiSealedContent: view,
+    apiSealedBy: 'compaction',
+    ...(meta ? { toolResultMeta: meta } : {}),
+  };
+}
+
+/** 非文件结果留头尾，并写明原文在哪里（或没有保存） */
+function shortenToolView(msg: UnifiedMessage, view: string, limit: number, headRatio: number): string {
+  const spill = msg.toolResultMeta?.spillPath;
+  const hint = spill
+    ? `\nShortened for context. Full original output saved at: ${spill} — read it with ${spillReadHint(spill)}.`
+    : '\nShortened for context; the original output was not saved — re-run the tool if you need the omitted part.';
+  const marker = `\n...[${Math.max(0, view.length - limit)} characters omitted from middle; shown view was ${view.length} characters]...${hint}\n`;
+  return truncateHeadTail(view, limit, { headRatio, marker });
+}
+
+/** read_file 结果按连续行缩短（不挖空中段），给出续读范围 */
+function shortenReadFileView(msg: UnifiedMessage, view: string, limit: number): CompactedView {
+  const meta = msg.toolResultMeta;
+  if (meta?.path && meta.lines && meta.page) {
+    const range: ReadFileRange = {
+      path: meta.path,
+      startLine: meta.lines.start,
+      endLine: meta.lines.end,
+      requestedEnd: meta.page.requestedEnd,
+      totalLines: meta.lines.total,
+      numbered: meta.page.numbered,
+      headerLines: meta.page.headerLines,
+      capped: meta.lines.end < meta.page.requestedEnd,
+    };
+    const capTokens = Math.max(200, Math.floor((estimateStringTokens(view) * limit) / Math.max(1, view.length)));
+    const paged = repageReadFileOutput(view, range, capTokens);
+    if (paged) {
+      const { omittedLines: _omitted, ...rest } = meta;
+      return { view: paged.output, meta: { ...rest, ...readFileRangeMeta(paged.range) } };
+    }
+  }
+  const cut = view.slice(0, limit);
+  const lastNl = cut.lastIndexOf('\n');
+  const head = lastNl > limit * 0.5 ? cut.slice(0, lastNl) : cut;
+  const path = meta?.path ?? '(see the original read_file call)';
+  return `${head}\n...[read_file result shortened for context: showing the first ${head.length} of ${view.length} chars. `
+    + `The rest is NOT shown — read_file path=${path} with offset/limit to see it (returns the file's current content).]`;
+}
+
 /** 同一批消息只估算一次，split / 收缩循环按对象身份复用。 */
 class MessageTokenCache {
   private readonly values = new WeakMap<UnifiedMessage, number>();
@@ -154,6 +213,21 @@ export interface CompactionUsageOptions {
   usage?: CompactionUsageSnapshot;
   /** 调用方已经读到的上下文窗口，避免重复同步读配置。 */
   contextWindowTokens?: number;
+  /** 单次输出上限。硬压缩线至少给它和易变块留出空间，否则大输出上限的模型会在压缩前就超窗。 */
+  outputReserveTokens?: number;
+}
+
+/** 硬压缩的剩余 token 下限：固定预留与「输出上限 + 易变块预留」取大 */
+export function resolveCompactionReserve(outputReserveTokens?: number): number {
+  return Math.max(COMPACTION_RESERVE_TOKENS, (outputReserveTokens ?? 0) + EPHEMERAL_RESERVE_TOKENS);
+}
+
+/** 微压缩线：窗口 × 0.8；给了输出上限时不晚于硬压缩线前 4% 窗口 */
+export function resolveMicroCompactionLine(ctxWindow: number, outputReserveTokens?: number): number {
+  const byRatio = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
+  if (outputReserveTokens === undefined) return byRatio;
+  const hardByReserve = ctxWindow - resolveCompactionReserve(outputReserveTokens);
+  return Math.max(0, Math.min(byRatio, hardByReserve - Math.floor(ctxWindow * 0.04)));
 }
 
 /** {@link compact} / {@link compactWithSessionMemory} 运行时选项 */
@@ -372,6 +446,11 @@ export class ContextCompactor {
   private microCompactSessionCount = 0;
   /** 微压缩本轮计数（每轮 prep 最多 MICRO_MAX_PER_ROUND 次） */
   private microCompactRoundCount = 0;
+  private lastLightClear: { cleared: number; clearedTokens: number; toolCallIds: string[] } = {
+    cleared: 0,
+    clearedTokens: 0,
+    toolCallIds: [],
+  };
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -419,8 +498,7 @@ export class ContextCompactor {
     if (!this.canMicroCompact()) return false;
     const ctxWindow = this.resolveContextWindow(options);
     const effectiveUsed = this.resolveEffectiveUsed(messages, options);
-    const microThreshold = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
-    return effectiveUsed >= microThreshold;
+    return effectiveUsed >= resolveMicroCompactionLine(ctxWindow, options?.outputReserveTokens);
   }
 
   /**
@@ -435,6 +513,7 @@ export class ContextCompactor {
     let assistantRound = 0;
     const msgAssistantRound = new Map<number, number>();
     const toolCallIdToName = new Map<string, string>();
+    const toolCallArgs = new Map<string, Record<string, unknown>>();
 
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
@@ -442,23 +521,40 @@ export class ContextCompactor {
         assistantRound++;
         for (const tc of m.toolCalls) {
           toolCallIdToName.set(tc.id, tc.name);
+          toolCallArgs.set(tc.id, tc.arguments ?? {});
         }
       }
       msgAssistantRound.set(i, assistantRound);
     }
 
+    this.lastLightClear = { cleared: 0, clearedTokens: 0, toolCallIds: [] };
     const next = applyLightMicrocompactToolClear(messages, {
       keepLastAssistantToolRounds: 5,
       toolCallIdToName,
       msgAssistantRound,
       currentAssistantRound: assistantRound,
+      toolCallArgs,
     });
     const changed = next.some((msg, i) => msg !== messages[i]);
     if (!changed) return messages;
 
+    for (let i = 0; i < next.length; i++) {
+      if (next[i] === messages[i]) continue;
+      this.lastLightClear.cleared++;
+      this.lastLightClear.clearedTokens += Math.max(
+        0,
+        estimateMessageTokens(messages[i]) - estimateMessageTokens(next[i]),
+      );
+      if (next[i].toolCallId) this.lastLightClear.toolCallIds.push(next[i].toolCallId!);
+    }
     this.microCompactSessionCount++;
     this.microCompactRoundCount++;
     return next;
+  }
+
+  /** 最近一次 {@link doLightCompact} 清理的结果（供遥测） */
+  getLastLightClear(): { cleared: number; clearedTokens: number; toolCallIds: string[] } {
+    return this.lastLightClear;
   }
 
   /**
@@ -466,7 +562,7 @@ export class ContextCompactor {
    *
    * 条件：
    * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.88），或
-   * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
+   * 2. 剩余空间不足 {@link resolveCompactionReserve}（COMPACTION_RESERVE_TOKENS 与输出上限 + 易变块预留取大）
    */
   needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     const ctxWindow = this.resolveContextWindow(options);
@@ -475,7 +571,7 @@ export class ContextCompactor {
     const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
 
     if (effectiveUsed >= tokenThreshold) return true;
-    return remaining < COMPACTION_RESERVE_TOKENS;
+    return remaining < resolveCompactionReserve(options?.outputReserveTokens);
   }
 
   /** 双轨有效占用（供日志 / 主动收缩判定） */
@@ -1082,27 +1178,22 @@ Continue the conversation from where it left off without asking the user any fur
         };
       }
 
-      // 压缩旧的 tool 结果（文件操作工具的结果不压缩）
+      // 压缩旧的 tool 结果（文件操作工具的结果不压缩）。只改发给模型的视图，content 保留原结果。
       if (msg.role === 'tool' && typeof msg.content === 'string') {
         const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
         if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
+        if (msg.apiSealedBy === 'pressureClear') return msg;
 
-        const content = msg.content;
-        if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(content)) {
-          const budget = getFailedRunCommandInlineChars();
-          if (content.length <= budget) return msg;
-          return {
-            ...msg,
-            content: truncateHeadTail(content, budget, { headRatio: 0.2 }),
-          };
+        const view = toolResultViewText(msg);
+        if (toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content)) {
+          return sealCompactedView(msg, shortenToolView(msg, view, getFailedRunCommandInlineChars(), 0.2));
         }
+        // 没落盘的短结果清掉就找不回来，省下的 token 也不值
+        if (!msg.toolResultMeta?.spillPath && view.length <= SPILL_ALWAYS_MIN_CHARS) return msg;
 
-        const isError = content.startsWith('Tool execution error')
-          || content.startsWith('工具执行错误')
-          || content.startsWith('工具调用被拒绝');
-        const status = isError ? 'failed' : 'succeeded';
-        const preview = content.substring(0, 50).replace(/\n/g, ' ');
-        return { ...msg, content: `[${status}] ${preview}${content.length > 50 ? '...' : ''}` };
+        const stub = buildClearedToolResultStub({ msg, toolName: toolName ?? 'unknown' });
+        if (stub.length >= view.length) return msg;
+        return { ...msg, apiSealedContent: stub, apiSealedBy: 'pressureClear' as const };
       }
 
       return msg;
@@ -1129,24 +1220,21 @@ Continue the conversation from where it left off without asking the user any fur
     const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     return messages.map(msg => {
-      if (msg.role === 'tool' && typeof msg.content === 'string') {
-        const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
-        const isFileOp = toolName && FILE_TOOLS.has(toolName);
-        const isFailedCommand = toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content);
-        const limit = isFailedCommand
-          ? getFailedRunCommandInlineChars()
-          : isFileOp
-            ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
-            : this.config.maxToolResultLength;      // 其他工具：3000 字符
+      if (msg.role !== 'tool' || typeof msg.content !== 'string') return msg;
+      if (msg.apiSealedBy === 'pressureClear') return msg;
+      const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
+      const isFileOp = toolName && FILE_TOOLS.has(toolName);
+      const isFailedCommand = toolName === 'run_command' && looksLikeFailedRunCommandOutput(msg.content);
+      const limit = isFailedCommand
+        ? getFailedRunCommandInlineChars()
+        : isFileOp
+          ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
+          : this.config.maxToolResultLength;      // 其他工具：3000 字符
 
-        if (msg.content.length > limit) {
-          return {
-            ...msg,
-            content: truncateHeadTail(msg.content, limit, { headRatio: isFailedCommand ? 0.2 : 0.3 }),
-          };
-        }
-      }
-      return msg;
+      const view = toolResultViewText(msg);
+      if (view.length <= limit) return msg;
+      if (toolName === 'read_file') return sealCompactedView(msg, shortenReadFileView(msg, view, limit));
+      return sealCompactedView(msg, shortenToolView(msg, view, limit, isFailedCommand ? 0.2 : 0.3));
     });
   }
 

@@ -9,9 +9,6 @@ import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'path';
 import '../../cli/paths.js';
-import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fence.js';
-// ExecutionPlan type removed (Phase 11)
-import type { TaskCheckpoint } from '../../harness/checkpoint.js';
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { getDefaultWorkDir } from '../../cli/paths.js';
 import { backfillPlaceholderSessionTitles } from '../session-title.js';
@@ -148,11 +145,6 @@ async function buildWorkspaceIndex(sessionIds: string[]): Promise<{
   return { defaultWorkDir, workspaces };
 }
 
-/**
- * 读取指定 session 当前的执行计划。
- * 优先从 checkpoint 中取（最新），退化到 session-notes plan fence。
- * 找不到则返回 null。
- */
 const CHECKPOINT_PREVIEW_MAX = 140;
 
 export interface CheckpointTimelineEntry {
@@ -209,26 +201,6 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
   };
 }
 
-async function readSessionPlan(sessionId: string): Promise<any> {
-  const checkpointPath = path.join(SESSIONS_DIR, `${sessionId}.checkpoint.json`);
-  try {
-    const raw = await fs.readFile(checkpointPath, 'utf-8');
-    const cp = JSON.parse(raw) as TaskCheckpoint;
-    if ((cp as any)?.plan) return (cp as any).plan;
-  } catch {
-    /* file missing or unparsable → fall through */
-  }
-  try {
-    const notes = await fs.readFile(
-      path.join(SESSIONS_DIR, `${sessionId}.session-notes.md`),
-      'utf-8',
-    );
-    return parsePersistedPlan(notes);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 删除会话相关文件族 + 通知 chat-ws 清理进程内缓存。
  *
@@ -237,7 +209,7 @@ async function readSessionPlan(sessionId: string): Promise<any> {
  *  - `{id}.structured.json`      LLM 结构化历史
  *  - `{id}.checkpoint.json`      TaskCheckpoint（断点恢复）
  *  - `{id}.workspace.json`       工作区锁定
- *  - `{id}.session-notes.md`     会话笔记（含 runtime / plan fence）
+ *  - `{id}.session-notes.md`     会话笔记（含 runtime fence）
  *  - `{id}/` 会话目录（checkpoints、后台任务等）
  */
 type SessionCleanupHook = (sessionId: string) => void | Promise<void>;
@@ -463,15 +435,16 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
   });
 
   /**
-   * GET /api/sessions/:id/plan - 获取执行计划（feature flag 关时返回 plan=null）
-   * 必须在 /:id 之前注册，避免被通配 :id 路由抢占。
+   * GET /api/sessions/:id/plan
+   * 结构化步骤计划已不再持久化。保留此路由，避免工作台重同步打到 404；
+   * 旧 session-notes 里的 icecoder-plan fence 不再读取。
+   * 必须在 /:id 之前注册。
    */
-  router.get('/:id/plan', async (req: Request, res: Response): Promise<void> => {
+  router.get('/:id/plan', (req: Request, res: Response): void => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
     if (rejectUnsafeSessionId(res, id)) return;
-    const plan = await readSessionPlan(id);
-    res.json({ plan });
+    res.json({ plan: null });
   });
 
   /**

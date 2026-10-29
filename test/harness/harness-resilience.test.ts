@@ -1,12 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
-import { resilienceMaybeBranchRecover, resilienceRecordToolCalls } from '../../src/harness/harness-resilience.js';
+import { resilienceRecordToolCalls } from '../../src/harness/harness-resilience.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
-import type { UnifiedMessage, ToolCall } from '../../src/llm/types.js';
+import type { ToolCall } from '../../src/llm/types.js';
 
-function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunState {
+function minimalState(): HarnessRunState {
   return {
     messages: [],
     tools: [],
@@ -15,7 +14,6 @@ function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunSta
     llmRetryCount: 0,
     emptyResponseRetryCount: 0,
     consecutiveToolFailures: 0,
-    consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
@@ -26,115 +24,49 @@ function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunSta
     repoContext: undefined as never,
     runtimeStateHash: '',
     failedToolCallSignatures: new Map(),
-    branchBudget,
-    branchBudgetWarnedThisRound: false,
-    verificationDigestInjectedThisRound: false,
-    stepReviewedThisRound: false,
+  } as unknown as HarnessRunState;
+}
+
+function engineStub() {
+  return {
+    save: vi.fn(async () => undefined),
+    stage: vi.fn(() => undefined),
+    shouldPersistOnTrigger: () => false,
   };
 }
 
-describe('harness resilience single-axis routing', () => {
-  it('injects branch recovery evidence directly into Harness messages', () => {
-    const branchBudget = new BranchBudgetTracker({ commandRetryMax: 1 });
-    branchBudget.recordFailedCommandAttempt('npm test');
-    branchBudget.recordFailedCommandAttempt('npm test');
-    const messages: UnifiedMessage[] = [];
-    const state = stateWithBranchBudget(branchBudget);
-
-    resilienceMaybeBranchRecover({
-      checkpointEngine: { save: async () => undefined } as never,
-      enqueueCheckpointPersist: async task => task(),
-    }, state, messages);
-
-    expect(messages.some(m =>
-      m.role === 'user'
-      && typeof m.content === 'string'
-      && m.content.includes('Current branch exhausted')
-    )).toBe(true);
-  });
-
-  it('does not increment command retry budget for policy-blocked run_command signatures', async () => {
-    const branchBudget = new BranchBudgetTracker({ commandRetryMax: 2 });
-    branchBudget.recordFailedCommandAttempt('npm run build 2>&1');
-    branchBudget.recordFailedCommandAttempt('npm run build 2>&1');
-    const tc: ToolCall = {
-      id: 'tc-build',
-      name: 'run_command',
-      arguments: { command: 'npm run build 2>&1' },
-    };
-    const state = stateWithBranchBudget(branchBudget);
+describe('harness resilience checkpoint recording', () => {
+  it('stages successful tool calls without writing to disk', async () => {
+    const engine = engineStub();
+    const tc: ToolCall = { id: 'tc-write', name: 'write_file', arguments: { path: 'src/a.ts', content: 'x' } };
 
     await resilienceRecordToolCalls(
-      {
-        checkpointEngine: {
-          save: async () => undefined,
-          stage: () => undefined,
-          shouldPersistOnTrigger: () => false,
-        } as never,
-        enqueueCheckpointPersist: async task => task(),
-      },
-      [tc],
+      { checkpointEngine: engine as never, enqueueCheckpointPersist: async task => task() },
+      [tc, tc, tc, tc],
       new Set(),
+      minimalState(),
+    );
+
+    expect(engine.stage).toHaveBeenCalledTimes(4);
+    expect(engine.save).not.toHaveBeenCalled();
+    expect(engine.stage.mock.calls[0]![0]).not.toHaveProperty('branchBudget');
+  });
+
+  it('persists a tool_failed snapshot for each failed call', async () => {
+    const engine = engineStub();
+    const tc: ToolCall = { id: 'tc-build', name: 'run_command', arguments: { command: 'npm run build 2>&1' } };
+
+    await resilienceRecordToolCalls(
+      { checkpointEngine: engine as never, enqueueCheckpointPersist: async task => task() },
+      [tc],
       new Set([toolCallSignature(tc)]),
-      state,
+      minimalState(),
     );
 
-    expect(branchBudget.inspect().commandRetries['npm run build 2>&1']).toBe(2);
-  });
-
-  it('does not increment file edit budget for policy-blocked write_file', async () => {
-    const branchBudget = new BranchBudgetTracker({ fileEditMax: 3 });
-    branchBudget.recordFileEdit('src/a.ts');
-    branchBudget.recordFileEdit('src/a.ts');
-    const tc: ToolCall = {
-      id: 'tc-write',
-      name: 'write_file',
-      arguments: { path: 'src/a.ts', content: 'x' },
-    };
-    const state = stateWithBranchBudget(branchBudget);
-
-    await resilienceRecordToolCalls(
-      {
-        checkpointEngine: {
-          save: async () => undefined,
-          stage: () => undefined,
-          shouldPersistOnTrigger: () => false,
-        } as never,
-        enqueueCheckpointPersist: async task => task(),
-      },
-      [tc],
-      new Set(),
-      new Set([toolCallSignature(tc)]),
-      state,
-    );
-
-    expect(branchBudget.inspect().fileEdits['src/a.ts']).toBe(2);
-  });
-
-  it('increments file edit budget only when write_file actually succeeded', async () => {
-    const branchBudget = new BranchBudgetTracker({ fileEditMax: 3 });
-    const tc: ToolCall = {
-      id: 'tc-write',
-      name: 'write_file',
-      arguments: { path: 'src/a.ts', content: 'x' },
-    };
-    const state = stateWithBranchBudget(branchBudget);
-
-    await resilienceRecordToolCalls(
-      {
-        checkpointEngine: {
-          save: async () => undefined,
-          stage: () => undefined,
-          shouldPersistOnTrigger: () => false,
-        } as never,
-        enqueueCheckpointPersist: async task => task(),
-      },
-      [tc],
-      new Set(),
-      new Set(),
-      state,
-    );
-
-    expect(branchBudget.inspect().fileEdits['src/a.ts']).toBe(1);
+    expect(engine.save).toHaveBeenCalledOnce();
+    expect(engine.save.mock.calls[0]![0]).toMatchObject({
+      trigger: 'tool_failed',
+      appendFailure: { signature: toolCallSignature(tc), count: 1 },
+    });
   });
 });

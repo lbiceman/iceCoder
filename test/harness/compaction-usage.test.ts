@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ContextCompactor } from '../../src/harness/context-compactor.js';
 import {
+  ContextCompactor,
+  resolveCompactionReserve,
+  resolveMicroCompactionLine,
+} from '../../src/harness/context-compactor.js';
+import {
+  COMPACTION_RESERVE_TOKENS,
   HARD_COMPACTION_RATIO,
   MICRO_COMPACTION_RATIO,
 } from '../../src/harness/compaction-constants.js';
+import { EPHEMERAL_RESERVE_TOKENS } from '../../src/harness/tool-result-budget.js';
 import { buildTotalTokenUsageWithContext } from '../../src/harness/context-usage-display.js';
 import {
   estimateToolsTokens,
@@ -83,6 +89,32 @@ describe('ContextCompactor 双轨占用判定', () => {
     expect(
       compactor.needsCompaction(messages, { lastApiPromptTokens: half }),
     ).toBe(false);
+  });
+
+  it('输出上限很大时，硬压缩在「窗口 − 输出上限 − 易变块预留」处触发，微压缩提前到它之前', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [{ role: 'user', content: 'ok' }];
+    const outputReserveTokens = 64_000;
+    const hardLine = CONTEXT_WINDOW - resolveCompactionReserve(outputReserveTokens);
+    expect(hardLine).toBe(CONTEXT_WINDOW - 64_000 - EPHEMERAL_RESERVE_TOKENS);
+
+    const opts = (lastApiPromptTokens: number) => ({ lastApiPromptTokens, outputReserveTokens });
+    expect(compactor.needsCompaction(messages, opts(hardLine))).toBe(false);
+    expect(compactor.needsCompaction(messages, opts(hardLine + 1))).toBe(true);
+    // 不传输出上限时保持原阈值：同样的占用还不触发
+    expect(compactor.needsCompaction(messages, { lastApiPromptTokens: hardLine + 1 })).toBe(false);
+
+    const microLine = resolveMicroCompactionLine(CONTEXT_WINDOW, outputReserveTokens);
+    expect(microLine).toBeLessThan(hardLine);
+    expect(compactor.needsMicroCompaction(messages, opts(microLine))).toBe(true);
+    expect(compactor.needsMicroCompaction(messages, opts(microLine - 1))).toBe(false);
+  });
+
+  it('默认输出上限下压缩线与原来基本一致', () => {
+    expect(resolveCompactionReserve(undefined)).toBe(COMPACTION_RESERVE_TOKENS);
+    expect(resolveCompactionReserve(16_384)).toBe(16_384 + EPHEMERAL_RESERVE_TOKENS);
+    expect(resolveMicroCompactionLine(CONTEXT_WINDOW, 16_384)).toBe(Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO));
+    expect(resolveMicroCompactionLine(CONTEXT_WINDOW)).toBe(Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO));
   });
 
   it('显式 tokenThreshold 仍仅看 messages 本地估算（测试兼容）', () => {

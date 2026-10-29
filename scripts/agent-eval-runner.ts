@@ -29,12 +29,51 @@ export interface EvalMetrics {
   compaction_recovery_success_rate: number;
 }
 
+/** 单个 case 的行为读数：轮次、工具、写同一文件次数、跑命令次数、token、耗时。 */
+export interface CaseStats {
+  rounds: number;
+  llmCalls: number;
+  toolCalls: number;
+  failedToolResults: number;
+  policyBlocks: number;
+  writeCalls: number;
+  maxSameFileWrites: number;
+  runCommands: number;
+  /** loopState 累计：输入 + 输出（含 stop 验证等主循环之外不再调用模型的部分） */
+  totalTokens: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** 各次 llm_response 上报的缓存命中 token 之和（provider 不报则为 0） */
+  cacheReadTokens?: number;
+  /** 单次请求 prompt token 峰值（provider 口径） */
+  peakPromptTokens?: number;
+  durationMs: number;
+  stopReason?: string;
+  completionStatus?: string;
+  toolResults?: ToolResultCaseStats;
+}
+
+/** 工具结果裁剪的收益与代价（来自 runtime telemetry） */
+export interface ToolResultCaseStats {
+  /** 写入时没有原样注入的结果数 */
+  shaped: number;
+  /** 补读次数，按原因分 */
+  rereads: Record<'paged' | 'cleared' | 'spill', number>;
+  /** 按模型调用累计的节省 token / 补读占用 token */
+  savedTokens: number;
+  rereadTokens: number;
+  /** 发送前总量检查：收紧次数、仍超出次数 */
+  budgetShrinks: number;
+  budgetOverflows: number;
+}
+
 export interface CaseResult {
   id: string;
   category: AgentEvalCase['category'];
   passed: boolean;
   metrics: EvalMetrics;
   failures: string[];
+  stats?: CaseStats;
   workspace?: string;
   /** 父模型发出的 task 次数。真实模型不强制派出，只做记录。 */
   taskCallCount?: number;
@@ -149,11 +188,13 @@ export async function runAgentEvalCase(
       harness.getStopHookManager().register(async (messages, lastContent) =>
         evaluateIncompleteTaskStopHook(messages, lastContent));
     }
+    const startedAt = Date.now();
     const result = await harness.run(
       buildPrompt(testCase),
       chatFn,
       event => events.push(event),
     );
+    const durationMs = Date.now() - startedAt;
 
     const judgeResults = await runJudgeCommands(workspace, testCase.verifyCommands);
     const telemetry = await readTelemetryEvents(runtimeTelemetryFile(sessionDir, testCase.id));
@@ -167,6 +208,7 @@ export async function runAgentEvalCase(
       judgeResults,
       sessionDir,
       scriptedParent: !options.chatFn,
+      durationMs,
     });
 
     return options.keepWorkspace
@@ -404,11 +446,13 @@ async function scoreCase(args: {
   judgeResults: JudgeCommandResult[];
   sessionDir: string;
   scriptedParent: boolean;
+  durationMs: number;
 }): Promise<CaseResult> {
   const { testCase, workspace, initialFiles, result, events, telemetry, judgeResults, sessionDir, scriptedParent } = args;
   const failures: string[] = [];
   const assertionFailures = await evaluateAssertions(workspace, initialFiles, testCase);
   failures.push(...assertionFailures);
+  failures.push(...findSupervisionTraces(result, events));
 
   for (const judge of judgeResults) {
     if (!judge.success) {
@@ -483,6 +527,13 @@ async function scoreCase(args: {
       }
     }
   }
+  if (testCase.expected.sameFileWrites) {
+    const { path: target, min } = testCase.expected.sameFileWrites;
+    const writes = successfulWritesByPath(events).get(normalizePath(target)) ?? 0;
+    if (writes < min) {
+      failures.push(`expected at least ${min} successful writes to ${target}, got ${writes}`);
+    }
+  }
   const taskCallCount = events.filter(event =>
     event.type === 'tool_call' && event.toolName === 'task' && !event.agentId,
   ).length;
@@ -541,6 +592,13 @@ async function scoreCase(args: {
   ) {
     failures.push(`final response does not contain ${JSON.stringify(testCase.expected.finalContains)}`);
   }
+  if (testCase.expected.finalContainsAll) {
+    const finalText = result.content.toLowerCase();
+    const missing = testCase.expected.finalContainsAll.filter(s => !finalText.includes(s.toLowerCase()));
+    if (missing.length > 0) {
+      failures.push(`final response is missing ${JSON.stringify(missing)}`);
+    }
+  }
   failures.push(...await evaluateCheckpoint(workspace, testCase));
 
   const summary = telemetry
@@ -557,6 +615,20 @@ async function scoreCase(args: {
   }
   if (testCase.category === 'compression' && !postCompactionToolProgress) {
     failures.push('expected tool progress after hard compaction');
+  }
+  const toolResults = collectToolResultStats(telemetry);
+  const rereadBounds = testCase.expected.toolResultRereads;
+  if (rereadBounds && (scriptedParent || rereadBounds.enforce === 'always')) {
+    const count = rereadBounds.reason
+      ? toolResults.rereads[rereadBounds.reason]
+      : toolResults.rereads.paged + toolResults.rereads.cleared + toolResults.rereads.spill;
+    const label = rereadBounds.reason ? `${rereadBounds.reason} reread(s)` : 'reread(s)';
+    if (rereadBounds.min !== undefined && count < rereadBounds.min) {
+      failures.push(`expected at least ${rereadBounds.min} ${label}, got ${count}`);
+    }
+    if (rereadBounds.max !== undefined && count > rereadBounds.max) {
+      failures.push(`expected at most ${rereadBounds.max} ${label}, got ${count}`);
+    }
   }
   const taskSucceeded = failures.length === 0;
   const memoryInterference = testCase.category === 'memory-conflict' && assertionFailures.length > 0 ? 1 : 0;
@@ -588,6 +660,7 @@ async function scoreCase(args: {
     passed: failures.length === 0,
     metrics,
     failures,
+    stats: { ...collectCaseStats(result, events, args.durationMs), toolResults },
     ...(testCase.subAgents ? {
       taskCallCount,
       agents: agentMetas.map(meta => ({
@@ -760,6 +833,105 @@ const WRITE_TOOLS = new Set([
   'patch_file',
   'batch_edit_file',
 ]);
+
+/**
+ * 监管已移除：任何 case 都不该再看到模式切换、步骤表、反复修改上限或只读催促留下的文案和事件。
+ * 文案按旧实现原样列出，旧会话历史里可能还留着，所以只查本次 run 新增的 user / tool 消息。
+ */
+const SUPERVISION_MARKERS = [
+  '[BranchBudget',
+  '[ToolGate]',
+  '[TaskGraph]',
+  '[Runtime Self-Review]',
+  'Rebuild Escalation',
+  'Build Diagnostic Gate',
+  'Diagnostic Gate]',
+  'Current branch exhausted',
+  'reading/analyzing for',
+];
+
+function findSupervisionTraces(result: HarnessResult, events: HarnessStepEvent[]): string[] {
+  const traces: string[] = [];
+  for (const message of result.messages) {
+    if (message.role !== 'user' && message.role !== 'tool') continue;
+    const text = typeof message.content === 'string' ? message.content : '';
+    const marker = SUPERVISION_MARKERS.find(m => text.includes(m));
+    if (marker) traces.push(`supervision text injected: ${marker}`);
+  }
+  for (const event of events) {
+    const type = String(event.type);
+    if (type.startsWith('execution_mode') || type.startsWith('task_graph')) {
+      traces.push(`supervision event emitted: ${type}`);
+    }
+  }
+  return [...new Set(traces)];
+}
+
+function successfulWritesByPath(events: HarnessStepEvent[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const event of events) {
+    if (event.type !== 'tool_result' || event.toolSuccess !== true || event.agentId) continue;
+    if (!WRITE_TOOLS.has(event.toolName ?? '')) continue;
+    const raw = event.toolArgs?.path ?? event.toolArgs?.file_path;
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const key = normalizePath(raw.trim()).replace(/^\.\//, '');
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function collectToolResultStats(telemetry: RuntimeTelemetryEvent[]): ToolResultCaseStats {
+  const stats: ToolResultCaseStats = {
+    shaped: 0,
+    rereads: { paged: 0, cleared: 0, spill: 0 },
+    savedTokens: 0,
+    rereadTokens: 0,
+    budgetShrinks: 0,
+    budgetOverflows: 0,
+  };
+  for (const event of telemetry) {
+    if (event.type === 'tool_result_budget' && event.strategy !== 'range_error') stats.shaped++;
+    if (event.type === 'tool_result_reread') stats.rereads[event.reason]++;
+    if (event.type === 'tool_result_savings') {
+      stats.savedTokens += event.shapedSavedTokens + event.clearedSavedTokens;
+      stats.rereadTokens += event.rereadTokens;
+    }
+    if (event.type === 'context_budget') {
+      if (event.shrunkResults > 0) stats.budgetShrinks++;
+      if (event.overflowTokens > 0) stats.budgetOverflows++;
+    }
+  }
+  return stats;
+}
+
+function collectCaseStats(result: HarnessResult, events: HarnessStepEvent[], durationMs: number): CaseStats {
+  const mainToolResults = events.filter(event => event.type === 'tool_result' && !event.agentId);
+  const writes = successfulWritesByPath(events);
+  const responseUsages = result.log
+    .filter(entry => entry.event === 'llm_response')
+    .map(entry => entry.data?.usage as { inputTokens?: number; cacheReadTokens?: number } | undefined)
+    .filter((usage): usage is { inputTokens?: number; cacheReadTokens?: number } => !!usage);
+  return {
+    rounds: result.loopState.currentRound,
+    llmCalls: result.log.filter(entry => entry.event === 'llm_call').length,
+    toolCalls: result.loopState.totalToolCalls,
+    failedToolResults: mainToolResults.filter(event => event.toolSuccess === false).length,
+    policyBlocks: mainToolResults.filter(event => event.toolOutcome === 'policy_block').length,
+    writeCalls: [...writes.values()].reduce((sum, count) => sum + count, 0),
+    maxSameFileWrites: Math.max(0, ...writes.values()),
+    runCommands: events.filter(event =>
+      event.type === 'tool_call' && event.toolName === 'run_command' && !event.agentId,
+    ).length,
+    totalTokens: result.loopState.totalInputTokens + result.loopState.totalOutputTokens,
+    inputTokens: result.loopState.totalInputTokens,
+    outputTokens: result.loopState.totalOutputTokens,
+    cacheReadTokens: responseUsages.reduce((sum, usage) => sum + (usage.cacheReadTokens ?? 0), 0),
+    peakPromptTokens: Math.max(0, ...responseUsages.map(usage => usage.inputTokens ?? 0)),
+    durationMs,
+    stopReason: result.loopState.stopReason,
+    completionStatus: result.completionStatus,
+  };
+}
 
 function didVerificationFollowLastWrite(events: HarnessStepEvent[], verifyCommands: string[]): boolean {
   if (verifyCommands.length === 0) return false;

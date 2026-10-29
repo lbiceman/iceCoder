@@ -2,7 +2,7 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * 结构：头部 → 监管条 → 工作台（上：检查点章节 / 下：本章执行流）→ 文件层 → Footer。
+ * 结构：头部 → 工作台（上：检查点章节 / 下：本章执行流）→ 文件层 → Footer。
  * 点章节打开下边执行流；回滚按钮在章节标题右侧，逻辑复用现有检查点回滚。
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
  */
@@ -46,30 +46,8 @@ export const ChatExecutionPlan = (() => {
     question: '问答',
   };
 
-  // tool_failure：ModeSignal 名，UI 显示「forced · 工具失败」。多为 run_command 验收失败触发，
-  // 或 BranchBudget 拦 write（工具未执行）；不是 edit_file 引擎坏了。见 branch-budget.ts 文件头。
-  const MODE_SIGNAL_LABELS = {
-    checkpoint_resumed: 'checkpoint 恢复',
-    task_graph_active: '任务图活跃',
-    branch_switched: '分支切换',
-    pending_steps: '待执行步骤',
-    tool_failure: '工具失败',
-    multi_write: '多文件写入',
-    large_diff: '大 diff',
-    explicit_impl: '明确实现',
-    recovery_pending: '恢复待定',
-    engine_fail_safe: '引擎 fail-safe',
-  };
-
-  const DEGRADED_LABELS = {
-    graph: '图构建降级',
-    step_queue: '步骤队列降级',
-    write_intent: '写入意图降级',
-  };
-
   let currentPlan = null;
   let frozenPlanId = null;
-  let currentExecutionMode = null;
   let visible = false;
   let capabilityEnabled = true;
   let pageActive = true;
@@ -77,7 +55,6 @@ export const ChatExecutionPlan = (() => {
 
   let rootEl = null;
   let listEl = null;
-  let modeBannerEl = null;
   let currentStepEl = null;
   let emptyStateEl = null;
   let footerEl = null;
@@ -124,7 +101,6 @@ export const ChatExecutionPlan = (() => {
   let roundRecords = [];
   let roundRecordByIteration = Object.create(null);
   let expandedRounds = Object.create(null);
-  let bannerDetailOpen = false;
   let roundVisibleLimit = 20;
   let roundTimelineBound = false;
   let roundTimelineBoundEl = null;
@@ -362,13 +338,6 @@ export const ChatExecutionPlan = (() => {
     return true;
   }
 
-  /** 底部摘要 / 锚点是否应继续展示（forced 执行段且进行中） */
-  function isPlanLive() {
-    if (!currentPlan || isPlanComplete(currentPlan)) return false;
-    if (!currentExecutionMode || currentExecutionMode.executionMode !== 'forced') return false;
-    return true;
-  }
-
   function pickActiveStep(plan) {
     if (!plan || !plan.steps) return null;
     if (plan.activeStepId) {
@@ -453,7 +422,6 @@ export const ChatExecutionPlan = (() => {
   /** 从 host 抓取渲染所需元素引用（模块级变量，后续渲染均以此为准）。 */
   function grabHostRefs(host) {
     listEl = host.querySelector('#exec-plan-list');
-    modeBannerEl = host.querySelector('#exec-plan-mode-banner');
     currentStepEl = host.querySelector('#etl-current-step');
     emptyStateEl = host.querySelector('.etl-plan-empty');
     footerEl = host.querySelector('#etl-footer');
@@ -618,7 +586,6 @@ export const ChatExecutionPlan = (() => {
     mobileBackdropEl = null;
     hostEl = null;
     listEl = null;
-    modeBannerEl = null;
     currentStepEl = null;
     emptyStateEl = null;
     footerEl = null;
@@ -645,7 +612,7 @@ export const ChatExecutionPlan = (() => {
     rootEl.setAttribute('aria-hidden', 'true');
 
     rootEl.innerHTML =
-      `<div class="etl-panel-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整工作台宽度" aria-valuemin="${PANEL_WIDTH_MIN}" aria-valuemax="${PANEL_WIDTH_MAX}"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll"><div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
+      `<div class="etl-panel-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整工作台宽度" aria-valuemin="${PANEL_WIDTH_MIN}" aria-valuemax="${PANEL_WIDTH_MAX}"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
 
     document.body.appendChild(rootEl);
     hostEl = rootEl;
@@ -681,7 +648,7 @@ export const ChatExecutionPlan = (() => {
     mobileSheetEl.setAttribute('aria-label', 'iceCoder工作台');
     mobileSheetEl.setAttribute('aria-hidden', 'true');
     mobileSheetEl.innerHTML =
-      `<div class="etl-msheet-handle" aria-hidden="true"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll"><div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
+      `<div class="etl-msheet-handle" aria-hidden="true"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
 
     document.body.appendChild(mobileBackdropEl);
     document.body.appendChild(mobileSheetEl);
@@ -1080,7 +1047,7 @@ export const ChatExecutionPlan = (() => {
 
   function hasLiveChapterWork() {
     if (liveChapterMeta) return true;
-    return hasSealableWork() || !!currentExecutionMode;
+    return hasSealableWork();
   }
 
   function hasChronicleWork() {
@@ -1341,98 +1308,6 @@ export const ChatExecutionPlan = (() => {
     filesSheetDocHandler = null;
     filesSheetBound = false;
     dockSheetKind = '';
-  }
-
-  // ── 监管横幅 ──
-
-  function formatSupervisionReason(modeState) {
-    if (!modeState) return '—';
-    const primary = modeState.enteredByPrimary || (modeState.enteredBy && modeState.enteredBy[0]);
-    if (primary) return MODE_SIGNAL_LABELS[primary] || primary;
-    return modeState.primaryReasonHuman || '监管接管';
-  }
-
-  function renderExecutionModeBanner() {
-    if (!modeBannerEl) return;
-    if (!currentExecutionMode || currentExecutionMode.executionMode !== 'forced') {
-      modeBannerEl.classList.add('hidden');
-      modeBannerEl.innerHTML = '';
-      bannerDetailOpen = false;
-      return;
-    }
-    const reasonLabel = formatSupervisionReason(currentExecutionMode);
-    const roundNo = typeof currentExecutionMode.round === 'number'
-      ? currentExecutionMode.round
-      : (roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : null);
-    const headline = '已进入监管模式（' + reasonLabel + (roundNo ? `，第 ${roundNo} 轮` : '') + '）';
-
-    const detailLines = [];
-    if (currentExecutionMode.enteredBy && currentExecutionMode.enteredBy.length) {
-      const tags = currentExecutionMode.enteredBy.map((sig) =>  MODE_SIGNAL_LABELS[sig] || sig);
-      detailLines.push(`信号：${tags.join(' + ')}`);
-    }
-    if (currentExecutionMode.degradedTier) {
-      detailLines.push('降级：' + (DEGRADED_LABELS[currentExecutionMode.degradedTier]
-        || currentExecutionMode.degradedTier));
-    }
-    if (currentExecutionMode.primaryReasonHuman) {
-      detailLines.push(`原因：${currentExecutionMode.primaryReasonHuman}`);
-    }
-
-    modeBannerEl.innerHTML = '';
-    const main = document.createElement('div');
-    main.className = 'etl-banner-main';
-    const icon = document.createElement('span');
-    icon.className = 'etl-banner-icon';
-    icon.textContent = '⚠';
-    const text = document.createElement('span');
-    text.className = 'etl-banner-text';
-    text.textContent = headline;
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-banner-toggle';
-    toggle.textContent = (bannerDetailOpen ? '收起详情 ▴' : '查看详情 ▾');
-    toggle.addEventListener('click', (event) => {
-      event.stopPropagation();
-      bannerDetailOpen = !bannerDetailOpen;
-      renderExecutionModeBanner();
-    });
-    main.appendChild(icon);
-    main.appendChild(text);
-    if (detailLines.length) main.appendChild(toggle);
-    modeBannerEl.appendChild(main);
-
-    if (detailLines.length) {
-      const detail = document.createElement('div');
-      detail.className = 'etl-banner-detail' + (bannerDetailOpen ? '' : ' hidden');
-      detail.textContent = detailLines.join('\n');
-      modeBannerEl.appendChild(detail);
-    }
-    modeBannerEl.classList.remove('hidden');
-  }
-
-  /** 底部一行摘要（供冰豆 #status-turn）；如 forced · 工具失败 = executionMode + enteredByPrimary 组合，非单一事件类型 */
-  function formatExecutionModeChip(modeState) {
-    if (!modeState || modeState.executionMode !== 'forced') return '';
-    const primary = modeState.enteredByPrimary;
-    let label = primary ? (MODE_SIGNAL_LABELS[primary] || primary) : 'forced';
-    if (modeState.degradedTier) {
-      label += ' · ' + (DEGRADED_LABELS[modeState.degradedTier] || modeState.degradedTier);
-    }
-    return `forced · ${label}`;
-  }
-
-  function formatFootSummary(plan) {
-    if (!plan || !plan.steps || !plan.steps.length) return '';
-    const done = countFinished(plan.steps);
-    const total = plan.steps.length;
-    const active = pickActiveStep(plan);
-    const phase = active ? STATE_LABELS[active.status] || active.status : '';
-    const shortTitle = active ? clamp24(active.title) : '';
-    const base = `${done}/${total}`;
-    if (phase && shortTitle) return `${base} · ${phase} · ${shortTitle}`;
-    if (phase) return `${base} · ${phase}`;
-    return base;
   }
 
   function notifyPetFoot() {
@@ -1769,7 +1644,6 @@ export const ChatExecutionPlan = (() => {
   function chapterMarkerLabel(key) {
     const api = chronicleApi();
     if (api && api.MARKER_LABELS && api.MARKER_LABELS[key]) return api.MARKER_LABELS[key];
-    if (key === 'supervision') return '监管曾介入';
     if (key === 'compaction') return '本章发生过压缩';
     if (key === 'circuit') return '熔断保护';
     if (key === 'subagent') return '子代理';
@@ -1880,9 +1754,6 @@ export const ChatExecutionPlan = (() => {
     const markers = (liveChapterMeta && Array.isArray(liveChapterMeta.markers))
       ? liveChapterMeta.markers.slice()
       : [];
-    if (currentExecutionMode && currentExecutionMode.executionMode === 'forced') {
-      if (!markers.includes('supervision')) markers.push('supervision');
-    }
     for (let i = 0; i < roundRecords.length; i++) {
       const rec = roundRecords[i];
       if (!rec) continue;
@@ -2639,8 +2510,6 @@ export const ChatExecutionPlan = (() => {
   function resetLiveChapterState() {
     currentPlan = null;
     frozenPlanId = null;
-    currentExecutionMode = null;
-    bannerDetailOpen = false;
     lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
     toolRecords = [];
     toolRecordById = Object.create(null);
@@ -2681,8 +2550,6 @@ export const ChatExecutionPlan = (() => {
       if (!hasSealableWork()) {
         currentPlan = null;
         frozenPlanId = null;
-        currentExecutionMode = null;
-        bannerDetailOpen = false;
         restoreInFlightTurnClock(savedStart, savedEnd, resetTimer);
         markLiveChapterRunning(opts.nextMeta || {});
         if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
@@ -2693,7 +2560,6 @@ export const ChatExecutionPlan = (() => {
           renderRoundTimeline(true);
           renderCurrentStep();
           renderEmptyState();
-          renderExecutionModeBanner();
           renderFooter();
           renderDockSheet();
           hideParkedLiveWidgets();
@@ -2735,7 +2601,6 @@ export const ChatExecutionPlan = (() => {
         renderRoundTimeline(true);
         renderCurrentStep();
         renderEmptyState();
-        renderExecutionModeBanner();
         renderFooter();
         renderDockSheet();
         hideParkedLiveWidgets();
@@ -2898,7 +2763,6 @@ export const ChatExecutionPlan = (() => {
         endTs: null,
         status: 'running',
         toolCallIds: [],
-        signals: [],
         branchReasons: [],
         stopReason: '',
         completionStatus: '',
@@ -2918,13 +2782,6 @@ export const ChatExecutionPlan = (() => {
     }
     snapshotRoundPlan(record);
     return { record, created };
-  }
-
-  function addUniqueStrings(target, values) {
-    if (!Array.isArray(values)) return;
-    for (let i = 0; i < values.length; i++) {
-      if (!target.includes(values[i])) target.push(values[i]);
-    }
   }
 
   function applyRoundActivity(evt) {
@@ -2948,12 +2805,6 @@ export const ChatExecutionPlan = (() => {
         record.isFinal = true;
         markRoundsComplete(record.iteration);
         endTurnTimer(ts);
-      }
-      if (evt.executionMode) {
-        addUniqueStrings(record.signals, evt.executionMode.enteredBy || []);
-        if (evt.executionMode.primaryReasonHuman && !record.reasonHuman) {
-          record.reasonHuman = evt.executionMode.primaryReasonHuman;
-        }
       }
       if (evt.reason || evt.message) {
         const branchReason = String(evt.message || evt.reason);
@@ -3040,10 +2891,6 @@ export const ChatExecutionPlan = (() => {
 
   function deriveRoundReason(record) {
     const parts = [];
-    if (record.signals && record.signals.length) {
-      const labels = record.signals.map((signal) =>  MODE_SIGNAL_LABELS[signal] || signal);
-      parts.push(labels.join('、'));
-    }
     if (record.branchReasons && record.branchReasons.length) {
       parts.push(clamp40(record.branchReasons[record.branchReasons.length - 1]));
     }
@@ -4082,12 +3929,7 @@ export const ChatExecutionPlan = (() => {
     const goal = document.createElement('div');
     goal.className = 'etl-overview-goal';
     goal.id = 'etl-overview-goal';
-    const badge = document.createElement('span');
-    badge.className = 'etl-overview-badge hidden';
-    badge.id = 'etl-overview-badge';
-    badge.textContent = '监管接管中';
     head.appendChild(goal);
-    head.appendChild(badge);
     taskOverviewEl.appendChild(head);
 
     const progressWrap = document.createElement('div');
@@ -4104,20 +3946,6 @@ export const ChatExecutionPlan = (() => {
     progressWrap.appendChild(bar);
     progressWrap.appendChild(progressMeta);
     taskOverviewEl.appendChild(progressWrap);
-
-    const grid = document.createElement('div');
-    grid.className = 'etl-overview-grid hidden';
-    grid.id = 'etl-overview-grid';
-    grid.innerHTML =
-      '<div class="etl-overview-grid-item">' +
-        '<span class="etl-overview-grid-label">接管原因</span>' +
-        '<span class="etl-overview-grid-value" id="etl-overview-reason">—</span>' +
-      '</div>' +
-      '<div class="etl-overview-grid-item">' +
-        '<span class="etl-overview-grid-label">接管轮次</span>' +
-        '<span class="etl-overview-grid-value" id="etl-overview-round">—</span>' +
-      '</div>';
-    taskOverviewEl.appendChild(grid);
 
     const intentEl = document.createElement('div');
     intentEl.className = 'etl-overview-intent hidden';
@@ -4158,15 +3986,12 @@ export const ChatExecutionPlan = (() => {
       const pct = total ? Math.round((done / total) * 100) : (currentPlan.progress || 0);
       const active = pickActiveStep(currentPlan);
       const intent = INTENT_LABELS[currentPlan.intent] || currentPlan.intent || '';
-      const forced = currentExecutionMode && currentExecutionMode.executionMode === 'forced';
       const remainSec = estimateRemainingSeconds(currentPlan);
 
       const goalEl = taskOverviewEl.querySelector('#etl-overview-goal');
       if (goalEl) {
         goalEl.textContent = formatGoalDisplay(currentPlan.goal, active);
       }
-      const badgeEl = taskOverviewEl.querySelector('#etl-overview-badge');
-      if (badgeEl) badgeEl.classList.toggle('hidden', !forced);
 
       const fillEl = taskOverviewEl.querySelector('#etl-overview-bar-fill');
       if (fillEl) fillEl.style.width = `${Math.max(0, Math.min(100, pct))}%`;
@@ -4179,22 +4004,6 @@ export const ChatExecutionPlan = (() => {
           progressText += ' · 已完成';
         }
         progressMetaEl.textContent = progressText;
-      }
-
-      const gridEl = taskOverviewEl.querySelector('#etl-overview-grid');
-      if (gridEl) {
-        gridEl.classList.toggle('hidden', !forced);
-        if (forced) {
-          const reasonEl = taskOverviewEl.querySelector('#etl-overview-reason');
-          if (reasonEl) reasonEl.textContent = formatSupervisionReason(currentExecutionMode);
-          const roundEl = taskOverviewEl.querySelector('#etl-overview-round');
-          if (roundEl) {
-            const roundNo = typeof currentExecutionMode.round === 'number'
-              ? currentExecutionMode.round
-              : (roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : '—');
-            roundEl.textContent = `第 ${roundNo} 轮`;
-          }
-        }
       }
 
       const intentEl = taskOverviewEl.querySelector('#etl-overview-intent');
@@ -4217,7 +4026,7 @@ export const ChatExecutionPlan = (() => {
 
   /**
    * 偏好变化后的公开刷新入口。仅重绘依赖偏好的独立区块；
-   * 不修改计划、执行模式或完成态，供 EtlPrefs 全局变更广播统一调用。
+   * 不修改计划或完成态，供 EtlPrefs 全局变更广播统一调用。
    */
   function refreshPreferences() {
     try {
@@ -4430,7 +4239,6 @@ export const ChatExecutionPlan = (() => {
 
   function fullRender() {
     if (!ensureMounted()) throw new Error('执行透明层挂载失败');
-    renderExecutionModeBanner();
     renderChapterDirectory({ scrollToLatest: true });
     renderTaskOverview();
     renderRoundTimeline(true);
@@ -4582,19 +4390,6 @@ export const ChatExecutionPlan = (() => {
     }
   }
 
-  function resetExecutionMode() {
-    try {
-      currentExecutionMode = null;
-      bannerDetailOpen = false;
-      renderExecutionModeBanner();
-      renderTaskOverview();
-      applyVisibility();
-      notifyPetFoot();
-    } catch (e) {
-      safeWarn('resetExecutionMode', e);
-    }
-  }
-
   function clear(opts) {
     try {
       opts = opts || {};
@@ -4607,13 +4402,11 @@ export const ChatExecutionPlan = (() => {
       }
       currentPlan = null;
       frozenPlanId = null;
-      currentExecutionMode = null;
       visible = !isPanelSuppressed();
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
       expandedRounds = Object.create(null);
       roundVisibleLimit = 20;
-      bannerDetailOpen = false;
       lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
       toolRecords = [];
       toolRecordById = Object.create(null);
@@ -4662,7 +4455,6 @@ export const ChatExecutionPlan = (() => {
         renderTaskOverview();
         renderChapterDirectory();
         renderRoundTimeline(true);
-        renderExecutionModeBanner();
         renderFooter();
         renderDockSheet();
       }
@@ -4726,9 +4518,7 @@ export const ChatExecutionPlan = (() => {
     try {
       if (isPanelSuppressed()) return;
       minimized = false;
-      if (currentPlan || currentExecutionMode) {
-        if (!isPlanComplete(currentPlan) || currentExecutionMode) visible = true;
-      }
+      if (currentPlan && !isPlanComplete(currentPlan)) visible = true;
       applyVisibility();
     } catch (e) {
       safeWarn('expand', e);
@@ -4745,34 +4535,6 @@ export const ChatExecutionPlan = (() => {
       expand();
     } catch (e) {
       safeWarn('requestExpandFromPet', e);
-    }
-  }
-
-  function applyExecutionModeEvent(step) {
-    try {
-      if (!step || !step.executionMode) return;
-      if (step.type === 'execution_mode_exit') {
-        currentExecutionMode = null;
-        bannerDetailOpen = false;
-        renderExecutionModeBanner();
-        renderTaskOverview();
-        applyVisibility();
-        notifyPetFoot();
-        return;
-      }
-      currentExecutionMode = { ...step.executionMode };
-      stampLiveMarker('supervision');
-      if (!isPanelSuppressed() && pageActive) {
-        ensureMounted();
-        renderExecutionModeBanner();
-        renderTaskOverview();
-      }
-      applyVisibility();
-      notifyPetFoot();
-      scheduleFlowPersist();
-    } catch (e) {
-      safeWarn('applyExecutionModeEvent', e);
-      teardownMounts();
     }
   }
 
@@ -4801,7 +4563,6 @@ export const ChatExecutionPlan = (() => {
       endTs: record.endTs,
       status: record.status,
       toolCallIds: Array.isArray(record.toolCallIds) ? record.toolCallIds.slice() : [],
-      signals: Array.isArray(record.signals) ? record.signals.slice() : [],
       branchReasons: Array.isArray(record.branchReasons) ? record.branchReasons.slice() : [],
       stopReason: record.stopReason || '',
       completionStatus: record.completionStatus || '',
@@ -4900,9 +4661,6 @@ export const ChatExecutionPlan = (() => {
       return {
         currentPlan: currentPlan ? JSON.parse(JSON.stringify(currentPlan)) : null,
         frozenPlanId,
-        currentExecutionMode: currentExecutionMode
-          ? { ...currentExecutionMode }
-          : null,
         roundRecords: rounds,
         toolRecords: tools,
         lastTool: { ...lastTool },
@@ -4984,13 +4742,10 @@ export const ChatExecutionPlan = (() => {
           ? snapshot.currentPlan
           : null;
         frozenPlanId = snapshot.frozenPlanId || null;
-        currentExecutionMode = snapshot.currentExecutionMode
-          ? { ...snapshot.currentExecutionMode }
-          : null;
       }
 
       visible = !isPanelSuppressed()
-        && !!(currentPlan || currentExecutionMode || roundRecords.length || sealedChapters.length);
+        && !!(currentPlan || roundRecords.length || sealedChapters.length);
       if (visible || hostEl) {
         ensureMounted();
         fullRender();
@@ -5014,128 +4769,6 @@ export const ChatExecutionPlan = (() => {
 
   function isVisible() {
     return visible;
-  }
-
-  function getExecutionModeChip() {
-    return formatExecutionModeChip(currentExecutionMode);
-  }
-
-  function getExecutionModeState() {
-    return currentExecutionMode ? { ...currentExecutionMode } : null;
-  }
-
-  // ── TaskGraph 方法（保留兼容）──
-
-  function graphPlanToPanel(plan) {
-    if (!plan || !plan.steps) return null;
-    return {
-      planId: plan.planId,
-      goal: plan.goal,
-      intent: plan.intent,
-      progress: plan.progress || 0,
-      steps: plan.steps,
-      activeStepId: plan.activeStepId,
-      createdAt: plan.createdAt,
-      updatedAt: plan.updatedAt,
-    };
-  }
-
-  function renderGraph(data) {
-    try {
-      if (data.plan) {
-        const panelPlan = graphPlanToPanel(data.plan);
-        if (panelPlan) {
-          setPlan(panelPlan);
-          return;
-        }
-      }
-      if (!data.graphGoal) return;
-      currentPlan = {
-        planId: `graph-${Date.now()}`,
-        intent: data.graphIntent || 'edit',
-        progress: 0,
-        steps: [],
-        activeStepId: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      frozenPlanId = null;
-      visible = !isPanelSuppressed();
-      ensureMounted();
-      fullRender();
-      applyVisibility();
-      notifyPetFoot();
-      scheduleFlowPersist();
-    } catch (e) {
-      safeWarn('renderGraph', e);
-      teardownMounts();
-    }
-  }
-
-  function updateGraphNode(data) {
-    try {
-      if (!currentPlan) return;
-      recoverPanelAfterFatal();
-      if (frozenPlanId && currentPlan.planId === frozenPlanId) return;
-      currentPlan.progress = Math.min(100, ((data.nodeIndex || 0) + 1) * 25);
-      currentPlan.activeStepId = data.nodeId || null;
-      if (isPlanComplete(currentPlan)) {
-        currentPlan.updatedAt = Date.now();
-        frozenPlanId = currentPlan.planId;
-        if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
-      }
-      if (listEl) {
-        const items = listEl.querySelectorAll('.exec-plan-step');
-        for (let i = 0; i < items.length; i++) {
-          items[i].classList.toggle('active', items[i].dataset.stepId === data.nodeId);
-        }
-      }
-      renderCurrentStep();
-      renderTaskOverview();
-      renderFooter();
-      notifyPetFoot();
-      scheduleFlowPersist();
-    } catch (e) {
-      safeWarn('updateGraphNode', e);
-      teardownMounts();
-    }
-  }
-
-  function highlightGraphBranch(_data) {
-    try {
-      recoverPanelAfterFatal();
-      if (!listEl) return;
-      const items = listEl.querySelectorAll('.exec-plan-step');
-      for (let i = 0; i < items.length; i++) {
-        items[i].classList.add('exec-plan-step--fallback');
-      }
-    } catch (e) {
-      safeWarn('highlightGraphBranch', e);
-      teardownMounts();
-    }
-  }
-
-  function markGraphComplete() {
-    try {
-      if (!currentPlan) return;
-      recoverPanelAfterFatal();
-      if (frozenPlanId && currentPlan.planId === frozenPlanId) return;
-      currentPlan.progress = 100;
-      if (typeof currentPlan.updatedAt !== 'number' || currentPlan.updatedAt < Date.now()) {
-        currentPlan.updatedAt = Date.now();
-      }
-      frozenPlanId = currentPlan.planId;
-      visible = !isPanelSuppressed();
-      renderCurrentStep();
-      renderFooter();
-      if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
-      applyVisibility();
-      notifyPetFoot();
-      scheduleFlowPersist();
-    } catch (e) {
-      safeWarn('markGraphComplete', e);
-      teardownMounts();
-    }
   }
 
   // ── 检查点数据：回滚按钮挂在章节上；变更文件走底栏弹出层 ──
@@ -5596,19 +5229,12 @@ export const ChatExecutionPlan = (() => {
     setPlan,
     applyPatch,
     clear,
-    resetExecutionMode,
     setVisible,
     setPageActive,
     setCapabilityEnabled,
     getPlan,
     isVisible,
-    isPlanLive,
     isPlanComplete,
-    formatFootSummary,
-    formatExecutionModeChip,
-    getExecutionModeChip,
-    getExecutionModeState,
-    applyExecutionModeEvent,
     isPanelSuppressed,
     requestExpandFromPet,
     // Phase 4 新增
@@ -5631,11 +5257,6 @@ export const ChatExecutionPlan = (() => {
     registerFlowPersist,
     flushFlowPersist,
     cancelFlowPersist,
-    // TaskGraph（兼容）
-    renderGraph,
-    updateGraphNode,
-    highlightGraphBranch,
-    markGraphComplete,
     registerSnapshotHandlers,
     refreshSnapshotTimeline,
     notifySnapshotRestoreAvailability,

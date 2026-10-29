@@ -4,9 +4,14 @@
  */
 
 import { Router, type Request, type Response } from 'express';
+import {
+  readUseWindowsFromMainConfig,
+  resolveMainConfigPath,
+} from '../../config/main-config.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import { summarizeToolCategories } from '../../tools/tool-offering-selector.js';
+import { isWindowsDesktopTool } from '../../tools/windows/windows-actions.js';
 
 export interface ToolsRouterOptions {
   registry: ToolRegistry;
@@ -23,12 +28,16 @@ export function createToolsRouter(options: ToolsRouterOptions): Router {
   /**
    * GET /api/tools - 列出所有可用工具
    */
-  router.get('/', (_req: Request, res: Response): void => {
-    const tools = registry.getAll().map((t) => ({
-      name: t.definition.name,
-      description: t.definition.description,
-      parameters: t.definition.parameters,
-    }));
+  router.get('/', async (_req: Request, res: Response): Promise<void> => {
+    const useWindows = process.platform === 'win32'
+      && await readUseWindowsFromMainConfig(resolveMainConfigPath());
+    const tools = registry.getAll()
+      .filter((t) => useWindows || !isWindowsDesktopTool(t.definition.name))
+      .map((t) => ({
+        name: t.definition.name,
+        description: t.definition.description,
+        parameters: t.definition.parameters,
+      }));
 
     const categories = summarizeToolCategories(tools.map((t) => t.name));
     res.json({ success: true, tools, count: tools.length, categories });

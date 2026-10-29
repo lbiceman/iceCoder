@@ -5,7 +5,6 @@ import {
 } from '../../src/harness/harness-verification-tool-adapter.js';
 import { executeStopVerificationPlan } from '../../src/harness/harness-stop-verification.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { OperationOutcomeLedger } from '../../src/harness/operation-outcome.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
@@ -29,8 +28,6 @@ function adapterState(messages: UnifiedMessage[] = []): HarnessRunState {
     operationOutcomes: new OperationOutcomeLedger(),
     shellMandatoryConfirmDenials: new Set(),
     verificationOutputBuffer: new VerificationOutputBuffer(),
-    executionMode: 'free',
-    branchBudget: new BranchBudgetTracker(),
   } as HarnessRunState;
 }
 
@@ -145,105 +142,8 @@ describe('Harness verification tool adapter', () => {
     }));
   });
 
-  it('reuses ToolGate and never submits a forced-step block to the executor', async () => {
+  it('maps a preflight block from the shared executor to unavailable', async () => {
     const state = adapterState();
-    state.executionMode = 'forced';
-    const executeTool = vi.fn();
-    const checkToolCall = vi.fn(() => ({
-      action: 'block' as const,
-      message: 'verification command is outside the active step',
-    }));
-    const adapter = createHarnessVerificationToolAdapter({
-      deps: {
-        toolExecutor: { executeTool } as never,
-        loopController: new LoopController({ maxRounds: 1 }),
-        permissionRules: [],
-        workspaceRoot: process.cwd(),
-      },
-      state,
-      currentTools: [runCommandDefinition],
-      logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      graphExecutor: {
-        hasGraph: () => true,
-        checkToolCall,
-        recordToolResult: vi.fn(),
-      } as never,
-    });
-
-    const result = await adapter({
-      id: 'verify-gated',
-      name: 'run_command',
-      arguments: { command: 'npm test', timeout: 1000 },
-    });
-
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      classification: null,
-      evidenceRef: 'verify-gated',
-      blocked: true,
-    });
-    expect(state.operationOutcomes?.getByToolCallId('verify-gated')).toMatchObject({
-      status: 'failed',
-      disposition: 'policy_block',
-    });
-    expect(checkToolCall).toHaveBeenCalledWith('run_command', { track: false });
-    expect(checkToolCall).not.toHaveBeenCalledWith('run_command', { track: true });
-  });
-
-  it('tracks an allowed forced-graph call exactly like a regular tool round', async () => {
-    const state = adapterState();
-    state.executionMode = 'forced';
-    const checkToolCall = vi.fn(() => ({ action: 'allow' as const }));
-    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
-    const adapter = createHarnessVerificationToolAdapter({
-      deps: {
-        toolExecutor: { executeTool } as never,
-        loopController: new LoopController({ maxRounds: 2 }),
-        permissionRules: [],
-        workspaceRoot: process.cwd(),
-      },
-      state,
-      currentTools: [runCommandDefinition],
-      logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      graphExecutor: {
-        hasGraph: () => true,
-        checkToolCall,
-        recordToolResult: vi.fn(),
-      } as never,
-    });
-
-    const result = await adapter({
-      id: 'verify-forced-allowed',
-      name: 'run_command',
-      arguments: { command: 'npm test', timeout: 1_000 },
-    });
-
-    expect(result.blocked).not.toBe(true);
-    expect(checkToolCall.mock.calls).toEqual([
-      ['run_command', { track: false }],
-      ['run_command', { track: true }],
-    ]);
-  });
-
-  it.each([
-    ['BranchBudget', false],
-    ['preflight', true],
-  ])('maps a %s block from the shared executor to unavailable', async (_label, preflight) => {
-    const state = adapterState();
-    state.buildDiagnosticGateActive = preflight;
-    state.branchBudget = {
-      bindWorkspaceRoot: vi.fn(),
-      hasWriteBypass: () => false,
-      wouldBlockCommandRetry: () => preflight,
-      checkToolBlock: () => preflight
-        ? { blocked: false }
-        : {
-            blocked: true,
-            dimension: 'command_retry',
-            key: 'npm test',
-            message: '[BranchBudget / Blocked] retry cap',
-          },
-    } as never;
     const executeTool = vi.fn();
     const adapter = createHarnessVerificationToolAdapter({
       deps: {
@@ -258,16 +158,37 @@ describe('Harness verification tool adapter', () => {
     });
 
     const result = await adapter({
-      id: `verify-${preflight ? 'preflight' : 'budget'}`,
+      id: 'verify-preflight',
       name: 'run_command',
-      arguments: { command: 'npm test', timeout: 1_000 },
+      arguments: { command: 'taskkill /F /IM node.exe', timeout: 1_000 },
     });
 
     expect(executeTool).not.toHaveBeenCalled();
     expect(result).toMatchObject({ classification: null, blocked: true });
-    expect(state.operationOutcomes?.getByToolCallId(
-      `verify-${preflight ? 'preflight' : 'budget'}`,
-    )).toMatchObject({ disposition: 'policy_block' });
+    expect(state.operationOutcomes?.getByToolCallId('verify-preflight'))
+      .toMatchObject({ disposition: 'policy_block' });
+  });
+
+  it('runs the same verification command again after it already failed', async () => {
+    const state = adapterState();
+    const executeTool = vi.fn(async () => ({ success: false, output: 'FAIL', error: 'exit 1' }));
+    const adapter = createHarnessVerificationToolAdapter({
+      deps: {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 5 }),
+        permissionRules: [],
+        workspaceRoot: process.cwd(),
+      },
+      state,
+      currentTools: [runCommandDefinition],
+      logger: { toolCall: () => {}, toolResult: () => {} } as never,
+    });
+
+    for (const id of ['v1', 'v2', 'v3']) {
+      const result = await adapter({ id, name: 'run_command', arguments: { command: 'npm test', timeout: 1_000 } });
+      expect(result.blocked).not.toBe(true);
+    }
+    expect(executeTool).toHaveBeenCalledTimes(3);
   });
 
   it('collapses intermediate background poll pairs after a terminal result', async () => {
@@ -348,74 +269,6 @@ describe('Harness verification tool adapter', () => {
     expect(state.messages).toBe(originalMessages);
     originalMessages.push({ role: 'user', content: 'checkpoint-after-compact' });
     expect(state.messages.at(-1)?.content).toBe('checkpoint-after-compact');
-  });
-
-  it('tracks only the initial run across sixty background polls', async () => {
-    const state = adapterState();
-    state.executionMode = 'forced';
-    const checkToolCall = vi.fn(() => ({ action: 'allow' as const }));
-    let checks = 0;
-    const executeTool = vi.fn(async (toolCall: ToolCall) => {
-      const action = toolCall.arguments.action;
-      if (!action) {
-        return {
-          success: true,
-          output: JSON.stringify({ mode: 'background', taskId: 'bg-graph', status: 'started' }),
-        };
-      }
-      if (action === 'stop') {
-        return { success: false, output: '', error: 'Task bg-graph is not running (status: completed)' };
-      }
-      checks += 1;
-      return {
-        success: true,
-        output: JSON.stringify({
-          command: 'npm test',
-          taskId: 'bg-graph',
-          status: checks <= 60 ? 'running' : 'completed',
-          exitCode: checks <= 60 ? undefined : 0,
-          cursor: checks,
-        }),
-      };
-    });
-    const adapter = createHarnessVerificationToolAdapter({
-      deps: {
-        toolExecutor: { executeTool } as never,
-        loopController: new LoopController({ maxRounds: 70 }),
-        permissionRules: [],
-        workspaceRoot: process.cwd(),
-      },
-      state,
-      currentTools: [runCommandDefinition],
-      logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      graphExecutor: {
-        hasGraph: () => true,
-        checkToolCall,
-        recordToolResult: vi.fn(),
-      } as never,
-    });
-
-    await adapter({
-      id: 'graph-start',
-      name: 'run_command',
-      arguments: { command: 'npm test', timeout: 120_000 },
-    });
-    for (let index = 0; index < 61; index++) {
-      await adapter({
-        id: `graph-check-${index}`,
-        name: 'run_command',
-        arguments: { action: 'check', task_id: 'bg-graph', since: index },
-      });
-    }
-    await adapter({
-      id: 'graph-stop',
-      name: 'run_command',
-      arguments: { action: 'stop', task_id: 'bg-graph' },
-    });
-
-    expect(checkToolCall.mock.calls.filter(([, options]) => options.track === true))
-      .toEqual([['run_command', { track: true }]]);
-    expect(state.operationOutcomes?.hasPending()).toBe(false);
   });
 
   it('settles the operation ledger after timeout cleanup through the same adapter', async () => {

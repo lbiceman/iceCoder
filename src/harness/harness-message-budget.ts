@@ -1,17 +1,11 @@
 import type { UnifiedMessage } from '../llm/types.js';
-import { getFailedRunCommandInlineChars } from '../tools/tool-output-limits.js';
-import { truncateHeadTail } from '../tools/head-tail-truncate.js';
 import {
-  FAILED_RUN_COMMAND_KEEP_RECENT,
   OLD_SUBAGENT_SUMMARY_CHARS,
   SUBAGENT_RESULT_KEEP_RECENT,
-  TOOL_RESULT_BUDGET_PER_MESSAGE,
-  TOOL_RESULT_KEEP_RECENT,
 } from './harness-constants.js';
-import { isFailedRunCommandToolResult } from './failed-run-command.js';
 import { isSubAgentToolResult } from './harness-message-utils.js';
 
-/** 写入 apiSealedContent 尾部的 tool budget 提示（仅展示；封存判定用 apiSealedBy） */
+/** 旧版 tool budget 封存正文里的提示（只用于识别历史会话里没有 apiSealedBy 的封存） */
 export const TOOL_RESULT_BUDGET_TRUNCATION_MARKER = '...[工具结果已裁剪，';
 
 /** 旧会话落盘兼容：子代理封存正文特征 */
@@ -35,10 +29,10 @@ export function truncateOldSubAgentResult(content: string): string {
   return `${header}${summary.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[older sub-agent summary trimmed; original length: ${summary.length} characters]`;
 }
 
-/** 是否已完成 tool budget 封存（显式字段优先，旧落盘回退正文 marker） */
+/** 是否为旧版 3000 字符 tool budget 封存（显式字段优先，旧落盘回退正文 marker） */
 export function isToolBudgetSealed(msg: UnifiedMessage): boolean {
   if (msg.apiSealedBy === 'toolBudget') return true;
-  if (msg.apiSealedBy === 'subAgent') return false;
+  if (msg.apiSealedBy) return false;
   return typeof msg.apiSealedContent === 'string'
     && msg.apiSealedContent.includes(TOOL_RESULT_BUDGET_TRUNCATION_MARKER);
 }
@@ -46,72 +40,27 @@ export function isToolBudgetSealed(msg: UnifiedMessage): boolean {
 /** 是否已完成子代理封存（显式字段优先，旧落盘回退正文 marker） */
 export function isSubAgentSealed(msg: UnifiedMessage): boolean {
   if (msg.apiSealedBy === 'subAgent') return true;
-  if (msg.apiSealedBy === 'toolBudget') return false;
+  if (msg.apiSealedBy) return false;
   return typeof msg.apiSealedContent === 'string'
     && msg.apiSealedContent.includes(SUBAGENT_SEAL_LEGACY_MARKER);
 }
 
 /**
- * 普通工具结果封存裁剪（API 侧）。
+ * 解除历史会话里的 3000 字符 tool budget 封存，让模型重新看到写入时的结果。
  *
- * 最近 N 条 **非子代理** tool 保持完整 content；更早的普通 tool 在首次超 budget 时写入
- * `apiSealedContent` + `apiSealedBy: 'toolBudget'` 后永不再改。
- * 失败的 `run_command`：最近 {@link FAILED_RUN_COMMAND_KEEP_RECENT} 条豁免封存；
- * 更早的失败命令用更大预算做头尾裁剪（错误在尾部）。
- * 子代理由 {@link sealSubAgentResultsForApi} 单独处理，不参与 KEEP_RECENT 计数。
+ * 原地替换为不含封存字段的新对象（不改共享的旧对象）；返回解除条数。
+ * 只在加载历史时发生一次，之后不会再产生这种封存。
  */
-export function sealToolResultsForApi(messages: UnifiedMessage[]): void {
-  const KEEP_RECENT = TOOL_RESULT_KEEP_RECENT;
-  const BUDGET_PER_MESSAGE = TOOL_RESULT_BUDGET_PER_MESSAGE;
-  const failedBudget = getFailedRunCommandInlineChars();
-
-  const keepFailedIndexes = new Set<number>();
-  let failedSeenFromEnd = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!isFailedRunCommandToolResult(messages, i)) continue;
-    failedSeenFromEnd++;
-    if (failedSeenFromEnd <= FAILED_RUN_COMMAND_KEEP_RECENT) {
-      keepFailedIndexes.add(i);
-    }
-  }
-
-  let toolMsgCount = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== 'tool' || isSubAgentToolResult(msg)) continue;
-    toolMsgCount++;
-  }
-
-  if (toolMsgCount <= KEEP_RECENT) return;
-
-  let seen = 0;
-  const cutoff = toolMsgCount - KEEP_RECENT;
+export function releaseLegacyToolBudgetSeals(messages: UnifiedMessage[]): number {
+  let released = 0;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
-    if (isSubAgentToolResult(msg)) continue;
-
-    seen++;
-    if (seen > cutoff) break;
-
-    if (keepFailedIndexes.has(i)) continue;
-    if (isToolBudgetSealed(msg)) continue;
-
-    const failedCommand = isFailedRunCommandToolResult(messages, i);
-    const budget = failedCommand ? failedBudget : BUDGET_PER_MESSAGE;
-    const source = msg.apiSealedContent ?? msg.content;
-    if (source.length <= budget) continue;
-
-    const marker = `\n...[工具结果已裁剪，原始长度 ${source.length} 字符]...\n`;
-    messages[i] = {
-      ...msg,
-      apiSealedContent: truncateHeadTail(source, budget, {
-        headRatio: failedCommand ? 0.2 : 0.3,
-        marker,
-      }),
-      apiSealedBy: 'toolBudget',
-    };
+    if (msg.role !== 'tool' || !isToolBudgetSealed(msg)) continue;
+    const { apiSealedContent: _sealed, apiSealedBy: _by, ...rest } = msg;
+    messages[i] = rest;
+    released++;
   }
+  return released;
 }
 
 /**
@@ -127,7 +76,7 @@ export function sealSubAgentResultsForApi(messages: UnifiedMessage[]): void {
     subAgentResultCount++;
     if (subAgentResultCount <= SUBAGENT_RESULT_KEEP_RECENT) continue;
 
-    if (isSubAgentSealed(msg) || isToolBudgetSealed(msg)) continue;
+    if (msg.apiSealedBy || isSubAgentSealed(msg) || isToolBudgetSealed(msg)) continue;
 
     const sealed = truncateOldSubAgentResult(msg.content);
     if (sealed !== msg.content) {

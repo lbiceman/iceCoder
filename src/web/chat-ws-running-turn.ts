@@ -40,7 +40,7 @@ export interface RunningTurnSnapshot {
   totalInputTokens: number;
   totalOutputTokens: number;
   startedAt: number;
-  /** 重放的执行计划 / 任务图 / 执行模式相关 step 事件，前端按现有 bridge 喂回即可重建 UI */
+  /** 重放的工作台 step 事件（execution_plan_clear），前端按现有 bridge 喂回即可重建 UI */
   planEvents: Array<{ type: string; [k: string]: unknown }>;
   /** 本轮子 Agent：卡片视图 + 各自的工具时间线（按 agentId） */
   agents: Record<string, RunningAgentSnapshot>;
@@ -349,16 +349,7 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
         }
       }
       break;
-    case 'execution_plan_init':
-    case 'execution_plan_update':
     case 'execution_plan_clear':
-    case 'task_graph_init':
-    case 'task_graph_node':
-    case 'task_graph_update':
-    case 'task_graph_branch':
-    case 'task_graph_done':
-    case 'execution_mode_enter':
-    case 'execution_mode_exit':
       t.planEvents.push({ ...event });
       if (t.planEvents.length > 200) {
         t.planEvents.splice(0, t.planEvents.length - 200);
@@ -367,8 +358,8 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
     case 'final':
       if (event.stopReason === 'user_checkpoint') {
         t.petState = 'user_checkpoint';
-        t.petBubble = '监管已暂停，需要你介入啦';
-        t.petStatusText = '监管已暂停，需要你介入啦';
+        t.petBubble = '已暂停，需要你介入啦';
+        t.petStatusText = '已暂停，需要你介入啦';
       } else if (event.stopReason === 'model_done') {
         t.petState = 'clap';
         t.petBubble = '已完成';

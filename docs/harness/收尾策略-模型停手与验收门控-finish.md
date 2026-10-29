@@ -5,7 +5,9 @@
 > 相关：`Harness-L2与Gate工作逻辑.md`  
 > 入口：`src/harness/harness-round-no-tools.ts`、`verification-plan.ts`、`verification-state.ts`、`harness-stop-verification.ts`
 
-无工具 + 有正文 = 模型提出结束。运行时只因硬状态或过期验收延迟结束；验收命令走现有 `run_command` ToolGate，不另起子进程。
+无工具 + 有正文 = 模型提出结束。运行时只因硬状态或过期验收延迟结束；验收命令以 `run_command` 走与普通工具轮相同的权限与执行链，不另起子进程。
+
+> 2026-10-16 起三档监管 / 执行档 / ToolGate / 分支预算已移除（见 `docs/requirement/监管收束-愿景.md`），本文的停时验收流程不受影响。
 
 ---
 
@@ -21,7 +23,7 @@
                   有工程修改且计划过期？
                     ├─ 无计划 → completed_unverified
                     ├─ 已 fresh → completed
-                    └─ 经 ToolGate 执行 VerificationPlan
+                    └─ 经普通工具执行链执行 VerificationPlan
                           ├─ 全绿 → completed
                           ├─ 失败 → [System / Stop Verification]，只续一轮
                           │         再失败：user → failed
@@ -107,7 +109,7 @@ interface VerificationFreshness {
 | `verification-plan.ts` | 解析用户句式 / 默认 `npm test` |
 | `verification-state.ts` | mutation version、freshness、续轮计数 |
 | `harness-stop-verification.ts` | 顺序执行计划，看 exit code |
-| `harness-verification-tool-adapter.ts` | 把停时命令送进同一条 ToolGate |
+| `harness-verification-tool-adapter.ts` | 把停时命令送进与普通工具轮相同的权限与执行链 |
 | `completion-state.ts` | 硬状态与终态枚举 |
 | `src/prompts/sections.ts` | 提示词看 `[System / Stop Verification]`，不再提 Completion Gate |
 
@@ -128,6 +130,8 @@ npm run eval:agent -- --mode=local
 
 本地改文件至少覆盖：改已有文件、新建文件、测后再改、无计划、默认/显式失败、双命令、用户命令覆盖默认测试、验收脚本自己改工作区、只读。定义在 `scripts/agent-eval-cases.ts`。
 
+`npm run eval:agent -- --category=model-led` 只跑「模型主导」类用例（同一文件连改 5 次、同一条失败命令重跑、长时间只读探索等），确认运行时不因反复修改 / 反复失败而拦截或停手；`--case` 支持逗号分隔多个 id。
+
 不要跑 `npm run build` 当验收（会 bump 版本）。
 
 ---
@@ -141,7 +145,7 @@ npm run eval:agent -- --mode=local
 | Claude Code | 无工具 | 默认无；可选 Stop hook 跑脚本 | hook 最多顶有限次 |
 | iceCoder 现在 | 无工具即提出结束；D′ 只在过期验收或硬状态时延迟 | 严格用户句式 / 安全 `package.json#scripts.test` | 硬状态；显式失败 → `failed`；默认失败 → `completed_unverified` |
 
-循环对齐 Codex / OpenCode。质量闸对齐 Claude Code Stop hook 的内核，但是内置、只续一次、走 ToolGate。
+循环对齐 Codex / OpenCode。质量闸对齐 Claude Code Stop hook 的内核，但是内置、只续一次、走普通工具的权限与执行链。
 
 不采用：再叫一轮 LLM 当法官；`submit` / `attempt_completion` 作为主路径；从 goal 里所有反引号编译 required 清单。
 
@@ -151,7 +155,7 @@ npm run eval:agent -- --mode=local
 
 - 不要为了收尾再打一轮「是否结束」的 LLM。
 - 不要恢复 `CompletionGate` / `TaskAcceptanceTracker`。
-- 不要在收尾路径直接 spawn，或绕过 ToolGate / 审批。
+- 不要在收尾路径直接 spawn，或绕过权限规则 / 审批。
 - 不要按时间戳判断验证是否覆盖最后一次修改。
 - 不要把「不再续跑」写成 `completed`。
 - 不要自动执行 `build` / migration / snapshot。

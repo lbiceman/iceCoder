@@ -1,15 +1,12 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * 布局：头部 → 监管横幅 → 工作台（上检查点 / 下执行流）→ 文件层 → Footer。
+ * 布局：头部 → 工作台（上检查点 / 下执行流）→ 文件层 → Footer。
  * 视觉：对齐 tokens.css 的 shadcn/zinc 中性灰阶；状态色仅用 success / warning / danger。
  */
 
 :root {
   --etl-w: 320px;
-  --etl-supervision-fg: var(--chip-skill-fg, #c4b0e0);
-  --etl-supervision-bg: var(--chip-skill-bg, rgba(167, 148, 200, 0.12));
-  --etl-supervision-border: var(--chip-skill-border, rgba(180, 168, 210, 0.28));
 }
 
 /* ── 面板容器 ── */
@@ -145,7 +142,7 @@ html[data-shell="mobile"] .etl-panel-resizer {
   outline: none;
 }
 
-/* ── 可滚动主区（横幅 / 工作台 / 执行流） ── */
+/* ── 可滚动主区（工作台 / 执行流） ── */
 .etl-main-scroll {
   flex: 1;
   min-height: 0;
@@ -153,74 +150,6 @@ html[data-shell="mobile"] .etl-panel-resizer {
   display: flex;
   flex-direction: column;
   -webkit-overflow-scrolling: touch;
-}
-
-/* ── 监管横幅 ── */
-.exec-plan-mode-banner {
-  margin: var(--space-2) var(--space-3) 0;
-  padding: var(--space-2) var(--space-3);
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning-light) 85%, var(--surface-panel));
-  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-color));
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-
-.exec-plan-mode-banner.hidden {
-  display: none;
-}
-
-.etl-banner-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.etl-banner-icon {
-  flex-shrink: 0;
-  font-size: 13px;
-}
-
-.etl-banner-text {
-  flex: 1;
-  min-width: 0;
-  font-weight: 500;
-}
-
-.etl-banner-toggle {
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px var(--space-1);
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
-}
-
-.etl-banner-toggle:hover,
-.etl-banner-toggle:focus-visible {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-  outline: none;
-}
-
-.etl-banner-detail {
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid color-mix(in srgb, var(--warning) 20%, var(--border-color));
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.etl-banner-detail.hidden {
-  display: none;
 }
 
 /* ── 任务摘要卡 ── */
@@ -268,22 +197,6 @@ html[data-shell="mobile"] .etl-panel-resizer {
   overflow: hidden;
 }
 
-.etl-overview-badge {
-  flex-shrink: 0;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--etl-supervision-border);
-  background: var(--etl-supervision-bg);
-  color: var(--etl-supervision-fg);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.etl-overview-badge.hidden {
-  display: none;
-}
-
 .etl-overview-progress {
   display: flex;
   flex-direction: column;
@@ -307,39 +220,6 @@ html[data-shell="mobile"] .etl-panel-resizer {
 .etl-overview-progress-meta {
   font-size: 12px;
   color: var(--text-muted);
-}
-
-.etl-overview-grid.hidden {
-  display: none;
-}
-
-.etl-overview-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2) var(--space-3);
-  padding-top: var(--space-1);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.etl-overview-grid-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.etl-overview-grid-label {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.etl-overview-grid-value {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .etl-overview-intent {

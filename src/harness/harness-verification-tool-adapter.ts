@@ -1,5 +1,5 @@
 import type { ToolCall, ToolDefinition } from '../llm/types.js';
-import { redactToolArguments, redactToolCalls } from '../tools/tool-argument-redaction.js';
+import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 import { CompletionFactsView } from './completion-facts-view.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import {
@@ -15,12 +15,8 @@ import {
   classifyRunCommandResult,
   extractRunCommandTaskId,
 } from './run-command-result.js';
-import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
-import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { HarnessStepEvent } from './types.js';
 import type { VerificationToolCallResult } from './harness-stop-verification.js';
-import type { GraphExecutor } from './task-graph-executor.js';
-import { buildHarnessToolGateContext } from './supervisor/tool-gate.js';
 
 export interface HarnessVerificationToolAdapterOptions {
   deps: ToolExecutorDeps;
@@ -29,11 +25,10 @@ export interface HarnessVerificationToolAdapterOptions {
   logger: HarnessLogger;
   onStep?: (event: HarnessStepEvent) => void;
   abortSignal?: AbortSignal;
-  graphExecutor?: GraphExecutor;
 }
 
 /**
- * 把停时 synthetic 工具调用送入与普通工具轮相同的 Gate、权限和执行链。
+ * 把停时 synthetic 工具调用送入与普通工具轮相同的权限和执行链。
  */
 export function createHarnessVerificationToolAdapter(
   options: HarnessVerificationToolAdapterOptions,
@@ -41,49 +36,16 @@ export function createHarnessVerificationToolAdapter(
   const intermediatePollCallIds = new Map<string, string[]>();
   return async (toolCall: ToolCall): Promise<VerificationToolCallResult> => {
     const { deps, state } = options;
-    deps.branchBudget = state.branchBudget;
     deps.missingFileAttempts = state.missingFileAttempts;
     deps.harnessPolicyStats = state.harnessPolicyStats;
-    state.branchBudget.bindWorkspaceRoot(deps.workspaceRoot);
     state.messages.push({
       role: 'assistant',
       content: '',
       toolCalls: redactToolCalls([toolCall]),
     });
 
-    const gateResult = executeToolCallsThroughGate({
-      toolCalls: [toolCall],
-      messages: state.messages,
-      ctx: buildHarnessToolGateContext(options.graphExecutor, [toolCall], state),
-    });
-    const gateBlocked = gateResult.executableToolCalls.length === 0;
-    const graphExecutor = options.graphExecutor;
-    const forcedGraphActive = state.executionMode === 'forced'
-      && graphExecutor?.hasGraph() === true;
-    const tracksGraphDeviation = forcedGraphActive && isInitialVerificationRun(toolCall);
-
-    if (gateBlocked) {
-      emitGateBlockObservability(options, toolCall);
-      const outcomes = recordToolOperationOutcomes(state.operationOutcomes, {
-        toolCalls: [toolCall],
-        messages: state.messages,
-        policyBlockedSignatures: [...gateResult.skippedSignatures],
-      });
-      const result = adapterResult(
-        options,
-        toolCall,
-        outcomes[0],
-        true,
-      );
-      compactBackgroundPollMessages(options.state, toolCall, result, intermediatePollCallIds);
-      return result;
-    }
-    if (tracksGraphDeviation) {
-      graphExecutor?.checkToolCall(toolCall.name, { track: true });
-    }
-
     const stats = await executeToolCallsStreaming(deps, {
-      toolCalls: gateResult.executableToolCalls,
+      toolCalls: [toolCall],
       messages: state.messages,
       logger: options.logger,
       onStep: options.onStep,
@@ -91,7 +53,6 @@ export function createHarnessVerificationToolAdapter(
       taskState: state.taskState,
       repoContext: state.repoContext,
       currentTools: options.currentTools,
-      buildDiagnosticGateActive: state.buildDiagnosticGateActive,
       completionFacts: CompletionFactsView.fromHarnessRunState(state),
       verificationOutputBuffer: state.verificationOutputBuffer,
       shellMandatoryConfirmDenials: state.shellMandatoryConfirmDenials,
@@ -106,12 +67,6 @@ export function createHarnessVerificationToolAdapter(
     if (outcome && stats.workspaceMutatedRunCommandIds.includes(toolCall.id)) {
       outcome = { ...outcome, effect: 'local_change' };
       state.operationOutcomes?.record(outcome);
-    }
-    if (tracksGraphDeviation) {
-      graphExecutor?.recordToolResult(
-        toolCall.name,
-        !!outcome && outcome.disposition === 'executed' && outcome.status !== 'failed',
-      );
     }
     const blocked = isUnavailableOutcome(outcome);
     const result = adapterResult(options, toolCall, outcome, blocked);
@@ -195,11 +150,6 @@ function isBackgroundStop(toolCall: ToolCall): boolean {
     && String(toolCall.arguments?.action ?? '').toLowerCase() === 'stop';
 }
 
-function isInitialVerificationRun(toolCall: ToolCall): boolean {
-  return toolCall.name === 'run_command'
-    && !String(toolCall.arguments?.action ?? '').trim();
-}
-
 function latestToolOutput(state: HarnessRunState, toolCallId: string): string {
   const message = [...state.messages].reverse().find(
     item => item.role === 'tool' && item.toolCallId === toolCallId,
@@ -214,38 +164,4 @@ function isUnavailableOutcome(outcome: OperationOutcome | undefined): boolean {
     || outcome.disposition === 'policy_block'
     || outcome.disposition === 'user_denied'
     || outcome.status === 'awaiting_approval';
-}
-
-function emitGateBlockObservability(
-  options: HarnessVerificationToolAdapterOptions,
-  toolCall: ToolCall,
-): void {
-  const iteration = options.deps.loopController.getState().currentRound;
-  const output = latestToolOutput(options.state, toolCall.id);
-  options.logger.toolResult(toolCall.name, false, output.length, 'tool_gate_block');
-  options.onStep?.({
-    type: 'tool_denied',
-    iteration,
-    toolName: toolCall.name,
-  });
-  options.onStep?.({
-    type: 'tool_result',
-    iteration,
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    toolSuccess: false,
-    toolOutcome: 'policy_block',
-    toolOutput: stepToolOutputPreview(toolCall.name, output),
-    toolError: 'tool_gate_block',
-    toolArgs: redactToolArguments(toolCall.name, toolCall.arguments),
-  });
-  options.deps.runtimeTelemetry?.recordTool({
-    round: iteration,
-    toolName: toolCall.name,
-    success: false,
-    outcome: 'policy_block',
-    policyReason: 'tool_gate_block',
-    outputLength: output.length,
-  });
-  options.deps.loopController.recordToolCalls(1);
 }

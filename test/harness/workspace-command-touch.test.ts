@@ -134,6 +134,63 @@ describe('workspace-command-touch', () => {
     }
   });
 
+  it('leaves excluded directories out of the inventory', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-exclude-'));
+    try {
+      await fs.mkdir(path.join(root, 'data', 'sessions', 'tool-output'), { recursive: true });
+      await fs.writeFile(path.join(root, 'data', 'sessions', 's.checkpoint.json'), '{}', 'utf8');
+      await fs.writeFile(path.join(root, 'data', 'sessions', 'tool-output', 'c1.log'), 'log', 'utf8');
+      await fs.writeFile(path.join(root, 'data', 'keep.json'), '{}', 'utf8');
+      const excludeDirs = [path.join(root, 'data', 'sessions')];
+
+      expect([...(await listWorkspaceFileInventory(root, { excludeDirs })).keys()]).toEqual(['data/keep.json']);
+      const scoped = await listWorkspaceFileInventory(root, {
+        excludeDirs,
+        scopeRelPaths: ['data/sessions/s.checkpoint.json', 'data/keep.json'],
+      });
+      expect([...scoped.keys()]).toEqual(['data/keep.json']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not count Harness writes into a session directory inside the workspace as a command mutation', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-session-dir-'));
+    const sessionDir = path.join(root, 'data', 'sessions');
+    const taskState = new TaskState('run tests');
+    try {
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(path.join(sessionDir, 's.checkpoint.json'), '{"v":1}', 'utf8');
+      // 命令执行期间异步落盘的 checkpoint / 工具输出
+      const executeTool = vi.fn(async () => {
+        await fs.writeFile(path.join(sessionDir, 's.checkpoint.json'), '{"v":2}', 'utf8');
+        await fs.mkdir(path.join(sessionDir, 'tool-output'), { recursive: true });
+        await fs.writeFile(path.join(sessionDir, 'tool-output', 'other.log'), 'spill', 'utf8');
+        return { success: true, output: 'all green' };
+      });
+
+      await executeToolCallsStreaming(
+        {
+          toolExecutor: { executeTool } as never,
+          loopController: new LoopController({ maxRounds: 1 }),
+          permissionRules: [],
+          workspaceRoot: root,
+          sessionDir,
+        },
+        {
+          toolCalls: [{ id: 'cmd-test', name: 'run_command', arguments: { command: 'npm test' } }],
+          messages: [],
+          logger: { toolCall: () => {}, toolResult: () => {} } as never,
+          taskState,
+        },
+      );
+
+      expect(taskState.snapshot().workspaceMutationVersion).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('uses a metadata signature instead of hashing oversized files', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-large-file-'));
     try {

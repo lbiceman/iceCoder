@@ -14,9 +14,6 @@ export const RECOVERY_BUDGET: {
   amnesia: RecoveryLimit;
   stopHook: RecoveryLimit;
   verificationContinuation: RecoveryLimit;
-  rebuildEscalation: RecoveryLimit;
-  checkFailureStreak: RecoveryLimit;
-  stepReview: RecoveryLimit;
   failureEvidenceLadder: {
     lightHintStart: number;
     lightHintEnd: number;
@@ -33,9 +30,6 @@ export const RECOVERY_BUDGET: {
   amnesia: { max: 1, reset: '发生压缩时清零' },
   stopHook: { max: 5, reset: '钩子不再要求继续，或工具轮出现有效进展' },
   verificationContinuation: { max: 1, reset: '验收计划指纹或工作区改动版本变化' },
-  rebuildEscalation: { max: 3, reset: '新的用户消息' },
-  checkFailureStreak: { max: 6, reset: '同一验收命令终态成功' },
-  stepReview: { max: 1, reset: '下一工具轮开始' },
   failureEvidenceLadder: {
     lightHintStart: 2,
     lightHintEnd: 3,

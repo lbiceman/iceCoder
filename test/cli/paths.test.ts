@@ -7,7 +7,6 @@ import {
   USER_DATA_DIR,
   applyRuntimeDataEnvDefaults,
   ensureDefaultSkillFiles,
-  ensureSupervisorConfigFile,
   getMcpCacheDir,
   getRuntimeDataDir,
   isPackagedCliEntry,
@@ -129,25 +128,6 @@ describe('ensureDefaultSkillFiles', () => {
       await ensureDefaultSkillFiles(skillsDir);
       const raw = await readFile(target, 'utf-8');
       expect(raw).toBe('custom\n');
-    } finally {
-      await rm(tmp, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('ensureSupervisorConfigFile', () => {
-  it('从包内示例写入 dataDir/supervisor-config.json', async () => {
-    const bundled = resolvePackagedDataExamplePath('supervisor-config.example.json');
-    expect(bundled).toContain('supervisor-config.example.json');
-
-    const tmp = await mkdtemp(path.join(os.tmpdir(), 'ice-supervisor-'));
-    try {
-      await ensureSupervisorConfigFile(tmp);
-      const target = path.join(tmp, 'supervisor-config.json');
-      const raw = await readFile(target, 'utf-8');
-      const parsed = JSON.parse(raw) as { mode?: string; executionMode?: { modeLockRounds?: number } };
-      expect(parsed.mode).toBe('adaptive');
-      expect(parsed.executionMode?.modeLockRounds).toBe(2);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

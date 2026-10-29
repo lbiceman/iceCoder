@@ -9,7 +9,6 @@
   "files": [
     "dist/",
     "data/config.example.json",
-    "data/supervisor-config.example.json",
     "data/skills/创建技能.md",
     "data/system-prompt.md",
     "package.json",
@@ -61,6 +60,7 @@
     "domhandler": "^6.0.1",
     "express": "^5.2.1",
     "jszip": "^3.10.1",
+    "koffi": "^3.3.3",
     "multer": "^2.1.1",
     "node-pty": "^1.1.0",
     "officeparser": "^6.1.0",

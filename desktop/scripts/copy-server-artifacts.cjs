@@ -37,6 +37,7 @@ const PROD_DEPS = [
   'word-extractor',
   'ws',
   'xml2js',
+  'koffi',
 ];
 
 function log(msg) {
@@ -136,6 +137,18 @@ function mergePublicStaticExtras(repoRoot, targetDistPublic) {
   }
 }
 
+function getKoffiPlatformDependency(nodeModulesDir) {
+  const pkgPath = path.join(nodeModulesDir, 'koffi', 'package.json');
+  if (!fs.existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const expected = `@koromix/koffi-${process.platform}-${process.arch}`;
+    return Object.prototype.hasOwnProperty.call(pkg.optionalDependencies || {}, expected) ? expected : null;
+  } catch {
+    return null;
+  }
+}
+
 function getRipgrepPlatformDependency(nodeModulesDir) {
   const pkgPath = path.join(nodeModulesDir, '@vscode', 'ripgrep', 'package.json');
   if (!fs.existsSync(pkgPath)) return null;
@@ -192,9 +205,11 @@ function main() {
   const tgtNm = path.join(targetRoot, 'node_modules');
   fs.mkdirSync(tgtNm, { recursive: true });
   const ripgrepPlatformDependency = getRipgrepPlatformDependency(repoNm);
+  const koffiPlatformDependency = getKoffiPlatformDependency(repoNm);
   const prodDeps = [
     ...PROD_DEPS,
     ...(ripgrepPlatformDependency ? [ripgrepPlatformDependency] : []),
+    ...(koffiPlatformDependency ? [koffiPlatformDependency] : []),
   ];
   const depsToCopy = collectTransitiveDependencies(prodDeps, repoNm);
   log(`copyDeps ${depsToCopy.length} packages (roots=${prodDeps.length})`);

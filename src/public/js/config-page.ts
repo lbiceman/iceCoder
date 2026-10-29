@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 设置页面：Tab 切换「通用」「模型配置」「MCP 配置」与「监管模式配置」。
+ * 设置页面：Tab 切换「通用」「模型配置」与「MCP 配置」。
  */
 
 /* exported ConfigPage, SettingsPage */
@@ -119,6 +119,27 @@ export const SettingsPage = (() => {
             '</div>' +
           '</div>' +
         '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-use-windows-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">Windows 操作</h2>' +
+            '<span class="config-badge is-starting">实验性</span>' +
+          '</div>' +
+          '<p class="settings-section-desc">打开后，才会把鼠标、键盘、截屏工具和它们的使用说明发给模型。关闭后这些内容不再注入。能做到哪一步，取决于模型能力</p>' +
+          '<div class="settings-card" id="settings-use-windows-card" hidden>' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">启用 Windows 操作</span>' +
+                '<p class="settings-card-desc" id="settings-use-windows-desc">实验性功能。开启后，模型可以移动鼠标、点击、敲键盘，并截取主屏幕。定时任务不会注入这些工具。实际效果取决于模型能力，下一条消息生效</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="启用 Windows 操作">' +
+                  '<input type="checkbox" id="settings-use-windows-input" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
           '<div class="settings-section-head">' +
             '<h2 class="settings-section-title">执行透明层</h2>' +
@@ -175,6 +196,33 @@ export const SettingsPage = (() => {
                   '<input type="checkbox" id="etl-show-desktop-pet" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
+              '<div class="settings-etl-row-info">' +
+                '<span class="settings-etl-row-label">屏幕问号</span>' +
+                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘。松开左键落下对应标记，标记底部停在按下的位置。左侧问号会截图并提问，正下方会把同一块截图放进输入框。松在中心则取消。Esc 关闭回答。</span>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-etl-switch" title="屏幕问号">' +
+                  '<input type="checkbox" id="settings-screen-ping" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-etl-row settings-screen-ping-crop" id="settings-screen-ping-crop-row" hidden>' +
+              '<div class="settings-etl-row-info">' +
+                '<span class="settings-etl-row-label">截图区域</span>' +
+                '<span class="settings-etl-row-hint">问号和正下方共用这块宽和高，单位是像素。</span>' +
+              '</div>' +
+              '<div class="settings-card-control settings-screen-ping-crop-field">' +
+                '<label class="settings-screen-ping-crop-axis">宽' +
+                  '<input type="number" id="settings-screen-ping-crop-w" min="1" step="1" inputmode="numeric" aria-label="截图宽度" />' +
+                '</label>' +
+                '<label class="settings-screen-ping-crop-axis">高' +
+                  '<input type="number" id="settings-screen-ping-crop-h" min="1" step="1" inputmode="numeric" aria-label="截图高度" />' +
+                '</label>' +
+                '<span class="settings-screen-ping-crop-unit">px</span>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -258,6 +306,7 @@ export const SettingsPage = (() => {
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
     bindEtlSettings(parentEl);
+    bindScreenPingSettings(parentEl);
     bindTaskNotificationSettings(parentEl);
   }
 
@@ -458,6 +507,74 @@ export const SettingsPage = (() => {
     }
   }
 
+  function bindScreenPingSettings(parentEl) {
+    const row = parentEl.querySelector('#settings-screen-ping-row');
+    const cropRow = parentEl.querySelector('#settings-screen-ping-crop-row');
+    const input = parentEl.querySelector('#settings-screen-ping');
+    const widthInput = parentEl.querySelector('#settings-screen-ping-crop-w');
+    const heightInput = parentEl.querySelector('#settings-screen-ping-crop-h');
+    const hint = parentEl.querySelector('#settings-screen-ping-hint');
+    const desktop = window.iceDesktop;
+    if (!row || !input || !cropRow || !widthInput || !heightInput || !desktop || typeof desktop.getScreenPing !== 'function') return;
+
+    row.hidden = false;
+    cropRow.hidden = false;
+    const apply = (state) => {
+      input.checked = !!state.enabled;
+      input.disabled = !state.supported;
+      widthInput.value = String(state.cropWidth);
+      heightInput.value = String(state.cropHeight);
+      widthInput.disabled = !state.supported;
+      heightInput.disabled = !state.supported;
+      if (!state.supported && hint) hint.textContent = '目前只在 Windows 桌面版可用';
+    };
+    desktop.getScreenPing().then(apply).catch(() => {
+      row.hidden = true;
+      cropRow.hidden = true;
+    });
+    input.addEventListener('change', () => {
+      const next = input.checked;
+      input.disabled = true;
+      desktop.setScreenPing({ enabled: next })
+        .then((state) => {
+          apply(state);
+          if (window.Notification) {
+            window.Notification.success(state.enabled ? '已开启屏幕问号' : '已关闭屏幕问号');
+          }
+        })
+        .catch(() => {
+          input.checked = !next;
+          input.disabled = false;
+          if (window.Notification) window.Notification.error('更新失败');
+        });
+    });
+    const saveEdge = (kind) => {
+      const field = kind === 'width' ? widthInput : heightInput;
+      const raw = Number(field.value);
+      if (!Number.isFinite(raw)) {
+        desktop.getScreenPing().then(apply).catch(() => {});
+        return;
+      }
+      const patch = kind === 'width' ? { cropWidth: raw } : { cropHeight: raw };
+      widthInput.disabled = true;
+      heightInput.disabled = true;
+      desktop.setScreenPing(patch)
+        .then((state) => {
+          apply(state);
+          if (window.Notification) {
+            window.Notification.success('截图区域已改为 ' + state.cropWidth + ' × ' + state.cropHeight + ' px');
+          }
+        })
+        .catch(() => {
+          widthInput.disabled = false;
+          heightInput.disabled = false;
+          if (window.Notification) window.Notification.error('更新失败');
+        });
+    };
+    widthInput.addEventListener('change', () => saveEdge('width'));
+    heightInput.addEventListener('change', () => saveEdge('height'));
+  }
+
   function bindDataDirectorySettings(parentEl) {
     const desktop = window.iceDesktop;
     const migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。Electron 与 iceCoder start 共用此位置。';
@@ -611,15 +728,18 @@ export const SettingsPage = (() => {
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
         const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
+        const windowsCard = parentEl.querySelector('#settings-use-windows-card');
         if (loading) loading.hidden = true;
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
         if (subAgentCard) subAgentCard.hidden = false;
+        if (windowsCard) windowsCard.hidden = false;
 
         const skipEnabled = data && data.skipPermissionChecks === true;
         syncSkipPermissionUi(parentEl, skipEnabled);
         const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
         if (subAgentInput) subAgentInput.checked = !data || data.enableSubAgents !== false;
+        syncUseWindowsUi(parentEl, data);
 
         const patterns = (data && Array.isArray(data.shellBlacklist)) ? data.shellBlacklist : [];
         const textarea = parentEl.querySelector('#settings-blacklist-textarea');
@@ -636,6 +756,7 @@ export const SettingsPage = (() => {
         const skipCard = parentEl.querySelector('#settings-skip-permission-card');
         const blacklistCard = parentEl.querySelector('#settings-blacklist-card');
         const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
+        const windowsCard = parentEl.querySelector('#settings-use-windows-card');
         if (loading) {
           loading.textContent = '加载失败';
           loading.classList.add('is-error');
@@ -643,14 +764,71 @@ export const SettingsPage = (() => {
         if (skipCard) skipCard.hidden = false;
         if (blacklistCard) blacklistCard.hidden = false;
         if (subAgentCard) subAgentCard.hidden = false;
+        if (windowsCard) windowsCard.hidden = false;
         bindGeneralSecurityEvents(parentEl);
         if (window.Notification) window.Notification.error('无法加载安全设置');
       });
   }
 
+  function syncUseWindowsUi(parentEl, data) {
+    const input = parentEl.querySelector('#settings-use-windows-input');
+    const desc = parentEl.querySelector('#settings-use-windows-desc');
+    const supported = !data || data.useWindowsSupported !== false;
+    if (input) {
+      input.checked = !!(data && data.useWindows === true);
+      input.disabled = !supported;
+      input.dataset.supported = supported ? '1' : '0';
+    }
+    if (desc && !supported) {
+      desc.textContent = '当前系统不是 Windows，不会向模型注入键鼠和截屏工具。';
+    }
+  }
+
   function bindGeneralSecurityEvents(parentEl) {
     if (parentEl._securityBound) return;
     parentEl._securityBound = true;
+
+    const windowsInput = parentEl.querySelector('#settings-use-windows-input');
+    if (windowsInput) {
+      windowsInput.addEventListener('change', () => {
+        if (windowsInput.dataset.supported === '0') {
+          windowsInput.checked = false;
+          return;
+        }
+        const next = windowsInput.checked;
+        windowsInput.disabled = true;
+        fetch('/api/config/use-windows', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ useWindows: next }),
+        })
+          .then((res) => { return res.json().then((body) => ({ ok: res.ok, body })); })
+          .then((result) => {
+            if (result.ok && result.body.success) {
+              windowsInput.checked = result.body.useWindows === true;
+              if (window.Notification) {
+                window.Notification.success(
+                  windowsInput.checked
+                    ? '已开启 Windows 操作（下一条消息生效）'
+                    : '已关闭 Windows 操作（下一条消息不再注入这些工具）'
+                );
+              }
+            } else {
+              windowsInput.checked = !next;
+              if (window.Notification) {
+                window.Notification.error((result.body && result.body.error) || '更新失败');
+              }
+            }
+          })
+          .catch(() => {
+            windowsInput.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(() => {
+            windowsInput.disabled = windowsInput.dataset.supported === '0';
+          });
+      });
+    }
 
     const subAgentInput = parentEl.querySelector('#settings-sub-agents-input');
     if (subAgentInput) {
@@ -811,7 +989,7 @@ export const SettingsPage = (() => {
         '<header class="config-center-header">' +
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
-            '<p class="config-center-subtitle">管理外观主题、安全选项、模型、MCP 服务器与监管模式</p>' +
+            '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
             '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）</p>' +
           '</div>' +
         '</header>' +
@@ -819,13 +997,11 @@ export const SettingsPage = (() => {
           '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">通用</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">模型配置</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">MCP 配置</button>' +
-          '<button type="button" class="config-tab' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-tab="supervisor" role="tab" aria-selected="' + (activeTab === 'supervisor' ? 'true' : 'false') + '">监管模式配置</button>' +
         '</nav>' +
         '<div class="config-tab-panels">' +
           '<div class="config-tab-panel' + (activeTab === 'general' ? ' is-active' : '') + '" data-panel="general" role="tabpanel" id="config-tab-general"' + (activeTab === 'general' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'model' ? ' is-active' : '') + '" data-panel="model" role="tabpanel" id="config-tab-model"' + (activeTab === 'model' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-panel="mcp" role="tabpanel" id="config-tab-mcp"' + (activeTab === 'mcp' ? '' : ' hidden') + '></div>' +
-          '<div class="config-tab-panel' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-panel="supervisor" role="tabpanel" id="config-tab-supervisor"' + (activeTab === 'supervisor' ? '' : ' hidden') + '></div>' +
         '</div>' +
       '</div>';
 
@@ -886,14 +1062,6 @@ export const SettingsPage = (() => {
       }
     } else if (switching && window.McpConfigPanel && window.McpConfigPanel.pause) {
       window.McpConfigPanel.pause();
-    }
-
-    if (tab === 'supervisor' && window.SupervisorConfigPanel) {
-      const supEl = container.querySelector('#config-tab-supervisor');
-      if (supEl && !supEl.dataset.mounted) {
-        supEl.dataset.mounted = '1';
-        window.SupervisorConfigPanel.render(supEl);
-      }
     }
   }
 

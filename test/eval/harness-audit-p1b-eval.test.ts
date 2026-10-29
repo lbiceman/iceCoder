@@ -190,38 +190,6 @@ describe('eval: harness audit P1 #19–#47', () => {
     expect(result.content).toContain('不要忘记提交');
   });
 
-  it('#22 a colored test failure reaches the next round without ANSI, and keeps the Windows path', async () => {
-    const output = [
-      '\u001b[31m FAIL \u001b[39m src/a.test.ts > adds',
-      'C:\\work\\app\\src\\a.ts(3,5): error TS2322: Type mismatch.',
-    ].join('\n');
-    const { executor, tools } = createToolExecutor({
-      run_command: async () => ({ success: false, output, error: 'Command failed (exit code: 1)' }),
-    });
-    const harness = new Harness(minConfig({
-      tools,
-      workspaceRoot: workDir,
-      sessionDir: workDir,
-      sessionId: 'audit-22',
-    }), executor);
-    stubMemoryPersist(harness);
-    const llm = scripted([
-      toolCallResponse([{ id: 't1', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('测试失败，先停下来。'),
-    ]);
-
-    await harness.run('运行一下测试', llm);
-
-    const digest = llm.inputs[1]!
-      .map(message => typeof message.content === 'string' ? message.content : '')
-      .find(text => text.includes('[Verification digest]') || text.includes('[Build digest]'));
-    expect(digest).toBeTruthy();
-    expect(digest).not.toContain('\u001b');
-    expect(digest).toContain('FAIL');
-    expect(digest).toContain('src/a.test.ts');
-    expect(digest).toContain('C:\\work\\app\\src\\a.ts');
-  });
-
   it('#47 skipPermissionChecks still enforces an explicit deny', async () => {
     const write = vi.fn<ToolHandler>(async () => ({ success: true, output: 'written' }));
     const { executor, tools } = createToolExecutor({ write_file: write });

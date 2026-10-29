@@ -102,7 +102,7 @@ describe('chat-ws-running-turn', () => {
 
   it('planEvents 超过 200 条会裁剪', () => {
     for (let i = 0; i < 205; i++) {
-      foldStepIntoRunningTurn('rt-plan', { type: 'task_graph_update', i });
+      foldStepIntoRunningTurn('rt-plan', { type: 'execution_plan_clear', i });
     }
     expect(getRunningTurn('rt-plan')?.planEvents.length).toBe(200);
   });

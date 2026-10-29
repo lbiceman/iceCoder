@@ -20,11 +20,9 @@ export const ChatPetBridge = (() => {
   const MCP_READY_NOTICE_MS = 5200;
   let tunnelReadyResetTimer = null;
   const TUNNEL_READY_NOTICE_MS = 5200;
-  let supervisorModeResetTimer = null;
-  const SUPERVISOR_MODE_NOTICE_MS = 4500;
   let userCheckpointNoticeActive = false;
-  const USER_CHECKPOINT_BUBBLE = '监管已暂停，需要你介入啦';
-  const USER_CHECKPOINT_TURN = '监管暂停 · 请接管';
+  const USER_CHECKPOINT_BUBBLE = '已暂停，需要你介入啦';
+  const USER_CHECKPOINT_TURN = '已暂停 · 请接管';
   let modelDoneNoticeActive = false;
   let modelDoneResetTimer = null;
   const MODEL_DONE_NOTICE_MS = 5200;
@@ -64,32 +62,16 @@ export const ChatPetBridge = (() => {
     sessionPet = pet;
   }
 
-  function hasLiveExecutionPlan() {
-    const P = window.ChatExecutionPlan;
-    if (!P || typeof P.getPlan !== 'function') return false;
-    if (typeof P.isPlanLive === 'function') return P.isPlanLive();
-    if (typeof P.isPanelSuppressed === 'function' && P.isPanelSuppressed()) return false;
-    if (typeof P.isVisible === 'function' && !P.isVisible()) return false;
-    const plan = P.getPlan();
-    if (!plan || !plan.steps || !plan.steps.length) return false;
-    if (typeof P.isPlanComplete === 'function' && P.isPlanComplete(plan)) return false;
-    return true;
-  }
-
   function clearFinishedPlan() {
     const P = window.ChatExecutionPlan;
     if (!P || typeof P.clear !== 'function' || typeof P.getPlan !== 'function') return;
     const plan = P.getPlan();
     if (!plan) return;
-    // 仅清除已终态 plan；不用 isPlanLive（面板被 ICE_PLAN_PANEL=0 抑制时会把进行中的 plan 误判为可清）
     if (typeof P.isPlanComplete === 'function' && P.isPlanComplete(plan)) {
       P.clear();
     }
   }
 
-  /**
-   * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
-   */
   function isUserCheckpointActive() {
     return userCheckpointNoticeActive;
   }
@@ -98,6 +80,7 @@ export const ChatPetBridge = (() => {
     return modelDoneNoticeActive;
   }
 
+  /** 冰豆底部「第 N 轮」；需要用户介入时改为接管提示。 */
   function syncExecPlanFoot() {
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
@@ -106,17 +89,8 @@ export const ChatPetBridge = (() => {
       sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
       return;
     }
-    const parts = [];
-    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.getExecutionModeChip === 'function') {
-      const modeChip = ChatExecutionPlan.getExecutionModeChip();
-      if (modeChip) parts.push(modeChip);
-    }
-    if (hasLiveExecutionPlan()) {
-      parts.push(ChatExecutionPlan.formatFootSummary(ChatExecutionPlan.getPlan()));
-    } else if (petUiSessionActive || lastWsProcessing || lastIsStreaming) {
-      if (currentTurnCount) parts.push(`第 ${currentTurnCount} 轮`);
-    }
-    sessionPet.setTurnLabel(parts.join(' · '));
+    const active = petUiSessionActive || lastWsProcessing || lastIsStreaming;
+    sessionPet.setTurnLabel(active && currentTurnCount ? `第 ${currentTurnCount} 轮` : '');
   }
 
   function clearModelDoneNotice() {
@@ -173,10 +147,6 @@ export const ChatPetBridge = (() => {
     if (tunnelReadyResetTimer) {
       clearTimeout(tunnelReadyResetTimer);
       tunnelReadyResetTimer = null;
-    }
-    if (supervisorModeResetTimer) {
-      clearTimeout(supervisorModeResetTimer);
-      supervisorModeResetTimer = null;
     }
     if (!sessionPet) return;
     sessionPet.setState('idle');
@@ -253,9 +223,6 @@ export const ChatPetBridge = (() => {
     clearModelDoneNotice();
     turnHadToolCall = false;
     clearFinishedPlan();
-    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
-      ChatExecutionPlan.resetExecutionMode();
-    }
     currentTurnCount = 0;
     petUiSessionActive = true;
     lastIsStreaming = false;
@@ -391,33 +358,6 @@ export const ChatPetBridge = (() => {
       case 'compaction':
         sessionPet.setState('restoring');
         bubble(step.content || '整理上下文中…');
-        break;
-      case 'task_graph_init':
-        sessionPet.setState('planning');
-        bubble('任务图已启动');
-        break;
-      case 'task_graph_node':
-        if (step.graphStatus === 'failed') {
-          sessionPet.setState('error');
-          bubble('节点失败');
-        } else {
-          sessionPet.setState('planning');
-        }
-        break;
-      case 'task_graph_update':
-        sessionPet.setState('planning');
-        break;
-      case 'task_graph_branch':
-        sessionPet.setState('error');
-        bubble(step.message || '分支切换');
-        break;
-      case 'execution_mode_exit':
-        syncExecPlanFoot();
-        break;
-      case 'task_graph_done':
-        sessionPet.setState('clap');
-        bubble('任务图完成');
-        syncExecPlanFoot();
         break;
       case 'final':
         {
@@ -639,30 +579,6 @@ export const ChatPetBridge = (() => {
     }, MEMORY_NOTICE_MS);
   }
 
-  function syncSupervisorModeEye(mode) {
-    if (!sessionPet) return;
-    const eyeFn = window.IceSupervisorModeEyeColor;
-    if (typeof eyeFn === 'function') {
-      sessionPet.setEyeColor(eyeFn(mode));
-    }
-  }
-
-  function notifySupervisorMode(mode, label) {
-    if (userCheckpointNoticeActive) return;
-    if (!sessionPet) return;
-    syncSupervisorModeEye(mode);
-    sessionPet.setVisible(true);
-    sessionPet.setState('idle');
-    sessionPet.setBubbleText('当前模式：' + (label || mode));
-    if (supervisorModeResetTimer) clearTimeout(supervisorModeResetTimer);
-    supervisorModeResetTimer = setTimeout(() => {
-      supervisorModeResetTimer = null;
-      if (!sessionPet || !sessionPet.isVisible()) return;
-      sessionPet.setState(busyPetState(lastIsStreaming, lastWsProcessing));
-      sessionPet.setBubbleText('');
-    }, SUPERVISOR_MODE_NOTICE_MS);
-  }
-
   return {
     init,
     showThinking,
@@ -674,8 +590,6 @@ export const ChatPetBridge = (() => {
     applyMemoryNoticesToPet,
     applyMcpReadyToPet,
     applyTunnelReadyToPet,
-    syncSupervisorModeEye,
-    notifySupervisorMode,
     getSessionPet,
     isSessionActive,
     syncExecPlanFoot,

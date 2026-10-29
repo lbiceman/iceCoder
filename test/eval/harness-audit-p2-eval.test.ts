@@ -1,7 +1,7 @@
 /**
  * Harness 审计 P2 的端到端 eval（脚本驱动 LLM，不打真实 API）。
  * 覆盖：命令清单差分、checkpoint 单次紧凑落盘、压缩占用快照、
- * 嵌入工具一次解析仍可执行、永久错误不重试、图信号一次遍历、异步仓库形态。
+ * 嵌入工具一次解析仍可执行、永久错误不重试。
  */
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,8 +12,6 @@ import { Harness } from '../../src/harness/harness.js';
 import { ContextCompactor } from '../../src/harness/context-compactor.js';
 import { readEffectiveContextWindowTokens } from '../../src/harness/context-window-tier.js';
 import { buildMessagesForLlm } from '../../src/harness/harness-api-messages.js';
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
-import { discoverRepoShape } from '../../src/harness/task-graph-builder.js';
 import {
   diffInventoryTouchedPaths,
   listWorkspaceFileInventory,
@@ -314,23 +312,5 @@ describe('eval: harness audit P2', () => {
     expect(flaky).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
     expect(result.error).toContain('中止');
-  });
-
-  it('reads graph mode facts in one pass and discovers the repo without blocking the caller', async () => {
-    const graph = new GraphExecutor();
-    graph.initGraph({ goal: 'Implement the login form and its tests', intent: 'edit' });
-    const facts = graph.readModeSnapshot();
-    expect(facts.snapshot).not.toBeNull();
-    expect(facts.pendingStepCount).toBeGreaterThan(0);
-    expect(facts.hasPendingImplementNode).toBe(true);
-    expect(facts.pendingStepCount).toBe(
-      Object.values(facts.snapshot!.nodes).filter(node => node.status === 'pending' || node.status === 'running').length,
-    );
-
-    const pending = discoverRepoShape(process.cwd());
-    expect(pending).toBeInstanceOf(Promise);
-    const shape = await pending;
-    expect(shape.typeSystem).toBe('typescript');
-    expect(shape.packageManager).not.toBe('none');
   });
 });

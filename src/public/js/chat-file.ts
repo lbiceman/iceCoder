@@ -148,6 +148,13 @@ export const ChatFile = (() => {
     }
   }
 
+  function addPendingImageDataUrl(dataUrl) {
+    if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image/') !== 0) return;
+    pendingImages.push({ dataUrl: dataUrl, file: null });
+    renderPendingImages();
+    notifyComposerChange();
+  }
+
   function addPendingImage(file) {
     pendingImageLoads++;
     notifyComposerChange();
@@ -381,6 +388,7 @@ export const ChatFile = (() => {
     getUploadedFiles,
     hasPendingUploads,
     addPendingImage,
+    addPendingImageDataUrl,
     removePendingImage,
     clearPendingImages,
     getPendingImages,

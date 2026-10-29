@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>iceCoder ping</title>
+  <style>
+    :root { --gold: #c8aa6e; --gold-dim: #8a7448; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #wheel {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 600px;
+      height: 600px;
+      margin: -300px 0 0 -300px;
+      opacity: 0;
+      transform: scale(.85);
+      transform-origin: center center;
+      transition: opacity .12s ease-out, transform .12s ease-out;
+    }
+    #wheel.open { opacity: 1; transform: scale(1); }
+    #wheel svg { width: 600px; height: 600px; display: block; overflow: visible; }
+    #wheel .wedge { transition: fill-opacity .08s; }
+    #wheel .icon {
+      transition: filter .1s;
+      filter: grayscale(1) sepia(.75) saturate(1.3) brightness(1.15);
+    }
+    /* 只绕图标中心放大。平移留在更内一层的属性上：CSS transform 会盖掉同一元素的 transform 属性，图标就会挪位。 */
+    #wheel .icon .zoom {
+      transform-box: fill-box;
+      transform-origin: center;
+      transform: scale(1);
+      transition: transform .1s ease-out;
+    }
+    #wheel .icon.hot { filter: none; }
+    #wheel .icon.hot .zoom { transform: scale(1.12); }
+    #wheel .icon.is-alert,
+    #wheel .icon.is-way { filter: none; }
+    .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
+    .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
+    #signals { position: absolute; inset: 0; pointer-events: none; }
+
+    .ping {
+      position: absolute;
+      width: 0;
+      height: 0;
+      display: none;
+      --size: 110px;
+      --c: #f2c518;
+      --dur: 3.2s;
+    }
+    .ping.on { display: block; }
+    .crop-frame {
+      display: none;
+      position: absolute;
+      box-sizing: border-box;
+      border: 1.5px solid rgba(242, 214, 120, 0.78);
+      background: rgba(242, 197, 24, 0.035);
+      pointer-events: none;
+    }
+    .crop-frame.on { display: block; }
+    .ping .ground {
+      position: absolute;
+      left: -28px;
+      top: -7px;
+      width: 56px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(closest-side, var(--c), transparent);
+      opacity: 0;
+      animation: ground var(--dur) ease-out forwards;
+    }
+    .ping .ring {
+      position: absolute;
+      left: calc(var(--size) * -0.545);
+      top: calc(var(--size) * -0.545);
+      width: calc(var(--size) * 1.09);
+      height: calc(var(--size) * 1.09);
+      box-sizing: border-box;
+      border-radius: 50%;
+      border: 3px solid var(--c);
+      box-shadow: 0 0 18px var(--c), inset 0 0 12px var(--c);
+      opacity: 0;
+      animation: ring .65s ease-out forwards;
+    }
+    .ping .ring.r2 { animation-delay: .22s; }
+    .ping .ring.r3 { animation-delay: 1.4s; }
+    /* 图形底边贴在落点上。不缩放、不平移，出现之后位置不再变。 */
+    .ping .art {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 64px;
+      height: 78px;
+      margin-left: -32px;
+      animation: none;
+    }
+    .ping .pop {
+      position: absolute;
+      inset: 0;
+      filter: drop-shadow(0 0 8px var(--c));
+      transform: none;
+      animation: mark-in .12s linear both;
+    }
+    .ping .pop svg { width: 100%; height: 100%; display: block; overflow: visible; }
+    .ping.signal { display: block; animation: life 3.2s linear forwards; }
+    .mark-card {
+      position: absolute;
+      left: 72px;
+      top: -36px;
+      width: max-content;
+      max-width: 280px;
+      padding: 10px 12px 8px;
+      border-radius: 10px;
+      background: rgba(8, 12, 16, .9);
+      border: 1px solid rgba(200, 170, 110, .55);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, .4);
+      color: #f0e6d2;
+      font: 600 13px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .ping.is-left .mark-card { left: auto; right: 72px; }
+    .mark-card.is-error { border-color: rgba(255, 120, 110, .75); }
+    .mark-card.is-loading .mark-card-text { color: #e7d7a4; }
+    .mark-card-text { white-space: pre-wrap; word-break: break-word; }
+    .mark-card-hint { margin-top: 6px; color: #8b97a3; font-size: 11px; font-weight: 500; }
+
+    @keyframes mark-in { from { opacity: 0; transform: none } to { opacity: 1; transform: none } }
+    @keyframes life { 0%, 87% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes ring { 0% { transform: scale(.25); opacity: .95 } 100% { transform: scale(1.35); opacity: 0 } }
+    @keyframes ground { 0% { opacity: 0 } 10% { opacity: .75 } 85% { opacity: .55 } 100% { opacity: .45 } }
+  </style>
+</head>
+<body>
+  <div id="wheel"></div>
+  <div id="signals"></div>
+  <div class="ping" id="mark">
+    <div class="crop-frame" id="crop-frame"></div>
+    <div class="ground"></div>
+    <div class="ring"></div>
+    <div class="ring r2"></div>
+    <div class="ring r3"></div>
+    <div class="art"><div class="pop" id="mark-art"></div></div>
+    <div class="mark-card" id="mark-card">
+      <div class="mark-card-text" id="mark-text"></div>
+      <div class="mark-card-hint">Esc 关闭 · 30 秒后自动收起</div>
+    </div>
+  </div>
+  <script>
+    const R_IN = 86, R_OUT = 188, R_EXT = 288, R_ICON = 137;
+    const NS = 'http://www.w3.org/2000/svg';
+    const SLICES = 4;
+    const QUESTION = 3;
+
+    const MARK_BOX = '0 0 64 78';
+
+    function questionMark(gradId, width, height, align) {
+      return '<svg class="q-art" width="' + width + '" height="' + height + '" viewBox="' + MARK_BOX + '" preserveAspectRatio="' + (align || 'xMidYMid meet') + '" overflow="visible">'
+        + '<defs><linearGradient id="' + gradId + '" x1="32" y1="0" x2="32" y2="78" gradientUnits="userSpaceOnUse">'
+        + '<stop offset="0" stop-color="#fff4a8"/>'
+        + '<stop offset=".55" stop-color="#ffe14a"/>'
+        + '<stop offset="1" stop-color="#f0b400"/>'
+        + '</linearGradient></defs>'
+        + '<path fill="url(#' + gradId + ')" d="M32 2C48 2 58 12 58 26C58 38 48 44 40 52V58H24V48C24 44 30 40 36 36C46 30 46 24 46 20C46 14 40 10 32 10C24 10 18 14 18 22H6C6 8 16 2 32 2Z"/>'
+        + '<rect x="27" y="68" width="10" height="10" rx="1" fill="url(#' + gradId + ')"/>'
+        + '</svg>';
+    }
+
+    /** 自上顺时针四个方向：危险感叹号、正在路上、旗、问号。图形自绘，底边贴着落点。 */
+    const MARKS = [
+      { color: '#ff2a3c', ink: '#ff2a3c', cls: 'is-alert', body: '<path fill="currentColor" d="M24 2 H40 L36 46 H28 Z"/><rect x="26" y="56" width="12" height="16" rx="2.5" fill="currentColor"/>' },
+      { color: '#2e8bff', ink: '#2e8bff', cls: 'is-way', body: '<path fill="currentColor" d="M32 2 L58 34 H44 V76 H20 V34 H6 Z"/>' },
+      { color: '#2e8bff', ink: '#e6d3a1', cls: '', body: '<path fill="currentColor" d="M18 2 H24 V78 H18 Z"/><path fill="currentColor" d="M24 8 H54 L44 24 H24 Z"/>' },
+      { color: '#f2c518', ink: '#e6d3a1', cls: 'is-q', body: '' },
+    ];
+
+    function markSvg(body, width, height, align) {
+      return '<svg viewBox="' + MARK_BOX + '" width="' + width + '" height="' + height + '" preserveAspectRatio="' + align + '" overflow="visible">' + body + '</svg>';
+    }
+
+    function pt(r, deg) {
+      const rad = deg * Math.PI / 180;
+      return [r * Math.cos(rad), r * Math.sin(rad)];
+    }
+    function sector(r0, r1, a0, a1) {
+      const [x0, y0] = pt(r0, a0);
+      const [x1, y1] = pt(r1, a0);
+      const [x2, y2] = pt(r1, a1);
+      const [x3, y3] = pt(r0, a1);
+      return 'M' + x0 + ',' + y0 + ' L' + x1 + ',' + y1
+        + ' A' + r1 + ',' + r1 + ' 0 0 1 ' + x2 + ',' + y2
+        + ' L' + x3 + ',' + y3
+        + ' A' + r0 + ',' + r0 + ' 0 0 0 ' + x0 + ',' + y0 + 'Z';
+    }
+
+    const wheel = document.getElementById('wheel');
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '-300 -300 600 600');
+    wheel.appendChild(svg);
+    const el = (tag, attrs, parent) => {
+      const node = document.createElementNS(NS, tag);
+      for (const key in attrs) node.setAttribute(key, attrs[key]);
+      (parent || svg).appendChild(node);
+      return node;
+    };
+
+    const defs = el('defs', {});
+    defs.innerHTML = ''
+      + '<radialGradient id="ext" cx="0" cy="0" r="' + R_EXT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_OUT / R_EXT) + '" stop-color="#5c6066" stop-opacity=".55"/>'
+      + '<stop offset="1" stop-color="#5c6066" stop-opacity="0"/></radialGradient>'
+      + '<radialGradient id="ring" cx="0" cy="0" r="' + R_OUT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_IN / R_OUT) + '" stop-color="#2a2d31"/>'
+      + '<stop offset="1" stop-color="#4a4e54"/></radialGradient>'
+      + '<radialGradient id="hot" cx="0" cy="0" r="' + R_EXT + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="' + (R_IN / R_EXT) + '" stop-color="#8a8f96"/>'
+      + '<stop offset="' + (R_OUT / R_EXT) + '" stop-color="#9aa0a8"/>'
+      + '<stop offset="1" stop-color="#9aa0a8" stop-opacity="0"/></radialGradient>'
+      + '<radialGradient id="core" cx="0" cy="-10" r="' + R_IN + '" gradientUnits="userSpaceOnUse">'
+      + '<stop offset="0" stop-color="#2c5d60"/><stop offset="1" stop-color="#11292c"/></radialGradient>';
+
+    const wedges = [];
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
+      el('path', { d: sector(R_OUT, R_EXT, mid - 45, mid + 45), fill: 'url(#ext)' });
+    }
+    el('circle', { r: (R_IN + R_OUT) / 2, fill: 'none', stroke: 'url(#ring)', 'stroke-width': R_OUT - R_IN, opacity: .92 });
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
+      const wedge = el('path', {
+        d: sector(R_IN, R_EXT, mid - 45, mid + 45),
+        fill: 'url(#hot)',
+        'fill-opacity': 0,
+        class: 'wedge' + (MARKS[i].cls ? ' ' + MARKS[i].cls : ''),
+        'data-slice': i,
+      });
+      wedges.push(wedge);
+    }
+    for (let i = 0; i < SLICES; i++) {
+      const mid = -90 + i * 90;
+      const [x0, y0] = pt(R_IN, mid - 45);
+      const [x1, y1] = pt(R_OUT, mid - 45);
+      el('line', { x1: x0, y1: y0, x2: x1, y2: y1, stroke: '#a08a5c', 'stroke-opacity': .45, 'stroke-width': 1.2 });
+    }
+    const icons = [];
+    for (let i = 0; i < SLICES; i++) {
+      const [ix, iy] = pt(R_ICON, -90 + i * 90);
+      const icon = el('g', { class: 'icon' + (MARKS[i].cls ? ' ' + MARKS[i].cls : ''), 'data-slice': String(i), transform: 'translate(' + ix + ' ' + iy + ')' });
+      const art = i === QUESTION
+        ? questionMark('qg-wheel', 48, 48, 'xMidYMid meet')
+        : markSvg(MARKS[i].body, 48, 48, 'xMidYMid meet');
+      icon.innerHTML = '<g class="zoom"><g transform="translate(-24 -24)" style="color:' + MARKS[i].ink + '">' + art + '</g></g>';
+      icons.push(icon);
+    }
+    el('circle', { r: R_IN + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: .6 });
+    el('circle', { r: R_IN, fill: 'url(#core)', stroke: '#c8aa6e', 'stroke-width': 3 });
+    el('circle', { r: R_IN - 7, fill: 'none', stroke: '#8a7448', 'stroke-width': 1, opacity: .6 });
+    el('polygon', { points: '0,-52 8,-40 0,-28 -8,-40', fill: '#3ec0ea' });
+    const pingLabel = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt ping-label' });
+    pingLabel.textContent = 'PING';
+    const back = el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' });
+    back.textContent = 'BACK';
+    const mouse = el('g', { opacity: .55, transform: 'translate(-26,40)' });
+    el('rect', { x: 0, y: 0, width: 11, height: 16, rx: 5.5, fill: 'none', stroke: '#6c7a7c', 'stroke-width': 1.3 }, mouse);
+    el('path', { d: 'M5.5,0 V7 H11 V5.5 A5.5,5.5 0 0 0 5.5,0Z', fill: '#6c7a7c' }, mouse);
+
+    const mark = document.getElementById('mark');
+    const cropFrame = document.getElementById('crop-frame');
+    const markArt = document.getElementById('mark-art');
+    const markCard = document.getElementById('mark-card');
+    const markText = document.getElementById('mark-text');
+    markArt.innerHTML = questionMark('qg-mark', 64, 78, 'xMidYMax meet');
+
+    const signals = document.getElementById('signals');
+    function spawnSignal(payload) {
+      if (!payload || payload.slice == null || payload.slice === QUESTION) return;
+      const mark = MARKS[payload.slice];
+      if (!mark || !mark.body) return;
+      const node = document.createElement('div');
+      node.className = 'ping signal on';
+      node.style.left = payload.x + 'px';
+      node.style.top = payload.y + 'px';
+      node.style.setProperty('--c', mark.color);
+      node.style.color = mark.color;
+      node.innerHTML = '<div class="ground"></div><div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div>'
+        + '<div class="art"><div class="pop">' + markSvg(mark.body, '100%', '100%', 'xMidYMax meet') + '</div></div>';
+      signals.appendChild(node);
+      const remove = () => { if (node.parentNode) node.remove(); };
+      node.addEventListener('animationend', (event) => {
+        if (event.animationName === 'life') remove();
+      });
+      window.setTimeout(remove, 3400);
+    }
+
+    let lastSlice = null;
+    let audioCtx = null;
+    function tick() {
+      try {
+        if (!audioCtx) audioCtx = new AudioContext();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = 740;
+        osc.type = 'triangle';
+        gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.03, audioCtx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.045);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.05);
+      } catch { /* 没声音也不影响落子 */ }
+    }
+
+    function paintSlice(slice) {
+      wedges.forEach((wedge, i) => {
+        const hot = slice !== null && i === slice;
+        wedge.setAttribute('fill-opacity', hot ? '0.55' : '0');
+        wedge.classList.toggle('is-hot', hot);
+      });
+      icons.forEach((icon, i) => icon.classList.toggle('hot', slice !== null && i === slice));
+      if (slice !== null && slice !== lastSlice) tick();
+      lastSlice = slice;
+    }
+
+    function setWheel(payload) {
+      if (!payload || !payload.show) {
+        if (wheel.classList.contains('open')) {
+          wheel.classList.remove('open');
+          lastSlice = null;
+          paintSlice(null);
+        }
+        return;
+      }
+      if (!wheel.classList.contains('open')) {
+        wheel.style.left = payload.x + 'px';
+        wheel.style.top = payload.y + 'px';
+        wheel.classList.add('open');
+      }
+      paintSlice(payload.slice == null ? null : payload.slice);
+    }
+
+    function paintCard(payload) {
+      mark.classList.toggle('is-left', payload.x > window.innerWidth - 320);
+      markCard.hidden = payload.phase === 'wait';
+      markCard.classList.toggle('is-error', payload.phase === 'error');
+      markCard.classList.toggle('is-loading', payload.phase === 'loading');
+      markText.textContent = payload.text || '';
+    }
+
+    function paintFrame(payload) {
+      const cropW = payload.cropW > 0 ? payload.cropW : 200;
+      const cropH = payload.cropH > 0 ? payload.cropH : cropW;
+      const radius = Math.max(12, Math.round(Math.min(cropW, cropH) * 0.12));
+      cropFrame.style.width = cropW + 'px';
+      cropFrame.style.height = cropH + 'px';
+      cropFrame.style.left = (-cropW / 2) + 'px';
+      cropFrame.style.top = (-cropH / 2) + 'px';
+      cropFrame.style.borderRadius = radius + 'px';
+      cropFrame.classList.add('on');
+    }
+
+    let markPlaced = false;
+
+    function setMarker(payload) {
+      if (payload && payload.frameOnly) {
+        if (markPlaced) paintFrame(payload);
+        return;
+      }
+      if (!payload || !payload.show) {
+        markPlaced = false;
+        mark.classList.remove('on');
+        cropFrame.classList.remove('on');
+        return;
+      }
+      // 问号只落一次。后面的矩形和文字都不再写 left/top。
+      if (!markPlaced) {
+        mark.style.left = payload.x + 'px';
+        mark.style.top = payload.y + 'px';
+        mark.classList.add('on');
+        markPlaced = true;
+      }
+      paintCard(payload);
+    }
+
+    const api = window.pingOverlay;
+    if (api) {
+      api.onWheel(setWheel);
+      api.onMarker(setMarker);
+      if (api.onSignal) api.onSignal(spawnSignal);
+    }
+    window.__pingPreview = { setWheel, setMarker, spawnSignal };
+  </script>
+</body>
+</html>

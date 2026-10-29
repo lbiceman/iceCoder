@@ -1,7 +1,6 @@
 /**
  * Harness 审计 P4 的端到端 eval（脚本驱动 LLM，不打真实 API）。
- * 覆盖：run 成本护栏与 tracker 默认预算是两套数；只读轮提示、截断阈值、
- * 任务图同一工具重复上限都走收拢后的常量。
+ * 覆盖：run 成本护栏与 tracker 默认预算是两套数；连续只读不催促改代码；截断阈值走收拢后的常量。
  */
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,12 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Harness } from '../../src/harness/harness.js';
 import {
-  MAX_SAME_TOOL_REPEAT,
   OUTPUT_TOKEN_CEILING_RATIO,
-  READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT,
   TRUNCATED_WRITE_CONTENT_MIN_CHARS,
 } from '../../src/harness/harness-constants.js';
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 import {
   isOutputAtTokenCeiling,
   shouldPlanTruncatedWriteToolRecovery,
@@ -98,7 +94,6 @@ function stubMemoryPersist(harness: Harness): void {
   vi.spyOn(mem.memoryDream, 'recordSession').mockResolvedValue(undefined);
 }
 
-const READONLY_HINT = `reading/analyzing for ${READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT} rounds`;
 
 describe('eval: harness audit P4 #90 #91', () => {
   let workDir: string;
@@ -160,33 +155,24 @@ describe('eval: harness audit P4 #90 #91', () => {
     expect(wideResult.loopState.stopReason).toBe('model_done');
   });
 
-  it('nudges implementation only after the configured read-only streak', async () => {
-    expect(READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT).toBe(5);
+  it('lets the model keep reading as long as it wants, without an implementation nudge', async () => {
+    const { executor, tools } = createToolExecutor({
+      read_file: async () => ({ success: true, output: 'file body' }),
+    });
+    const harness = new Harness(minConfig({ tools, workspaceRoot: workDir }), executor);
+    stubMemoryPersist(harness);
+    let seen = 0;
+    const chatFn: ChatFunction = async () => {
+      seen += 1;
+      if (seen <= 7) {
+        return toolCallResponse([{ id: `r${seen}`, name: 'read_file', args: { path: `src/f${seen}.ts` } }]);
+      }
+      return finalResponse('先读到这里。');
+    };
 
-    async function runReadOnlyRounds(rounds: number) {
-      const { executor, tools } = createToolExecutor({
-        read_file: async () => ({ success: true, output: 'file body' }),
-      });
-      const harness = new Harness(minConfig({ tools, workspaceRoot: workDir }), executor);
-      stubMemoryPersist(harness);
-      let seen = 0;
-      const chatFn: ChatFunction = async () => {
-        seen += 1;
-        if (seen <= rounds) {
-          return toolCallResponse([{ id: `r${seen}`, name: 'read_file', args: { path: 'a.ts' } }]);
-        }
-        return finalResponse('先读到这里。');
-      };
-      return harness.run('请修改 src/app.ts 的标题', chatFn);
-    }
-
-    const early = await runReadOnlyRounds(READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT - 1);
-    expect(early.loopState.stopReason).toBe('model_done');
-    expect(early.messages.some(message => String(message.content).includes(READONLY_HINT))).toBe(false);
-
-    const nudged = await runReadOnlyRounds(READONLY_ROUNDS_BEFORE_IMPLEMENT_HINT);
-    expect(nudged.loopState.stopReason).toBe('model_done');
-    expect(nudged.messages.some(message => String(message.content).includes(READONLY_HINT))).toBe(true);
+    const result = await harness.run('请修改 src/app.ts 的标题', chatFn);
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.messages.some(message => /reading\/analyzing for \d+ rounds/.test(String(message.content)))).toBe(false);
   });
 
   it('treats output near the token ceiling and long path-less writes as truncated', () => {
@@ -214,18 +200,5 @@ describe('eval: harness audit P4 #90 #91', () => {
     });
     expect(below).toBe(false);
     expect(atLimit).toBe(true);
-  });
-
-  it('blocks the same tool only after the shared node-guard limit', () => {
-    expect(MAX_SAME_TOOL_REPEAT).toBe(5);
-    const executor = new GraphExecutor();
-    executor.initGraph({ goal: '看看这个函数做什么', intent: 'question' });
-
-    for (let i = 0; i < MAX_SAME_TOOL_REPEAT; i++) {
-      expect(executor.checkToolCall('read_file').action).toBe('allow');
-    }
-    const over = executor.checkToolCall('read_file');
-    expect(over.action).toBe('warn');
-    expect(over.message).toContain(`上限 ${MAX_SAME_TOOL_REPEAT}`);
   });
 });

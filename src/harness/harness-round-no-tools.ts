@@ -23,7 +23,6 @@ import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
-import type { GraphExecutor } from './task-graph-executor.js';
 import type { StopHookManager } from './stop-hooks.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -76,7 +75,6 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
   stopHookManager: StopHookManager;
-  graphExecutor: GraphExecutor;
   workspaceRoot?: string;
   toolExecutor?: ToolExecutor;
   permissionRules?: ToolPermissionRule[];
@@ -431,7 +429,7 @@ export async function handleNoToolCalls(
     });
   }
 
-  // 正文是结束提议；先写入历史，再以同一 deps/Graph/Gate 执行确定性验收。
+  // 正文是结束提议；先写入历史，再走与普通工具轮相同的权限与执行链做确定性验收。
   pushAssistantForHistory(msgs, response);
   const stopVerification = deps.toolExecutor
     && workspaceRoot
@@ -447,7 +445,6 @@ export async function handleNoToolCalls(
           logger,
           onStep,
           abortSignal: deps.abortSignal,
-          graphExecutor: deps.graphExecutor,
         }),
         abortSignal: deps.abortSignal,
       })
@@ -632,11 +629,6 @@ async function finishNoToolRound(
   if (!terminal.assistantAlreadyRecorded) {
     pushAssistantForHistory(state.messages, response);
   }
-  if (terminal.stopReason === 'model_done' && deps.graphExecutor?.hasGraph()) {
-    const advanced = deps.graphExecutor.advanceOrComplete();
-    if (advanced.graphDone) onStep?.({ type: 'task_graph_done' });
-  }
-
   state.completionStatus = terminal.status;
   state.completionReason = terminal.reason;
   emitLightweightSnapshotBoundary({

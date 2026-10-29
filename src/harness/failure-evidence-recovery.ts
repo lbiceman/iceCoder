@@ -3,14 +3,11 @@
  *
  * 阶梯（consecutiveToolFailures）：
  *   1 静默 | 2~3 轻提示 | 4~6 证据包（刷新） | 7~9 强警告 | ≥10 熔断
- *
- * L2 adaptive 开启时仍注入（harness-tool-round → injectToolFailureEscalation，source=lifecycle）。
  */
 
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
-import { extractRunCommand } from './branch-budget-path.js';
-import { findLastFailedVerification } from './rebuild-escalation.js';
+import { extractRunCommand } from './tool-target-path.js';
 import type { RunCommandResultClassification } from './run-command-result.js';
 
 export type EphemeralFailureRecoveryKind = 'light' | 'evidence' | 'strong';
@@ -44,17 +41,53 @@ function findAssistantToolCall(
 export function isFailedToolResultContent(content: string): boolean {
   return content.includes('工具执行错误')
     || content.includes('Tool execution error')
-    || content.includes('[BranchBudget / Blocked]')
     || content.includes('[Tool skipped]');
 }
 
 function stripToolErrorPrefix(content: string): string {
-  if (content.includes('[BranchBudget / Blocked]')) {
-    return content.trim();
-  }
   return content
     .replace(/^(?:工具执行错误|Tool execution error)[:：][^\n]*\n+/m, '')
     .trim();
+}
+
+/** 从对话历史取最近一次失败的 run_command 及其输出体；历史里只剩命令时退回 buffer。 */
+export function findLastFailedVerification(
+  messages: UnifiedMessage[],
+  buffer?: VerificationOutputBuffer,
+): {
+  command: string;
+  outputBody: string;
+} | null {
+  let commandOnly: string | null = null;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    if (!msg.content.includes('工具执行错误') && !msg.content.includes('Tool execution error')) continue;
+
+    const tc = findAssistantToolCall(messages, i, msg.toolCallId);
+    if (!tc || tc.name !== 'run_command') continue;
+
+    const command = extractRunCommand(tc.arguments);
+    if (!command) continue;
+
+    if (!commandOnly) commandOnly = command;
+
+    const body = stripToolErrorPrefix(msg.content);
+    if (body) {
+      return { command, outputBody: body };
+    }
+  }
+
+  const buffered = buffer?.findLastFailed(commandOnly);
+  if (buffered) {
+    return { command: buffered.command, outputBody: buffered.outputBody };
+  }
+
+  if (commandOnly) {
+    return { command: commandOnly, outputBody: '' };
+  }
+  return null;
 }
 
 function truncateTail(text: string, maxChars: number): string {
@@ -75,7 +108,7 @@ function labelForToolCall(tc: ToolCall | undefined, content: string): string {
   return tc.name;
 }
 
-/** 从对话历史收集最近失败 tool 结果（含 BranchBudget 拦截）。 */
+/** 从对话历史收集最近失败 tool 结果。 */
 export function collectFailureEvidenceEntries(
   messages: UnifiedMessage[],
   buffer?: VerificationOutputBuffer,

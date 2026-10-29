@@ -11,7 +11,6 @@ import './etl-prefs.ts';
 import './model-names.ts';
 import './config-model-panel.ts';
 import './config-mcp-panel.ts';
-import './config-supervisor-panel.ts';
 import './config-page.ts';
 import './session-pet.js';
 import './desktop-pet-bridge.ts';

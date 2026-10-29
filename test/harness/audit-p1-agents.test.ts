@@ -17,9 +17,6 @@ vi.mock('../../src/web/chat-ws-broadcast.js', async (importOriginal) => ({
   hasSessionSubscribers: () => true,
 }));
 
-import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
-import { createTaskGraph, startCurrentNode } from '../../src/harness/task-graph.js';
-import type { TaskGraph, TaskNode } from '../../src/types/task-graph.js';
 import { findBlockedSubAgentGitSubcommand } from '../../src/harness/agents/agent-git-policy.js';
 import { AgentSpawner, type AgentHarnessFactory } from '../../src/harness/agents/agent-spawner.js';
 import { AgentBackgroundHub } from '../../src/harness/agents/agent-background-hub.js';
@@ -143,62 +140,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   broadcasts.length = 0;
   await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
-});
-
-// ─── #34 ───
-
-function graphNode(id: string, type: TaskNode['type']): TaskNode {
-  return {
-    id, type, title: id, phase: 'editing', requiresTool: true,
-    status: 'pending', retryCount: 0, maxRetries: 1,
-  };
-}
-
-function executorWithGraph(nodes: TaskNode[]): { ex: GraphExecutor; graph: TaskGraph } {
-  const ex = new GraphExecutor();
-  const graph = createTaskGraph({ goal: 'g', intent: 'edit', nodes, graphId: 'g1' });
-  startCurrentNode(graph);
-  (ex as unknown as { graph: TaskGraph }).graph = graph;
-  return { ex, graph };
-}
-
-function driveUntilForceSwitch(ex: GraphExecutor) {
-  for (let i = 0; i < 20; i++) {
-    ex.checkToolCall('edit_file');
-    const r = ex.evaluateRound(1);
-    if (r.action === 'force_switch') return r;
-  }
-  return undefined;
-}
-
-describe('#34 force_switch 时 fallback 分支真正激活', () => {
-  it('当前节点仍 running 时 force_switch 也切到 fallback 分支并启动其节点', () => {
-    const { ex, graph } = executorWithGraph([graphNode('n1', 'edit'), graphNode('fb1', 'fallback')]);
-    expect(graph.nodes.n1!.status).toBe('running');
-
-    const r = driveUntilForceSwitch(ex);
-    expect(r?.fallbackActivated).toBe(true);
-    expect(graph.cursor.branchId).toContain('branch-fallback');
-    expect(graph.cursor.nodeId).toBe('fb1');
-    expect(graph.nodes.n1!.status).toBe('failed');
-    expect(graph.nodes.fb1!.status).toBe('running');
-    expect(graph.status).toBe('running');
-    expect(ex.isTerminal()).toBe(false);
-  });
-
-  it('fallback 用尽后再次 force_switch 判图失败', () => {
-    const { ex, graph } = executorWithGraph([graphNode('n1', 'edit'), graphNode('fb1', 'fallback')]);
-    expect(driveUntilForceSwitch(ex)?.fallbackActivated).toBe(true);
-    expect(driveUntilForceSwitch(ex)?.fallbackActivated).toBe(false);
-    expect(graph.status).toBe('failed');
-    expect(graph.nodes.fb1!.status).toBe('failed');
-  });
-
-  it('没有 fallback 节点时仍判图失败', () => {
-    const { ex, graph } = executorWithGraph([graphNode('n1', 'edit')]);
-    expect(driveUntilForceSwitch(ex)?.fallbackActivated).toBe(false);
-    expect(graph.status).toBe('failed');
-  });
 });
 
 // ─── #35 ───

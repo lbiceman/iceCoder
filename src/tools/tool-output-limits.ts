@@ -1,7 +1,12 @@
 /**
  * 工具输出与读文件软上限（减轻主上下文膨胀）。
- * 可用 ICE_MAX_TOOL_OUTPUT_CHARS、READ_FILE / DOC_PARSE 相关 env 调节。
+ * 可用 ICE_MAX_TOOL_OUTPUT_CHARS、ICE_READ_FILE_MAX_TOKENS、DOC_PARSE 相关 env 调节。
+ *
+ * 文件读取 / 命令 / 搜索 / 网页按 token 计，并随上下文窗口档位放大；
+ * Codex 单条约 10k tokens 只是 L/XL 档的参照，不是固定值。
  */
+
+import { getContextWindowTier, type ContextWindowTier } from '../harness/context-window-tier.js';
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
@@ -34,14 +39,31 @@ function intEnv(name: string, fallback: number): number {
   return Number.isNaN(n) ? fallback : n;
 }
 
-/** read_file 无 offset/limit 时最多返回的行数 */
-export function getReadFileDefaultMaxLines(): number {
-  return clamp(intEnv('ICE_READ_FILE_MAX_LINES', 420), 50, 5_000);
+/** 按 token 计上限的工具类别；其余工具仍走 {@link getMaxToolOutputChars} 字符上限 */
+export type ToolTokenBudgetClass = 'file_read' | 'command' | 'search' | 'web';
+
+const TOOL_TOKEN_CAPS: Record<ToolTokenBudgetClass, Record<ContextWindowTier, number>> = {
+  file_read: { S: 8_000, M: 12_000, L: 20_000, XL: 20_000 },
+  command: { S: 6_000, M: 8_000, L: 10_000, XL: 10_000 },
+  search: { S: 5_000, M: 5_000, L: 5_000, XL: 5_000 },
+  web: { S: 10_000, M: 10_000, L: 10_000, XL: 10_000 },
+};
+
+/** 单条工具结果注入上下文的 token 上限（未考虑剩余上下文；余量保护见 harness/tool-result-budget） */
+export function getToolTokenCap(
+  cls: ToolTokenBudgetClass,
+  tier: ContextWindowTier = getContextWindowTier(),
+): number {
+  if (cls === 'file_read') {
+    const override = intEnv('ICE_READ_FILE_MAX_TOKENS', 0);
+    if (override > 0) return clamp(override, 1_000, 200_000);
+  }
+  return TOOL_TOKEN_CAPS[cls][tier];
 }
 
-/** read_file 无 offset/limit 时正文软字符上限（与行数上限同时生效） */
-export function getReadFileDefaultMaxChars(): number {
-  return clamp(intEnv('ICE_READ_FILE_MAX_CHARS', 18_000), 2_000, 500_000);
+/** read_file 单次返回的 token 上限 */
+export function getReadFileMaxTokens(): number {
+  return getToolTokenCap('file_read');
 }
 
 /** 文档解析等纯文本直读路径的单次软字符上限 */

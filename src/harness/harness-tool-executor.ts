@@ -1,8 +1,16 @@
 import type { UnifiedMessage, ToolCall, ToolDefinition } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
-import { getFailedRunCommandInlineChars, getMaxToolOutputChars } from '../tools/tool-output-limits.js';
-import { truncateHeadTail } from '../tools/head-tail-truncate.js';
+import { estimateStringTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
+import {
+  exceedsToolResultBudget,
+  findRereadTarget,
+  resolveToolResultBudget,
+  shapeToolResult,
+  shouldSpillToolResult,
+  toolResultNeedsSpill,
+} from './tool-result-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
@@ -23,16 +31,13 @@ import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
 import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
 import {
   extractRunCommand,
   extractToolTargetPath,
-} from './branch-budget-path.js';
-import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
+} from './tool-target-path.js';
 import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
-import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 import {
   capturePreTurnWriteSnapshot,
   isIntentCheckpointWriteTool,
@@ -80,8 +85,6 @@ export interface ToolExecutorDeps {
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
   runtimeTelemetry?: RuntimeTelemetry;
-  /** Resilience v2：超限时硬拦截 write / 失败命令重试。 */
-  branchBudget?: BranchBudgetTracker;
   /** 同路径 missing-file preflight 拦截次数。 */
   missingFileAttempts?: Map<string, number>;
   /** Harness 策略拦截 / 恢复统计。 */
@@ -94,6 +97,8 @@ export interface ToolExecutorDeps {
   checkpointOwner?: { sessionDir: string; sessionId: string };
   /** 子 Agent 执行前检查（写租约 / 只读 / git 限制）与命令改动回调 */
   agentScope?: import('./types.js').AgentToolScope;
+  /** 单次 LLM 输出上限；工具结果预算按「窗口 − 输出预留」计算 */
+  agentMaxOutputTokens?: number;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -126,10 +131,7 @@ interface PolicyBlockContext {
   taskState?: TaskState;
   repoContext?: RepoContext;
   policyBlockedSignatures: string[];
-  enrichWithVerification?: boolean;
-  verificationOutputBuffer?: VerificationOutputBuffer;
   countAsMissingFile?: boolean;
-  budgetBlockPath?: string;
   outcome?: Extract<import('./types.js').ToolOutcome, 'policy_block' | 'user_denied'>;
 }
 
@@ -138,21 +140,11 @@ function emitHarnessPolicyBlock(
   ctx: PolicyBlockContext,
 ): void {
   const outcome = ctx.outcome ?? 'policy_block';
-  let blockMessage = ctx.baseMessage;
-  if (ctx.enrichWithVerification) {
-    blockMessage = appendVerificationEvidenceToBranchBlock(
-      blockMessage,
-      ctx.messages,
-      ctx.verificationOutputBuffer,
-    );
-  }
+  const blockMessage = ctx.baseMessage;
 
   ctx.deps.harnessPolicyStats && (ctx.deps.harnessPolicyStats.policyBlockCount += 1);
   if (ctx.countAsMissingFile && ctx.deps.harnessPolicyStats) {
     ctx.deps.harnessPolicyStats.missingFileBlockCount += 1;
-  }
-  if (ctx.policyReason === 'branch_budget_file') {
-    recordBudgetBlockByPath(ctx.deps.harnessPolicyStats, ctx.budgetBlockPath);
   }
 
   ctx.logger.toolResult(ctx.tc.name, false, blockMessage.length, ctx.errorLabel);
@@ -213,7 +205,6 @@ export interface ExecuteToolCallsStreamingArgs {
   repoContext?: RepoContext;
   chatFn?: ChatFunction;
   currentTools?: ToolDefinition[];
-  buildDiagnosticGateActive?: boolean;
   completionFacts?: CompletionFactsView;
   verificationOutputBuffer?: VerificationOutputBuffer;
   /** 本 Harness run 内已拒绝的 Shell mandatory-confirm 键。 */
@@ -221,14 +212,12 @@ export interface ExecuteToolCallsStreamingArgs {
 }
 
 export interface ToolExecutionStats {
-  /** 真实执行失败（用于熔断 / BranchBudget 计次 / 重复失败统计） */
+  /** 真实执行失败（用于熔断 / 重复失败统计） */
   failedCount: number;
   totalCount: number;
   failedSignatures: string[];
-  /** Harness 策略拒绝（preflight / BranchBudget / delegate gate），不计入 failedCount */
+  /** Harness 策略拒绝（preflight / delegate gate / 权限），不计入 failedCount */
   policyBlockedSignatures: string[];
-  /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
-  budgetBlockedFilePaths: string[];
   /** 通过执行前后工作区清单确认产生修改的 run_command 调用。 */
   workspaceMutatedRunCommandIds: string[];
   /** mutating run_command 的执行前 TaskState mutation version。 */
@@ -287,7 +276,6 @@ export async function executeToolCallsStreaming(
     repoContext,
     chatFn,
     currentTools,
-    buildDiagnosticGateActive,
     completionFacts,
     verificationOutputBuffer,
     shellMandatoryConfirmDenials,
@@ -310,13 +298,13 @@ export async function executeToolCallsStreaming(
   let directTotalCount = 0;
   const directFailedSignatures: string[] = [];
   const policyBlockedSignatures: string[] = [];
-  const budgetBlockedFilePaths: string[] = [];
-  const budgetBlockedPathSet = new Set<string>();
   const workspaceMutatedRunCommandIds = new Set<string>();
   const workspaceMutationVersionBeforeRunCommand: Record<string, number> = {};
   const commandInventoryScope = commandInventoryScopeFor(deps, taskState);
   const checkpointSessionId = deps.checkpointOwner?.sessionId ?? deps.sessionId;
   const checkpointSessionDir = deps.checkpointOwner?.sessionDir ?? deps.sessionDir;
+  const harnessOwnedDirs = [deps.sessionDir, checkpointSessionDir]
+    .filter((dir): dir is string => typeof dir === 'string' && dir.length > 0);
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
@@ -589,19 +577,16 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    // Harness preflight：dist 读取 / missing file / build diagnostic gate / shell sandbox
+    // Harness preflight：工作区边界 / dist 读取 / missing file / shell sandbox
     const preflight = checkToolPreflight({
       toolName: tc.name,
       args: tc.arguments,
-      branchBudget: deps.branchBudget,
       completionFacts,
-      buildDiagnosticGateActive,
       workspaceRoot: deps.workspaceRoot,
       lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
       missingFileAttempts: deps.missingFileAttempts,
     });
     if (preflight.blocked) {
-      const enrichGate = preflight.reason === 'build_diagnostic_gate';
       emitHarnessPolicyBlock({
         deps,
         tc,
@@ -616,8 +601,6 @@ export async function executeToolCallsStreaming(
         taskState,
         repoContext,
         policyBlockedSignatures,
-        enrichWithVerification: enrichGate,
-        verificationOutputBuffer,
         countAsMissingFile: preflight.reason === 'missing_file'
           || preflight.reason === 'missing_file_repeat',
       });
@@ -627,56 +610,6 @@ export async function executeToolCallsStreaming(
     }
 
     const targetPath = extractToolTargetPath(tc.name, tc.arguments);
-    const hadWriteBypass = targetPath ? deps.branchBudget?.hasWriteBypass(targetPath) : false;
-
-    // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，
-    // 不是 edit_file/write_file 引擎故障；长任务里多在 npm test 反复失败后、forced 段出现。
-    const branchBlock = deps.branchBudget?.checkToolBlock(
-      tc.name,
-      tc.arguments,
-      extractToolTargetPath,
-      extractRunCommand,
-      { workspaceRoot: deps.workspaceRoot },
-    );
-    if (branchBlock?.blocked) {
-      const budgetKey = branchBlock.key ?? targetPath;
-      if (branchBlock.dimension === 'file_edit' && budgetKey && !budgetBlockedPathSet.has(budgetKey)) {
-        budgetBlockedPathSet.add(budgetKey);
-        budgetBlockedFilePaths.push(budgetKey);
-      }
-      emitHarnessPolicyBlock({
-        deps,
-        tc,
-        iteration,
-        baseMessage: branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.',
-        errorLabel: 'Branch budget block',
-        policyReason: branchBlock.dimension === 'command_retry'
-          ? 'branch_budget_command'
-          : 'branch_budget_file',
-        messages,
-        onStep,
-        logger,
-        taskState,
-        repoContext,
-        policyBlockedSignatures,
-        enrichWithVerification: true,
-        verificationOutputBuffer,
-        budgetBlockPath: budgetKey,
-      });
-      directTotalCount++;
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (
-      hadWriteBypass
-      && targetPath
-      && deps.branchBudget
-      && !deps.branchBudget.hasWriteBypass(targetPath)
-    ) {
-      deps.harnessPolicyStats && (deps.harnessPolicyStats.writeBypassUsedCount += 1);
-    }
-
     const snapshotPaths = new Set<string>();
     if (targetPath && (isIntentCheckpointWriteTool(tc.name) || tc.name === 'read_file')) {
       snapshotPaths.add(targetPath);
@@ -695,6 +628,7 @@ export async function executeToolCallsStreaming(
         tc.id,
         await listWorkspaceFileInventory(deps.workspaceRoot, {
           scopeRelPaths: inventoryScopeForToolCall(tc),
+          excludeDirs: harnessOwnedDirs,
         }),
       );
     }
@@ -726,6 +660,12 @@ export async function executeToolCallsStreaming(
   const processedIds = new Set<string>();
   let failedCount = directFailedCount;
   const failedSignatures: string[] = [...directFailedSignatures];
+  const contextWindowTokens = readEffectiveContextWindowTokens();
+  let usedContextTokens = resolveCompactionUsage({
+    messages,
+    tools: currentTools,
+    lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+  }).effectiveUsed;
 
   // 中断时 flush 只返回已跑完的工具；这些副作用已发生，照常写结果并记账，未完成的才补 interrupted。
   for (const sr of results) {
@@ -792,6 +732,7 @@ export async function executeToolCallsStreaming(
       const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
         baseline: inventoryBefore,
         scopeRelPaths: inventoryBefore.scopeRelPaths,
+        excludeDirs: harnessOwnedDirs,
       });
       commandInventoryDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       deps.agentScope?.onCommandWorkspaceChange?.(tc, commandInventoryDiff);
@@ -863,38 +804,106 @@ export async function executeToolCallsStreaming(
       toolArgs: observableToolArgs(tc),
     });
 
-    const toolMeta = getToolMetadata(tc.name);
-    const maxCap = getMaxToolOutputChars();
-    const defaultMax = toolMeta.maxResultSizeChars === Infinity
-      ? maxCap
-      : Math.min(toolMeta.maxResultSizeChars, maxCap);
-    const maxOutput = !result.success && tc.name === 'run_command'
-      ? Math.max(defaultMax, getFailedRunCommandInlineChars())
-      : defaultMax;
+    const budget = resolveToolResultBudget({
+      toolName: tc.name,
+      success: result.success,
+      contextWindowTokens,
+      effectiveUsedTokens: usedContextTokens,
+      metadataMaxChars: getToolMetadata(tc.name).maxResultSizeChars,
+      maxOutputTokens: deps.agentMaxOutputTokens,
+    });
+    const readRange = result.success ? result.readRange : undefined;
+    let spillPath: string | undefined;
+    if (shouldSpillToolResult(output, budget, readRange) && deps.sessionDir && deps.sessionId && tc.id) {
+      spillPath = await spillToolOutputToSession({
+        sessionDir: deps.sessionDir,
+        sessionId: deps.sessionId,
+        toolCallId: tc.id,
+        content: output,
+      }) ?? undefined;
+    }
+    const spillFailed = !spillPath
+      && exceedsToolResultBudget(output, budget)
+      && toolResultNeedsSpill(budget, readRange);
+    const shaped = shapeToolResult({ toolName: tc.name, output, budget, readRange, spillPath });
+    const meta = shaped.meta;
 
-    let truncatedOutput = output;
-    if (output.length > maxOutput) {
-      let spillPath: string | undefined;
-      if (deps.sessionDir && deps.sessionId && tc.id) {
-        spillPath = await spillToolOutputToSession({
-          sessionDir: deps.sessionDir,
-          sessionId: deps.sessionId,
+    const rawReadPath = tc.name === 'read_file' ? (tc.arguments?.path ?? tc.arguments?.filePath) : undefined;
+    const rereadPath = meta.path ?? (typeof rawReadPath === 'string' && rawReadPath.trim() ? rawReadPath : undefined);
+    if (rereadPath) {
+      const span: [number, number] | undefined = meta.lines
+        ? [meta.lines.start, meta.lines.end]
+        : meta.omittedLines?.[0];
+      const reread = findRereadTarget(messages, rereadPath, span);
+      if (reread) {
+        meta.rereadOf = reread.toolCallId;
+        deps.runtimeTelemetry?.recordToolResultReread({
+          round: iteration,
           toolCallId: tc.id,
-          content: output,
-        }) ?? undefined;
+          rereadOf: reread.toolCallId,
+          reason: reread.reason,
+          path: rereadPath,
+          ...(span ? { lines: span } : {}),
+          injectedTokens: meta.injectedTokens,
+        });
       }
-      truncatedOutput = truncateHeadTail(output, maxOutput, {
-        headRatio: !result.success && tc.name === 'run_command' ? 0.2 : 0.3,
-        spillPath,
-        marker: `\n...[输出已截断，原始长度 ${output.length} 字符]...\n`,
+    }
+    if (meta.strategy !== 'full') {
+      deps.runtimeTelemetry?.recordToolResultBudget({
+        round: iteration,
+        toolName: tc.name,
+        toolCallId: tc.id,
+        strategy: meta.strategy,
+        originalChars: meta.originalChars,
+        originalTokens: meta.originalTokens,
+        injectedChars: meta.injectedChars,
+        injectedTokens: meta.injectedTokens,
+        capTokens: budget.capTokens,
+        capChars: budget.capChars,
+        capSource: budget.source,
+        path: meta.path,
+        omittedLines: meta.omittedLines,
+        omittedChars: meta.omittedChars,
+        spilled: Boolean(spillPath),
+        ...(spillFailed ? { spillFailed: true } : {}),
+      });
+    } else if (result.readRangeRejected) {
+      const rejected = result.readRangeRejected;
+      deps.runtimeTelemetry?.recordToolResultBudget({
+        round: iteration,
+        toolName: tc.name,
+        toolCallId: tc.id,
+        strategy: 'range_error',
+        originalChars: 0,
+        originalTokens: rejected.requestedTokens,
+        injectedChars: output.length,
+        injectedTokens: estimateStringTokens(output),
+        capTokens: rejected.capTokens,
+        capSource: 'tier',
+        path: rejected.path,
+        omittedLines: [[rejected.startLine, rejected.endLine]],
+        spilled: false,
       });
     }
 
-    messages.push({
-      role: 'tool',
-      content: truncatedOutput,
-      toolCallId: tc.id,
-    });
+    const keepMeta = meta.strategy !== 'full' || tc.name === 'read_file' || Boolean(meta.spillPath);
+    // 落盘失败时不能只留裁剪版：content 保存原文，注入视图写进封存字段。
+    messages.push(spillFailed && shaped.view !== output
+      ? {
+        role: 'tool',
+        content: output,
+        toolCallId: tc.id,
+        apiSealedContent: shaped.view,
+        apiSealedBy: 'resultBudget',
+        toolResultMeta: meta,
+      }
+      : {
+        role: 'tool',
+        content: shaped.view,
+        toolCallId: tc.id,
+        ...(keepMeta ? { toolResultMeta: meta } : {}),
+      });
+    usedContextTokens += meta.injectedTokens + 4;
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);
@@ -919,7 +928,6 @@ export async function executeToolCallsStreaming(
     totalCount: results.length + directTotalCount,
     failedSignatures,
     policyBlockedSignatures,
-    budgetBlockedFilePaths,
     workspaceMutatedRunCommandIds: [...workspaceMutatedRunCommandIds],
     workspaceMutationVersionBeforeRunCommand,
   };

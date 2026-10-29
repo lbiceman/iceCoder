@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { classifyToolRoundProgress } from '../../src/harness/tool-round-progress.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
 import type { RunCommandResultClassification } from '../../src/harness/run-command-result.js';
@@ -107,14 +106,13 @@ describe('classifyToolRoundProgress', () => {
     })).toBe('non_progress_success');
   });
 
-  it('allows progress on another file while one file is over budget', () => {
-    const budget = new BranchBudgetTracker({ fileEditMax: 1 });
-    budget.recordFileEdit('src/tasks.ts');
-    budget.recordFileEdit('src/tasks.ts');
+  it('repeated successful writes to the same file still count as progress', () => {
     expect(classifyToolRoundProgress({
-      executableToolCalls: [tc('write_file', { path: 'src/other.ts', content: 'x' })],
+      executableToolCalls: [
+        tc('edit_file', { path: 'src/tasks.ts', old_string: 'a', new_string: 'b' }, 'e1'),
+        tc('edit_file', { path: 'src/tasks.ts', old_string: 'b', new_string: 'c' }, 'e2'),
+      ],
       failedSignatures: [],
-      branchBudget: budget,
     })).toBe('meaningful_progress');
   });
 });

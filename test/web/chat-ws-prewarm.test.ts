@@ -105,27 +105,23 @@ describe('chat-ws-prewarm', () => {
     await fs.rm(dirB, { recursive: true, force: true });
   });
 
-  it('prewarmChatRuntime 并行触发三个 hook 且吞掉错误', async () => {
+  it('prewarmChatRuntime 并行触发两个 hook 且吞掉错误', async () => {
     const ensureMemory = vi.fn().mockResolvedValue(undefined);
-    const getSupervisor = vi.fn().mockResolvedValue({});
     const loadPrompt = vi.fn().mockResolvedValue(fakePrompt);
 
     prewarmChatRuntime({
       ensureMemoryInitialized: ensureMemory,
-      getSupervisorRuntime: getSupervisor,
       loadAssembledPrompt: loadPrompt,
     });
 
     await vi.waitFor(() => {
       expect(ensureMemory).toHaveBeenCalledTimes(1);
-      expect(getSupervisor).toHaveBeenCalledTimes(1);
       expect(loadPrompt).toHaveBeenCalledTimes(1);
     });
 
     const failMemory = vi.fn().mockRejectedValue(new Error('mem'));
     prewarmChatRuntime({
       ensureMemoryInitialized: failMemory,
-      getSupervisorRuntime: vi.fn().mockResolvedValue({}),
       loadAssembledPrompt: vi.fn().mockResolvedValue(fakePrompt),
     });
     await vi.waitFor(() => expect(failMemory).toHaveBeenCalled());
