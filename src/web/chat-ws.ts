@@ -75,6 +75,7 @@ import {
   purgeSessionMaps,
   recordSessionDeferredToolCall,
   resolveSessionWorkspacePayload,
+  startStructuredCacheEviction,
 } from './chat-ws-runtime.js';
 
 export interface ChatWSOptions {
@@ -140,6 +141,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   });
 
   void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(getActiveSessionId()).catch(() => {}));
+  startStructuredCacheEviction();
 
   const wss = new WebSocketServer({ noServer: true });
 

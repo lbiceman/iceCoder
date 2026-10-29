@@ -15,6 +15,7 @@
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
 import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
+import { DYNAMIC_CONTEXT_USER_SEPARATOR } from './harness-message-utils.js';
 
 /** JSON 兼容的排序键遍历，便于 DeepSeek/OpenAI 前缀缓存稳定命中 */
 function sortedStringRecordEntries(record: Record<string, string>): [string, string][] {
@@ -170,7 +171,7 @@ ${serialized}
     const dynamicContext = this.buildDynamicContextMessage();
     if (dynamicContext) {
       // 中文说明：将动态系统上下文与用户原始消息明确分隔。
-      messages.push({ role: 'user', content: `${dynamicContext}\n\n---\n## User's message\n${userMessage}` });
+      messages.push({ role: 'user', content: `${dynamicContext}${DYNAMIC_CONTEXT_USER_SEPARATOR}${userMessage}` });
     } else {
       messages.push({ role: 'user', content: userMessage });
     }

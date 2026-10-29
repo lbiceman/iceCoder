@@ -5,7 +5,13 @@
 import { promises as fs } from 'node:fs';
 import type { IntentCheckpointArchive, UiChatMessage } from '../types/intent-checkpoint.js';
 import { readUiSessionMessages } from './intent-checkpoint-capture.js';
-import { loadCheckpointIndex, loadIntentCheckpoint } from './intent-checkpoint-store.js';
+import {
+  IntentBlobStore,
+  loadCheckpointIndex,
+  loadIntentCheckpointHead,
+  readIntentCheckpointFile,
+  type IntentFileRef,
+} from './intent-checkpoint-store.js';
 import { extractUnifiedDiffFromText } from '../web/tool-display-extract.js';
 import { readToolTraceDiffIndex } from '../web/session-tool-trace-diffs.js';
 import {
@@ -310,15 +316,28 @@ export async function collectExistedRelPathsAtCheckpoint(opts: {
   }
   const index = await loadCheckpointIndex(sessionDir, sessionId);
   const targetIdx = index.entries.findIndex((e) => e.messageId === archive.messageId);
+  const store = new IntentBlobStore(sessionDir, sessionId);
   for (let i = 0; i < targetIdx; i++) {
-    const earlier = await loadIntentCheckpoint(sessionDir, sessionId, index.entries[i].messageId);
+    const earlier = await loadIntentCheckpointHead(sessionDir, sessionId, index.entries[i].messageId, store);
     if (!earlier) continue;
-    const remapped = remapSnapshotToWorkspace(workspaceRoot, earlier.workspaceFiles);
-    for (const [rel, content] of Object.entries(remapped)) {
-      if (content !== null) existed.add(rel);
+    for (const [rel, ref] of remapHeadFiles(workspaceRoot, earlier.files)) {
+      if (ref !== null) existed.add(rel);
     }
   }
   return existed;
+}
+
+/** 与 remapSnapshotToWorkspace 同规则，但只处理内容引用，不读正文。 */
+function remapHeadFiles(
+  workspaceRoot: string,
+  files: Record<string, IntentFileRef | null>,
+): Map<string, IntentFileRef | null> {
+  const out = new Map<string, IntentFileRef | null>();
+  for (const [raw, ref] of Object.entries(files)) {
+    const key = remapPathToWorkspace(workspaceRoot, raw) ?? raw.replace(/\\/g, '/');
+    if (!out.has(key) || ref === null) out.set(key, ref);
+  }
+  return out;
 }
 
 function reconstructedPreImageIsMissingFile(
@@ -344,11 +363,15 @@ export async function buildSessionWorkspaceRestoreSnapshot(opts: {
     archive.workspaceFiles,
   );
 
-  const fresh = await loadIntentCheckpoint(sessionDir, sessionId, archive.messageId);
+  const store = new IntentBlobStore(sessionDir, sessionId);
+  const fresh = await loadIntentCheckpointHead(sessionDir, sessionId, archive.messageId, store);
   if (fresh) {
-    const remappedFresh = remapSnapshotToWorkspace(workspaceRoot, fresh.workspaceFiles);
-    for (const [rel, content] of Object.entries(remappedFresh)) {
-      if (!(rel in snapshot) || content === null) snapshot[rel] = content;
+    for (const [rel, ref] of remapHeadFiles(workspaceRoot, fresh.files)) {
+      if (ref === null) {
+        snapshot[rel] = null;
+      } else if (!(rel in snapshot)) {
+        snapshot[rel] = await readIntentCheckpointFile(store, ref, rel);
+      }
     }
   }
 
@@ -441,39 +464,26 @@ async function recoverMissingExistedContent(opts: {
   const targetIdx = index.entries.findIndex((e) => e.messageId === opts.archiveMessageId);
   const found: Record<string, string> = {};
   const still = new Set(missing);
+  const store = new IntentBlobStore(opts.sessionDir, opts.sessionId);
+
+  const takeFrom = async (messageId: string) => {
+    const head = await loadIntentCheckpointHead(opts.sessionDir, opts.sessionId, messageId, store);
+    if (!head) return;
+    const remapped = remapHeadFiles(opts.workspaceRoot, head.files);
+    for (const rel of [...still]) {
+      const ref = remapped.get(rel);
+      if (ref) {
+        found[rel] = await readIntentCheckpointFile(store, ref, rel);
+        still.delete(rel);
+      }
+    }
+  };
 
   for (let i = targetIdx - 1; i >= 0 && still.size; i--) {
-    const earlier = await loadIntentCheckpoint(
-      opts.sessionDir,
-      opts.sessionId,
-      index.entries[i].messageId,
-    );
-    if (!earlier) continue;
-    const remapped = remapSnapshotToWorkspace(opts.workspaceRoot, earlier.workspaceFiles);
-    for (const rel of still) {
-      const content = remapped[rel];
-      if (typeof content === 'string') {
-        found[rel] = content;
-        still.delete(rel);
-      }
-    }
+    await takeFrom(index.entries[i].messageId);
   }
-
   for (let i = targetIdx + 1; i < index.entries.length && still.size; i++) {
-    const later = await loadIntentCheckpoint(
-      opts.sessionDir,
-      opts.sessionId,
-      index.entries[i].messageId,
-    );
-    if (!later) continue;
-    const remapped = remapSnapshotToWorkspace(opts.workspaceRoot, later.workspaceFiles);
-    for (const rel of still) {
-      const content = remapped[rel];
-      if (typeof content === 'string') {
-        found[rel] = content;
-        still.delete(rel);
-      }
-    }
+    await takeFrom(index.entries[i].messageId);
   }
 
   return found;

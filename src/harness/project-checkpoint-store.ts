@@ -40,6 +40,9 @@ interface SessionWriteState {
   tail: Promise<void>;
   generation: number;
   latest: ProjectCheckpointV3 | null;
+  /** latest 对应的磁盘文件指纹；文件未被别人改过时 load/save 不必重读。 */
+  latestFingerprint: string | null;
+  latestIdleTimer: NodeJS.Timeout | null;
   persistBlocked: boolean;
 }
 
@@ -49,8 +52,31 @@ export interface ProjectCheckpointRestoreOptions extends ProjectCheckpointSaveOp
 
 const writeStates = new Map<string, SessionWriteState>();
 
+/** latest 含完整对话，闲置这么久就丢掉，下次按需从磁盘读。 */
+const LATEST_IDLE_RELEASE_MS = 5 * 60_000;
+
 function writeStateKey(sessionDir: string, sessionId: string): string {
   return path.resolve(path.join(sessionDir, `${sessionId}.checkpoint.json`)).toLowerCase();
+}
+
+function setLatest(
+  state: SessionWriteState,
+  checkpoint: ProjectCheckpointV3 | null,
+  fingerprint: string | null,
+): void {
+  state.latest = checkpoint;
+  state.latestFingerprint = checkpoint ? fingerprint : null;
+  if (state.latestIdleTimer) clearTimeout(state.latestIdleTimer);
+  state.latestIdleTimer = null;
+  if (!checkpoint) return;
+  const timer = setTimeout(() => {
+    if (state.latestIdleTimer !== timer) return;
+    state.latestIdleTimer = null;
+    state.latest = null;
+    state.latestFingerprint = null;
+  }, LATEST_IDLE_RELEASE_MS);
+  timer.unref();
+  state.latestIdleTimer = timer;
 }
 
 /** 会话删除后释放进程内缓存的最新 checkpoint（含完整对话/工作区快照）；排队中的写入完成后再移除。 */
@@ -62,7 +88,10 @@ export function releaseProjectCheckpointWriteState(sessionDir: string, sessionId
     const tail = state.tail;
     void tail.then(() => {
       if (state.tail !== tail) return drain();
-      if (writeStates.get(key) === state) writeStates.delete(key);
+      if (writeStates.get(key) === state) {
+        setLatest(state, null, null);
+        writeStates.delete(key);
+      }
     });
   };
   drain();
@@ -97,7 +126,14 @@ export class ProjectCheckpointStore {
     const key = writeStateKey(options.sessionDir, this.sessionId);
     let state = writeStates.get(key);
     if (!state) {
-      state = { tail: Promise.resolve(), generation: 0, latest: null, persistBlocked: false };
+      state = {
+        tail: Promise.resolve(),
+        generation: 0,
+        latest: null,
+        latestFingerprint: null,
+        latestIdleTimer: null,
+        persistBlocked: false,
+      };
       writeStates.set(key, state);
     }
     this.writeState = state;
@@ -112,6 +148,9 @@ export class ProjectCheckpointStore {
       }
       return this.withFileLock(async () => {
         await this.recoverInterruptedReplace();
+        const cached = await this.cachedDurable();
+        if (cached) return cloneProjectCheckpointV3(cached);
+        const fingerprint = await this.durableFingerprint();
         let raw: string;
         try {
           raw = await fs.readFile(this.checkpointPath, 'utf-8');
@@ -129,10 +168,9 @@ export class ProjectCheckpointStore {
           return null;
         }
         if (isProjectCheckpointV3(parsed)) {
-          const checkpoint = cloneProjectCheckpointV3(parsed);
-          this.writeState.latest = cloneProjectCheckpointV3(checkpoint);
-          this.writeState.generation = checkpoint.snapshotMeta.sequence ?? 0;
-          return checkpoint;
+          setLatest(this.writeState, parsed, fingerprint);
+          this.writeState.generation = parsed.snapshotMeta.sequence ?? 0;
+          return cloneProjectCheckpointV3(parsed);
         }
         // A native v3 file that fails the strict validator must not be
         // empty-adapted; callers would then persist a blank stand-in.
@@ -150,7 +188,8 @@ export class ProjectCheckpointStore {
           await this.quarantineUnreadable('legacy adaptation failed', error);
           return null;
         }
-        this.writeState.latest = cloneProjectCheckpointV3(checkpoint);
+        // 磁盘上仍是旧格式，不记指纹，save 时照常走 legacy 备份。
+        setLatest(this.writeState, cloneProjectCheckpointV3(checkpoint), null);
         this.writeState.generation = checkpoint.snapshotMeta.sequence ?? 0;
         return checkpoint;
       });
@@ -203,10 +242,15 @@ export class ProjectCheckpointStore {
       await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
       return this.withFileLock(async () => {
         await this.recoverInterruptedReplace();
-        const durable = await this.readDurableV3();
+        const cached = await this.cachedDurable();
+        let durable = cached;
+        if (!cached) {
+          const fingerprint = await this.durableFingerprint();
+          durable = await this.readDurableV3();
+          setLatest(this.writeState, durable, fingerprint);
+        }
         const durableGeneration = durable?.snapshotMeta.sequence ?? 0;
         this.writeState.generation = durableGeneration;
-        this.writeState.latest = durable ? cloneProjectCheckpointV3(durable) : null;
 
         const generation = requestedGeneration ?? durableGeneration + 1;
         if (requestedGeneration !== undefined) {
@@ -219,17 +263,20 @@ export class ProjectCheckpointStore {
 
         snapshot.snapshotMeta.parentGeneration = durableGeneration;
         snapshot.snapshotMeta.sequence = generation;
-        await this.backupLegacyOnce();
+        if (!cached) await this.backupLegacyOnce();
         const hash = await this.recoverableReplace(snapshot);
         this.writeState.generation = generation;
-        this.writeState.latest = cloneProjectCheckpointV3(snapshot);
+        setLatest(this.writeState, snapshot, await this.durableFingerprint());
         return { checkpoint: cloneProjectCheckpointV3(snapshot), generation, hash };
       });
     });
   }
 
   latest(): ProjectCheckpointV3 | null {
-    return this.writeState.latest ? cloneProjectCheckpointV3(this.writeState.latest) : null;
+    const { latest, latestFingerprint } = this.writeState;
+    if (!latest) return null;
+    setLatest(this.writeState, latest, latestFingerprint);
+    return cloneProjectCheckpointV3(latest);
   }
 
   async hasDurableFile(): Promise<boolean> {
@@ -256,7 +303,7 @@ export class ProjectCheckpointStore {
 
   /** Transaction rollback hook when the active checkpoint did not exist before restore. */
   discardCachedLatest(): void {
-    this.writeState.latest = null;
+    setLatest(this.writeState, null, null);
     this.writeState.generation = 0;
   }
 
@@ -366,10 +413,30 @@ export class ProjectCheckpointStore {
   private async readDurableV3(): Promise<ProjectCheckpointV3 | null> {
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(this.checkpointPath, 'utf-8'));
-      return isProjectCheckpointV3(parsed) ? cloneProjectCheckpointV3(parsed) : null;
+      return isProjectCheckpointV3(parsed) ? parsed : null;
     } catch {
       return null;
     }
+  }
+
+  /** 文件身份 + 大小 + 纳秒 mtime；原子替换会换 inode，别的进程写过一定对不上。 */
+  private async durableFingerprint(): Promise<string | null> {
+    try {
+      const stat = await fs.stat(this.checkpointPath, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 磁盘文件仍是上次读到/写入的那份时返回缓存（调用方持有文件锁）。 */
+  private async cachedDurable(): Promise<ProjectCheckpointV3 | null> {
+    if (!this.writeState.latest || !this.writeState.latestFingerprint) return null;
+    const fingerprint = await this.durableFingerprint();
+    const { latest, latestFingerprint } = this.writeState;
+    if (!latest || !fingerprint || fingerprint !== latestFingerprint) return null;
+    setLatest(this.writeState, latest, latestFingerprint);
+    return latest;
   }
 
   private async recoverInterruptedReplace(): Promise<void> {

@@ -6,7 +6,7 @@ import { checkpointHasPendingWork } from './incomplete-completion.js';
 import { buildCheckpointResumeSummary, sanitizeCheckpointGoal } from './checkpoint-resume-compact.js';
 import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 import {
-  cloneProjectCheckpointV3,
+  isProjectCheckpointV3,
   type ProjectCheckpointV3,
 } from '../types/runtime-checkpoint.js';
 import { ProjectCheckpointStore } from './project-checkpoint-store.js';
@@ -272,7 +272,9 @@ function buildNativeProjectCheckpoint(
     extensions,
     migration: null,
   };
-  return cloneProjectCheckpointV3(project);
+  // store.save 入口会再整体克隆一次，这里只校验。
+  if (!isProjectCheckpointV3(project)) throw new TypeError('Invalid ProjectCheckpointV3');
+  return project;
 }
 
 function completeLoopState(loop: LoopState, stopReason?: StopReason): LoopState {

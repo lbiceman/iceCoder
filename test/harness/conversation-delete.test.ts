@@ -27,6 +27,7 @@ import {
   saveIntentCheckpoint,
 } from '../../src/harness/intent-checkpoint-store.js';
 import { persistToolTraceDiff, readToolTraceDiffIndex } from '../../src/web/session-tool-trace-diffs.js';
+import { ContextAssembler } from '../../src/harness/context-assembler.js';
 import type { IntentCheckpointArchive } from '../../src/types/intent-checkpoint.js';
 import type { UiChatMessage } from '../../src/types/intent-checkpoint.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
@@ -175,6 +176,59 @@ describe('conversation-delete', () => {
       structuredWithSkill[0],
       structuredWithSkill[1],
     ]);
+  });
+
+  describe('first turn merged with the dynamic context', () => {
+    const [systemMessage, firstMessage] = new ContextAssembler({
+      systemPrompt: 'system',
+      tools: [],
+      environment: { platform: 'win32' },
+    }).assembleInitialMessages('first');
+    const context = (firstMessage.content as string).split("\n\n---\n## User's message\n")[0];
+    const ui: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'first' },
+      { role: 'agent', id: 'a1', content: 'answer one' },
+      { role: 'user', id: 'u2', content: 'second' },
+      { role: 'agent', id: 'a2', content: 'answer two' },
+    ];
+    const structured: UnifiedMessage[] = [
+      systemMessage,
+      firstMessage,
+      { role: 'assistant', content: 'answer one' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'answer two' },
+    ];
+
+    it('deletes the first turn but keeps the dynamic context for later turns', () => {
+      expect(context).toMatch(/^<system-context>[\s\S]*<\/system-context>$/);
+      expect(removeStructuredUserMessage(structured, ui, 'u1', 'first')).toEqual([
+        systemMessage,
+        { role: 'user', content: context },
+        structured[3],
+        structured[4],
+      ]);
+    });
+
+    it('deletes a later turn without touching the first one', () => {
+      expect(removeStructuredUserMessage(structured, ui, 'u2', 'second')).toEqual(
+        structured.slice(0, 3),
+      );
+    });
+
+    it('rolling back to the first turn clears the context so the next turn starts fresh', () => {
+      expect(truncateConversationBeforeUserMessage(ui, structured, 'u1').structuredMessages).toEqual([]);
+      expect(truncateConversationBeforeUserMessage(ui, structured, 'u2').structuredMessages).toEqual(
+        structured.slice(0, 3),
+      );
+    });
+  });
+
+  it('truncate uses the provided fallback when the target turn is missing from structured', () => {
+    const fallback: UnifiedMessage[] = [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi' }];
+    const unsaved = structuredMessages.slice(0, 2);
+    expect(truncateConversationBeforeUserMessage(uiMessages, unsaved, 'u3', '', fallback).structuredMessages)
+      .toEqual(fallback);
+    expect(truncateConversationBeforeUserMessage(uiMessages, unsaved, 'u3').structuredMessages).toEqual([]);
   });
 
   it('removeUiUserMessage deletes only an /also note without cascading', () => {

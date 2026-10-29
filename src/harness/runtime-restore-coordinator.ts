@@ -123,7 +123,14 @@ async function conversationBeforeRestoredTurn(
     sourceStructured,
     messageId,
     fallbackUserContent,
+    archivedStructuredBeforeTurn(archive),
   );
+}
+
+/** 归档时的 structured 是「本轮开始前的上下文 + 本轮用户消息」。 */
+function archivedStructuredBeforeTurn(archive: IntentCheckpointArchive): UnifiedMessage[] {
+  const messages = archive.structuredMessages;
+  return messages[messages.length - 1]?.role === 'user' ? messages.slice(0, -1) : [];
 }
 
 function sessionCheckpointPath(sessionDir: string, sessionId: string): string {

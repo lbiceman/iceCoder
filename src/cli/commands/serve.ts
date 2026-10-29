@@ -8,6 +8,7 @@ import { reloadLLMAdapter, watchConfigChanges } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getDefaultWorkDir, getMcpCacheDir, getRuntimeDataDir } from '../paths.js';
 import { startStoragePruneSchedule } from '../../runtime/storage-prune.js';
+import { startIntentCheckpointMaintenance } from '../../harness/intent-checkpoint-maintenance.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { createServer, startServer } from '../../web/server.js';
 import { createConfigRouter } from '../../web/routes/config.js';
@@ -213,9 +214,13 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     mcpCacheDir: getMcpCacheDir(),
     runtimeDir: path.join(getRuntimeDataDir(), 'runtime'),
   });
+  const stopCheckpointMaintenance = startIntentCheckpointMaintenance({
+    sessionsDir: path.resolve(process.env.ICE_SESSIONS_DIR!),
+  });
 
   const cleanup = () => {
     stopStoragePrune();
+    stopCheckpointMaintenance();
     scheduledTaskScheduler.stop();
     unregisterScheduledTaskTool();
     disableOsSchedulerGuard();
