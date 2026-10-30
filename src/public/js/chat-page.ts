@@ -478,7 +478,7 @@ export const ChatPage = (() => {
 
     if (text === '~telemetry') {
       Cmd.hide();
-      Cmd.handleTelemetry(Session.getMessages(), (msg) => { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      Cmd.handleTelemetry();
       return true;
     }
 

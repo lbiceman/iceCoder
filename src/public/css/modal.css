@@ -142,7 +142,7 @@
   opacity: 0.9;
 }
 
-/* ===== Panel dialog（扫码 / Token 统计等共用） ===== */
+/* ===== Panel dialog（扫码 / Token / 记忆遥测共用） ===== */
 .modal-panel-box {
   width: 380px;
 }
@@ -153,6 +153,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 18px 16px 0 20px;
+  flex-shrink: 0;
 }
 
 .modal-panel-heading {
@@ -179,8 +180,52 @@
   margin-top: -2px;
 }
 
+.modal-panel-toolbar {
+  padding: 12px 18px 0;
+  flex-shrink: 0;
+}
+
+.modal-panel-toolbar[hidden] {
+  display: none;
+}
+
+.modal-panel-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.modal-panel-switch-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 6px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.modal-panel-switch-btn:hover {
+  color: var(--text-primary);
+}
+
+.modal-panel-switch-btn[aria-pressed="true"] {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
 .modal-panel-body {
   padding: 14px 18px 18px;
+  min-height: 0;
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.6;
@@ -236,6 +281,11 @@
   letter-spacing: -0.02em;
   color: var(--text-primary);
   white-space: nowrap;
+}
+
+.modal-panel-row-value.is-empty {
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .modal-panel-media {

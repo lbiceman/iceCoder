@@ -3,7 +3,8 @@
  * 通用 Modal 组件
  * 确认框一律走 Modal.confirm：回滚、消息/会话/记忆/技能删除、
  * 模型提供者移除、MCP 删除与未保存、权限 / Shell 确认。
- * 信息面板（扫码 / Token 统计）走 Modal.panel。
+ * 信息面板（扫码 / Token 统计 / 记忆遥测）走 Modal.panel。
+ * 相同 reuseKey 会复用当前弹层，只更新标题与内容。
  *
  * 用法：
  *   Modal.confirm({ title, message, type, confirmText, cancelText, dangerConfirm })
@@ -169,15 +170,39 @@ export const Modal = (() => {
   let activePanel = null;
 
   /**
-   * 信息展示弹层（扫码 / Token 统计等共用）。
+   * 同一 reuseKey 的弹层仍在显示时，只更新标题和内容。
+   * @returns {object|null}
+   */
+  function tryReusePanel(opts) {
+    if (!opts.reuseKey || !activePanel) return null;
+    if (activePanel.reuseKey !== opts.reuseKey || activePanel.closed) return null;
+    if (!activePanel.overlay || !activePanel.overlay.parentNode) return null;
+    if (typeof activePanel.setHeading === 'function') {
+      activePanel.setHeading(opts.title || '', opts.description || '');
+    }
+    if (opts.toolbarHtml != null && typeof activePanel.setToolbar === 'function') {
+      activePanel.setToolbar(opts.toolbarHtml);
+    }
+    if (opts.bodyHtml != null && typeof activePanel.setBody === 'function') {
+      activePanel.setBody(opts.bodyHtml);
+    }
+    return activePanel;
+  }
+
+  /**
+   * 信息展示弹层（扫码 / Token 统计 / 记忆遥测共用）。
    * @param {object} opts
    * @param {string} opts.title
    * @param {string} [opts.description]
    * @param {string} [opts.bodyHtml]
-   * @returns {{ overlay: HTMLElement, body: HTMLElement, close: Function, setBody: Function }}
+   * @param {string} [opts.toolbarHtml] - 标题与正文之间的工具条（如内容切换）
+   * @param {string} [opts.reuseKey] - 相同 key 再次打开时复用当前弹层
+   * @returns {{ overlay: HTMLElement, body: HTMLElement, toolbar: HTMLElement, close: Function, setHeading: Function, setToolbar: Function, setBody: Function }}
    */
   function panel(opts) {
     opts = opts || {};
+    const reused = tryReusePanel(opts);
+    if (reused) return reused;
     closePanel(true);
 
     const overlay = document.createElement('div');
@@ -201,17 +226,9 @@ export const Modal = (() => {
     const titleEl = document.createElement('h3');
     titleEl.className = 'modal-panel-title';
     titleEl.id = titleId;
-    titleEl.textContent = opts.title || '';
     heading.appendChild(titleEl);
 
-    if (opts.description) {
-      const descEl = document.createElement('p');
-      descEl.className = 'modal-panel-desc';
-      descEl.id = descId;
-      descEl.textContent = opts.description;
-      heading.appendChild(descEl);
-      box.setAttribute('aria-describedby', descId);
-    }
+    let descEl = null;
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
@@ -222,11 +239,15 @@ export const Modal = (() => {
     header.appendChild(heading);
     header.appendChild(closeBtn);
 
+    const toolbar = document.createElement('div');
+    toolbar.className = 'modal-panel-toolbar';
+    toolbar.hidden = true;
+
     const body = document.createElement('div');
     body.className = 'modal-panel-body';
-    if (opts.bodyHtml) body.innerHTML = opts.bodyHtml;
 
     box.appendChild(header);
+    box.appendChild(toolbar);
     box.appendChild(body);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -263,6 +284,46 @@ export const Modal = (() => {
       }
     }
 
+    function setHeading(title, description) {
+      if (closed) return;
+      titleEl.textContent = title || '';
+      const next = description || '';
+      if (next) {
+        if (!descEl) {
+          descEl = document.createElement('p');
+          descEl.className = 'modal-panel-desc';
+          descEl.id = descId;
+          heading.appendChild(descEl);
+          box.setAttribute('aria-describedby', descId);
+        }
+        descEl.textContent = next;
+      } else if (descEl) {
+        descEl.remove();
+        descEl = null;
+        box.removeAttribute('aria-describedby');
+      }
+    }
+
+    function setToolbar(html) {
+      if (closed) return;
+      if (!html) {
+        toolbar.hidden = true;
+        toolbar.innerHTML = '';
+        return;
+      }
+      toolbar.hidden = false;
+      toolbar.innerHTML = html;
+    }
+
+    function setBody(html) {
+      if (closed || !overlay.parentNode) return;
+      body.innerHTML = html || '';
+    }
+
+    setHeading(opts.title || '', opts.description || '');
+    setToolbar(opts.toolbarHtml || '');
+    setBody(opts.bodyHtml || '');
+
     closeBtn.addEventListener('click', () => { close(); });
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
@@ -277,11 +338,13 @@ export const Modal = (() => {
     const handle = {
       overlay,
       body,
+      toolbar,
+      reuseKey: opts.reuseKey || '',
+      get closed() { return closed; },
       close,
-      setBody(html) {
-        if (!overlay.parentNode) return;
-        body.innerHTML = html || '';
-      },
+      setHeading,
+      setToolbar,
+      setBody,
     };
     activePanel = handle;
     return handle;
