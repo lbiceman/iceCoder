@@ -41,7 +41,7 @@ describe('shell mandatory confirm runtime', () => {
     })).toBeNull();
   });
 
-  it('T29: mandatory confirm runs even when skipPermissionChecks is true', async () => {
+  it('T29: skipPermissionChecks skips blacklist confirm and executes', async () => {
     const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
     const onShellMandatoryConfirm = vi.fn(async () => false);
     const messages: UnifiedMessage[] = [];
@@ -68,9 +68,8 @@ describe('shell mandatory confirm runtime', () => {
       },
     );
 
-    expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(messages[0]?.content).toMatch(/confirmation_timeout|denied/i);
+    expect(onShellMandatoryConfirm).not.toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
   it('T37: unmatched shell_exec skips normal permission and executes', async () => {
@@ -106,7 +105,7 @@ describe('shell mandatory confirm runtime', () => {
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
-  it('run_command in normal mode triggers mandatory confirm and bypasses skipPermissionChecks', async () => {
+  it('run_command skips blacklist confirm when skipPermissionChecks is true', async () => {
     const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
     const onShellMandatoryConfirm = vi.fn(async () => true);
     const messages: UnifiedMessage[] = [];
@@ -133,7 +132,7 @@ describe('shell mandatory confirm runtime', () => {
       },
     );
 
-    expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
+    expect(onShellMandatoryConfirm).not.toHaveBeenCalled();
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
@@ -143,6 +142,22 @@ describe('shell mandatory confirm runtime', () => {
       name: 'shell_exec',
       arguments: { command: 'rm -rf /' },
     }, { sessionId: 'sess-1', workspaceRoot: '/tmp/workspace' });
+
+    expect(decision.hardBlocked).toBe(true);
+    expect(decision.required).toBe(false);
+  });
+
+  it('hard-blocks rm -rf / even when skipPermissionChecks is true', () => {
+    const decision = resolveShellMandatoryConfirm({
+      id: 'hb-skip',
+      name: 'run_command',
+      arguments: { command: 'rm -rf /' },
+    }, {
+      sessionId: 'sess-1',
+      workspaceRoot: '/tmp/workspace',
+      lockedWorkspaceRoot: '/tmp/workspace',
+      skipPermissionChecks: true,
+    });
 
     expect(decision.hardBlocked).toBe(true);
     expect(decision.required).toBe(false);

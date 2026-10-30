@@ -261,7 +261,7 @@ export const SettingsPage = (() => {
                   '<span class="settings-card-title">跳过权限确认</span>' +
                   '<span class="config-badge is-error settings-risk-badge" id="settings-skip-risk-badge" hidden>高风险</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">开启后 Agent 可直接执行工具，不再弹出确认（新会话生效）</p>' +
+                '<p class="settings-card-desc">开启后不再弹出确认，工具直接执行。灾难命令和宿主保护仍然拦截（新会话生效）</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
                 '<label class="config-default-switch settings-card-switch" title="跳过权限确认">' +
@@ -281,9 +281,9 @@ export const SettingsPage = (() => {
                 '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。适用于普通聊天与 /shell 协作。</p>' +
                 '<div class="settings-shell-rules-panel">' +
                   '<ul class="settings-shell-rules-list">' +
-                    '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
-                    '<li>「跳过权限确认」等设置<strong>不能</strong>绕过强制确认</li>' +
-                    '<li>未命中规则的命令不受此列表约束</li>' +
+                    '<li>命中规则，或命令要写到锁定工作区以外 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
+                    '<li>开启「跳过权限确认」后，这两类确认都不再弹出</li>' +
+                    '<li>未命中规则、且没有写到工作区外的命令不受此列表约束</li>' +
                   '</ul>' +
                 '</div>' +
                 '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后不再触发强制确认。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +

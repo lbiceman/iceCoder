@@ -2,7 +2,7 @@
  * 工作区路径作用域（tools / harness 共用，避免 tools → harness 依赖）。
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -12,6 +12,21 @@ export function isUnderRoot(absPath: string, root: string): boolean {
   const rel = path.relative(resolvedRoot, resolvedTarget);
   if (rel === '') return true;
   return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/** 已存在的最近祖先目录的真实路径；用于识别指向工作区外的 symlink / junction。 */
+export function realpathOfNearestExisting(absPath: string): string {
+  let current = absPath;
+  while (true) {
+    try {
+      const real = realpathSync.native(current);
+      return current === absPath ? real : path.join(real, path.relative(current, absPath));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return absPath;
+      current = parent;
+    }
+  }
 }
 
 export function resolveAgainstWorkspace(rawPath: string, workspaceRoot: string): string {

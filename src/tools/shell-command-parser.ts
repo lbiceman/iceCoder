@@ -18,7 +18,10 @@ function pushSegment(segments: string[], raw: string): void {
   if (trimmed) segments.push(trimmed);
 }
 
-/** Split newline, `;`, `&&`, `||`, and pipelines outside quotes. */
+/**
+ * Split newline, `;`, `&`, `&&`, `||`, and pipelines outside quotes.
+ * Ampersands that belong to redirects (`2>&1`, `>&1`, `&>file`) stay in the segment.
+ */
 export function splitShellCommandSegments(input: string): string[] {
   const segments: string[] = [];
   let current = '';
@@ -59,6 +62,15 @@ export function splitShellCommandSegments(input: string): string[] {
       current = '';
       i++;
       continue;
+    }
+    if (ch === '&') {
+      const prev = current.length > 0 ? current[current.length - 1] : '';
+      const next = input[i + 1];
+      if (next !== '>' && prev !== '>') {
+        pushSegment(segments, current);
+        current = '';
+        continue;
+      }
     }
     if (ch === '|' && input[i + 1] === '|') {
       pushSegment(segments, current);

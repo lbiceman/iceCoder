@@ -16,13 +16,16 @@ import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
   formatConfirmToolName,
   isShellCollabCommandTool,
-  isShellCollabFileTool,
   isShellMandatoryConfirmCommandTool,
   resolveShellMandatoryConfirm,
   resolveToolPermission,
   shellMandatoryConfirmKey,
   toolCallSignature,
 } from './harness-permission-runtime.js';
+import {
+  OUTSIDE_WORKSPACE_WRITE_CATEGORY,
+  OUTSIDE_WORKSPACE_WRITE_DENIAL_HINT,
+} from '../tools/shell-outside-write.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { RepoContext } from './repo-context.js';
@@ -76,7 +79,7 @@ export interface ToolExecutorDeps {
   /** 为 true 时跳过 confirm / onConfirm；显式 deny 规则仍生效 */
   skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-  /** Shell 协作 mandatory confirm；不可被 skipPermissionChecks 跳过 */
+  /** Shell 黑名单或工作区外写入确认。skipPermissionChecks 为 true 时不会调用。 */
   onShellMandatoryConfirm?: (
     request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
   ) => Promise<boolean>;
@@ -388,7 +391,6 @@ export async function executeToolCallsStreaming(
     // ── 权限检查：Shell mandatory confirm / Shell 文件 confirm / 显式规则 / 破坏性兜底 ──
     const shellCollabActive = deps.shellCollabActive === true;
     const isShellCommandTool = shellCollabActive && isShellCollabCommandTool(tc.name);
-    const isShellFileTool = shellCollabActive && isShellCollabFileTool(tc.name);
     const needsShellMandatoryConfirm = isShellMandatoryConfirmCommandTool(tc.name)
       && (tc.name === 'run_command' || shellCollabActive);
     let shellMandatoryConfirmApproved = false;
@@ -397,6 +399,8 @@ export async function executeToolCallsStreaming(
         const mandatory = resolveShellMandatoryConfirm(tc, {
           sessionId: deps.sessionId ?? 'default',
           workspaceRoot: deps.workspaceRoot,
+          lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
+          skipPermissionChecks: deps.skipPermissionChecks === true,
         });
 
         if (mandatory.hardBlocked) {
@@ -425,12 +429,15 @@ export async function executeToolCallsStreaming(
           const commandNotExecutedHint = isShellCollabCommandTool(tc.name)
             ? `Command was not written to PTY: ${req.commandDisplay}`
             : `Command was not executed: ${req.commandDisplay}`;
+          const outsideWriteHint = req.risk.category === OUTSIDE_WORKSPACE_WRITE_CATEGORY
+            ? `\n${OUTSIDE_WORKSPACE_WRITE_DENIAL_HINT}`
+            : '';
           if (shellMandatoryConfirmDenials?.has(denialKey)) {
             emitHarnessPolicyBlock({
               deps,
               tc,
               iteration,
-              baseMessage: `[Harness / Shell Confirm Policy] This exact command was already denied in the current run. ${commandNotExecutedHint}`,
+              baseMessage: `[Harness / Shell Confirm Policy] This exact command was already denied in the current run. ${commandNotExecutedHint}${outsideWriteHint}`,
               errorLabel: 'Shell mandatory confirmation previously denied',
               policyReason: 'shell_mandatory_confirm_previously_denied',
               messages,
@@ -450,7 +457,7 @@ export async function executeToolCallsStreaming(
               deps,
               tc,
               iteration,
-              baseMessage: `Tool ${tc.name} requires shell mandatory confirmation but no handler is configured.`,
+              baseMessage: `Tool ${tc.name} requires shell mandatory confirmation but no handler is configured.${outsideWriteHint}`,
               errorLabel: 'Shell mandatory confirmation required but no handler is configured',
               policyReason: 'shell_mandatory_confirm_no_handler',
               messages,
@@ -480,7 +487,8 @@ export async function executeToolCallsStreaming(
               tc,
               iteration,
               baseMessage: `User denied shell command or confirmation timed out (confirmation_timeout). `
-                + commandNotExecutedHint,
+                + commandNotExecutedHint
+                + outsideWriteHint,
               errorLabel: 'Shell mandatory confirmation denied or timed out',
               policyReason: 'shell_mandatory_confirm_denied',
               outcome: 'user_denied',
@@ -499,11 +507,10 @@ export async function executeToolCallsStreaming(
         }
     }
 
-    // Shell 文件工具走 permission confirm；Shell 模式不受 skipPermissionChecks 影响。
-    // Shell 命令工具（shell_exec 等）未命中 mandatory 时也不进入普通 permission。
-    // skipPermissionChecks 只跳过 confirm，显式 deny 规则仍生效。
+    // Shell 命令工具（shell_exec 等）未命中 mandatory 时不进入普通 permission。
+    // skipPermissionChecks 跳过 confirm，包括 Shell 协作里的文件工具确认。显式 deny 仍生效。
     const runPermissionChecks = !isShellCommandTool;
-    const runConfirmChecks = isShellFileTool || !deps.skipPermissionChecks;
+    const runConfirmChecks = !deps.skipPermissionChecks;
     if (runPermissionChecks) {
       const permission = resolveToolPermission(tc, deps.permissionRules);
       if (permission.permission === 'deny') {

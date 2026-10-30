@@ -7,6 +7,18 @@ import {
 } from '../../src/tools/shell-command-parser.js';
 
 describe('shell-command-parser', () => {
+  it('splits a single & outside quotes and keeps redirect ampersands', () => {
+    expect(splitShellCommandSegments('cd %APPDATA% & del x.txt')).toEqual([
+      'cd %APPDATA%',
+      'del x.txt',
+    ]);
+    expect(splitShellCommandSegments('npm test > out.log 2>&1')).toEqual([
+      'npm test > out.log 2>&1',
+    ]);
+    expect(splitShellCommandSegments('echo "a & b"')).toEqual(['echo "a & b"']);
+    expect(splitShellCommandSegments('build &> both.log')).toEqual(['build &> both.log']);
+  });
+
   it('splits all supported separators only outside quotes', () => {
     expect(splitShellCommandSegments(
       'echo "a;b|c\nd" && one || two; three | four\r\nfive',

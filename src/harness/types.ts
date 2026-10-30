@@ -144,8 +144,9 @@ export interface HarnessConfig {
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
   /**
-   * 为 true 时跳过 confirm 与破坏性操作确认；`permissions` 中显式的 deny 规则仍生效。
-   * Shell 协作文件工具的 confirm 与 Shell mandatory confirm 不受影响。
+   * 为 true 时跳过 confirm、破坏性操作确认、Shell 黑名单确认、工作区外写入确认，
+   * 以及 Shell 协作里的文件工具确认。
+   * 显式 deny、Shell 硬拦截和 HostGuard 仍生效。
    */
   skipPermissionChecks?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
@@ -160,7 +161,7 @@ export interface HarnessConfig {
   compactionMaxReinjectFiles?: number;
   /** confirm 权限的回调：返回 true 允许，false 拒绝 */
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-  /** Shell 协作模式：命中强制确认规则时的独立回调（不可被 skipPermissionChecks 跳过） */
+  /** Shell 黑名单或工作区外写入需要确认时的回调。skipPermissionChecks 为 true 时不会调用。 */
   onShellMandatoryConfirm?: (
     request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
   ) => Promise<boolean>;
