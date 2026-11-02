@@ -29,8 +29,10 @@ describe('tool-trace-format', () => {
   it('marks background and escalated results with background status', () => {
     const bgOutput = JSON.stringify({ mode: 'background', taskId: 'bg_1' });
     const escOutput = JSON.stringify({ mode: 'escalated', taskId: 'bg_2' });
+    const yieldedOutput = JSON.stringify({ mode: 'yielded', taskId: 'bg_3', status: 'running' });
     expect(resolveToolTraceResultStatus('run_command', true, 'executed', bgOutput)).toBe('background');
     expect(resolveToolTraceResultStatus('run_command', true, 'executed', escOutput)).toBe('background');
+    expect(resolveToolTraceResultStatus('run_command', true, 'executed', yieldedOutput)).toBe('background');
     expect(resolveToolTraceResultStatus('run_command', true, 'executed', '{"mode":"foreground"}')).toBe('success');
   });
 

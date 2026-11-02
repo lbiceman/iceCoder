@@ -11,6 +11,9 @@
 
 import type { LoopControlConfig, LoopState, StopReason } from './types.js';
 
+/** 连续这么多次循环都没拿到模型响应，判定为停滞（压缩 / 重试空转）。 */
+export const MAX_LOOP_ITERATIONS_WITHOUT_LLM = 20;
+
 /**
  * LoopController 管理 Harness 核心循环的生命周期。
  * 对应 Harness 文档中的"什么时候停（循环控制）"。
@@ -18,6 +21,9 @@ import type { LoopControlConfig, LoopState, StopReason } from './types.js';
 export class LoopController {
   private config: LoopControlConfig;
   private state: LoopState;
+  /** 本地改写过历史后，lastInputTokens 不再代表当前上下文，直到下一次真实响应。 */
+  private promptTokensStale = false;
+  private iterationsWithoutLlm = 0;
 
   constructor(config: LoopControlConfig) {
     this.config = config;
@@ -45,6 +51,8 @@ export class LoopController {
       totalToolCalls: 0,
       startTime: Date.now(),
     };
+    this.promptTokensStale = false;
+    this.iterationsWithoutLlm = 0;
   }
 
   /**
@@ -106,6 +114,26 @@ export class LoopController {
     // 记录最后一轮的值（= 当前上下文窗口实际占用）
     this.state.lastInputTokens = inputTokens;
     this.state.lastOutputTokens = outputTokens;
+    this.promptTokensStale = false;
+    this.iterationsWithoutLlm = 0;
+  }
+
+  /** 压缩 / fork 改写了历史：上一次 API 的 prompt_tokens 已过期。 */
+  markPromptTokensStale(): void {
+    this.promptTokensStale = true;
+  }
+
+  /** 压缩判定用的 API prompt；历史刚被本地改写时返回 0，只看本地估算。 */
+  getLiveApiPromptTokens(): number {
+    return this.promptTokensStale ? 0 : this.state.lastInputTokens;
+  }
+
+  noteLoopIteration(): void {
+    this.iterationsWithoutLlm++;
+  }
+
+  isStalled(): boolean {
+    return this.iterationsWithoutLlm >= MAX_LOOP_ITERATIONS_WITHOUT_LLM;
   }
 
   /**

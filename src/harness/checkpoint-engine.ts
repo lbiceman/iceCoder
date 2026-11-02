@@ -196,7 +196,8 @@ export class CheckpointEngine {
       projectId: this.checkpointPath,
       capturedAt: this.v2State.v2UpdatedAt,
     });
-    await this.projectStore.save(this.materializeAggregate(aggregate, input));
+    // latest()/load()/adapt 返回的都是独立副本，可以直接改。
+    await this.projectStore.save(this.materializeAggregate(aggregate, input, false));
 
     return cloneV2(this.v2State);
   }
@@ -204,8 +205,9 @@ export class CheckpointEngine {
   private materializeAggregate(
     aggregate: ProjectCheckpointV3,
     input: CheckpointSaveInput,
+    copy = true,
   ): ProjectCheckpointV3 {
-    const next = cloneProjectCheckpointV3(aggregate);
+    const next = copy ? cloneProjectCheckpointV3(aggregate) : aggregate;
     next.migration = null;
     next.snapshotMeta.capturedAt = this.v2State.v2UpdatedAt;
     next.snapshotMeta.trigger = input.trigger;

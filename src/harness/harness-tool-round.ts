@@ -6,13 +6,10 @@ import {
   CIRCUIT_BREAKER_THRESHOLD,
   FAILURE_EVIDENCE_THRESHOLD_END,
   FAILURE_EVIDENCE_THRESHOLD_START,
-  LIGHT_HINT_FAILURE_THRESHOLD_END,
-  LIGHT_HINT_FAILURE_THRESHOLD_START,
   STRONG_WARNING_FAILURE_THRESHOLD,
 } from './harness-constants.js';
 import {
   buildFailureEvidencePackMessage,
-  buildLightFailureHintMessage,
   buildStrongFailureWarningMessage,
   clearResolvedVerificationFailures,
   collectFailureEvidenceEntries,
@@ -361,16 +358,6 @@ export async function runHarnessToolRound(
         'evidence',
       );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入失败证据包`);
-    } else if (
-      failureCount >= LIGHT_HINT_FAILURE_THRESHOLD_START
-      && failureCount <= LIGHT_HINT_FAILURE_THRESHOLD_END
-    ) {
-      injectEphemeralFailureRecovery(
-        msgs,
-        buildLightFailureHintMessage(failureCount),
-        'light',
-      );
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入轻提示`);
     }
   } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;

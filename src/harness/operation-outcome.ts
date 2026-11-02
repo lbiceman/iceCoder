@@ -252,7 +252,7 @@ function inferStatus(
   }
   if (
     ['pending', 'running', 'started', 'queued', 'awaiting_input'].includes(rawStatus)
-    || ((mode === 'background' || mode === 'escalated') && rawStatus !== 'completed')
+    || ((mode === 'background' || mode === 'escalated' || mode === 'yielded') && rawStatus !== 'completed')
     || /\bstatus:\s*(pending|running)\b/i.test(result.output)
     || /running in the background/i.test(result.output)
   ) {

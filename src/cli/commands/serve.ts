@@ -6,7 +6,9 @@
 import type { BootstrapResult } from '../bootstrap.js';
 import { reloadLLMAdapter, watchConfigChanges } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
-import { getDefaultWorkDir } from '../paths.js';
+import { getDefaultWorkDir, getMcpCacheDir, getRuntimeDataDir } from '../paths.js';
+import { startStoragePruneSchedule } from '../../runtime/storage-prune.js';
+import { startIntentCheckpointMaintenance } from '../../harness/intent-checkpoint-maintenance.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { createServer, startServer } from '../../web/server.js';
 import { createConfigRouter } from '../../web/routes/config.js';
@@ -45,6 +47,7 @@ import { createScheduledTaskService } from '../../web/scheduled-task-service.js'
 import { SCHEDULED_TASK_TOOL_NAME, createScheduledTaskTool } from '../../web/scheduled-task-tool.js';
 import { registerSessionToolProvider } from '../../tools/session-tool-providers.js';
 import { enableOsSchedulerGuard } from '../../tools/shell-os-scheduler-guard.js';
+import { registerHostListenPort } from '../../tools/shell-host-guard.js';
 import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
 import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
 import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
@@ -174,6 +177,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   });
 
   const server = await startServer(app, port);
+  registerHostListenPort(port);
   attachChatWebSocket(server, {
     orchestrator,
     toolRegistry,
@@ -205,8 +209,18 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     onReady: (url) => broadcastTunnelReady({ url }),
   });
   const stopConfigWatch = watchConfigChanges(llmAdapter, paths.configPath);
+  const stopStoragePrune = startStoragePruneSchedule({
+    sessionsDir: path.resolve(process.env.ICE_SESSIONS_DIR!),
+    mcpCacheDir: getMcpCacheDir(),
+    runtimeDir: path.join(getRuntimeDataDir(), 'runtime'),
+  });
+  const stopCheckpointMaintenance = startIntentCheckpointMaintenance({
+    sessionsDir: path.resolve(process.env.ICE_SESSIONS_DIR!),
+  });
 
   const cleanup = () => {
+    stopStoragePrune();
+    stopCheckpointMaintenance();
     scheduledTaskScheduler.stop();
     unregisterScheduledTaskTool();
     disableOsSchedulerGuard();

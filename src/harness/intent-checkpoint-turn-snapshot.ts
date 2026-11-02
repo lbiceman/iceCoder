@@ -4,14 +4,10 @@
  */
 
 import { promises as fs } from 'node:fs';
-import {
-  loadIntentCheckpoint,
-  rewriteIntentCheckpoint,
-} from './intent-checkpoint-store.js';
-import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
+import { mergeIntentCheckpointWorkspaceFiles } from './intent-checkpoint-store.js';
+import { readSnapshotFileContent } from './snapshot-file-content.js';
 import {
   remapPathToWorkspace,
-  remapSnapshotToWorkspace,
   resolveInsideWorkspace,
 } from './workspace-snapshot.js';
 
@@ -80,7 +76,7 @@ async function readWorkspaceFileOrNull(
   try {
     const stat = await fs.stat(abs);
     if (!stat.isFile()) return null;
-    return await fs.readFile(abs, 'utf-8');
+    return await readSnapshotFileContent(abs);
   } catch {
     return null;
   }
@@ -130,27 +126,5 @@ export async function finalizeIntentCheckpointTurn(
   const buf = turnBuffers.get(key);
   clearIntentCheckpointTurn(sessionId, messageId);
   if (!buf || Object.keys(buf).length === 0) return;
-
-  const archive = await loadIntentCheckpoint(sessionDir, sessionId, messageId);
-  if (!archive) return;
-
-  const root = archive.workspaceRoot || sessionDir;
-  const mergedFiles = remapSnapshotToWorkspace(root, archive.workspaceFiles);
-  const mergedTracked = new Set(
-    archive.trackedPaths.map((p) => remapPathToWorkspace(root, p) ?? p.replace(/\\/g, '/')),
-  );
-  for (const [rel, content] of Object.entries(buf)) {
-    const normalized = remapPathToWorkspace(root, rel) ?? rel.replace(/\\/g, '/');
-    if (!(normalized in mergedFiles)) {
-      mergedFiles[normalized] = content;
-    }
-    mergedTracked.add(normalized);
-  }
-
-  const next: IntentCheckpointArchive = {
-    ...archive,
-    workspaceFiles: mergedFiles,
-    trackedPaths: [...mergedTracked],
-  };
-  await rewriteIntentCheckpoint(sessionDir, sessionId, next);
+  await mergeIntentCheckpointWorkspaceFiles(sessionDir, sessionId, messageId, buf);
 }

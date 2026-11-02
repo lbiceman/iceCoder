@@ -366,6 +366,7 @@ describe('legacy checkpoint adapter', () => {
 
     expect(isProjectCheckpointV3(result)).toBe(true);
     expect(result.extensions.legacySource).toMatchObject({ kind: 'intent-archive' });
+    expect(result.extensions.legacyUnknown).toBeUndefined();
     expect(result.conversation.messages[0]).toMatchObject({
       role: 'assistant',
       toolCalls: [{ id: 'call-1', name: 'read_file', arguments: { path: 'src/a.ts' } }],

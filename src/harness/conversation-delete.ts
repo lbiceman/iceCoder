@@ -12,13 +12,14 @@ import {
   extractUserMessageText,
   isAlsoNoteMessage,
   isSystemInjectedUserContent,
+  splitDynamicContextUserMessage,
 } from './harness-message-utils.js';
 import { readUiSessionMessages, writeUiSessionMessages } from './intent-checkpoint-capture.js';
 import {
   loadCheckpointIndex,
-  loadIntentCheckpoint,
   removeCheckpoint,
-  rewriteIntentCheckpoint,
+  sweepIntentCheckpointBlobs,
+  updateIntentCheckpointConversation,
 } from './intent-checkpoint-store.js';
 import { removeToolTraceDiffEntries } from '../web/session-tool-trace-diffs.js';
 import {
@@ -42,12 +43,42 @@ function isRealUiUserMessage(message: UiChatMessage): boolean {
   return content.trim().length > 0;
 }
 
+/** structured 里 user 消息的正文；首轮合并消息只取用户输入部分。 */
+function structuredUserText(message: UnifiedMessage): string {
+  const text = extractUserMessageText(message.content ?? '');
+  return splitDynamicContextUserMessage(text)?.userText ?? text;
+}
+
+function dynamicContextOf(message: UnifiedMessage | undefined): string | null {
+  if (message?.role !== 'user' || typeof message.content !== 'string') return null;
+  return splitDynamicContextUserMessage(message.content)?.context ?? null;
+}
+
 function isRealStructuredUserMessage(message: UnifiedMessage): boolean {
   if (message.role !== 'user') return false;
   if (isAlsoNoteMessage(message)) return false;
-  const text = extractUserMessageText(message.content ?? '');
+  const text = structuredUserText(message);
   if (!text.trim()) return false;
   return !isSystemInjectedUserContent(text);
+}
+
+/** 动态上下文只在首轮注入一次，删掉首轮时得把它留给后面的轮次。 */
+function removeStructuredRange(
+  structuredMessages: UnifiedMessage[],
+  start: number,
+  end: number,
+): UnifiedMessage[] {
+  const context = dynamicContextOf(structuredMessages[start]);
+  return [
+    ...structuredMessages.slice(0, start),
+    ...(context ? [{ role: 'user' as const, content: context }] : []),
+    ...structuredMessages.slice(end),
+  ];
+}
+
+/** 首轮之前只有 system prompt；回滚到首轮就清空，让下一轮按新会话重新组装。 */
+function structuredBefore(structuredMessages: UnifiedMessage[], start: number): UnifiedMessage[] {
+  return dynamicContextOf(structuredMessages[start]) ? [] : structuredMessages.slice(0, start);
 }
 
 function findSkillGuideIndexForDeletedRequest(
@@ -92,7 +123,7 @@ function findStructuredUserIndexByUiContent(
   let found = -1;
   for (let i = 0; i < structuredMessages.length; i++) {
     if (!isRealStructuredUserMessage(structuredMessages[i])) continue;
-    const text = extractUserMessageText(structuredMessages[i].content ?? '');
+    const text = structuredUserText(structuredMessages[i]);
     if (structuredTextMatchesUi(text, needle)) found = i;
   }
   return found;
@@ -111,7 +142,7 @@ function findStructuredStartForUiUser(
 
   let start = findNthRealStructuredUserIndex(structuredMessages, realUiBefore);
   if (anchorUserContent && start >= 0) {
-    const text = extractUserMessageText(structuredMessages[start].content ?? '');
+    const text = structuredUserText(structuredMessages[start]);
     if (!structuredTextMatchesUi(text, anchorUserContent)) {
       const byContent = findStructuredUserIndexByUiContent(structuredMessages, anchorUserContent);
       if (byContent >= 0) start = byContent;
@@ -398,27 +429,27 @@ export function removeStructuredUserMessage(
       );
       if (nextStart > fallbackStart) fallbackEnd = nextStart;
     }
-    return stripResumeCheckpointMessages([
-      ...structuredMessages.slice(0, fallbackStart),
-      ...structuredMessages.slice(fallbackEnd),
-    ]);
+    return stripResumeCheckpointMessages(
+      removeStructuredRange(structuredMessages, fallbackStart, fallbackEnd),
+    );
   }
 
-  return stripResumeCheckpointMessages([
-    ...structuredMessages.slice(0, range.start),
-    ...structuredMessages.slice(range.end),
-  ]);
+  return stripResumeCheckpointMessages(
+    removeStructuredRange(structuredMessages, range.start, range.end),
+  );
 }
 
 /**
  * 回滚：丢掉该用户消息及其之后的全部对话（聊天记录与模型上下文都截断）。
  * 与 {@link removeUiUserMessage} 不同，后面的用户回合也不会保留。
+ * structured 里定位不到目标回合时（如该轮崩溃前没落盘）改用 `structuredWhenMissing`。
  */
 export function truncateConversationBeforeUserMessage(
   uiMessages: UiChatMessage[],
   structuredMessages: UnifiedMessage[],
   messageId: string,
   fallbackUserContent = '',
+  structuredWhenMissing: UnifiedMessage[] = [],
 ): {
   uiMessages: UiChatMessage[];
   structuredMessages: UnifiedMessage[];
@@ -440,14 +471,14 @@ export function truncateConversationBeforeUserMessage(
       deletedContent,
     );
     if (start >= 0) {
-      nextStructured = structuredMessages.slice(0, start);
+      nextStructured = structuredBefore(structuredMessages, start);
     } else {
       const found = findStructuredUserIndexByUiContent(structuredMessages, deletedContent);
-      nextStructured = found >= 0 ? structuredMessages.slice(0, found) : [];
+      nextStructured = found >= 0 ? structuredBefore(structuredMessages, found) : structuredWhenMissing;
     }
   } else if (deletedContent.trim()) {
     const found = findStructuredUserIndexByUiContent(structuredMessages, deletedContent);
-    if (found >= 0) nextStructured = structuredMessages.slice(0, found);
+    if (found >= 0) nextStructured = structuredBefore(structuredMessages, found);
   }
 
   return {
@@ -476,26 +507,31 @@ async function removeMessageFromCheckpointHistory(
     ? index.entries.slice(targetIdx + 1)
     : index.entries;
 
+  let rewritten = false;
   for (const entry of laterEntries) {
-    const archive = await loadIntentCheckpoint(sessionDir, sessionId, entry.messageId);
-    if (!archive) continue;
-    const nextStructured = removeStructuredUserMessage(
-      archive.structuredMessages,
-      archive.uiMessages,
-      messageId,
-      deletedUserContent,
+    const changed = await updateIntentCheckpointConversation(
+      sessionDir,
+      sessionId,
+      entry.messageId,
+      ({ uiMessages, structuredMessages }) => {
+        const nextUi = removeUiUserMessage(uiMessages, messageId);
+        if (!nextUi) return null;
+        const nextStructured = removeStructuredUserMessage(
+          structuredMessages,
+          uiMessages,
+          messageId,
+          deletedUserContent,
+        );
+        return { uiMessages: nextUi, structuredMessages: nextStructured ?? structuredMessages };
+      },
     );
-    const nextUi = removeUiUserMessage(archive.uiMessages, messageId);
-    if (!nextUi) continue;
-    await rewriteIntentCheckpoint(sessionDir, sessionId, {
-      ...archive,
-      uiMessages: nextUi,
-      structuredMessages: nextStructured ?? archive.structuredMessages,
-    });
+    rewritten ||= changed;
   }
 
   if (targetIdx >= 0) {
     await removeCheckpoint(sessionDir, sessionId, messageId);
+  } else if (rewritten) {
+    await sweepIntentCheckpointBlobs(sessionDir, sessionId);
   }
 }
 

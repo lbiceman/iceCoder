@@ -425,6 +425,7 @@ describe('workspace-command-touch', () => {
   it.each([
     ['background', true],
     ['escalated', false],
+    ['yielded', false],
   ])('tracks %s command mutations at terminal check', async (mode, explicitBackground) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `ice-cmd-${mode}-`));
     const taskState = new TaskState('background build');

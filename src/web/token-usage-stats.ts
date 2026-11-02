@@ -18,6 +18,8 @@ export const TOKEN_USAGE_WINDOW_DAYS = {
 
 export const TOKEN_USAGE_SERIES_HOURS = 24;
 export const TOKEN_USAGE_SERIES_DAYS = 31;
+/** 统计页「当年」：含今天在内的最近 365 个本地日，按月汇总。 */
+export const TOKEN_USAGE_YEAR_DAYS = 365;
 
 export interface TokenUsageTotals {
   inputTokens: number;
@@ -54,6 +56,8 @@ export interface TokenUsageBucket extends TokenUsageTotals {
 export interface TokenUsageSeries {
   hourly: TokenUsageBucket[];
   daily: TokenUsageBucket[];
+  /** 落在最近 365 天内的各自然月；首尾月可能不足整月。 */
+  monthly: TokenUsageBucket[];
 }
 
 export interface TokenUsageRecord {
@@ -133,6 +137,16 @@ function localDateKey(d: Date): string {
 
 function localHourKey(d: Date): string {
   return `${localDateKey(d)}T${pad2(d.getHours())}:00`;
+}
+
+function startOfLocalMonth(ts: number): Date {
+  const d = startOfLocalDay(ts);
+  d.setDate(1);
+  return d;
+}
+
+function localMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 }
 
 function emptyTokenUsageBucket(key: string, timestamp: number): TokenUsageBucket {
@@ -218,7 +232,29 @@ function addToBucket(bucket: TokenUsageBucket, record: TokenUsageRecord): void {
   addUsage(bucket.byModel[model], record.inputTokens, record.outputTokens);
 }
 
-/** 本地时区下的 24 小时桶 + 31 天日桶，供统计页面积图使用。 */
+function buildMonthlyBuckets(now: number): {
+  monthly: TokenUsageBucket[];
+  monthlyMap: Map<string, TokenUsageBucket>;
+  cutoff: number;
+} {
+  const today = startOfLocalDay(now);
+  const windowStart = new Date(today);
+  windowStart.setDate(windowStart.getDate() - (TOKEN_USAGE_YEAR_DAYS - 1));
+  const cursor = startOfLocalMonth(windowStart.getTime());
+  const end = startOfLocalMonth(today.getTime());
+  const monthly: TokenUsageBucket[] = [];
+  const monthlyMap = new Map<string, TokenUsageBucket>();
+  while (cursor.getTime() <= end.getTime()) {
+    const key = localMonthKey(cursor);
+    const bucket = emptyTokenUsageBucket(key, cursor.getTime());
+    monthly.push(bucket);
+    monthlyMap.set(key, bucket);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return { monthly, monthlyMap, cutoff: windowStart.getTime() };
+}
+
+/** 本地时区下的 24 小时桶、31 天日桶，以及最近 365 天的月桶，供统计页面积图使用。 */
 export function aggregateTokenUsageSeries(
   records: TokenUsageRecord[],
   now = Date.now(),
@@ -246,6 +282,7 @@ export function aggregateTokenUsageSeries(
     dailyMap.set(key, bucket);
   }
 
+  const { monthly, monthlyMap, cutoff: monthCutoff } = buildMonthlyBuckets(now);
   const hourCutoff = hourly[0]?.timestamp ?? now;
   const dayCutoff = daily[0]?.timestamp ?? now;
 
@@ -258,9 +295,13 @@ export function aggregateTokenUsageSeries(
       const bucket = dailyMap.get(localDateKey(startOfLocalDay(record.timestamp)));
       if (bucket) addToBucket(bucket, record);
     }
+    if (record.timestamp >= monthCutoff) {
+      const bucket = monthlyMap.get(localMonthKey(startOfLocalMonth(record.timestamp)));
+      if (bucket) addToBucket(bucket, record);
+    }
   }
 
-  return { hourly, daily };
+  return { hourly, daily, monthly };
 }
 
 export function aggregateTokenUsageByModel(

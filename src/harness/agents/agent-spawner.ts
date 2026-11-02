@@ -640,7 +640,13 @@ export class AgentSpawner {
     this.emitUpdate(run, parent, true);
     void this.persistMeta(run);
 
-    const limits = resolveAgentLimits(run.type, { parentDeadline: parent.deadline, now: startedAt });
+    const limits = resolveAgentLimits(run.type, {
+      parentDeadline: parent.deadline,
+      now: startedAt,
+      maxRounds: parent.config.loop.maxRounds,
+      timeoutMs: parent.config.loop.timeout,
+      tokenBudget: parent.config.loop.tokenBudget,
+    });
     const childConfig = this.buildChildConfig(run, parent, limits);
     const executor = new AgentRecordingToolExecutor(parent.toolExecutor, this.createRecorder(run));
     const harness = this.options.harnessFactory(childConfig, executor);
@@ -823,12 +829,12 @@ export class AgentSpawner {
   private onCommandWorkspaceChange(
     run: AgentRun,
     toolCall: ToolCall,
-    diff: { created: string[]; changed: string[]; deleted: string[] },
+    diff: { created: string[]; changed: string[]; deleted: string[]; bulkCreatedSkipped?: number },
   ): void {
     const tracking = run.commands.get(toolCall.id);
     const startedAt = tracking?.startedAt ?? this.now();
     const command = tracking?.command ?? String(toolCall.arguments?.command ?? toolCall.name);
-    let ownMutation = false;
+    let ownMutation = (diff.bulkCreatedSkipped ?? 0) > 0;
     const all = [
       ...diff.created.map(p => ({ p, kind: 'created' as const })),
       ...diff.changed.map(p => ({ p, kind: 'changed' as const })),

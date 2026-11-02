@@ -231,7 +231,8 @@ export function createToolUsageSection(toolNames?: readonly string[]): PromptSec
 - Run independent tools in parallel and dependent tools in order. Do not repeat calls unless data may have changed.`,
     has('run_command')
       ? `## Shell execution
-- run_command waits in the foreground until the process exits unless the command is a watcher/install/docker job or you set background:true. A background start is not a completed check. Do not retry; poll that task with action:"check" until it exits, then judge by exit code and output.
+- run_command blocks until the process exits, at most 5 minutes per call, and returns earlier if it exits. If it is still running, the process stays alive and the result includes a taskId. Wait again with action:"check" (each check also waits at most 5 minutes). Do not poll every few seconds and do not start the command again.
+- Watchers, installs, and docker jobs, or background:true, return a taskId without waiting. That start is not a completed run. Call action:"check" to wait. Omit timeout to wait the full 5 minutes; pass timeout only to sample a server that should keep running (minimum 5000 ms).
 - If the user specified a verification command or test framework, use that exact command. Otherwise discover how this repository verifies itself (scripts, README, manifests). Do not assume a default toolchain.
 - When checking a task, pass back its latest cursor. Silence after a server or watcher starts is normal; stop it only on failure, timeout, or user request.`
       : '',
@@ -407,7 +408,7 @@ export function createShellGuideSection(): PromptSection {
 
 Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
 
-**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev or preview server, find the PID listening on that server's port and stop only that PID.`,
+**Never** kill processes by image name — not \`node\`, not \`iceCoder\`, not \`electron\` (\`taskkill /IM\`, \`Stop-Process -Name\`, \`killall\`, \`pkill\`, or filtering \`Get-Process\` by name then killing). The desktop app runs this agent inside \`iceCoder.exe\`, and any copy of iceCoder you launch to test has the same name, so a name-based kill terminates you. To stop something you started, keep its PID (\`Start-Process -PassThru\`, \`spawn().pid\`) and run \`taskkill /PID <pid> /T /F\` on that PID only. To stop a dev or preview server, find the PID listening on that server's port and stop only that PID.`,
     isStatic: true,
     priority: 45,
     enabled: true,

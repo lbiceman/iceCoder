@@ -295,7 +295,8 @@ function extractLegacy(input: unknown, context: LegacyCheckpointAdapterContext):
     const notesRuntime = typeof sessionNotes === 'string'
       ? parseLastRuntimeFence(sessionNotes, warnings)
       : null;
-    root = asRecord(root.combinedCheckpoint) ?? notesRuntime ?? root;
+    // 归档本身（消息、文件快照）不是运行时状态，不能落进 legacyUnknown。
+    root = asRecord(root.combinedCheckpoint) ?? notesRuntime ?? null;
   }
 
   if (root && looksCombined(root)) {

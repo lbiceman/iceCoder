@@ -273,4 +273,48 @@ describe('ChatSession 服务端快照同步', () => {
     expect(msgs[0].usedModel).toBe('gpt-4o');
     expect(msgs[0].turnTokenUsage).toEqual({ inputTokens: 3, outputTokens: 1 });
   });
+
+  it('流式失败前把本轮工具挂到最近一条 agent 上，且不会重复挂到下一轮', () => {
+    const session = loadChatSession() as ChatSessionApi & {
+      pushToolBatch(item: {
+        toolName: string;
+        detail?: string;
+        status?: string;
+        toolCallId?: string;
+        iteration?: number;
+      }): void;
+      commitLiveToolBatchToTraces(): boolean;
+      getToolTraces(): Record<string, Array<Record<string, unknown>>>;
+    };
+    session.initSession();
+    session.appendMessage({ role: 'user', id: 'u1', content: '做一下' });
+    session.appendMessage({ role: 'agent', id: 'a1', content: '' });
+    session.pushToolBatch({
+      toolName: 'read_file', detail: 'ui.js', status: 'success', toolCallId: 'c1', iteration: 2,
+    });
+    session.pushToolBatch({
+      toolName: 'grep', detail: 'spell', status: 'success', toolCallId: 'c2', iteration: 3,
+    });
+    expect(session.commitLiveToolBatchToTraces()).toBe(true);
+    expect(session.commitLiveToolBatchToTraces()).toBe(false);
+    expect(session.getToolTraces().a1).toHaveLength(2);
+    expect(session.getToolTraces().a1[0]).toMatchObject({
+      toolName: 'read_file', toolCallId: 'c1', iteration: 2,
+    });
+
+    session.appendMessage({ role: 'user', id: 'u2', content: '继续' });
+    session.appendMessage({ role: 'agent', content: 'LLM 调用错误: boom' });
+    session.pushToolBatch({
+      toolName: 'read_file', detail: 'game.js', status: 'success', toolCallId: 'c3', iteration: 1,
+    });
+    expect(session.commitLiveToolBatchToTraces()).toBe(true);
+    const traces = session.getToolTraces();
+    expect(traces.a1).toHaveLength(2);
+    const agents = session.getMessages().filter((m) => (m as { role?: string }).role === 'agent') as Array<{ id: string }>;
+    const errorAgent = agents[agents.length - 1];
+    expect(errorAgent.id).toBeTruthy();
+    expect(errorAgent.id).not.toBe('a1');
+    expect(traces[errorAgent.id]).toHaveLength(1);
+    expect(traces[errorAgent.id][0]).toMatchObject({ toolName: 'read_file', toolCallId: 'c3' });
+  });
 });

@@ -194,7 +194,7 @@ export function aggregateRuntimeTelemetry(
     const session = sessionFor(typeof event.sessionId === 'string' ? event.sessionId : undefined);
     switch (event.type) {
       case 'round':
-        session.rounds++;
+        session.rounds += 1 + (typeof event.suppressedDuplicates === 'number' ? event.suppressedDuplicates : 0);
         break;
       case 'tool': {
         session.toolCalls++;

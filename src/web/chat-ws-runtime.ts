@@ -68,25 +68,84 @@ export function endSessionBatch(sessionId: string): void {
  * 同时持久化到磁盘，服务重启后自动恢复。
  */
 let cachedMessages: UnifiedMessage[] | undefined;
+/** 聚焦会话可能不经 setCachedMessages 就切回（如 switch_session 失败回退），只认写入时的归属。 */
+let cachedMessagesSessionId: string | undefined;
 
 /** 多会话结构化消息缓存 Map<sessionId, UnifiedMessage[]> */
 export const structuredCache = new Map<string, UnifiedMessage[]>();
 
+/** structuredCache 各会话最近一次读写时间，供闲置淘汰。 */
+const structuredCacheTouchedAt = new Map<string, number>();
+
+const STRUCTURED_CACHE_IDLE_MS = 10 * 60_000;
+const STRUCTURED_CACHE_EVICT_INTERVAL_MS = 60_000;
+
 /** 获取指定会话的结构化消息缓存 */
 export function getCachedMessages(sessionId: string = getActiveSessionId()): UnifiedMessage[] | undefined {
-  return structuredCache.get(sessionId) ?? (sessionId === getActiveSessionId() ? cachedMessages : undefined);
+  const cached = structuredCache.get(sessionId);
+  if (cached) {
+    structuredCacheTouchedAt.set(sessionId, Date.now());
+    return cached;
+  }
+  return sessionId === getActiveSessionId() && sessionId === cachedMessagesSessionId
+    ? cachedMessages
+    : undefined;
 }
 
 /** 设置指定会话的结构化消息缓存 */
 export function setCachedMessages(sessionId: string, messages: UnifiedMessage[] | undefined): void {
   if (messages === undefined) {
     structuredCache.delete(sessionId);
+    structuredCacheTouchedAt.delete(sessionId);
   } else {
     structuredCache.set(sessionId, messages);
+    structuredCacheTouchedAt.set(sessionId, Date.now());
   }
   if (sessionId === getActiveSessionId()) {
     cachedMessages = messages;
+    cachedMessagesSessionId = sessionId;
   }
+}
+
+/**
+ * 丢掉闲置会话的结构化消息缓存；磁盘上有完整副本，下次用到时重新加载。
+ * 当前聚焦、运行中或还有待刷盘写入的会话不动。
+ */
+export function evictIdleStructuredCaches(
+  now: number = Date.now(),
+  idleMs: number = STRUCTURED_CACHE_IDLE_MS,
+): string[] {
+  const evicted: string[] = [];
+  for (const sessionId of structuredCache.keys()) {
+    if (sessionId === activeSessionId
+      || saveTimerMap.has(sessionId)
+      || sessionProcessing.has(sessionId)
+      || sessionActiveBatchCounts.has(sessionId)
+      || sessionAbortControllers.has(sessionId)) {
+      continue;
+    }
+    if (now - (structuredCacheTouchedAt.get(sessionId) ?? 0) < idleMs) continue;
+    structuredCache.delete(sessionId);
+    structuredCacheTouchedAt.delete(sessionId);
+    evicted.push(sessionId);
+  }
+  return evicted;
+}
+
+let structuredCacheEvictionTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startStructuredCacheEviction(): void {
+  if (structuredCacheEvictionTimer) return;
+  structuredCacheEvictionTimer = setInterval(() => {
+    evictIdleStructuredCaches();
+  }, STRUCTURED_CACHE_EVICT_INTERVAL_MS);
+  structuredCacheEvictionTimer.unref();
+}
+
+export function stopStructuredCacheEviction(): void {
+  if (!structuredCacheEvictionTimer) return;
+  clearInterval(structuredCacheEvictionTimer);
+  structuredCacheEvictionTimer = null;
 }
 
 /** 每个会话独立的 fileBrowser 状态 */
@@ -216,6 +275,7 @@ export const saveTimerMap = new Map<string, ReturnType<typeof setTimeout>>();
 export function purgeSessionMaps(sessionId: string): void {
   tombstoneSession(sessionId);
   structuredCache.delete(sessionId);
+  structuredCacheTouchedAt.delete(sessionId);
   fileBrowserStateBySession.delete(sessionId);
   sessionDeferredToolCalls.delete(sessionId);
   sessionActiveBatchCounts.delete(sessionId);
@@ -264,6 +324,7 @@ export function clearRuntimeOnShutdown(): void {
   sessionBackgroundWakeTimers.clear();
   sessionProcessing.clear();
   runPhaseBySession.clear();
+  stopStructuredCacheEviction();
   setCachedMessages(getActiveSessionId(), undefined);
   fileBrowserStateBySession.delete(getActiveSessionId());
 }

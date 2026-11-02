@@ -83,7 +83,7 @@ export function classifyRunCommandResult(
     const parsed = safeParseJson(rawOutput);
     if (parsed) {
       const mode = typeof parsed.mode === 'string' ? parsed.mode : '';
-      if (mode === 'background' || mode === 'escalated') {
+      if (mode === 'background' || mode === 'escalated' || mode === 'yielded') {
         return { kind: 'background_start', command: argumentCommand };
       }
     }

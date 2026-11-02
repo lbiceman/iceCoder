@@ -3,9 +3,14 @@ import { analyzeShellSandbox } from '../tools/shell-sandbox.js';
 import {
   classifyShellCollabCommandRisk,
   hashNormalizedShellCommand,
+  normalizeShellCommand,
   redactShellCommandForDisplay,
   type ShellCollabCommandRisk,
 } from '../tools/shell-collab-command-risk.js';
+import {
+  findOutsideWorkspaceWrites,
+  OUTSIDE_WORKSPACE_WRITE_CATEGORY,
+} from '../tools/shell-outside-write.js';
 import {
   SHELL_COLLAB_TOOL_NAMES,
   isShellCollabFileTool,
@@ -90,6 +95,9 @@ export function resolveShellMandatoryConfirm(
   options: {
     sessionId: string;
     workspaceRoot?: string;
+    lockedWorkspaceRoot?: string;
+    /** 为 true 时跳过黑名单确认和工作区外写入确认。硬拦截不受影响。 */
+    skipPermissionChecks?: boolean;
     configPath?: string;
   },
 ): ShellMandatoryConfirmDecision {
@@ -111,11 +119,53 @@ export function resolveShellMandatoryConfirm(
     };
   }
 
-  const risk = classifyShellCollabCommandRisk(command, { configPath: options.configPath });
+  if (options.skipPermissionChecks) {
+    return { required: false };
+  }
+
+  const risk = classifyShellCollabCommandRisk(command, { configPath: options.configPath })
+    ?? outsideWorkspaceWriteRisk(command, options);
   if (!risk) {
     return { required: false };
   }
 
+  return confirmDecision(tc, command, options.sessionId, risk);
+}
+
+function outsideWorkspaceWriteRisk(
+  command: string,
+  options: { workspaceRoot?: string; lockedWorkspaceRoot?: string },
+): ShellCollabCommandRisk | null {
+  const workspaceRoot = options.lockedWorkspaceRoot;
+  if (!workspaceRoot) return null;
+  const finding = findOutsideWorkspaceWrites(command, {
+    cwd: options.workspaceRoot || workspaceRoot,
+    workspaceRoot,
+  });
+  if (finding.outside.length === 0 && finding.unresolved.length === 0) return null;
+
+  const shownOutside = finding.outside.slice(0, 3);
+  const shownUnresolved = finding.unresolved.slice(0, 3);
+  const impact = [
+    shownOutside.length > 0 ? `会写到工作区外：${shownOutside.join('、')}` : '',
+    shownUnresolved.length > 0 ? `无法确定写入位置：${shownUnresolved.join('、')}` : '',
+  ].filter(Boolean).join('；');
+
+  return {
+    risk: 'mandatory_confirm',
+    category: OUTSIDE_WORKSPACE_WRITE_CATEGORY,
+    normalized: normalizeShellCommand(command),
+    matchedPattern: finding.outside[0] ?? finding.unresolved[0] ?? OUTSIDE_WORKSPACE_WRITE_CATEGORY,
+    impact,
+  };
+}
+
+function confirmDecision(
+  tc: ToolCall,
+  command: string,
+  sessionId: string,
+  risk: ShellCollabCommandRisk,
+): ShellMandatoryConfirmDecision {
   const taskIdRaw = (tc.arguments as Record<string, unknown>)?.task_id;
   const taskId = typeof taskIdRaw === 'string' && taskIdRaw.trim()
     ? taskIdRaw.trim()
@@ -133,7 +183,7 @@ export function resolveShellMandatoryConfirm(
       command,
       commandDisplay: redactShellCommandForDisplay(command),
       taskId,
-      sessionId: options.sessionId,
+      sessionId,
       normalizedCommandHash: hashNormalizedShellCommand(risk.normalized),
       risk,
     },

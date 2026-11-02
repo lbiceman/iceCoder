@@ -130,3 +130,160 @@ describe('助手气泡 Markdown 渲染', () => {
     expect(result.failedText).toBe('**失败也原文**');
   });
 });
+
+describe('思考块收起预览', () => {
+  it('收起后在 Thinking 后显示最近一行，长行露出结尾', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await page.setViewportSize({ width: 960, height: 720 });
+    await loadChat(page);
+    await page.addStyleTag({ path: path.join(publicRoot, 'css/tokens.css') });
+    await page.addStyleTag({ path: path.join(publicRoot, 'css/chat.css') });
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.body.style.background = '#111113';
+    });
+
+    const short = await page.evaluate(() => {
+      const ui = (window as unknown as {
+        ChatUI: { appendReasoningStreamChunk: (text: string) => void };
+      }).ChatUI;
+      ui.appendReasoningStreamChunk('先看布局。\n```ts\n');
+      const block = document.querySelector('.message-thinking') as HTMLElement;
+      const header = block.querySelector('.msg-thinking-toggle-header') as HTMLButtonElement;
+      header.click();
+      const preview = header.querySelector('.msg-thinking-preview') as HTMLElement;
+      const text = header.querySelector('.msg-thinking-preview-text') as HTMLElement;
+      const skippedFence = text.textContent || '';
+      ui.appendReasoningStreamChunk('准备把预览接到 Thinking 后面。\n');
+      return {
+        collapsed: block.classList.contains('is-collapsed'),
+        skippedFence,
+        preview: text.textContent || '',
+        label: header.querySelector('.msg-thinking-toggle-text')?.textContent || '',
+        charSpans: header.querySelectorAll('.msg-thinking-char').length,
+        previewDisplay: getComputedStyle(preview).display,
+        bodyDisplay: getComputedStyle(block.querySelector('.msg-thinking-body') as Element).display,
+        footerDisplay: getComputedStyle(block.querySelector('.msg-thinking-toggle-footer') as Element).display,
+        truncated: preview.classList.contains('is-truncated'),
+        textTransform: getComputedStyle(text).textTransform,
+        aria: header.getAttribute('aria-label') || '',
+        blockWidth: block.clientWidth,
+      };
+    });
+
+    expect(short.collapsed).toBe(true);
+    expect(short.skippedFence).toBe('先看布局。');
+    expect(short.preview).toBe('准备把预览接到 Thinking 后面。');
+    expect(short.label).toBe('Thinking');
+    expect(short.charSpans).toBe(0);
+    expect(short.previewDisplay).toBe('flex');
+    expect(short.bodyDisplay).toBe('none');
+    expect(short.footerDisplay).toBe('none');
+    expect(short.truncated).toBe(false);
+    expect(short.textTransform).toBe('none');
+    expect(short.aria).toContain('准备把预览接到 Thinking 后面。');
+    expect(short.blockWidth).toBeGreaterThan(180);
+    expect(short.blockWidth).toBeLessThan(620);
+
+    const expanded = await page.evaluate(() => {
+      const block = document.querySelector('.message-thinking') as HTMLElement;
+      const header = block.querySelector('.msg-thinking-toggle-header') as HTMLButtonElement;
+      header.click();
+      const preview = header.querySelector('.msg-thinking-preview') as HTMLElement;
+      return {
+        collapsed: block.classList.contains('is-collapsed'),
+        previewDisplay: getComputedStyle(preview).display,
+        bodyDisplay: getComputedStyle(block.querySelector('.msg-thinking-body') as Element).display,
+        bodyText: block.querySelector('.msg-thinking-body')?.textContent || '',
+      };
+    });
+    expect(expanded.collapsed).toBe(false);
+    expect(expanded.previewDisplay).toBe('none');
+    expect(expanded.bodyDisplay).not.toBe('none');
+    expect(expanded.bodyText).toContain('先看布局。');
+    expect(expanded.bodyText).toContain('准备把预览接到 Thinking 后面。');
+
+    const long = await page.evaluate(() => {
+      const ui = (window as unknown as {
+        ChatUI: { appendReasoningStreamChunk: (text: string) => void };
+      }).ChatUI;
+      const block = document.querySelector('.message-thinking') as HTMLElement;
+      const header = block.querySelector('.msg-thinking-toggle-header') as HTMLButtonElement;
+      header.click();
+      const ending = '结尾十二个字要露出来啊';
+      const longLine = '甲'.repeat(50) + '乙'.repeat(50) + ending;
+      ui.appendReasoningStreamChunk('\n' + longLine);
+      const preview = header.querySelector('.msg-thinking-preview') as HTMLElement;
+      const textEl = header.querySelector('.msg-thinking-preview-text') as HTMLElement;
+      const clip = header.querySelector('.msg-thinking-preview-clip') as HTMLElement;
+      const node = textEl.firstChild as Text;
+      const range = document.createRange();
+      const len = node.textContent ? node.textContent.length : 0;
+      range.setStart(node, Math.max(0, len - 1));
+      range.setEnd(node, len);
+      const endRect = range.getBoundingClientRect();
+      range.setStart(node, 0);
+      range.setEnd(node, 1);
+      const startRect = range.getBoundingClientRect();
+      const clipRect = clip.getBoundingClientRect();
+      const mark = getComputedStyle(header.querySelector('.msg-thinking-preview-mark') as Element, '::before').content;
+      return {
+        text: textEl.textContent || '',
+        truncated: preview.classList.contains('is-truncated'),
+        endInside: endRect.width > 0
+          && endRect.right <= clipRect.right + 2
+          && endRect.left >= clipRect.left - 1
+          && endRect.left < clipRect.right,
+        startOutside: startRect.right <= clipRect.left + 1,
+        mark,
+        contained: block.scrollWidth <= block.clientWidth + 2,
+        clipWidth: clipRect.width,
+        blockWidth: block.clientWidth,
+      };
+    });
+
+    expect(long.text.endsWith('结尾十二个字要露出来啊')).toBe(true);
+    expect(long.text.startsWith('甲')).toBe(true);
+    expect(long.truncated).toBe(true);
+    expect(long.endInside).toBe(true);
+    expect(long.startOutside).toBe(true);
+    expect(long.mark).toContain('…');
+    expect(long.contained).toBe(true);
+    expect(long.clipWidth).toBeGreaterThan(80);
+    expect(long.blockWidth).toBeGreaterThan(400);
+
+    await page.setViewportSize({ width: 420, height: 720 });
+    const narrow = await page.evaluate(() => new Promise<Record<string, boolean | number>>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const block = document.querySelector('.message-thinking') as HTMLElement;
+          const header = block.querySelector('.msg-thinking-toggle-header') as HTMLElement;
+          const textEl = header.querySelector('.msg-thinking-preview-text') as HTMLElement;
+          const clip = header.querySelector('.msg-thinking-preview-clip') as HTMLElement;
+          const label = header.querySelector('.msg-thinking-toggle-text') as HTMLElement;
+          const node = textEl.firstChild as Text;
+          const range = document.createRange();
+          const len = node.textContent ? node.textContent.length : 0;
+          range.setStart(node, Math.max(0, len - 1));
+          range.setEnd(node, len);
+          const endRect = range.getBoundingClientRect();
+          const clipRect = clip.getBoundingClientRect();
+          const labelRect = label.getBoundingClientRect();
+          resolve({
+            endInside: endRect.width > 0
+              && endRect.right <= clipRect.right + 2
+              && endRect.left >= clipRect.left - 1,
+            labelVisible: labelRect.width > 40 && labelRect.left >= block.getBoundingClientRect().left,
+            contained: block.scrollWidth <= block.clientWidth + 2,
+            blockWidth: block.clientWidth,
+          });
+        });
+      });
+    }));
+    expect(narrow.endInside).toBe(true);
+    expect(narrow.labelVisible).toBe(true);
+    expect(narrow.contained).toBe(true);
+    expect(narrow.blockWidth).toBeLessThan(400);
+  });
+});

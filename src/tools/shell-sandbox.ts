@@ -1,6 +1,6 @@
 /**
  * Shell 沙箱 — 运行时拦截（不进系统提示词）。
- * 1. 防自杀：误杀 iceCoder 宿主 node 进程
+ * 1. 防自杀：误杀 iceCoder 宿主进程（node / 打包后的 iceCoder.exe）
  * 2. 黑名单：config.json 可配的 shell 命令模式
  */
 
@@ -199,7 +199,8 @@ export function analyzeShellSandbox(
     };
   }
 
-  for (const segment of collectExpandedShellCommands(trimmed)) {
+  // 整条先查一遍：按 `|` 拆段后，`Get-Process node | Stop-Process` 这类管道写法会被拆散。
+  for (const segment of [trimmed, ...collectExpandedShellCommands(trimmed)]) {
     const hostResult = analyzeShellHostSafety(segment, { workDir: options?.workDir });
     if (hostResult.blocked) {
       return {

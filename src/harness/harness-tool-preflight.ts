@@ -1,7 +1,6 @@
-import { realpathSync } from 'node:fs';
 import nodePath from 'node:path';
 
-import { isUnderRoot } from '../shared/path-scope.js';
+import { isUnderRoot, realpathOfNearestExisting } from '../shared/path-scope.js';
 import {
   canonicalizeMemoryToolPath,
   resolveMemoryRootForPath,
@@ -162,21 +161,6 @@ function collectBoundaryWriteTargets(toolName: string, args: Record<string, unkn
   }
   add(args.path ?? args.file_path);
   return targets;
-}
-
-/** 已存在的最近祖先目录的真实路径；用于识别指向工作区外的 symlink / junction。 */
-function realpathOfNearestExisting(absPath: string): string {
-  let current = absPath;
-  while (true) {
-    try {
-      const real = realpathSync.native(current);
-      return current === absPath ? real : nodePath.join(real, nodePath.relative(current, absPath));
-    } catch {
-      const parent = nodePath.dirname(current);
-      if (parent === current) return absPath;
-      current = parent;
-    }
-  }
 }
 
 function isWriteTargetInsideWorkspace(rawPath: string, workspaceRoot: string): boolean {

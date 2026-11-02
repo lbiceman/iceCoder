@@ -4,9 +4,8 @@
 
 import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import {
-  loadCheckpointIndex,
   loadCheckpointMessageIds,
-  loadIntentCheckpoint,
+  loadCursorTrackedPaths,
 } from '../harness/intent-checkpoint-store.js';
 import { getHarnessRuntimeState } from '../harness/harness-runtime-registry.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
@@ -128,6 +127,17 @@ export async function loadStructuredMessages(sessionId?: string): Promise<Unifie
     return repaired;
   }
   return undefined;
+}
+
+/** 结构化缓存缺失（闲置被淘汰或从未加载）时从磁盘补回。 */
+export async function getOrLoadCachedMessages(sessionId: string): Promise<UnifiedMessage[] | undefined> {
+  const cached = getCachedMessages(sessionId);
+  if (cached || isSessionTombstoned(sessionId)) return cached;
+  const loaded = await loadStructuredMessages(sessionId);
+  const raced = getCachedMessages(sessionId);
+  if (raced) return raced;
+  if (loaded) setCachedMessages(sessionId, loaded);
+  return loaded;
 }
 
 let activeSessionBootstrapPromise: Promise<void> | null = null;
@@ -319,10 +329,7 @@ async function mergeAppendMessages(
 }
 
 export async function getPriorTrackedPaths(sessionId: string): Promise<string[]> {
-  const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
-  if (!index.cursorMessageId) return [];
-  const archive = await loadIntentCheckpoint(SESSIONS_DIR, sessionId, index.cursorMessageId);
-  return archive?.trackedPaths ?? [];
+  return loadCursorTrackedPaths(SESSIONS_DIR, sessionId);
 }
 
 export async function buildEnqueueInput(

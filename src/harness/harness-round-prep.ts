@@ -146,7 +146,7 @@ export async function prepareHarnessRound(
     logger,
     onStep,
     state,
-    lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+    lastApiPromptTokens: deps.loopController.getLiveApiPromptTokens(),
     tools: currentTools,
   }));
 

@@ -57,37 +57,64 @@
 }
 .message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
 }
-/* 收起态：Thinking 逐字从左到右跳动（展开时不播放） */
-@keyframes msg-thinking-char-bounce {
-  0%,
-  70%,
-  100% {
-    transform: translateY(0);
-  }
-  20% {
-    transform: translateY(-0.28em);
-  }
-  35% {
-    transform: translateY(0);
-  }
+/* 收起后按内容收缩，最长不超过气泡上限；列宽用 minmax 才能在到达上限时把预览截成一行 */
+.message:is(.assistant, .agent).message-thinking.is-collapsed {
+  align-self: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+  min-width: 0;
+  max-width: 80%;
 }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
-  display: inline-block;
-  animation: msg-thinking-char-bounce 1.35s ease-in-out infinite;
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-text,
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-icon {
+  flex: none;
 }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1) { animation-delay: 0s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2) { animation-delay: 0.08s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3) { animation-delay: 0.16s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4) { animation-delay: 0.24s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5) { animation-delay: 0.32s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6) { animation-delay: 0.4s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7) { animation-delay: 0.48s; }
-.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8) { animation-delay: 0.56s; }
-@media (prefers-reduced-motion: reduce) {
-  .message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
-    animation: none;
-  }
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle {
+  min-width: 0;
+}
+/* 收起态：Thinking 后面接最近一行。展开时预览隐藏，避免和正文重复。 */
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview {
+  display: none;
+  align-items: baseline;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--msg-thinking-text);
+}
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-preview.has-text {
+  display: flex;
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview-mark {
+  display: none;
+  flex: none;
+  opacity: 0.8;
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview.is-truncated .msg-thinking-preview-mark {
+  display: inline;
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview.is-truncated .msg-thinking-preview-mark::before {
+  content: '…';
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview-clip {
+  display: flex;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+  overflow: hidden;
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview.is-truncated .msg-thinking-preview-clip {
+  justify-content: flex-end;
+}
+.message:is(.assistant, .agent).message-thinking .msg-thinking-preview-text {
+  flex: none;
+  white-space: nowrap;
 }
 /* 不设 max-height / 内层滚动，高度随内容增长，由 .chat-messages 统一贴底跟滚（80px 阈值） */
 .message:is(.assistant, .agent).message-thinking .msg-thinking-body,

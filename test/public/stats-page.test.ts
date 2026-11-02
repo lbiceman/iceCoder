@@ -108,6 +108,8 @@ function samplePayload(now = Date.now()) {
     const byModel: Record<string, ReturnType<typeof emptyTotals>> = {};
     if (gpt) byModel['gpt-4o'] = emptyTotals(gpt, gpt - 100, 100);
     if (ds) byModel['DeepSeek-V3.2'] = emptyTotals(ds, ds - 40, 40);
+    if (i >= 27) byModel['claude-sonnet'] = emptyTotals(180, 144, 36);
+    if (i >= 29) byModel['mini-model'] = emptyTotals(20, 16, 4);
     const turns = (gpt ? 1 : 0) + (ds ? 1 : 0);
     return bucket(key, d.getTime(), gpt + ds, byModel, turns, emptyByKind(gpt, ds, gpt ? 1 : 0, ds ? 1 : 0));
   });
@@ -131,7 +133,17 @@ function samplePayload(now = Date.now()) {
         all: emptyTotals(7000, 5600, 1400),
       },
     },
-    series: { hourly, daily },
+    series: {
+      hourly,
+      daily,
+      monthly: [
+        bucket('2025-10', Date.parse('2025-10-01T00:00:00'), 100, { 'gpt-4o': emptyTotals(100, 80, 20) }, 1, emptyByKind(80, 20, 1, 1)),
+        bucket('2026-10', Date.parse('2026-10-01T00:00:00'), 200, {
+          'gpt-4o': emptyTotals(150, 120, 30),
+          'DeepSeek-V3.2': emptyTotals(50, 40, 10),
+        }, 1, emptyByKind(150, 50, 1, 1)),
+      ],
+    },
   };
 }
 
@@ -165,6 +177,8 @@ async function loadStats(page: Page, payload: Record<string, unknown>) {
     window.fetch = (input: RequestInfo) => {
       const url = String(input);
       if (url.includes('/api/memory/telemetry')) {
+        const days = /[?&]days=(\d+)/.exec(url);
+        (window as unknown as { __telemetryDays?: string }).__telemetryDays = days ? days[1] : '';
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
@@ -178,8 +192,15 @@ async function loadStats(page: Page, payload: Record<string, unknown>) {
             series: auxDays.map((row, i) => ({
               ...row,
               recall: i === 6 ? 4 : 0,
+              recallSelected: i === 6 ? 8 : 0,
+              recallMs: i === 6 ? 400 : 0,
               extract: i === 5 ? 2 : 0,
+              extractCache: i === 5 ? 2 : 0,
+              extractMs: i === 5 ? 20000 : 0,
+              extractSkip: i === 6 ? 3 : 0,
+              skips: i === 6 ? { session_extract_cap: 2, extractor_empty: 1 } : {},
               dream: i === 6 ? 1 : 0,
+              dreamDeleted: i === 4 ? 1 : 0,
             })),
           }),
         } as Response);
@@ -211,6 +232,13 @@ describe('统计页 Token 图表', () => {
       return {
         trendStrokes: document.querySelectorAll('[data-chart="trend"] .stats-area-stroke').length,
         trendFills: document.querySelectorAll('[data-chart="trend"] .stats-area-fill').length,
+        trendStrokeColors: [...document.querySelectorAll('[data-chart="trend"] .stats-area-stroke')].map((el) => el.getAttribute('stroke')),
+        trendDashed: [...document.querySelectorAll('[data-chart="trend"] .stats-area-stroke')].map((el) => el.classList.contains('is-dashed')),
+        kindColors: ['--chart-1', '--chart-3', '--chart-2'].map((name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()),
+        modelColors: ['--model-line-1', '--model-line-2', '--model-line-3'].map((name) => {
+          const root = document.querySelector('.stats-root');
+          return root ? getComputedStyle(root).getPropertyValue(name).trim() : '';
+        }),
         trendMetrics: document.querySelectorAll('[data-role="trend-metrics"] .stats-aux-metric').length,
         trendMetricLabels: [...document.querySelectorAll('[data-role="trend-metrics"] .stats-aux-metric-label')].map((el) => el.textContent),
         trendLegend: [...document.querySelectorAll('[data-role="trend-legend"] .stats-legend-item')].map((el) => el.textContent),
@@ -220,6 +248,8 @@ describe('统计页 Token 图表', () => {
         reserve: document.querySelectorAll('.stats-reserve').length,
         labels: [...document.querySelectorAll('.stats-card-label')].map((el) => el.textContent),
         memoryRead: document.querySelector('[data-role="memory-metrics"] .stats-aux-metric-value')?.textContent,
+        memoryLegend: [...document.querySelectorAll('[data-role="memory-legend"] .stats-legend-item')].map((el) => el.textContent),
+        memoryDashed: [...document.querySelectorAll('[data-chart="memory"] .stats-area-stroke')].map((el) => el.classList.contains('is-dashed')),
         memoryStrokes: document.querySelectorAll('[data-chart="memory"] .stats-area-stroke').length,
         memoryFills: document.querySelectorAll('[data-chart="memory"] .stats-area-fill').length,
         supervisor: document.querySelectorAll('[data-chart="supervisor"], [data-role^="supervisor-"]').length,
@@ -231,23 +261,42 @@ describe('统计页 Token 图表', () => {
         rootOverflow: root ? getComputedStyle(root).overflow : '',
       };
     });
-    expect(snapshot.trendStrokes).toBe(3);
+    expect(snapshot.trendStrokes).toBe(6);
     expect(snapshot.trendFills).toBe(0);
+    expect(snapshot.trendStrokeColors).toEqual([...snapshot.kindColors, ...snapshot.modelColors]);
+    expect(snapshot.trendDashed).toEqual([false, false, false, true, true, true]);
+    expect(new Set(snapshot.trendStrokeColors).size).toBe(6);
     expect(snapshot.trendMetrics).toBe(4);
     expect(snapshot.trendMetricLabels).toEqual(['会话', '子 Agent', '记忆', '请求次数']);
-    expect(snapshot.trendLegend).toEqual(['会话', '子 Agent', '记忆']);
+    expect(snapshot.trendLegend).toEqual(['会话', '子 Agent', '记忆', 'gpt-4o', 'DeepSeek-V3.2', 'claude-sonnet']);
+
+    const weekTip = await page.evaluate(() => {
+      const svg = document.querySelector('[data-chart="trend"] svg') as SVGSVGElement | null;
+      const rect = svg?.getBoundingClientRect();
+      if (svg && rect) {
+        svg.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: rect.left + rect.width - 4,
+          clientY: rect.top + 24,
+          bubbles: true,
+        }));
+      }
+      return [...document.querySelectorAll('.stats-tooltip-name')].map((el) => el.textContent);
+    });
+    expect(weekTip).toEqual(['claude-sonnet', 'DeepSeek-V3.2', 'gpt-4o', '记忆', '会话']);
     expect(snapshot.model).toBe(0);
     expect(snapshot.turns).toBe(0);
     expect(snapshot.split).toBe(1);
     expect(snapshot.reserve).toBe(0);
     expect(snapshot.labels).toEqual(['Token 消耗', '记忆']);
     expect(snapshot.memoryRead).toBe('4');
-    expect(snapshot.memoryStrokes).toBe(3);
+    expect(snapshot.memoryLegend).toEqual(['读取', '写入', '修改', 'Dream', '读取耗时', '写入耗时', 'LLM']);
+    expect(snapshot.memoryStrokes).toBe(7);
+    expect(snapshot.memoryDashed.filter(Boolean)).toHaveLength(4);
     expect(snapshot.memoryFills).toBe(0);
     expect(snapshot.supervisor).toBe(0);
     expect(snapshot.hint).not.toMatch(/监管/);
     expect(snapshot.io).toBe(0);
-    expect(snapshot.rangeLabels).toEqual(['日', '当周', '当月']);
+    expect(snapshot.rangeLabels).toEqual(['日', '当周', '当月', '当年']);
     expect(snapshot.table).toBe(0);
     expect(snapshot.overflow).toBe('hidden');
     expect(snapshot.rootOverflow).toBe('hidden');
@@ -255,8 +304,12 @@ describe('统计页 Token 图表', () => {
     await page.click('.stats-range-btn[data-range="day"]');
     const headerPressed = await page.getAttribute('.stats-range-btn[data-range="day"]', 'aria-pressed');
     expect(headerPressed).toBe('true');
-    const dayChart = await page.evaluate(() => document.querySelectorAll('[data-chart="trend"] svg').length);
-    expect(dayChart).toBe(1);
+    const dayChart = await page.evaluate(() => ({
+      svg: document.querySelectorAll('[data-chart="trend"] svg').length,
+      legend: [...document.querySelectorAll('[data-role="trend-legend"] .stats-legend-item')].map((el) => el.textContent),
+    }));
+    expect(dayChart.svg).toBe(1);
+    expect(dayChart.legend).toEqual(['会话', '子 Agent', '记忆', 'gpt-4o']);
   });
 
   it('切换时间范围时，指标骨架与加载后等高，图表不跳动', async () => {
@@ -317,5 +370,46 @@ describe('统计页 Token 图表', () => {
     expect(after.memorySvg).toBe(1);
     expect(Math.abs(after.metric - before.metric)).toBeLessThan(1);
     expect(Math.abs(after.chart - before.chart)).toBeLessThan(1);
+  });
+
+  it('当年汇总最近一年的 Token，并按月画趋势', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadStats(page, samplePayload());
+
+    await page.click('.stats-range-btn[data-range="year"]');
+    await page.waitForFunction(() => (window as unknown as { __telemetryDays?: string }).__telemetryDays === '365');
+    await page.waitForSelector('[data-chart="memory"] svg');
+
+    const view = await page.evaluate(() => {
+      const svg = document.querySelector('[data-chart="trend"] svg') as SVGSVGElement | null;
+      const rect = svg?.getBoundingClientRect();
+      if (svg && rect) {
+        svg.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: rect.left + rect.width - 4,
+          clientY: rect.top + 24,
+          bubbles: true,
+        }));
+      }
+      return {
+        pressed: document.querySelector('.stats-range-btn[data-range="year"]')?.getAttribute('aria-pressed'),
+        ticks: [...document.querySelectorAll('[data-chart="trend"] .stats-axis-label')].map((el) => el.textContent),
+        total: document.querySelector('[data-role="trend-total"]')?.textContent,
+        chat: document.querySelector('[data-role="trend-metrics"] .stats-aux-metric-value')?.textContent,
+        tip: document.querySelector('.stats-tooltip-title')?.textContent ?? '',
+        memoryTicks: [...document.querySelectorAll('[data-chart="memory"] .stats-axis-label')].map((el) => el.textContent),
+        rangeRight: document.querySelector('.stats-range')?.getBoundingClientRect().right ?? 0,
+        headerRight: document.querySelector('.stats-header')?.getBoundingClientRect().right ?? 0,
+      };
+    });
+
+    expect(view.pressed).toBe('true');
+    expect(view.ticks).toEqual(['25/10', '26/10']);
+    expect(view.total).toBe('300');
+    expect(view.chat).toBe('230');
+    expect(view.tip).toBe('2026年10月');
+    expect(view.memoryTicks.length).toBeGreaterThan(0);
+    expect(view.memoryTicks.every((tick) => /^\d{2}\/\d{1,2}$/.test(tick || ''))).toBe(true);
+    expect(view.rangeRight).toBeLessThanOrEqual(view.headerRight + 1);
   });
 });

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ProjectCheckpointStore,
@@ -380,5 +380,47 @@ describe('ProjectCheckpointStore', () => {
     expect(restored.checkpoint.identity.checkpointId).toBe('from-snapshot');
     expect(restored.checkpoint.extensions.restoredFromIntentMessageId).toBe('msg-9');
     expect(restored.generation).toBe(3);
+  });
+
+  it('does not reread its own last write while the file is unchanged', async () => {
+    const store = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-cache' });
+    await store.save(checkpoint('session-cache'), { generation: 1 });
+    const readFile = vi.spyOn(fs, 'readFile');
+    try {
+      const loaded = await store.load();
+      expect(loaded?.snapshotMeta.sequence).toBe(1);
+      const next = await store.save(loaded!);
+      expect(next.generation).toBe(2);
+      expect((await store.load())?.snapshotMeta.sequence).toBe(2);
+      expect(readFile.mock.calls.filter(([file]) => String(file) === store.checkpointPath)).toEqual([]);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
+  it('rereads the file after another writer changed it', async () => {
+    const store = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-1' });
+    await store.save(checkpoint('session-1', 'mine'), { generation: 1 });
+    const theirs = checkpoint('session-1', 'theirs-longer-id');
+    theirs.snapshotMeta.sequence = 5;
+    await fs.writeFile(store.checkpointPath, JSON.stringify(theirs), 'utf-8');
+
+    expect((await store.load())?.identity.checkpointId).toBe('theirs-longer-id');
+    await expect(store.save(checkpoint('session-1', 'stale'), { generation: 3 }))
+      .rejects.toBeInstanceOf(StaleCheckpointWriteError);
+  });
+
+  it('drops the cached aggregate after it sits idle', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const store = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-idle' });
+      await store.save(checkpoint('session-idle'), { generation: 1 });
+      expect(store.latest()).not.toBeNull();
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+      expect(store.latest()).toBeNull();
+      expect((await store.load())?.snapshotMeta.sequence).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

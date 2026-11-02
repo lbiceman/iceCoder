@@ -92,7 +92,7 @@ Like Codex, Claude Code, and OpenCode, **Harness** is one loop: the model decide
 What the loop still enforces:
 
 - **Permission rules** (allow / confirm / deny); `skipPermissionChecks` never skips an explicit deny. Shell sandbox, host-process guard, workspace write boundary, and missing-file preflight.
-- **All-tools-failed ladder**: light hint at 2–3 consecutive failed rounds, failure-evidence bundle at 4–6, strong warning at 7–9, `circuit_breaker` stop at ≥10. Same-arguments repeat failures get a hint.
+- **All-tools-failed ladder**: failure-evidence bundle at 2–6 consecutive failed rounds, strong warning at 7–9, `circuit_breaker` stop at ≥10. The first failed round keeps the tool result only. Same-arguments repeat failures get a hint.
 - **D′ stop-time verification**: engineering edits may run a bounded acceptance plan through the same permission and execution path as ordinary tool rounds.
 - No-tool recovery and micro/hard compaction with runtime re-injection.
 - **TaskState + RepoContext** track intent, phase, touched files, and verification status.

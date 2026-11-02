@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { CheckpointEngine } from '../../src/harness/checkpoint-engine.js';
+import { ContextAssembler } from '../../src/harness/context-assembler.js';
 import { captureIntentCheckpoint } from '../../src/harness/intent-checkpoint-capture.js';
 import {
   loadCheckpointIndex,
@@ -525,6 +526,69 @@ describe('RuntimeRestoreCoordinator', () => {
       { role: 'assistant', content: 'ok1' },
     ]);
     expect(cached).toEqual(structuredRaw);
+  });
+
+  it('restores the archived pre-turn context when the crashed turn never reached structured.json', async () => {
+    const msg1 = 'user-first';
+    const msg2 = 'user-crashed';
+    const [systemMessage, firstMessage] = new ContextAssembler({
+      systemPrompt: 'system',
+      tools: [],
+      environment: { platform: 'win32' },
+    }).assembleInitialMessages('first');
+    const afterFirstTurn = [systemMessage, firstMessage, { role: 'assistant' as const, content: 'ok1' }];
+    const firstUi = { role: 'user' as const, content: 'first', id: msg1, sentAt: 1000 };
+    const crashedUi = { role: 'user' as const, content: 'second', id: msg2, sentAt: 2000 };
+
+    await captureIntentCheckpoint({
+      sessionDir: tmp,
+      sessionId,
+      messageId: msg1,
+      userMessageTime: 1000,
+      workspaceRoot: tmp,
+      workspaceState: { referenceReads: [], changeCount: 0 },
+      structuredMessages: [{ role: 'user', content: 'first' }],
+      uiMessages: [firstUi],
+    });
+    await captureIntentCheckpoint({
+      sessionDir: tmp,
+      sessionId,
+      messageId: msg2,
+      userMessageTime: 2000,
+      workspaceRoot: tmp,
+      workspaceState: { referenceReads: [], changeCount: 0 },
+      structuredMessages: [...afterFirstTurn, { role: 'user', content: 'second' }],
+      uiMessages: [firstUi, { role: 'agent', content: 'ok1', id: 'a1' }, crashedUi],
+    });
+
+    await fs.writeFile(path.join(tmp, `${sessionId}.json`), JSON.stringify([
+      firstUi,
+      { role: 'agent', content: 'ok1', id: 'a1' },
+      crashedUi,
+      { role: 'agent', content: '(interrupted)', id: 'a2' },
+    ]), 'utf-8');
+    await fs.writeFile(
+      path.join(tmp, `${sessionId}.structured.json`),
+      JSON.stringify(afterFirstTurn),
+      'utf-8',
+    );
+
+    let cached: unknown;
+    const coordinator = new RuntimeRestoreCoordinator();
+    await coordinator.restore({
+      sessionDir: tmp,
+      sessionId,
+      messageId: msg2,
+      defaultWorkDir: tmp,
+      getStructuredMessages: () => undefined,
+      setStructuredMessages: (m) => { cached = m; },
+    });
+
+    const structuredRaw = JSON.parse(
+      await fs.readFile(path.join(tmp, `${sessionId}.structured.json`), 'utf-8'),
+    );
+    expect(structuredRaw).toEqual(afterFirstTurn);
+    expect(cached).toEqual(afterFirstTurn);
   });
 
   it('rolls back workspace files when conversation write fails', async () => {

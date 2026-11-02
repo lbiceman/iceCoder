@@ -20,6 +20,9 @@ export const COMPACTION_RESERVE_TOKENS = 18_000;
 /** 占用 ≥ 窗口 × 此比例且常规压缩后仍过高 → 主动 aggressive fork */
 export const PROACTIVE_FORK_RATIO = 0.93;
 
+/** 调用模型前的主动收缩最多连续重试这么多次；之后直接发送，由 provider 判定是否超长 */
+export const MAX_PRE_LLM_COMPACTION_RETRIES = 2;
+
 /** 每轮 prep 最多 1 次微压缩 */
 export const MICRO_MAX_PER_ROUND = 1;
 

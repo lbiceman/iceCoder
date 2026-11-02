@@ -23,13 +23,16 @@ import { CompletionFactsView } from './completion-facts-view.js';
 import {
   canUseEmergencyCompact,
   consumeEmergencyCompact,
-  refundEmergencyCompact,
+  scheduleEmergencyCompactRefund,
 } from './emergency-compact-quota.js';
+import type { LoopController } from './loop-controller.js';
 
 export interface CompactionDeps extends ResilienceBridgeDeps {
   contextCompactor: ContextCompactor;
   memoryIntegration: HarnessMemoryIntegration;
   runtimeTelemetry?: RuntimeTelemetry;
+  /** 本地改写历史后标记上一次 API prompt 过期 */
+  loopController?: LoopController;
   /** 单次 LLM 输出上限；压缩线与发送前总量检查的输出预留 */
   agentMaxOutputTokens?: number;
 }
@@ -76,6 +79,7 @@ function applyProactiveForkIfNeeded(
   state.checkpointResumeForkApplied = true;
   const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
   const fork = applyCheckpointResumeFork(deps.contextCompactor, messages, summary, { aggressive: true });
+  deps.loopController?.markPromptTokensStale();
   console.log(
     `[harness] 主动收缩: effectiveUsed=${usage.effectiveUsed} ≥ ${proactiveLine} `
     + `(${fork.beforeMessages}→${fork.afterMessages} msgs)`,
@@ -160,6 +164,7 @@ export async function maybeCompact(
 
     messages.length = 0;
     messages.push(...compacted);
+    deps.loopController?.markPromptTokensStale();
     const lightClear = deps.contextCompactor.getLastLightClear?.();
     if (lightClear && lightClear.cleared > 0) {
       deps.runtimeTelemetry?.recordToolResultClear(lightClear);
@@ -230,6 +235,8 @@ export async function maybeCompact(
     messages.push(...compacted);
   }
 
+  deps.loopController?.markPromptTokensStale();
+
   // ── 压缩后统一恢复 ──
 
   // 1. 重新注入最近记忆消息（只补回被压缩掉的）
@@ -293,7 +300,7 @@ export async function maybeCompact(
   });
   const microLine = resolveMicroCompactionLine(readEffectiveContextWindowTokens(), deps.agentMaxOutputTokens);
   if (afterHardUsage.effectiveUsed < microLine) {
-    refundEmergencyCompact(state);
+    scheduleEmergencyCompactRefund(state);
   }
 
   emitContextUsageStep(onStep, messages, tools);

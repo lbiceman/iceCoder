@@ -88,6 +88,27 @@ export function isSystemInjectedUserContent(content: string): boolean {
   return SYSTEM_INJECTED_USER_PREFIXES.some(prefix => trimmed.startsWith(prefix));
 }
 
+/** 首轮把动态上下文和用户输入合成一条 user 消息时，两者之间的分隔。 */
+export const DYNAMIC_CONTEXT_USER_SEPARATOR = "\n\n---\n## User's message\n";
+const DYNAMIC_CONTEXT_CLOSE = '</system-context>';
+
+/**
+ * 拆开首轮「动态上下文 + 用户输入」合并消息；不是这种消息时返回 null。
+ * 它以 `<system-context>` 开头，按前缀规则会被当成系统注入，实际上承载着用户的第一句话。
+ */
+export function splitDynamicContextUserMessage(
+  content: string,
+): { context: string; userText: string } | null {
+  if (!content.startsWith('<system-context>')) return null;
+  const at = content.indexOf(DYNAMIC_CONTEXT_CLOSE + DYNAMIC_CONTEXT_USER_SEPARATOR);
+  if (at < 0) return null;
+  const contextEnd = at + DYNAMIC_CONTEXT_CLOSE.length;
+  return {
+    context: content.slice(0, contextEnd),
+    userText: content.slice(contextEnd + DYNAMIC_CONTEXT_USER_SEPARATOR.length),
+  };
+}
+
 /** 统计真实用户消息条数（不含 system 注入块）。 */
 export function countRealUserMessages(messages: UnifiedMessage[]): number {
   let count = 0;

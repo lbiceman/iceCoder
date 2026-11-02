@@ -5,7 +5,8 @@
  *
  * - 'long'  → 应当后台启动，不设 hard timeout（Shell Dock 长驻）
  * - 'short' → 前台执行，timeout 上限收紧到 10s
- * - 'auto'  → 前台等到进程退出或硬超时（默认 10min）。
+ * - 'auto'  → 前台等到进程退出，单次最多 5 分钟（Codex 空轮询上限）。
+ *             到点仍在跑则转入后台且不杀进程，下一轮 action:"check" 再等最多 5 分钟。
  *             不再在 8s 软超时切后台；否则 test/build 会变成「启动成功」+ 额外 LLM poll。
  *             旧行为：ICE_SHELL_SOFT_ESCALATE=1 时仍按 SOFT_TIMEOUT_MS escalate
  *
@@ -29,8 +30,18 @@ export const HARD_TIMEOUT_DEFAULT_MS = HARD_TIMEOUT_NONE;
 /** @deprecated 历史别名；后台长驻任务现统一不限时。 */
 export const HARD_TIMEOUT_LONG_MS = HARD_TIMEOUT_NONE;
 
-/** 前台一次性命令默认 timeout — 10 分钟。 */
-export const FOREGROUND_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * 单次阻塞等待上限 — 5 分钟。
+ * 对齐 Codex 空 `write_stdin` 的 `max_write_stdin_yield_time_ms`：
+ * 进程先退出就立刻返回；到点还在跑则把控制权交回模型，进程继续活着。
+ */
+export const MAX_COMMAND_YIELD_MS = 5 * 60 * 1000;
+
+/** 单次 check 等待下限 — 5 秒。对齐 Codex 空轮询，避免模型用几百毫秒的 timeout 打成忙等。 */
+export const MIN_COMMAND_YIELD_MS = 5_000;
+
+/** 前台一次性命令默认等待 — 与单次上限相同（5 分钟）。 */
+export const FOREGROUND_DEFAULT_TIMEOUT_MS = MAX_COMMAND_YIELD_MS;
 
 /** 短命令前台 timeout 上限 — 10 秒。 */
 export const SHORT_TIMEOUT_MAX_MS = 10_000;
@@ -86,10 +97,10 @@ export function pickBackgroundHardTimeout(
 }
 
 /**
- * 根据分类与显式 args.timeout 决定前台 timeout。
+ * 根据分类与显式 args.timeout 决定前台本次阻塞多久。
  *
- * - 'short' → min(argsTimeout ?? 10min, 10s)
- * - 其它 → argsTimeout ?? 10min
+ * - 'short' → min(argsTimeout ?? 5min, 10s)
+ * - 其它 → min(argsTimeout ?? 5min, 5min)
  */
 export function pickForegroundTimeout(
   cls: ShellClass,
@@ -98,5 +109,19 @@ export function pickForegroundTimeout(
 ): number {
   const base = argsTimeout && argsTimeout > 0 ? argsTimeout : defaultTimeoutMs;
   if (cls === 'short') return Math.min(base, SHORT_TIMEOUT_MAX_MS);
-  return base;
+  return Math.min(base, MAX_COMMAND_YIELD_MS);
+}
+
+/**
+ * 把 action:"check" 的等待时间钳到 Codex 空轮询区间：5 秒～5 分钟。
+ * 未传、0 或非数字时用 fallback（默认顶满 5 分钟），这样模型漏写 timeout 也不会几秒轮询一次。
+ */
+export function clampCommandYieldMs(
+  value: unknown,
+  fallbackMs: number = MAX_COMMAND_YIELD_MS,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return fallbackMs;
+  }
+  return Math.min(MAX_COMMAND_YIELD_MS, Math.max(MIN_COMMAND_YIELD_MS, Math.round(value)));
 }

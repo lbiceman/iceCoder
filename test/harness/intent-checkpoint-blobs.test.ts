@@ -13,6 +13,7 @@ import {
   intentCheckpointArchivePath,
   loadCheckpointIndex,
   loadIntentCheckpoint,
+  loadIntentCheckpointHead,
   removeCheckpoint,
   saveIntentCheckpoint,
 } from '../../src/harness/intent-checkpoint-store.js';
@@ -107,12 +108,19 @@ describe('intent checkpoint content blobs', () => {
 
     const raw1 = JSON.parse(await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u1'), 'utf-8'));
     const raw2 = JSON.parse(await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'));
-    expect(raw1.storage).toBe('blobs-v1');
+    expect(raw1.storage).toBe('blobs-v2');
     expect(JSON.stringify(raw1)).not.toContain('共享正文');
     expect(JSON.stringify(raw2)).not.toContain('共享正文');
-    expect(raw1.workspaceFileRefs['a.txt']).toBe(raw1.workspaceFileRefs['copy.txt']);
-    expect(raw1.workspaceFileRefs['a.txt']).toBe(raw2.workspaceFileRefs['a.txt']);
-    expect(raw1.workspaceFileRefs['gone.txt']).toBeNull();
+    expect(raw1.workspaceTreeRef).toBe(raw2.workspaceTreeRef);
+    expect(raw1.trackedPathsExtra).toBeUndefined();
+    expect(raw1.trackedPathsOmit).toBeUndefined();
+    const head1 = await loadIntentCheckpointHead(tmp, sessionId, 'u1');
+    const head2 = await loadIntentCheckpointHead(tmp, sessionId, 'u2');
+    expect(head1?.files['a.txt']).toEqual({ hash: hashIntentBlobContent(SHARED) });
+    expect(head1?.files['copy.txt']).toEqual(head1?.files['a.txt']);
+    expect(head2?.files['a.txt']).toEqual(head1?.files['a.txt']);
+    expect(head1?.files['gone.txt']).toBeNull();
+    expect(head2?.trackedPaths.sort()).toEqual(['a.txt', 'copy.txt', 'empty.txt', 'gone.txt']);
     expect(raw1.uiMessageRefs[0]).toBe(raw2.uiMessageRefs[0]);
     expect(raw1.sessionNotesRef).toBe(raw2.sessionNotesRef);
     expect(raw1.toolTraceDiffsRef).toBeNull();
@@ -411,10 +419,11 @@ describe('intent checkpoint content blobs', () => {
       priorTrackedPaths: ['src/a.txt'],
     });
 
-    const raw1 = JSON.parse(await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u1'), 'utf-8'));
     const raw2 = JSON.parse(await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'));
-    expect(raw1.workspaceFileRefs['src/a.txt']).toBe(raw2.workspaceFileRefs['src/a.txt']);
-    expect(raw1.workspaceFileRefs['src/a.txt']).toBe(hashIntentBlobContent(SHARED));
+    const head1 = await loadIntentCheckpointHead(tmp, sessionId, 'u1');
+    const head2 = await loadIntentCheckpointHead(tmp, sessionId, 'u2');
+    expect(head1?.files['src/a.txt']).toEqual({ hash: hashIntentBlobContent(SHARED) });
+    expect(head2?.files['src/a.txt']).toEqual(head1?.files['src/a.txt']);
     expect(JSON.stringify(raw2)).not.toContain('共享正文');
 
     await fs.writeFile(filePath, '改过了', 'utf-8');

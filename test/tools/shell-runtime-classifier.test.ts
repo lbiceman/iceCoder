@@ -6,8 +6,11 @@ import {
   SOFT_TIMEOUT_MS,
   HARD_TIMEOUT_NONE,
   FOREGROUND_DEFAULT_TIMEOUT_MS,
+  MAX_COMMAND_YIELD_MS,
+  MIN_COMMAND_YIELD_MS,
   SHORT_TIMEOUT_MAX_MS,
   BG_SUMMARY_INTERVAL_MS,
+  clampCommandYieldMs,
   shellSoftEscalateEnabled,
 } from '../../src/tools/shell-runtime-classifier.js';
 
@@ -30,8 +33,10 @@ describe('shell-runtime-classifier — constants', () => {
     expect(HARD_TIMEOUT_NONE).toBe(0);
   });
 
-  it('FOREGROUND_DEFAULT_TIMEOUT_MS is 10 minutes', () => {
-    expect(FOREGROUND_DEFAULT_TIMEOUT_MS).toBe(10 * 60 * 1000);
+  it('FOREGROUND_DEFAULT_TIMEOUT_MS is 5 minutes', () => {
+    expect(FOREGROUND_DEFAULT_TIMEOUT_MS).toBe(5 * 60 * 1000);
+    expect(MAX_COMMAND_YIELD_MS).toBe(5 * 60 * 1000);
+    expect(MIN_COMMAND_YIELD_MS).toBe(5_000);
   });
 
   it('SHORT_TIMEOUT_MAX_MS is 10 seconds', () => {
@@ -202,8 +207,13 @@ describe('pickForegroundTimeout', () => {
     expect(pickForegroundTimeout('auto', 20_000)).toBe(20_000);
   });
 
-  it('auto uses 10min default when undefined', () => {
+  it('auto uses 5min default when undefined', () => {
     expect(pickForegroundTimeout('auto', undefined)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
+  });
+
+  it('auto caps a requested wait at 5 minutes', () => {
+    expect(pickForegroundTimeout('auto', 10 * 60 * 1000)).toBe(MAX_COMMAND_YIELD_MS);
+    expect(pickForegroundTimeout('auto', 30 * 60 * 1000)).toBe(MAX_COMMAND_YIELD_MS);
   });
 
   it('auto honors custom default', () => {
@@ -218,5 +228,19 @@ describe('pickForegroundTimeout', () => {
   it('ignores zero / negative args.timeout', () => {
     expect(pickForegroundTimeout('auto', 0)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
     expect(pickForegroundTimeout('auto', -1)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
+  });
+});
+
+describe('clampCommandYieldMs', () => {
+  it('defaults an omitted wait to 5 minutes', () => {
+    expect(clampCommandYieldMs(undefined)).toBe(MAX_COMMAND_YIELD_MS);
+    expect(clampCommandYieldMs(0)).toBe(MAX_COMMAND_YIELD_MS);
+    expect(clampCommandYieldMs(-1)).toBe(MAX_COMMAND_YIELD_MS);
+  });
+
+  it('raises sub-5s polls and cuts anything above 5 minutes', () => {
+    expect(clampCommandYieldMs(1_000)).toBe(MIN_COMMAND_YIELD_MS);
+    expect(clampCommandYieldMs(30_000)).toBe(30_000);
+    expect(clampCommandYieldMs(10 * 60 * 1000)).toBe(MAX_COMMAND_YIELD_MS);
   });
 });

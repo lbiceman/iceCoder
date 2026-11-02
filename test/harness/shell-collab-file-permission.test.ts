@@ -5,7 +5,7 @@ import { LoopController } from '../../src/harness/loop-controller.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
 describe('Shell collaboration file tool permission', () => {
-  it('requires onConfirm for fs_operation delete in shell mode even when skipPermissionChecks is true', async () => {
+  it('skips fs_operation confirm in shell mode when skipPermissionChecks is true', async () => {
     const executeTool = vi.fn(async () => ({ success: true, output: 'deleted' }));
     const onConfirm = vi.fn(async () => false);
     const onShellMandatoryConfirm = vi.fn(async () => false);
@@ -34,10 +34,9 @@ describe('Shell collaboration file tool permission', () => {
       },
     );
 
-    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
     expect(onShellMandatoryConfirm).not.toHaveBeenCalled();
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(messages[0]?.content).toMatch(/denied tool fs_operation/i);
+    expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
   it('executes fs_operation delete in shell mode after onConfirm approval', async () => {
@@ -50,7 +49,7 @@ describe('Shell collaboration file tool permission', () => {
         toolExecutor: { executeTool } as never,
         loopController: new LoopController({ maxRounds: 1 }),
         permissionRules: [{ pattern: 'fs_operation', permission: 'confirm' }],
-        skipPermissionChecks: true,
+        skipPermissionChecks: false,
         shellCollabActive: true,
         onConfirm,
         workspaceRoot: '/tmp/workspace',

@@ -327,38 +327,222 @@ export const ChatCommands = (() => {
     });
   }
 
-  function handleTelemetry(messages, appendFn, saveFn) {
-    const telemetryMsg = { role: 'agent', content: '正在获取记忆系统遥测报告…' };
-    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-      window.ChatSession.stampMessageTimestamps(telemetryMsg);
-    }
-    messages.push(telemetryMsg);
-    appendFn(telemetryMsg);
-    saveFn();
+  // Token 与记忆遥测共用一个弹层（reuseKey: usage），只切换标题和正文。
+  const USAGE_VIEWS = {
+    tokens: {
+      title: 'Token 消耗',
+      description: '按每次模型调用记账，与会话无关',
+      label: 'Token 消耗',
+    },
+    telemetry: {
+      title: '记忆遥测',
+      description: '运行记录为最近 7 天，记忆库为当前存量',
+      label: '记忆遥测',
+    },
+  };
 
-    fetchJsonWithTimeout('/api/memory/telemetry?days=7&format=text', 30000)
+  let usageSeq = 0;
+  let usageView = '';
+  const usageCache = { tokens: '', telemetry: '' };
+  const usageCacheSeq = { tokens: 0, telemetry: 0 };
+
+  function finiteNum(value) {
+    const n = typeof value === 'number' ? value : Number(value);
+    return typeof n === 'number' && isFinite(n) ? n : 0;
+  }
+
+  function formatAgeDays(value) {
+    const n = typeof value === 'number' && isFinite(value) ? value : 0;
+    const rounded = Math.round(n * 10) / 10;
+    if (Math.abs(rounded - Math.round(rounded)) < 1e-6) return formatTokenCount(Math.round(rounded));
+    return String(rounded);
+  }
+
+  function panelRow(label, hint, value, empty) {
+    const valueClass = empty ? 'modal-panel-row-value is-empty' : 'modal-panel-row-value';
+    return (
+      '<div class="modal-panel-row">' +
+        '<div class="modal-panel-row-meta">' +
+          `<span class="modal-panel-row-label">${escapeTokenStatsText(label)}</span>` +
+          `<span class="modal-panel-row-hint">${escapeTokenStatsText(hint)}</span>` +
+        '</div>' +
+        `<span class="${valueClass}">${escapeTokenStatsText(value)}</span>` +
+      '</div>'
+    );
+  }
+
+  function renderUsageSwitch(active) {
+    const keys = ['tokens', 'telemetry'];
+    let html = '<div class="modal-panel-switch" role="group" aria-label="统计内容">';
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const pressed = key === active ? 'true' : 'false';
+      html +=
+        `<button type="button" class="modal-panel-switch-btn" data-usage-view="${key}" aria-pressed="${pressed}">${escapeTokenStatsText(USAGE_VIEWS[key].label)}</button>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTelemetryReport(body) {
+    const days = finiteNum(body && body.days) || 7;
+    const log = (body && body.log) || {};
+    const proc = (body && body.process) || {};
+    const store = (body && body.store) || {};
+    const recallLog = log.recall || {};
+    const extractLog = log.extract || {};
+    const dreamLog = log.dream || {};
+    const capLog = log.capEvict || {};
+
+    const recallLogCount = finiteNum(recallLog.count);
+    const recallCount = recallLogCount || finiteNum(proc.totalRecalls);
+    let activity = '';
+    if (recallCount > 0) {
+      const llmRate = Math.round(recallLogCount > 0 ? finiteNum(recallLog.llmRate) : finiteNum(proc.llmRecallRate));
+      const keywordRate = Math.max(0, 100 - llmRate);
+      const avgMs = recallLogCount > 0 ? finiteNum(recallLog.avgMs) : finiteNum(proc.avgRecallMs);
+      const selected = finiteNum(recallLog.totalSelected) || finiteNum(proc.totalMemoriesSelected);
+      activity += panelRow(
+        '召回',
+        `LLM ${formatTokenCount(llmRate)}% · 关键词 ${formatTokenCount(keywordRate)}% · 平均 ${formatTokenCount(avgMs)}ms · 选中 ${formatTokenCount(selected)} 条`,
+        `${formatTokenCount(recallCount)} 次`,
+      );
+    } else {
+      activity += panelRow('召回', `最近 ${days} 天`, '暂无', true);
+    }
+
+    const extractLogCount = finiteNum(extractLog.count);
+    const extractCount = extractLogCount || finiteNum(proc.totalExtracts);
+    const skipCount = finiteNum(extractLog.skipCount);
+    if (extractCount > 0) {
+      const cacheRate = Math.round(extractLogCount > 0 ? finiteNum(extractLog.cacheHitRate) : finiteNum(proc.cacheHitRate));
+      const avgMs = extractLogCount > 0 ? finiteNum(extractLog.avgMs) : finiteNum(proc.avgExtractMs);
+      const total = finiteNum(extractLog.totalMemories) || finiteNum(proc.totalMemoriesExtracted);
+      let hint = `cache 命中 ${formatTokenCount(cacheRate)}% · 平均 ${formatTokenCount(avgMs)}ms · 提取 ${formatTokenCount(total)} 条`;
+      if (skipCount > 0) hint += ` · 跳过 ${formatTokenCount(skipCount)}`;
+      activity += panelRow('提取', hint, `${formatTokenCount(extractCount)} 次`);
+    } else if (skipCount > 0) {
+      activity += panelRow('提取', `跳过 ${formatTokenCount(skipCount)}`, '0 次');
+    } else {
+      activity += panelRow('提取', `最近 ${days} 天`, '暂无', true);
+    }
+
+    const dreamCount = finiteNum(dreamLog.count) || finiteNum(proc.totalDreams);
+    if (dreamCount > 0) {
+      const evicted = finiteNum(dreamLog.totalEvicted);
+      let hint = `Dream · 修改 ${formatTokenCount(finiteNum(dreamLog.totalModified))} · 删除 ${formatTokenCount(finiteNum(dreamLog.totalDeleted))}`;
+      if (evicted > 0) hint += ` · 淘汰 ${formatTokenCount(evicted)}`;
+      hint += ` · 平均 ${formatTokenCount(finiteNum(dreamLog.avgMs))}ms`;
+      activity += panelRow('整合', hint, `${formatTokenCount(dreamCount)} 次`);
+    } else {
+      activity += panelRow('整合', 'Dream', '暂无', true);
+    }
+
+    const capCount = finiteNum(capLog.count);
+    if (capCount > 0) {
+      activity += panelRow(
+        '条数淘汰',
+        `归档 ${formatTokenCount(finiteNum(capLog.totalFilesEvicted))} 条 · 平均 ${formatTokenCount(finiteNum(capLog.avgMs))}ms`,
+        `${formatTokenCount(capCount)} 次`,
+      );
+    }
+
+    const files = finiteNum(store.totalFiles);
+    let storeHtml = '';
+    if (files > 0) {
+      const byType = store.byType && typeof store.byType === 'object' ? store.byType : {};
+      const typeNames = Object.keys(byType);
+      const typeHint = typeNames.length
+        ? typeNames.map((name) => `${name} ${formatTokenCount(finiteNum(byType[name]))}`).join(' · ')
+        : '当前存量';
+      storeHtml += panelRow('记忆库', typeHint, formatTokenCount(files));
+      storeHtml += panelRow(
+        '库龄',
+        `最老 ${formatAgeDays(store.maxAgeDays)} 天`,
+        `${formatAgeDays(store.avgAgeDays)} 天`,
+      );
+    } else {
+      storeHtml += panelRow('记忆库', '尚未创建记忆文件', '空', true);
+    }
+
+    return `<div class="modal-panel-card">${activity}</div><div class="modal-panel-card">${storeHtml}</div>`;
+  }
+
+  function bindUsageSwitch(panel) {
+    if (!panel || panel._usageBound || !panel.toolbar) return;
+    panel._usageBound = true;
+    panel.toolbar.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('[data-usage-view]') : null;
+      if (!btn || !panel.toolbar.contains(btn)) return;
+      const view = btn.getAttribute('data-usage-view');
+      if (!view || view === usageView || !USAGE_VIEWS[view]) return;
+      showUsagePanel(view);
+    });
+  }
+
+  function publishUsage(panel, seq, view, html) {
+    if (seq >= usageCacheSeq[view]) {
+      usageCacheSeq[view] = seq;
+      usageCache[view] = html;
+    }
+    if (seq !== usageSeq || !panel) return;
+    panel.setBody(html);
+  }
+
+  function publishUsageError(panel, seq, message) {
+    if (seq !== usageSeq || !panel) return;
+    panel.setBody(`<p class="modal-panel-error">${escapeTokenStatsText(message)}</p>`);
+  }
+
+  function loadTokenStats(panel, seq) {
+    fetchJsonWithTimeout('/api/token-usage', 30000)
       .then((body) => {
-        const report = (body && body.success && body.report)
-          ? body.report
-          : ('遥测报告获取失败：' + ((body && body.error) || '未知错误'));
-        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
-          const stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
-          window.ChatUI.updateMessageContent(telemetryMsg, report, stripFn || function (s) { return s; });
-        } else {
-          telemetryMsg.content = report;
+        if (body && body.success) {
+          publishUsage(panel, seq, 'tokens', renderTokenStatsWindows(body));
+          return;
         }
-        saveFn();
+        publishUsageError(panel, seq, '统计失败：' + ((body && body.error) || '统计失败'));
       })
       .catch((err) => {
-        const errText = '遥测报告获取失败：' + (err && err.message ? err.message : '网络错误');
-        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
-          const stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
-          window.ChatUI.updateMessageContent(telemetryMsg, errText, stripFn || function (s) { return s; });
-        } else {
-          telemetryMsg.content = errText;
-        }
-        saveFn();
+        publishUsageError(panel, seq, '统计失败：' + (err && err.message ? err.message : '网络错误'));
       });
+  }
+
+  function loadTelemetry(panel, seq) {
+    fetchJsonWithTimeout('/api/memory/telemetry?days=7&format=json', 30000)
+      .then((body) => {
+        if (body && body.success) {
+          publishUsage(panel, seq, 'telemetry', renderTelemetryReport(body));
+          return;
+        }
+        publishUsageError(panel, seq, '遥测报告获取失败：' + ((body && body.error) || '未知错误'));
+      })
+      .catch((err) => {
+        publishUsageError(panel, seq, '遥测报告获取失败：' + (err && err.message ? err.message : '网络错误'));
+      });
+  }
+
+  function showUsagePanel(view) {
+    const meta = USAGE_VIEWS[view];
+    if (!meta) return;
+    if (!window.Modal || typeof window.Modal.panel !== 'function') return;
+    const seq = ++usageSeq;
+    usageView = view;
+    const panel = window.Modal.panel({
+      reuseKey: 'usage',
+      title: meta.title,
+      description: meta.description,
+      toolbarHtml: renderUsageSwitch(view),
+      bodyHtml: usageCache[view] || usageLoadingHtml(),
+    });
+    if (!panel) return;
+    bindUsageSwitch(panel);
+    if (view === 'tokens') loadTokenStats(panel, seq);
+    else loadTelemetry(panel, seq);
+  }
+
+  function handleTelemetry() {
+    showUsagePanel('telemetry');
   }
 
   function formatTokenCount(n) {
@@ -409,7 +593,7 @@ export const ChatCommands = (() => {
     return html;
   }
 
-  function tokenStatsLoadingHtml() {
+  function usageLoadingHtml() {
     return (
       '<div class="modal-panel-card" aria-busy="true">' +
         '<div class="modal-panel-row"><span class="modal-panel-skel"></span><span class="modal-panel-skel is-value"></span></div>' +
@@ -419,29 +603,8 @@ export const ChatCommands = (() => {
     );
   }
 
-  function showTokenStatsError(panel, message) {
-    panel.setBody(`<p class="modal-panel-error">统计失败：${escapeTokenStatsText(message)}</p>`);
-  }
-
   function handleTokenStats() {
-    if (!window.Modal || typeof window.Modal.panel !== 'function') return;
-    const panel = window.Modal.panel({
-      title: 'Token 消耗',
-      description: '按每次模型调用记账，与会话无关',
-      bodyHtml: tokenStatsLoadingHtml(),
-    });
-
-    fetchJsonWithTimeout('/api/token-usage', 30000)
-      .then((body) => {
-        if (body && body.success) {
-          panel.setBody(renderTokenStatsWindows(body));
-          return;
-        }
-        showTokenStatsError(panel, (body && body.error) || '统计失败');
-      })
-      .catch((err) => {
-        showTokenStatsError(panel, err && err.message ? err.message : '网络错误');
-      });
+    showUsagePanel('tokens');
   }
 
   return {

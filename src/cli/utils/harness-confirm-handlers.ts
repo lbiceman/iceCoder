@@ -26,7 +26,7 @@ export function createCliOnConfirm(spinner?: CliConfirmSpinner) {
   };
 }
 
-/** 终端版 Shell mandatory confirm（命中强制确认规则，不可被 skip 绕过）。 */
+/** 终端版 Shell 确认（黑名单或工作区外写入）。跳过权限确认开启时不会走到这里。 */
 export function createCliOnShellMandatoryConfirm(spinner?: CliConfirmSpinner) {
   return async (request: ShellMandatoryConfirmRequest): Promise<boolean> => {
     spinner?.stop();
@@ -36,8 +36,6 @@ export function createCliOnShellMandatoryConfirm(spinner?: CliConfirmSpinner) {
       `命中规则: ${request.risk.matchedPattern}`,
       `风险类别: ${request.risk.category}`,
       `影响: ${request.risk.impact}`,
-      '',
-      '此确认不会被「跳过权限确认」设置绕过。',
     ];
     console.log(`\n${c.yellow}⚠ Shell 敏感命令确认${c.reset}`);
     console.log(lines.join('\n'));

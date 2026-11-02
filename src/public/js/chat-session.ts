@@ -100,6 +100,70 @@ export const ChatSession = (() => {
     } catch (_e) { /* ignore */ }
   }
 
+  function newLiveTraceParentId() {
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch (_e) { /* ignore */ }
+    return `live-tools-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  /**
+   * 把本轮还在内存里的工具时间线挂到最近一条 agent 消息上。
+   * 流式失败或下一句发出时，全量重绘会清掉尾部 DOM；若此时 toolTraces 还没有这批调用，
+   * 工具记录会从界面消失，直到整页重启从会话文件再画出来。
+   */
+  function commitLiveToolBatchToTraces() {
+    if (!currentToolBatch.length) return false;
+    let agent = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg && (msg.role === 'agent' || msg.role === 'assistant')) {
+        agent = msg;
+        break;
+      }
+    }
+    if (!agent) return false;
+    if (!agent.id) agent.id = newLiveTraceParentId();
+    const parentId = agent.id;
+    const existing = Array.isArray(toolTraces[parentId]) ? toolTraces[parentId].slice() : [];
+    const seen = Object.create(null);
+    const traceKeys = Object.keys(toolTraces);
+    for (let k = 0; k < traceKeys.length; k++) {
+      const list = toolTraces[traceKeys[k]];
+      if (!Array.isArray(list)) continue;
+      for (let e = 0; e < list.length; e++) {
+        const id = list[e] && list[e].toolCallId;
+        if (id) seen[id] = true;
+      }
+    }
+    let added = 0;
+    for (let t = 0; t < currentToolBatch.length; t++) {
+      const row = currentToolBatch[t];
+      if (!row || !row.toolName) continue;
+      if (row.toolCallId && seen[row.toolCallId]) continue;
+      const trace = {
+        toolName: row.toolName,
+        detail: row.detail || '',
+        status: row.status || 'pending',
+        toolCallId: row.toolCallId || '',
+      };
+      if (typeof row.iteration === 'number' && isFinite(row.iteration) && row.iteration > 0) {
+        trace.iteration = Math.floor(row.iteration);
+      }
+      if (typeof row.diffSource === 'string' && row.diffSource) trace.diffSource = row.diffSource;
+      existing.push(trace);
+      if (trace.toolCallId) seen[trace.toolCallId] = true;
+      added++;
+    }
+    if (!added && existing.length === (toolTraces[parentId] ? toolTraces[parentId].length : 0)) {
+      return false;
+    }
+    toolTraces[parentId] = existing;
+    return true;
+  }
+
   function replaceLiveToolBatch(tools) {
     currentToolBatch = Array.isArray(tools)
       ? tools.map((t) =>  ({
@@ -1040,6 +1104,7 @@ export const ChatSession = (() => {
     getCurrentToolBatch,
     pushToolBatch,
     updateToolBatchStatus,
+    commitLiveToolBatchToTraces,
     loadLiveToolBatch,
     replaceLiveToolBatch,
     clearLiveToolBatch,

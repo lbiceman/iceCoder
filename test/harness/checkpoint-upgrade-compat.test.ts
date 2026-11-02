@@ -10,6 +10,7 @@ import {
   intentCheckpointArchivePath,
   loadCheckpointIndex,
   loadIntentCheckpoint,
+  loadIntentCheckpointHead,
   rewriteIntentCheckpoint,
 } from '../../src/harness/intent-checkpoint-store.js';
 import {
@@ -271,10 +272,11 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
-    expect(onDisk.storage).toBe('blobs-v1');
+    expect(onDisk.storage).toBe('blobs-v2');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
     expect(onDisk.workspaceFiles).toBeUndefined();
-    expect(onDisk.workspaceFileRefs['src/b.ts']).toBeNull();
+    const head = await loadIntentCheckpointHead(tmp, sessionId, 'u2');
+    expect(head?.files['src/b.ts']).toBeNull();
     const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');
     expect(hydrated?.projectCheckpoint?.execution.taskState.goal).toBe(
       'Implement the remaining editor feature without losing session history',
@@ -294,7 +296,7 @@ describe('checkpoint upgrade compatibility', () => {
     const onDisk = JSON.parse(
       await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u2'), 'utf-8'),
     );
-    expect(onDisk.storage).toBe('blobs-v1');
+    expect(onDisk.storage).toBe('blobs-v2');
     expect(onDisk.combinedCheckpoint.taskId).toBe('task-legacy');
     expect(onDisk.uiMessages).toBeUndefined();
     const hydrated = await loadIntentCheckpoint(tmp, sessionId, 'u2');

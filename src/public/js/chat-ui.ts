@@ -246,15 +246,138 @@ export const ChatUI = (() => {
     elHistoryWindow.addEventListener('click', elHistoryWindow._toolTraceClickHandler, true);
   }
 
-  function fillThinkingToggleText(container, text) {
-    container.textContent = '';
-    const word = text || 'Thinking';
-    for (let i = 0; i < word.length; i++) {
-      const ch = document.createElement('span');
-      ch.className = 'msg-thinking-char';
-      ch.textContent = word.charAt(i);
-      container.appendChild(ch);
+  const THINKING_PREVIEW_MAX_CHARS = 2000;
+  const THINKING_PREVIEW_SCAN_LINES = 8;
+
+  function normalizeThinkingPreviewLine(raw) {
+    let line = String(raw || '').replace(/[ \t\f\v]+/g, ' ').trim();
+    if (!line) return '';
+    if (/^```[\w.-]*$/.test(line)) return '';
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) return '';
+    line = line.replace(/^(?:#{1,6} |> |[-*+] |\d+[.)] )/, '').trim();
+    line = line.replace(/^`([^`]+)`$/, '$1').trim();
+    return line;
+  }
+
+  /** 取思维链末尾最近一行有内容的文字，供收起态预览。 */
+  function latestThinkingLine(text) {
+    const src = String(text || '');
+    if (!src) return '';
+    let end = src.length;
+    for (let n = 0; n < THINKING_PREVIEW_SCAN_LINES && end > 0; n++) {
+      while (end > 0) {
+        const c = src.charCodeAt(end - 1);
+        if (c === 10 || c === 13 || c === 32 || c === 9) end--;
+        else break;
+      }
+      if (end <= 0) break;
+      let start = end;
+      while (start > 0) {
+        const c = src.charCodeAt(start - 1);
+        if (c === 10 || c === 13) break;
+        start--;
+      }
+      let line = normalizeThinkingPreviewLine(src.slice(start, end));
+      if (line) {
+        if (line.length > THINKING_PREVIEW_MAX_CHARS) {
+          line = line.slice(line.length - THINKING_PREVIEW_MAX_CHARS);
+        }
+        return line;
+      }
+      end = start;
     }
+    return '';
+  }
+
+  function thinkingToggleLabel(collapsed, previewLine) {
+    if (!collapsed) return '折叠思考内容';
+    if (!previewLine) return '展开思考内容';
+    const snippet = previewLine.length > 80 ? previewLine.slice(-80) : previewLine;
+    return '展开思考内容：' + snippet;
+  }
+
+  function syncThinkingToggleA11y(block) {
+    const collapsed = block.classList.contains('is-collapsed');
+    const previewLine = block._thinkingPreviewLine || '';
+    const label = thinkingToggleLabel(collapsed, previewLine);
+    const toggles = block.querySelectorAll('.msg-thinking-toggle');
+    for (let i = 0; i < toggles.length; i++) {
+      toggles[i].setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      toggles[i].setAttribute('aria-label', label);
+    }
+  }
+
+  /**
+   * 长行把结尾留在可视区。流式输出时，收起态看到的是最新几个字，而不是行首。
+   */
+  function syncThinkingPreviewTitle(preview, line) {
+    if (!preview) return;
+    if (line && preview.classList.contains('is-truncated')) {
+      preview.title = line.length > 240 ? ('…' + line.slice(-240)) : line;
+      return;
+    }
+    preview.removeAttribute('title');
+  }
+
+  function layoutThinkingPreview(block) {
+    if (!block) return;
+    const preview = block.querySelector('.msg-thinking-toggle-header .msg-thinking-preview');
+    if (!preview) return;
+    const line = block._thinkingPreviewLine || '';
+    if (!preview.classList.contains('has-text') || !block.classList.contains('is-collapsed')) {
+      preview.classList.remove('is-truncated');
+      syncThinkingPreviewTitle(preview, line);
+      return;
+    }
+    const textEl = preview.querySelector('.msg-thinking-preview-text');
+    const clip = preview.querySelector('.msg-thinking-preview-clip');
+    if (!textEl || !clip) return;
+    preview.classList.remove('is-truncated');
+    const width = clip.clientWidth;
+    if (width > 0) preview.classList.toggle('is-truncated', textEl.scrollWidth > width + 1);
+    syncThinkingPreviewTitle(preview, line);
+  }
+
+  function updateThinkingPreview(block, fullText) {
+    if (!block) return;
+    const line = latestThinkingLine(fullText);
+    block._thinkingPreviewLine = line;
+    const preview = block.querySelector('.msg-thinking-toggle-header .msg-thinking-preview');
+    if (preview) {
+      const textEl = preview.querySelector('.msg-thinking-preview-text');
+      if (textEl) textEl.textContent = line;
+      preview.classList.toggle('has-text', !!line);
+    }
+    layoutThinkingPreview(block);
+    syncThinkingToggleA11y(block);
+  }
+
+  function bindThinkingPreviewResize(block) {
+    if (!block || block._previewResizeObs || typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver(() => {
+      const w = block.clientWidth;
+      if (w === block._previewObservedWidth) return;
+      block._previewObservedWidth = w;
+      if (block.classList.contains('is-collapsed')) layoutThinkingPreview(block);
+    });
+    obs.observe(block);
+    block._previewResizeObs = obs;
+  }
+
+  function createThinkingPreview() {
+    const preview = document.createElement('span');
+    preview.className = 'msg-thinking-preview';
+    const mark = document.createElement('span');
+    mark.className = 'msg-thinking-preview-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    const clip = document.createElement('span');
+    clip.className = 'msg-thinking-preview-clip';
+    const text = document.createElement('span');
+    text.className = 'msg-thinking-preview-text';
+    clip.appendChild(text);
+    preview.appendChild(mark);
+    preview.appendChild(clip);
+    return preview;
   }
 
   function createThinkingToggleButton(footer) {
@@ -266,13 +389,14 @@ export const ChatUI = (() => {
     label.setAttribute('aria-label', '折叠思考内容');
     const labelText = document.createElement('span');
     labelText.className = 'msg-thinking-toggle-text';
-    fillThinkingToggleText(labelText, 'Thinking');
+    labelText.textContent = 'Thinking';
     label.appendChild(labelText);
     const labelIcon = document.createElement('span');
     labelIcon.className = 'msg-thinking-toggle-icon';
     labelIcon.setAttribute('aria-hidden', 'true');
     labelIcon.textContent = '▾';
     label.appendChild(labelIcon);
+    if (!footer) label.appendChild(createThinkingPreview());
     return label;
   }
 
@@ -283,6 +407,8 @@ export const ChatUI = (() => {
   function renderThinkingBody(bodyEl, fullText) {
     if (!bodyEl) return;
     const text = fullText || '';
+    const block = bodyEl.closest ? bodyEl.closest('.message-thinking') : null;
+    if (block) updateThinkingPreview(block, text);
     if (text.length <= THINKING_EXPAND_MAX_CHARS) {
       bodyEl.textContent = text;
       return;
@@ -297,12 +423,8 @@ export const ChatUI = (() => {
     if (!block) return;
     if (collapsed) block.classList.add('is-collapsed');
     else block.classList.remove('is-collapsed');
-    const toggles = block.querySelectorAll('.msg-thinking-toggle');
-    for (let i = 0; i < toggles.length; i++) {
-      const t = toggles[i];
-      t.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      t.setAttribute('aria-label', collapsed ? '展开思考内容' : '折叠思考内容');
-    }
+    syncThinkingToggleA11y(block);
+    layoutThinkingPreview(block);
   }
 
   /** 思考块头/尾 Thinking 行折叠（尾部真实 DOM，委托在 chat-messages） */
@@ -3220,7 +3342,9 @@ export const ChatUI = (() => {
   function clearReasoningStream() {
     streamReasoningBuffer = '';
     const el = document.getElementById('streaming-reasoning-msg');
-    if (el) el.remove();
+    if (!el) return;
+    if (el._previewResizeObs) el._previewResizeObs.disconnect();
+    el.remove();
   }
 
   function discardIncompleteStream(messages) {
@@ -3283,6 +3407,7 @@ export const ChatUI = (() => {
       el.appendChild(createThinkingToggleButton(true));
       el._streamContentEl = body;
       insertTailBefore(el);
+      bindThinkingPreviewResize(el);
     }
     el._fullThinkingText = streamReasoningBuffer;
     renderThinkingBody(el._streamContentEl, streamReasoningBuffer);

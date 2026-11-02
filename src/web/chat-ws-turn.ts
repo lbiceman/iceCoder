@@ -96,6 +96,7 @@ import {
   broadcastHarnessState,
   ensureMemoryInitialized,
   getGlobalFileMemoryManager,
+  getOrLoadCachedMessages,
   getPriorTrackedPaths,
   loadAssembledPrompt,
   saveStructuredMessages,
@@ -114,7 +115,6 @@ import {
   MAIN_CONFIG_PATH,
   MEMORY_DIR,
   SESSIONS_DIR,
-  getCachedMessages,
   getFileBrowserState,
   getSessionDeferredToolCalls,
   isSessionTombstoned,
@@ -191,7 +191,7 @@ async function finalizeDirectBrowserTurn(
   },
 ): Promise<void> {
   const sid = opts.sessionId;
-  const cached = getCachedMessages(sid);
+  const cached = await getOrLoadCachedMessages(sid);
   const base = cached ? [...cached] : [];
   base.push({ role: 'user', content: opts.userStructuredContent });
   base.push({ role: 'assistant', content: opts.assistantContent });
@@ -353,7 +353,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
   await ensureMemoryInitialized();
 
-  const existingMessages = getCachedMessages(runSessionId);
+  const existingMessages = await getOrLoadCachedMessages(runSessionId);
 
   const userMsgId = isSafeIntentMessageId(clientMessageId) ? clientMessageId : randomUUID();
   const userSentAt = Date.now();
