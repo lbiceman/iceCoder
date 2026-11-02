@@ -1081,15 +1081,19 @@
   border-top: 1px solid var(--border-light, var(--border-color));
 }
 .msg-content--md .md-table-wrap {
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
   max-width: 100%;
+  overflow-x: auto;
   border: 1px solid var(--border-subtle, var(--border-color));
   border-radius: 8px;
 }
 .msg-content--md table.md-table {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
+  table-layout: auto;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1099,7 +1103,13 @@
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border-subtle, var(--border-color));
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.msg-content--md table.md-table code {
+  white-space: inherit;
+  overflow-wrap: inherit;
 }
 .msg-content--md table.md-table th {
   font-weight: 650;
