@@ -55,6 +55,17 @@ describe('prompt assembly safeguards', () => {
     expect(content).toContain('Do not bypass permissions');
   });
 
+  it('大任务在同一轮写结果清单并立刻开工', () => {
+    const workStyle = getDefaultSections().find((section) => section.id === 'work_style')!.content;
+    const execution = createDoingTasksSection().content;
+    expect(workStyle).toContain('checklist of 3 to 7 outcomes');
+    expect(workStyle).toContain('Do not stop after the list');
+    expect(workStyle).not.toContain('at most one short plan sentence');
+    expect(execution).toContain('## Task list');
+    expect(execution).toContain('Do not end the turn after only writing the list');
+    expect(execution).toContain('Do not ask the user to approve the list');
+  });
+
   it('执行提示词包含代码质量与验证约束', () => {
     const content = createDoingTasksSection().content;
     expect(content).toContain('## Quality bar');
