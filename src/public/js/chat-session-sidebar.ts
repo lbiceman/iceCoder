@@ -78,22 +78,24 @@ export const ChatSessionSidebar = (() => {
 
   function getRouteFromHash() {
     const h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'rules' || h === 'tasks' || h === 'stats' || h === 'settings' || h === 'config') {
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'rules' || h === 'tasks' || h === 'todos' || h === 'stats' || h === 'settings' || h === 'config') {
       return h === 'config' ? 'settings' : h;
     }
     if (h === 'knowledge') return 'skills';
     return 'chat';
   }
 
-  /** 技能、记忆、规则三个路由同属「知识库」导航项 */
+  /** 技能、记忆、规则三个路由同属「知识库」导航项。待办和定时同属「任务」。 */
   function navPageForRoute(route) {
-    return route === 'skills' || route === 'memory' || route === 'rules' ? 'knowledge' : route;
+    if (route === 'skills' || route === 'memory' || route === 'rules') return 'knowledge';
+    if (route === 'todos') return 'tasks';
+    return route;
   }
 
   /** 任务 / 知识库 / 统计 / 设置：会话列表不当作当前页，点会话回到聊天 */
   function isAuxiliaryNavPage() {
     const route = getRouteFromHash();
-    return route === 'memory' || route === 'skills' || route === 'rules' || route === 'tasks' || route === 'stats' || route === 'settings';
+    return route === 'memory' || route === 'skills' || route === 'rules' || route === 'tasks' || route === 'todos' || route === 'stats' || route === 'settings';
   }
 
   function navigateToChatPage() {
@@ -145,6 +147,10 @@ export const ChatSessionSidebar = (() => {
           if (!page) return;
           if (page === 'knowledge' && window.KnowledgeTabs) {
             window.KnowledgeTabs.open();
+            return;
+          }
+          if (page === 'tasks' && window.TaskTabs) {
+            window.TaskTabs.open();
             return;
           }
           if (window.location.hash !== `#/${page}`) {

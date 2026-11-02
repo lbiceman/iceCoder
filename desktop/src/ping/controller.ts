@@ -1,15 +1,17 @@
 /**
  * 把钩子、浮层和截图串起来。
  * 左边和右边都是自己框选。左边把这块画面交给模型，右边复制到剪贴板并放进输入框。
- * 上下只落图标。连续提问只认最后一次。浮层对截图不可见。
+ * 正下记下一条待办，正上只落图标。连续提问只认最后一次。浮层对截图不可见。
  */
 import { clipboard, nativeImage } from 'electron';
 import { writeConsole } from '../console-output';
-import { wheelReleaseAction, wheelSlice, type ScreenRect } from './geometry';
+import { physicalToLocal, wheelReleaseAction, wheelSlice, type ScreenRect } from './geometry';
 import { createScreenPingHook, type ScreenPingHook } from './hook-win';
 import { capturePhysicalRect, type RegionShot } from './capture-win';
 import { createPingOverlay, readPingDisplayMaps, type PingOverlay } from './overlay';
 import { createSnipSession, reduceSnip, SNIP_MIN_PX, snipShowsChrome, type SnipSession } from './snip-session';
+import { shrinkPngDataUrl } from './shrink-shot';
+import { createTodoDraft, type TodoDraft } from './todo-draft';
 import { readScreenPingEnabled, writeScreenPingSettings } from './settings';
 import type { GestureEffect } from './gesture';
 
@@ -18,7 +20,7 @@ const MARKER_TTL_MS = 30_000;
 /** 问号请求要小于 Express 的 5mb JSON 上限。过大的框选先缩小再送。 */
 const ASK_IMAGE_MAX_CHARS = 1_400_000;
 
-type SnipPurpose = 'copy' | 'ask';
+type SnipPurpose = 'copy' | 'ask' | 'todo';
 
 export interface ScreenPingController {
   setEnabled(enabled: boolean): void;
@@ -43,6 +45,12 @@ export function createScreenPingController(opts: {
   let snipState: SnipSession = createSnipSession();
   let lastSlice: number | null = null;
   let markerTimer: ReturnType<typeof setTimeout> | null = null;
+  let draftWindow: TodoDraft | null = null;
+  let draftEpoch = 0;
+  let draftText = '';
+  let draftImage: string | null = null;
+  let draftError = '';
+  let draftDip: { x: number; y: number } | null = null;
 
   function clearMarkerTimer(): void {
     if (!markerTimer) return;
@@ -75,7 +83,7 @@ export function createScreenPingController(opts: {
       overlay = createPingOverlay(() => {
         hook?.abort();
         lastSlice = null;
-        cancelSnip();
+        cancelActiveSnip();
       });
     }
     return overlay;
@@ -101,6 +109,7 @@ export function createScreenPingController(opts: {
     resetSnip();
     overlay?.endSnip();
     if (purpose === 'ask') void askRegion(rect);
+    else if (purpose === 'todo') void attachTodoShot(rect);
     else void deliverRegionSnip(rect);
   }
 
@@ -118,7 +127,7 @@ export function createScreenPingController(opts: {
       return;
     }
     if (result.done === 'cancel') {
-      cancelSnip();
+      cancelActiveSnip();
       return;
     }
     if (result.paint) paintLiveSnip();
@@ -139,7 +148,7 @@ export function createScreenPingController(opts: {
       },
       onCancel: () => {
         if (gen !== snipGen) return;
-        cancelSnip();
+        cancelActiveSnip();
       },
     }, purpose);
   }
@@ -156,9 +165,152 @@ export function createScreenPingController(opts: {
     }
   }
 
+  function releaseToDip(physX: number, physY: number): { x: number; y: number } | null {
+    const maps = readPingDisplayMaps();
+    const local = physicalToLocal(physX, physY, maps);
+    if (!local) return null;
+    const map = maps.find((item) => item.id === local.id);
+    if (!map) return null;
+    return { x: map.dip.x + local.x, y: map.dip.y + local.y };
+  }
+
+  function ensureDraft(): TodoDraft {
+    if (!draftWindow) {
+      draftWindow = createTodoDraft({
+        onSubmit: (text) => { void submitTodoDraft(text); },
+        onSnip: (text) => { beginTodoSnip(text); },
+        onCancel: () => { discardTodoDraft(); },
+      });
+    }
+    return draftWindow;
+  }
+
+  function showTodoDraft(): void {
+    if (!draftDip) return;
+    try {
+      hook?.setDraftOpen(true);
+      ensureDraft().show({
+        dipX: draftDip.x,
+        dipY: draftDip.y,
+        text: draftText,
+        image: draftImage,
+        error: draftError,
+      });
+    } catch (err) {
+      log(`todo draft failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function discardTodoDraft(): void {
+    draftEpoch += 1;
+    draftText = '';
+    draftImage = null;
+    draftError = '';
+    draftDip = null;
+    hook?.setDraftOpen(false);
+    draftWindow?.hide();
+  }
+
+  function interruptTodoDraft(): void {
+    if (!draftDip && !draftImage && !draftText) return;
+    discardTodoDraft();
+  }
+
+  function openTodoDraft(originX: number, originY: number): void {
+    if (snipLive) cancelSnip();
+    const dip = releaseToDip(originX, originY);
+    if (!dip) {
+      log('todo draft skipped: no display');
+      return;
+    }
+    draftEpoch += 1;
+    draftText = '';
+    draftImage = null;
+    draftError = '';
+    draftDip = dip;
+    showTodoDraft();
+  }
+
+  function beginTodoSnip(text: string): void {
+    draftText = text;
+    draftError = '';
+    if (!overlay) {
+      showTodoDraft();
+      return;
+    }
+    hook?.setDraftOpen(false);
+    draftWindow?.hide();
+    beginRegionSnip('todo');
+  }
+
+  function cancelActiveSnip(): void {
+    const purpose = snipLive ? snipPurpose : null;
+    cancelSnip();
+    if (purpose === 'todo') showTodoDraft();
+  }
+
+  async function attachTodoShot(rect: ScreenRect): Promise<void> {
+    const epoch = draftEpoch;
+    try {
+      const shot = capturePhysicalRect(rect);
+      const image = shrinkPngDataUrl(shot.dataUrl);
+      if (epoch !== draftEpoch) return;
+      draftImage = image;
+      draftError = '';
+    } catch (err) {
+      if (epoch !== draftEpoch) return;
+      log(`todo snip failed: ${err instanceof Error ? err.message : String(err)}`);
+      draftError = '这块画面没有截下来';
+    }
+    showTodoDraft();
+  }
+
+  async function submitTodoDraft(text: string): Promise<void> {
+    const epoch = draftEpoch;
+    const image = draftImage;
+    const trimmed = text.trim();
+    if (!trimmed && !image) {
+      discardTodoDraft();
+      return;
+    }
+    hook?.setDraftOpen(false);
+    draftWindow?.hide();
+    let saved = false;
+    let message = '没有记上，再试一次';
+    try {
+      const response = await fetch(`${serverBaseUrl}/api/todos`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(image ? { text, image } : { text }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: unknown };
+      if (response.ok) saved = true;
+      else if (typeof payload.error === 'string' && payload.error.trim()) message = payload.error.trim();
+    } catch (err) {
+      log(`todo save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (epoch !== draftEpoch) return;
+    if (!saved) {
+      draftText = text;
+      draftError = message;
+      showTodoDraft();
+      return;
+    }
+    draftText = '';
+    draftImage = null;
+    draftError = '';
+    draftDip = null;
+    log('todo saved');
+  }
+
   function onEffect(effect: GestureEffect): void {
+    if (effect.type === 'draft-cancel') {
+      discardTodoDraft();
+      return;
+    }
     if (effect.type === 'snip-cancel') {
-      cancelSnip();
+      cancelActiveSnip();
       return;
     }
     if (effect.type === 'snip-confirm') {
@@ -172,6 +324,7 @@ export function createScreenPingController(opts: {
     const view = overlay;
     if (!view || !enabled) return;
     if (effect.type === 'open') {
+      interruptTodoDraft();
       askGen += 1;
       clearMarkerTimer();
       view.reveal();
@@ -209,6 +362,10 @@ export function createScreenPingController(opts: {
     }
     if (action === 'snip') {
       beginRegionSnip('copy');
+      return;
+    }
+    if (action === 'todo') {
+      openTodoDraft(effect.originX, effect.originY);
       return;
     }
     view.showSignal(effect.originX, effect.originY, slice);
@@ -324,8 +481,16 @@ export function createScreenPingController(opts: {
     enabled = false;
     askGen += 1;
     snipGen += 1;
+    draftEpoch += 1;
     resetSnip();
     clearMarkerTimer();
+    draftText = '';
+    draftImage = null;
+    draftError = '';
+    draftDip = null;
+    hook?.setDraftOpen(false);
+    draftWindow?.destroy();
+    draftWindow = null;
     if (watchdog) clearInterval(watchdog);
     watchdog = null;
     hook?.stop();

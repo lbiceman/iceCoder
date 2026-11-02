@@ -41,8 +41,8 @@ interface SnipShow {
   /** 本屏要不要画完成按钮。跨屏时只有选区右下角所在的那块屏幕为 true。 */
   bar?: { x: number; y: number } | null;
   label?: string;
-  /** copy 复制进输入框，ask 交给模型。 */
-  purpose?: 'copy' | 'ask';
+  /** copy 复制进输入框，ask 交给模型，todo 附到待办草稿。 */
+  purpose?: 'copy' | 'ask' | 'todo';
 }
 
 interface SnipHandlers {
@@ -112,7 +112,7 @@ export interface PingOverlay {
   /** 轮盘上的普通标记。问号和框选不走这里。 */
   showSignal(originX: number, originY: number, slice: number): void;
   /** 左右松手后铺满每块屏幕，让用户自己拖出截图区域。 */
-  beginSnip(handlers: SnipHandlers, purpose: 'copy' | 'ask'): void;
+  beginSnip(handlers: SnipHandlers, purpose: 'copy' | 'ask' | 'todo'): void;
   /** 把同一块物理矩形画到每一块屏幕上。坐标可以伸出本屏。 */
   paintSnip(rect: ScreenRect | null, chosen: boolean): void;
   endSnip(): void;
@@ -147,7 +147,7 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   let listenerBound = false;
   let refreshing = false;
   let snipHandlers: SnipHandlers | null = null;
-  let snipPurpose: 'copy' | 'ask' = 'copy';
+  let snipPurpose: 'copy' | 'ask' | 'todo' = 'copy';
   const onDisplayChange = (): void => {
     if (refreshing) return;
     refreshing = true;
@@ -460,7 +460,7 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
     },
     beginSnip(handlers, purpose) {
       snipHandlers = handlers;
-      snipPurpose = purpose === 'ask' ? 'ask' : 'copy';
+      snipPurpose = purpose === 'ask' || purpose === 'todo' ? purpose : 'copy';
       for (const slot of slots.values()) armSnipInput(slot);
       this.paintSnip(null, false);
       focusCursorSlot();

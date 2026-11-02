@@ -32,6 +32,7 @@ export const MobileShell = (() => {
   function navPageFor(page) {
     if (page === 'workChat') return 'work';
     if (page === 'mSkills' || page === 'mMemory' || page === 'mRules') return 'mKnowledge';
+    if (page === 'mTodos') return 'mTasks';
     return page;
   }
 
@@ -108,6 +109,13 @@ export const MobileShell = (() => {
           return;
         }
       }
+      if (page === 'mTasks') {
+        if (btn.classList.contains('is-active')) return;
+        if (window.TaskTabs) {
+          window.TaskTabs.open();
+          return;
+        }
+      }
       if (page && window.AppRouter && typeof window.AppRouter.navigate === 'function') {
         window.AppRouter.navigate(page);
       }
@@ -141,6 +149,7 @@ export const MobileShell = (() => {
     if (path === '/m/skills') return 'mSkills';
     if (path === '/m/rules') return 'mRules';
     if (path === '/m/tasks') return 'mTasks';
+    if (path === '/m/todos') return 'mTodos';
     if (path === '/m/config') return 'mConfig';
 
     const h = window.location.hash || '';
@@ -149,6 +158,7 @@ export const MobileShell = (() => {
     if (h.startsWith('#/m/memory')) return 'mMemory';
     if (h.startsWith('#/m/skills')) return 'mSkills';
     if (h.startsWith('#/m/rules')) return 'mRules';
+    if (h.startsWith('#/m/todos')) return 'mTodos';
     if (h.startsWith('#/m/tasks')) return 'mTasks';
     if (h.startsWith('#/m/config')) return 'mConfig';
     return 'work';
@@ -260,8 +270,13 @@ export const MobileShell = (() => {
         : `<span class="mobile-top-bar-title">知识库</span>${getConnectionDot()}`;
       if (Tabs) Tabs.bind(center.querySelector('.knowledge-tabs'));
       right.innerHTML = themeBtnHtml();
-    } else if (mode === 'tasks') {
-      center.innerHTML = `<span class="mobile-top-bar-title">任务</span>${getConnectionDot()}`;
+    } else if (mode === 'tasks' || mode === 'todos') {
+      const Tabs = window.TaskTabs;
+      const active = mode === 'todos' ? 'todos' : 'scheduled';
+      center.innerHTML = Tabs
+        ? `${Tabs.html(active, 'is-segmented')}${getConnectionDot()}`
+        : `<span class="mobile-top-bar-title">任务</span>${getConnectionDot()}`;
+      if (Tabs) Tabs.bind(center.querySelector('.knowledge-tabs'));
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'config') {
       center.innerHTML = `<span class="mobile-top-bar-title">设置</span>${getConnectionDot()}`;

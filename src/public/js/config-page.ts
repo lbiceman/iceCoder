@@ -201,7 +201,7 @@ export const SettingsPage = (() => {
             '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
               '<div class="settings-etl-row-info">' +
                 '<span class="settings-etl-row-label">屏幕问号</span>' +
-                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘，松开左键确认。左侧框选一块区域交给模型解析，回答出现在选区旁边，并记在「屏幕问号」会话里。右侧框选后复制到剪贴板并放进输入框。上下只落下图标。松在中心取消。Esc 关闭回答；框选时 Esc 取消。</span>' +
+                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl，再按住鼠标左键拖动打开轮盘，松开左键确认。左侧框选一块区域交给模型解析，回答出现在选区旁边，并记在「屏幕问号」会话里。右侧框选后复制到剪贴板并放进输入框。下方记下一条待办，可以再框一张图。上方只落下图标。松在中心取消。Esc 关闭回答；框选时 Esc 取消；记待办时 Esc 放弃这条。</span>' +
               '</div>' +
               '<div class="settings-card-control">' +
                 '<label class="config-default-switch settings-etl-switch" title="屏幕问号">' +

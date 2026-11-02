@@ -43,6 +43,8 @@ export interface ScreenPingHook {
   setMarkerOpen(open: boolean): void;
   /** 框选截图时把键鼠还给浮层，只留下 Esc 取消。 */
   setSnipOpen(open: boolean): void;
+  /** 待办草稿开着时，Esc 先取消这条草稿，不关掉已经落下的问号回答。 */
+  setDraftOpen(open: boolean): void;
   /** 轮盘开着但 10 秒没有输入时收起。 */
   pulse(now: number): void;
   abort(): void;
@@ -134,6 +136,7 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
   let state: GestureSnapshot = { ...INITIAL_GESTURE };
   let markerOpen = false;
   let snipOpen = false;
+  let draftOpen = false;
   let ctrlHeld = false;
   let lastInputAt = 0;
   let moveQueued = false;
@@ -253,6 +256,9 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
         if (snipOpen) {
           emit({ type: 'snip-cancel' });
           swallow = true;
+        } else if (draftOpen) {
+          emit({ type: 'draft-cancel' });
+          swallow = true;
         } else {
           swallow = apply({ kind: 'escape', markerOpen }).swallow;
         }
@@ -284,6 +290,7 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
       state = { ...INITIAL_GESTURE };
       ctrlHeld = false;
       snipOpen = false;
+      draftOpen = false;
       lastInputAt = Date.now();
     },
     stop() {
@@ -296,6 +303,7 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
       state = { ...INITIAL_GESTURE };
       ctrlHeld = false;
       snipOpen = false;
+      draftOpen = false;
       pendingMove = null;
     },
     setMarkerOpen(open: boolean) {
@@ -303,6 +311,9 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
     },
     setSnipOpen(open: boolean) {
       snipOpen = open;
+    },
+    setDraftOpen(open: boolean) {
+      draftOpen = open;
     },
     pulse(now: number) {
       if (!mouseHook) return;

@@ -78,6 +78,12 @@ export const IPC = {
   SCREEN_PING_SNIP_RESULT: 'screen-ping:snip-result',
   /** 主进程 → 主窗口：把截图放进输入框。 */
   SCREEN_PING_PASTE: 'screen-ping:paste',
+  /** 主进程 → 待办草稿窗：当前文字、截图和错误。 */
+  TODO_DRAFT_STATE: 'todo-draft:state',
+  /** 待办草稿窗 → 主进程。 */
+  TODO_DRAFT_SUBMIT: 'todo-draft:submit',
+  TODO_DRAFT_SNIP: 'todo-draft:snip',
+  TODO_DRAFT_CANCEL: 'todo-draft:cancel',
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

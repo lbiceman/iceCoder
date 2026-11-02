@@ -1,6 +1,6 @@
 /**
  * 问号轮盘几何。扇区从正上方起顺时针 4 等分：上、右、下、左。
- * 问号在正左，框选复制在正右。上下只落图标。
+ * 问号在正左，框选复制在正右。正下记一条待办。正上只落图标。
  * 手势阈值、中心取消半径，以及物理像素到浮层坐标的换算，参照 lolPing（MIT）。图形是自绘的。
  */
 
@@ -37,16 +37,17 @@ export const QUESTION_SLICE = 3;
 /** 正右扇区。框选后复制到剪贴板并放进输入框。 */
 export const SNIP_SLICE = 1;
 
-/** 正下扇区。只落图标。 */
+/** 正下扇区。弹出草稿，记下一条待办。 */
 export const PASTE_SLICE = 2;
 
-export type WheelReleaseAction = 'cancel' | 'ask' | 'snip' | 'signal';
+export type WheelReleaseAction = 'cancel' | 'ask' | 'snip' | 'signal' | 'todo';
 
 /** 松开左键时这个扇区要做的事。中心圆内是取消。 */
 export function wheelReleaseAction(slice: number | null): WheelReleaseAction {
   if (slice == null) return 'cancel';
   if (slice === QUESTION_SLICE) return 'ask';
   if (slice === SNIP_SLICE) return 'snip';
+  if (slice === PASTE_SLICE) return 'todo';
   return 'signal';
 }
 

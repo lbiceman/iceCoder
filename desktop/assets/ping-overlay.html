@@ -671,6 +671,9 @@
       if (payload.purpose === 'ask') {
         snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后交给模型看这块画面。Esc 取消';
         snipOk.title = '交给模型看这块画面';
+      } else if (payload.purpose === 'todo') {
+        snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后附到这条待办。Esc 回到草稿';
+        snipOk.title = '附到这条待办';
       } else if (payload.purpose === 'copy') {
         snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后复制到剪贴板，并放进输入框。Esc 取消';
         snipOk.title = '复制到剪贴板，并放进输入框';

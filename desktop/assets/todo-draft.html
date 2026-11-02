@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    html, body { margin: 0; height: 100%; background: #1c1f22; color: #f2f2f2; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    .bar {
+      box-sizing: border-box;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px 4px 8px;
+      border: 1px solid #c8aa6e;
+      border-radius: 8px;
+    }
+    input {
+      flex: 1;
+      min-width: 0;
+      height: 28px;
+      border: none;
+      background: transparent;
+      color: #f2f2f2;
+      font-size: 14px;
+      outline: none;
+      padding: 0;
+    }
+    button.snip {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      border: none;
+      border-radius: 6px;
+      background: #243028;
+      color: #3ddc97;
+      cursor: pointer;
+      padding: 4px;
+    }
+    button.snip:hover { background: #2c3b32; }
+    .shot {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      object-fit: cover;
+      border-radius: 4px;
+      background: #111416;
+    }
+    .error { margin: 0; padding: 0 8px 4px; font-size: 11px; line-height: 14px; color: #ff8d8d; }
+    .error[hidden], .shot[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <form class="bar" id="bar">
+    <img id="shot" class="shot" alt="" hidden>
+    <input id="text" maxlength="500" placeholder="记一条待办" autocomplete="off" spellcheck="false" aria-label="待办内容">
+    <button type="button" id="snip" title="框选一张图附上" aria-label="框选一张图附上">
+      <svg viewBox="0 0 64 78" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" fill-rule="evenodd" d="M8 30 V12 H30 V18 H14 V30 Z M34 12 H56 V30 H50 V18 H34 Z M56 48 V66 H34 V60 H50 V48 Z M8 48 H14 V60 H30 V66 H8 Z M22 28 H42 V52 H22 Z M26 32 V48 H38 V32 Z"/>
+      </svg>
+    </button>
+  </form>
+  <p id="error" class="error" hidden></p>
+  <script>
+    const text = document.getElementById('text');
+    const shot = document.getElementById('shot');
+    const error = document.getElementById('error');
+    const api = window.todoDraft;
+
+    function focusInput() {
+      text.focus();
+      const end = text.value.length;
+      try { text.setSelectionRange(end, end); } catch (e) { /* 个别环境不让改选区 */ }
+    }
+
+    function apply(state) {
+      const next = state && typeof state.text === 'string' ? state.text : '';
+      if (text.value !== next) text.value = next;
+      if (state && state.image) {
+        shot.hidden = false;
+        shot.src = state.image;
+      } else {
+        shot.hidden = true;
+        shot.removeAttribute('src');
+      }
+      const message = state && typeof state.error === 'string' ? state.error : '';
+      error.textContent = message;
+      error.hidden = !message;
+      focusInput();
+    }
+
+    document.getElementById('bar').addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (api) api.submit(text.value);
+    });
+    document.getElementById('snip').addEventListener('click', () => {
+      if (api) api.snip(text.value);
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      if (api) api.cancel();
+    });
+    if (api) api.onState(apply);
+    else focusInput();
+  </script>
+</body>
+</html>

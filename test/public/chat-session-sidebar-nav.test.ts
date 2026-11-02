@@ -15,6 +15,10 @@ const KNOWLEDGE_TABS_SOURCE = classicWindowSource(readFileSync(
   path.join(__dirname, '../../src/public/js/knowledge-tabs.ts'),
   'utf-8',
 ));
+const TASK_TABS_SOURCE = classicWindowSource(readFileSync(
+  path.join(__dirname, '../../src/public/js/task-tabs.ts'),
+  'utf-8',
+));
 
 let browser: Browser;
 const openPages = new Set<Page>();
@@ -71,6 +75,7 @@ async function openSidebarPage(): Promise<Page> {
     };
   });
   await page.addScriptTag({ content: KNOWLEDGE_TABS_SOURCE });
+  await page.addScriptTag({ content: TASK_TABS_SOURCE });
   await page.addScriptTag({ content: SIDEBAR_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatSessionSidebar.create(document.querySelector('.app-shell'));
@@ -139,6 +144,22 @@ describe('桌面侧栏主导航与会话列表', () => {
       hash: '#/tasks',
       activeNavPage: 'tasks',
       activeSessionId: null,
+    });
+
+    await page.evaluate(() => {
+      (window as any).TaskTabs.remember('todos');
+      window.location.hash = '#/todos';
+    });
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/todos',
+      activeNavPage: 'tasks',
+    });
+
+    await page.locator('.chat-sidebar-nav-btn[data-page="chat"]').click();
+    await page.locator('.chat-sidebar-nav-btn[data-page="tasks"]').click();
+    await expect.poll(async () => snapshot(page)).toMatchObject({
+      hash: '#/todos',
+      activeNavPage: 'tasks',
     });
 
     await page.locator('.chat-sidebar-nav-btn[data-page="knowledge"]').click();

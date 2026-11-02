@@ -15,11 +15,11 @@ describe('问号轮盘几何', () => {
     expect(wheelSlice(-40, -100)).toBe(0);
   });
 
-  it('松开时左边交给模型，右边框选复制，上下只落标记', () => {
+  it('松开时左边交给模型，右边框选复制，下方记待办，上方只落标记', () => {
     expect(wheelReleaseAction(null)).toBe('cancel');
     expect(wheelReleaseAction(QUESTION_SLICE)).toBe('ask');
     expect(wheelReleaseAction(SNIP_SLICE)).toBe('snip');
-    expect(wheelReleaseAction(PASTE_SLICE)).toBe('signal');
+    expect(wheelReleaseAction(PASTE_SLICE)).toBe('todo');
     expect(wheelReleaseAction(0)).toBe('signal');
   });
 

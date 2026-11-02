@@ -47,6 +47,8 @@ export type GestureEffect =
   | { type: 'dismiss' }
   /** 框选截图开着时按 Esc。不从手势状态机里产生，由钩子直接发出。 */
   | { type: 'snip-cancel' }
+  /** 待办草稿开着时按 Esc。不从手势状态机里产生，由钩子直接发出。 */
+  | { type: 'draft-cancel' }
   /** 框选时按 Enter。 */
   | { type: 'snip-confirm' }
   /** 框选时的鼠标。坐标是整张桌面的物理像素，可以跨屏幕。 */
