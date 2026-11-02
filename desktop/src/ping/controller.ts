@@ -1,20 +1,24 @@
 /**
  * 把钩子、浮层和截图串起来。
- * 问号只落一次。矩形按这个落点补上，不再改问号的坐标。
- * 连续问号只认最后一次。到点直接截图再发请求。浮层对截图不可见，问号不用先藏起来。
+ * 左边和右边都是自己框选。左边把这块画面交给模型，右边复制到剪贴板并放进输入框。
+ * 上下只落图标。连续提问只认最后一次。浮层对截图不可见。
  */
+import { clipboard, nativeImage } from 'electron';
 import { writeConsole } from '../console-output';
-import { PASTE_SLICE, QUESTION_SLICE, wheelSlice } from './geometry';
+import { wheelReleaseAction, wheelSlice, type ScreenRect } from './geometry';
 import { createScreenPingHook, type ScreenPingHook } from './hook-win';
-import { captureRegionAround, type RegionShot } from './capture-win';
-import { createPingOverlay, type PingOverlay } from './overlay';
-import { readScreenPingEnabled, readScreenPingSettings, writeScreenPingSettings } from './settings';
+import { capturePhysicalRect, type RegionShot } from './capture-win';
+import { createPingOverlay, readPingDisplayMaps, type PingOverlay } from './overlay';
+import { createSnipSession, reduceSnip, SNIP_MIN_PX, snipShowsChrome, type SnipSession } from './snip-session';
+import { readScreenPingEnabled, writeScreenPingSettings } from './settings';
 import type { GestureEffect } from './gesture';
 
 const WATCHDOG_INTERVAL_MS = 1000;
 const MARKER_TTL_MS = 30_000;
-/** 连续落问号时只解析最后一次。这段时间够再开一次轮盘。 */
-const ASK_DEBOUNCE_MS = 1000;
+/** 问号请求要小于 Express 的 5mb JSON 上限。过大的框选先缩小再送。 */
+const ASK_IMAGE_MAX_CHARS = 1_400_000;
+
+type SnipPurpose = 'copy' | 'ask';
 
 export interface ScreenPingController {
   setEnabled(enabled: boolean): void;
@@ -22,13 +26,9 @@ export interface ScreenPingController {
   stop(): void;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
 export function createScreenPingController(opts: {
   serverBaseUrl: string;
-  /** 正下方截图放进主窗口输入框。 */
+  /** 右侧框选放进主窗口输入框。 */
   onPasteShot?: (dataUrl: string) => void;
 }): ScreenPingController {
   const serverBaseUrl = opts.serverBaseUrl.replace(/\/$/, '');
@@ -37,6 +37,10 @@ export function createScreenPingController(opts: {
   let overlay: PingOverlay | null = null;
   let watchdog: NodeJS.Timeout | null = null;
   let askGen = 0;
+  let snipGen = 0;
+  let snipLive = false;
+  let snipPurpose: SnipPurpose = 'copy';
+  let snipState: SnipSession = createSnipSession();
   let lastSlice: number | null = null;
   let markerTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -71,12 +75,100 @@ export function createScreenPingController(opts: {
       overlay = createPingOverlay(() => {
         hook?.abort();
         lastSlice = null;
+        cancelSnip();
       });
     }
     return overlay;
   }
 
+  function resetSnip(): void {
+    snipLive = false;
+    snipState = createSnipSession();
+    hook?.setSnipOpen(false);
+  }
+
+  function cancelSnip(): void {
+    snipGen += 1;
+    resetSnip();
+    overlay?.endSnip();
+  }
+
+  function finishRegionSnip(): void {
+    const rect = snipState.rect;
+    if (!snipLive || !rect || rect.width < SNIP_MIN_PX || rect.height < SNIP_MIN_PX) return;
+    const purpose = snipPurpose;
+    snipGen += 1;
+    resetSnip();
+    overlay?.endSnip();
+    if (purpose === 'ask') void askRegion(rect);
+    else void deliverRegionSnip(rect);
+  }
+
+  function paintLiveSnip(): void {
+    if (!snipLive) return;
+    overlay?.paintSnip(snipState.rect, snipShowsChrome(snipState.phase));
+  }
+
+  function onSnipPointer(phase: 'down' | 'move' | 'up', x: number, y: number): void {
+    if (!snipLive) return;
+    const result = reduceSnip(snipState, { kind: phase, x, y, now: Date.now() }, readPingDisplayMaps());
+    snipState = result.state;
+    if (result.done === 'ok') {
+      finishRegionSnip();
+      return;
+    }
+    if (result.done === 'cancel') {
+      cancelSnip();
+      return;
+    }
+    if (result.paint) paintLiveSnip();
+  }
+
+  function beginRegionSnip(purpose: SnipPurpose): void {
+    const view = overlay;
+    if (!view) return;
+    const gen = ++snipGen;
+    snipLive = true;
+    snipPurpose = purpose;
+    snipState = createSnipSession();
+    hook?.setSnipOpen(true);
+    view.beginSnip({
+      onOk: () => {
+        if (gen !== snipGen) return;
+        finishRegionSnip();
+      },
+      onCancel: () => {
+        if (gen !== snipGen) return;
+        cancelSnip();
+      },
+    }, purpose);
+  }
+
+  async function deliverRegionSnip(rect: ScreenRect): Promise<void> {
+    try {
+      const shot = capturePhysicalRect(rect);
+      const image = nativeImage.createFromDataURL(shot.dataUrl);
+      if (!image.isEmpty()) clipboard.writeImage(image);
+      opts.onPasteShot?.(shot.dataUrl);
+      log(`snip ${shot.width}x${shot.height}`);
+    } catch (err) {
+      log(`snip capture failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   function onEffect(effect: GestureEffect): void {
+    if (effect.type === 'snip-cancel') {
+      cancelSnip();
+      return;
+    }
+    if (effect.type === 'snip-confirm') {
+      finishRegionSnip();
+      return;
+    }
+    if (effect.type === 'snip-pointer') {
+      onSnipPointer(effect.phase, effect.x, effect.y);
+      return;
+    }
     const view = overlay;
     if (!view || !enabled) return;
     if (effect.type === 'open') {
@@ -109,63 +201,65 @@ export function createScreenPingController(opts: {
     lastSlice = null;
     view.hideWheel();
     const slice = wheelSlice(effect.x - effect.originX, effect.y - effect.originY);
-    if (slice == null) return;
-    if (slice === QUESTION_SLICE) {
-      scheduleAsk(effect.originX, effect.originY);
+    const action = wheelReleaseAction(slice);
+    if (action === 'cancel' || slice == null) return;
+    if (action === 'ask') {
+      beginRegionSnip('ask');
       return;
     }
-    if (slice === PASTE_SLICE) {
-      void pasteShot(effect.originX, effect.originY);
+    if (action === 'snip') {
+      beginRegionSnip('copy');
       return;
     }
     view.showSignal(effect.originX, effect.originY, slice);
   }
 
-  async function pasteShot(x: number, y: number): Promise<void> {
-    const { cropWidth, cropHeight } = readScreenPingSettings();
-    try {
-      const shot = captureRegionAround(x, y, cropWidth, cropHeight);
-      opts.onPasteShot?.(shot.dataUrl);
-    } catch (err) {
-      log(`paste capture failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  function scheduleAsk(x: number, y: number): void {
+  async function askRegion(rect: ScreenRect): Promise<void> {
     const view = overlay;
     if (!view) return;
     const gen = ++askGen;
-    clearMarkerTimer();
-    hook?.setMarkerOpen(true);
-    void placeThenAsk(view, gen, x, y);
-  }
-
-  async function placeThenAsk(view: PingOverlay, gen: number, x: number, y: number): Promise<void> {
-    const { cropWidth, cropHeight } = readScreenPingSettings();
-    const due = Date.now() + ASK_DEBOUNCE_MS;
-    view.showMarker(x, y, 'wait', '');
-    await delay(32);
-    if (!enabled || gen !== askGen) return;
-    view.showCrop(cropWidth, cropHeight);
-    const remain = due - Date.now();
-    if (remain > 0) await delay(remain);
-    if (!enabled || gen !== askGen) return;
-
     let shot: RegionShot;
     try {
-      shot = captureRegionAround(x, y, cropWidth, cropHeight);
+      shot = capturePhysicalRect(rect);
     } catch (err) {
-      log(`capture failed: ${err instanceof Error ? err.message : String(err)}`);
+      log(`ask capture failed: ${err instanceof Error ? err.message : String(err)}`);
       if (!enabled || gen !== askGen) return;
-      view.showMarker(x, y, 'error', '这块画面没有截下来');
-      await delay(32);
-      if (!enabled || gen !== askGen) return;
-      view.showCrop(cropWidth, cropHeight);
+      clearMarkerTimer();
+      hook?.setMarkerOpen(true);
+      view.showAsk(rect, 'error', '这块画面没有截下来');
       armMarkerTimer();
       return;
     }
     if (!enabled || gen !== askGen) return;
-    void askAt(view, gen, shot);
+    clearMarkerTimer();
+    hook?.setMarkerOpen(true);
+    view.showAsk(rect, 'loading', '在看这块画面…');
+    void askAt(view, gen, fitAskShot(shot));
+  }
+
+  /** 框选很大时 PNG 会撑爆提问接口。按比例缩小，画面内容还在。 */
+  function fitAskShot(shot: RegionShot): RegionShot {
+    if (shot.dataUrl.length <= ASK_IMAGE_MAX_CHARS) return shot;
+    let image = nativeImage.createFromDataURL(shot.dataUrl);
+    if (image.isEmpty()) return shot;
+    let url = shot.dataUrl;
+    for (let i = 0; i < 8 && url.length > ASK_IMAGE_MAX_CHARS; i++) {
+      const size = image.getSize();
+      const width = Math.max(1, Math.round(size.width * 0.75));
+      const height = Math.max(1, Math.round(size.height * 0.75));
+      if (width === size.width && height === size.height) break;
+      image = image.resize({ width, height, quality: 'good' });
+      url = `data:image/png;base64,${image.toPNG().toString('base64')}`;
+    }
+    const size = image.getSize();
+    log(`ask image shrunk to ${size.width}x${size.height}`);
+    return {
+      dataUrl: url,
+      width: size.width,
+      height: size.height,
+      anchorX: Math.round(size.width / 2),
+      anchorY: Math.round(size.height / 2),
+    };
   }
 
   async function askAt(view: PingOverlay, gen: number, shot: RegionShot): Promise<void> {
@@ -229,6 +323,8 @@ export function createScreenPingController(opts: {
   function stopHook(): void {
     enabled = false;
     askGen += 1;
+    snipGen += 1;
+    resetSnip();
     clearMarkerTimer();
     if (watchdog) clearInterval(watchdog);
     watchdog = null;

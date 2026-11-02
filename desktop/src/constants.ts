@@ -72,6 +72,10 @@ export const IPC = {
   SCREEN_PING_MARKER: 'screen-ping:marker',
   /** 主进程 → 浮层：轮盘上除问号以外的标记。 */
   SCREEN_PING_SIGNAL: 'screen-ping:signal',
+  /** 主进程 → 浮层：右侧框选截图。 */
+  SCREEN_PING_SNIP: 'screen-ping:snip',
+  /** 浮层 → 主进程：框选完成或取消。 */
+  SCREEN_PING_SNIP_RESULT: 'screen-ping:snip-result',
   /** 主进程 → 主窗口：把截图放进输入框。 */
   SCREEN_PING_PASTE: 'screen-ping:paste',
 } as const;

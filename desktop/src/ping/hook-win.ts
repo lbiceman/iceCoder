@@ -29,6 +29,7 @@ const VK_CONTROL = 0x11;
 const VK_LCONTROL = 0xa2;
 const VK_RCONTROL = 0xa3;
 const VK_ESCAPE = 0x1b;
+const VK_RETURN = 0x0d;
 const MOUSEEVENTF_MOVE = 0x0001;
 const MOUSEEVENTF_LEFTDOWN = 0x0002;
 const MOUSEEVENTF_LEFTUP = 0x0004;
@@ -40,6 +41,8 @@ export interface ScreenPingHook {
   start(): void;
   stop(): void;
   setMarkerOpen(open: boolean): void;
+  /** 框选截图时把键鼠还给浮层，只留下 Esc 取消。 */
+  setSnipOpen(open: boolean): void;
   /** 轮盘开着但 10 秒没有输入时收起。 */
   pulse(now: number): void;
   abort(): void;
@@ -130,14 +133,19 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
   let keyProc: unknown = null;
   let state: GestureSnapshot = { ...INITIAL_GESTURE };
   let markerOpen = false;
+  let snipOpen = false;
   let ctrlHeld = false;
   let lastInputAt = 0;
   let moveQueued = false;
   let pendingMove: GestureEffect | null = null;
 
+  function isCoalescedMove(effect: GestureEffect): boolean {
+    return effect.type === 'move' || (effect.type === 'snip-pointer' && effect.phase === 'move');
+  }
+
   function emit(effect: GestureEffect): void {
     if (effect.type === 'none') return;
-    if (effect.type === 'move') {
+    if (isCoalescedMove(effect)) {
       pendingMove = effect;
       if (moveQueued) return;
       moveQueued = true;
@@ -189,6 +197,25 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
       const info = native.decodeMouse(lParam);
       const injected = (info.flags & LLMHF_INJECTED) !== 0;
       lastInputAt = Date.now();
+      // 框选按整张桌面的物理坐标走。左键交给会话，移动仍要传下去，光标才能跨屏。
+      if (snipOpen && !injected) {
+        if (msg === WM_LBUTTONDOWN) {
+          emit({ type: 'snip-pointer', phase: 'down', x: info.x, y: info.y });
+          return 1;
+        }
+        if (msg === WM_LBUTTONUP) {
+          emit({ type: 'snip-pointer', phase: 'up', x: info.x, y: info.y });
+          return 1;
+        }
+        if (msg === WM_MOUSEMOVE) {
+          emit({ type: 'snip-pointer', phase: 'move', x: info.x, y: info.y });
+          return native.callNext(null, nCode, wParam, lParam);
+        }
+        if (msg === WM_RBUTTONDOWN) {
+          emit({ type: 'snip-cancel' });
+          return 1;
+        }
+      }
       let swallow = false;
       if (msg === WM_LBUTTONDOWN) {
         swallow = apply({ kind: 'mouseDown', x: info.x, y: info.y, trigger: ctrlHeld, injected }).swallow;
@@ -223,7 +250,15 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
         ctrlHeld = false;
         swallow = apply({ kind: 'triggerUp' }).swallow;
       } else if (!injected && !up && info.vkCode === VK_ESCAPE && (msg === WM_KEYDOWN || msg === WM_SYSKEYDOWN)) {
-        swallow = apply({ kind: 'escape', markerOpen }).swallow;
+        if (snipOpen) {
+          emit({ type: 'snip-cancel' });
+          swallow = true;
+        } else {
+          swallow = apply({ kind: 'escape', markerOpen }).swallow;
+        }
+      } else if (!injected && !up && info.vkCode === VK_RETURN && snipOpen && (msg === WM_KEYDOWN || msg === WM_SYSKEYDOWN)) {
+        emit({ type: 'snip-confirm' });
+        swallow = true;
       } else if (!injected && !up && (msg === WM_KEYDOWN || msg === WM_SYSKEYDOWN)) {
         swallow = apply({ kind: 'otherKey' }).swallow;
       }
@@ -248,6 +283,7 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
       }
       state = { ...INITIAL_GESTURE };
       ctrlHeld = false;
+      snipOpen = false;
       lastInputAt = Date.now();
     },
     stop() {
@@ -259,10 +295,14 @@ export function createScreenPingHook(onEffect: (effect: GestureEffect) => void):
       keyProc = null;
       state = { ...INITIAL_GESTURE };
       ctrlHeld = false;
+      snipOpen = false;
       pendingMove = null;
     },
     setMarkerOpen(open: boolean) {
       markerOpen = open;
+    },
+    setSnipOpen(open: boolean) {
+      snipOpen = open;
     },
     pulse(now: number) {
       if (!mouseHook) return;

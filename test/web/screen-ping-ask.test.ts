@@ -22,7 +22,7 @@ function fakeLlm(reply: string, seen: { messages?: UnifiedMessage[] }): LLMAdapt
 }
 
 describe('屏幕问号提问', () => {
-  it('把落点锚点和截图一起交给模型', async () => {
+  it('把框选画面交给模型', async () => {
     const seen: { messages?: UnifiedMessage[] } = {};
     const result = await answerScreenPing(fakeLlm('这是发送按钮。', seen), {
       image: 'data:image/png;base64,aaaa',
@@ -42,7 +42,7 @@ describe('屏幕问号提问', () => {
     expect(seen.messages).toEqual(messages);
     const user = messages[1];
     expect(Array.isArray(user.content) && user.content.some((block) => block.type === 'image')).toBe(true);
-    expect(JSON.stringify(user.content)).toContain('(100, 80)');
+    expect(JSON.stringify(user.content)).toContain('框选');
     expect(JSON.stringify(user.content)).toContain('200×200');
   });
 

@@ -1,5 +1,5 @@
 /**
- * POST /api/screen-ping/ask — 桌面问号轮盘把 200×200 截图换成一句回答。
+ * POST /api/screen-ping/ask — 桌面问号轮盘把框选画面换成一句回答。
  */
 
 import { Router, type Request, type Response } from 'express';

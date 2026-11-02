@@ -1,5 +1,6 @@
 /**
- * 问号轮盘几何。扇区从正上方起顺时针 4 等分：上、右、下、左。问号在正左。
+ * 问号轮盘几何。扇区从正上方起顺时针 4 等分：上、右、下、左。
+ * 问号在正左，框选复制在正右。上下只落图标。
  * 手势阈值、中心取消半径，以及物理像素到浮层坐标的换算，参照 lolPing（MIT）。图形是自绘的。
  */
 
@@ -30,11 +31,24 @@ export const WHEEL_CENTER_RADIUS = 86;
 
 export const WHEEL_SLICE_COUNT = 4;
 
-/** 正左扇区。截图后问模型。 */
+/** 正左扇区。框选后交给模型。 */
 export const QUESTION_SLICE = 3;
 
-/** 正下扇区。截图放进输入框。 */
+/** 正右扇区。框选后复制到剪贴板并放进输入框。 */
+export const SNIP_SLICE = 1;
+
+/** 正下扇区。只落图标。 */
 export const PASTE_SLICE = 2;
+
+export type WheelReleaseAction = 'cancel' | 'ask' | 'snip' | 'signal';
+
+/** 松开左键时这个扇区要做的事。中心圆内是取消。 */
+export function wheelReleaseAction(slice: number | null): WheelReleaseAction {
+  if (slice == null) return 'cancel';
+  if (slice === QUESTION_SLICE) return 'ask';
+  if (slice === SNIP_SLICE) return 'snip';
+  return 'signal';
+}
 
 /** 按住触发键后，移动超过这个距离才打开轮盘（物理像素）。 */
 export const DRAG_THRESHOLD_PX = 8;
@@ -103,6 +117,44 @@ export interface ScreenRect {
   y: number;
   width: number;
   height: number;
+}
+
+/**
+ * 浮层里的 CSS 像素换成这块屏幕的物理像素。
+ * 先不取整，交给 clampCaptureRect 往屏幕里收，避免四舍五入后裁出屏幕。
+ */
+export function localCssToPhysical(
+  local: ScreenRect,
+  display: { physX: number; physY: number; scale: number },
+): ScreenRect {
+  const scale = display.scale > 0 && Number.isFinite(display.scale) ? display.scale : 1;
+  return {
+    x: display.physX + local.x * scale,
+    y: display.physY + local.y * scale,
+    width: local.width * scale,
+    height: local.height * scale,
+  };
+}
+
+/**
+ * 把截图矩形收进屏幕。宽或高不足 1 物理像素时返回 null。
+ * 用向内取整，贴着屏幕边缘时不会多裁出一像素。
+ */
+export function clampCaptureRect(
+  rect: ScreenRect,
+  screen: { left: number; top: number; width: number; height: number },
+): ScreenRect | null {
+  const nums = [rect.x, rect.y, rect.width, rect.height, screen.left, screen.top, screen.width, screen.height];
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  if (rect.width <= 0 || rect.height <= 0 || screen.width <= 0 || screen.height <= 0) return null;
+  const left = Math.ceil(Math.max(rect.x, screen.left));
+  const top = Math.ceil(Math.max(rect.y, screen.top));
+  const right = Math.floor(Math.min(rect.x + rect.width, screen.left + screen.width));
+  const bottom = Math.floor(Math.min(rect.y + rect.height, screen.top + screen.height));
+  const width = right - left;
+  const height = bottom - top;
+  if (width < 1 || height < 1) return null;
+  return { x: left, y: top, width, height };
 }
 
 /** 一块屏幕：Electron 用 DIP，钩子报的是物理像素。换算方式和 lolPing 的 DisplayMap 一致。 */

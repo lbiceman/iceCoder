@@ -36,7 +36,7 @@ describe('问号浮层预览', () => {
       expect(await page.locator('.ping-label').textContent()).toBe('PING');
       expect(await page.locator('#wheel .icon.hot .q-art').count()).toBe(1);
       expect(await page.locator('#wheel .icon.is-alert').count()).toBe(1);
-      expect(await page.locator('#wheel .icon.is-way').count()).toBe(1);
+      expect(await page.locator('#wheel .icon.is-snip').count()).toBe(1);
       expect(await page.locator('#mark .q-art').count()).toBe(1);
       expect(await page.locator('#mark-text').textContent()).toBe('这是发送按钮，回车也能发出去。');
       expect(await page.locator('.wedge.is-q.is-hot').count()).toBe(1);
@@ -54,7 +54,7 @@ describe('问号浮层预览', () => {
         };
         return {
           up: at('.icon.is-alert'),
-          right: at('.icon.is-way'),
+          right: at('.icon.is-snip'),
           down: at('.icon[data-slice="2"]'),
           left: at('.icon.is-q'),
         };
@@ -158,6 +158,49 @@ describe('问号浮层预览', () => {
       });
       expect(await page.locator('#signals .ping').count()).toBe(3);
       expect(await page.locator('#signals .art svg').count()).toBe(3);
+      const crossed = await page.evaluate(() => {
+        const preview = (window as unknown as {
+          __pingPreview: { setSnip: (payload: unknown) => void };
+        }).__pingPreview;
+        preview.setSnip({
+          show: true,
+          scale: 1,
+          rect: { x: -80, y: 60, w: 1040, h: 180 },
+          chosen: true,
+          label: '1040 × 180',
+        });
+        const box = document.getElementById('snip-box')!.getBoundingClientRect();
+        return {
+          left: box.left,
+          width: box.width,
+          right: box.right,
+          view: window.innerWidth,
+          label: document.getElementById('snip-size')?.textContent,
+        };
+      });
+      expect(crossed.left).toBeLessThan(0);
+      expect(crossed.width).toBeGreaterThan(1000);
+      expect(crossed.right).toBeGreaterThan(crossed.view);
+      expect(crossed.label).toBe('1040 × 180');
+      await page.locator('#snip-ok').click();
+      const shot = await page.evaluate(() => (
+        window as unknown as { __pingLastSnip: { action: string } }
+      ).__pingLastSnip);
+      expect(shot).toEqual({ action: 'ok' });
+      expect(await page.locator('#snip.on').count()).toBe(0);
+      await page.evaluate(() => {
+        const preview = (window as unknown as {
+          __pingPreview: { setSnip: (payload: unknown) => void };
+        }).__pingPreview;
+        preview.setSnip({ show: true, scale: 1 });
+      });
+      await page.locator('#snip.on').waitFor();
+      await page.keyboard.press('Escape');
+      const cancelled = await page.evaluate(() => (
+        window as unknown as { __pingLastSnip: { action: string } }
+      ).__pingLastSnip);
+      expect(cancelled).toEqual({ action: 'cancel' });
+      expect(await page.locator('#snip.on').count()).toBe(0);
       await page.screenshot({ path: path.join(os.tmpdir(), 'ice-ping-preview.png') });
     } finally {
       await browser.close();

@@ -1,5 +1,5 @@
 /**
- * 屏幕问号：把落点周围的一小块截图交给当前模型，要一句短回答。
+ * 屏幕问号：把用户框选的画面交给当前模型，要一句短回答。
  * 不进 Harness，不调工具。
  */
 
@@ -24,11 +24,11 @@ export interface ScreenPingAskInput {
 }
 
 export function buildScreenPingMessages(input: ScreenPingAskInput): UnifiedMessage[] {
-  const { anchorX, anchorY, width, height } = input;
+  const { width, height } = input;
   return [
     {
       role: 'system',
-      content: '你在看用户屏幕上的一小块截图。用中文回答，只写一两句，不要用列表，不要说「这是一张截图」。',
+      content: '你在看用户框选的一块屏幕画面。用中文回答，只写一两句，不要用列表，不要说「这是一张截图」。',
     },
     {
       role: 'user',
@@ -36,9 +36,8 @@ export function buildScreenPingMessages(input: ScreenPingAskInput): UnifiedMessa
         {
           type: 'text',
           text: [
-            `这是以问号落点为中心裁出的 ${width}×${height} 像素画面。`,
-            `问号打在图内像素 (${anchorX}, ${anchorY})。`,
-            '用户想知道这个位置是什么、能做什么。直接回答。',
+            `这是用户框选的 ${width}×${height} 像素画面。`,
+            '用户想知道这块画面是什么、能做什么。直接回答。',
           ].join(''),
         },
         { type: 'image', imageUrl: input.imageDataUrl },
