@@ -4,10 +4,16 @@
 
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { remapPathToWorkspace } from './workspace-snapshot.js';
+import { splitShellCommandSegments, tokenizeShellCommand } from '../tools/shell-command-parser.js';
+import { resolveGitExecutable } from '../tools/builtin/git-tool.js';
+
+const execFileAsync = promisify(execFile);
 
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -52,6 +58,8 @@ export interface WorkspaceFileInventory extends Map<string, {
    * 未设置表示全树扫描。前后两次对比必须使用同一范围。
    */
   scopeRelPaths?: string[];
+  /** 命令判定为不写工作区，没有扫描；命令结束后也不扫，按无改动处理。 */
+  readOnlyCommand?: boolean;
 }
 
 export interface ListWorkspaceInventoryOptions {
@@ -97,18 +105,19 @@ interface ContentHashEntry {
 interface WorkspaceTouchState {
   preCommandInventories: Map<string, WorkspaceFileInventory>;
   backgroundCommandInventories: Map<string, BackgroundInventoryEntry>;
-  contentHashCache: Map<string, ContentHashEntry>;
-  lastFullInventory: { root: string; inventory: WorkspaceFileInventory } | null;
 }
 
 function emptyWorkspaceTouchState(): WorkspaceTouchState {
   return {
     preCommandInventories: new Map(),
     backgroundCommandInventories: new Map(),
-    contentHashCache: new Map(),
-    lastFullInventory: null,
   };
 }
+
+/** 按工作区根复用：同一进程里后一轮命令不必重读未改文件。校验仍看 size/mtime/ctime。 */
+const LAST_FULL_INVENTORY_ROOT_LIMIT = 4;
+const lastFullInventories = new Map<string, WorkspaceFileInventory>();
+const contentHashCache = new Map<string, ContentHashEntry>();
 
 const workspaceTouchStorage = new AsyncLocalStorage<WorkspaceTouchState>();
 /** 没有 run 作用域时的回退，给直接扫清单的测试用。 */
@@ -118,7 +127,7 @@ function currentWorkspaceTouch(): WorkspaceTouchState {
   return workspaceTouchStorage.getStore() ?? fallbackWorkspaceTouch;
 }
 
-/** 包住一次 run，命令清单和内容哈希不再跟其他会话共用。 */
+/** 包住一次 run，命令前快照与后台基线不跟其他会话共用。文件哈希按工作区根复用。 */
 export function runWithWorkspaceTouchScope<T>(fn: () => T): T {
   return workspaceTouchStorage.run(emptyWorkspaceTouchState(), fn);
 }
@@ -196,6 +205,92 @@ export function extractLikelyWritePathsFromCommand(command: string): string[] {
   return [...paths];
 }
 
+/**
+ * 只打印、不写文件的命令。`.git` 不在清单里，只动 `.git` 的 git 子命令也算。
+ * 不认识的命令一律不算，交给前后清单对比。
+ */
+const READ_ONLY_EXECUTABLES = new Set([
+  'ls', 'dir', 'pwd', 'cd', 'cat', 'type', 'head', 'tail', 'wc', 'echo', 'stat', 'file', 'du', 'df',
+  'which', 'where', 'whoami', 'hostname', 'uname', 'printenv',
+  'rg', 'grep', 'egrep', 'fgrep', 'findstr', 'find', 'tree',
+  'get-childitem', 'gci', 'get-content', 'gc', 'get-item', 'gi', 'get-location', 'gl',
+  'select-string', 'sls', 'test-path', 'resolve-path', 'get-command', 'gcm', 'measure-object', 'measure',
+]);
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'grep',
+  'describe', 'shortlog', 'cat-file', 'branch', 'tag', 'remote',
+]);
+
+const VERSION_PROBE_EXECUTABLES = new Set([
+  'node', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'deno', 'python', 'python3', 'py', 'pip', 'pip3',
+  'tsc', 'java', 'go', 'cargo', 'rustc', 'dotnet', 'git',
+]);
+
+/** 这些参数会让本来只读的命令写文件或执行别的程序。 */
+const WRITING_ARGS: Record<string, RegExp> = {
+  find: /^-(?:delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/i,
+  rg: /^--pre(?:=|$)/,
+  tree: /^-o$/,
+  git: /^(?:--output(?:=|$)|--ext-diff$|-O|--open-files-in-pager)/,
+};
+
+function executableName(token: string): string {
+  const base = token.replace(/\\/g, '/').split('/').pop() ?? '';
+  return base.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, '');
+}
+
+function gitSubcommand(args: string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-C') {
+      i++;
+      continue;
+    }
+    if (arg === '--no-pager' || arg === '-P' || /^--(?:git-dir|work-tree)=/.test(arg)) continue;
+    if (arg.startsWith('-')) return null;
+    return arg.toLowerCase();
+  }
+  return null;
+}
+
+function isReadOnlySegment(segment: string): boolean {
+  const tokens = tokenizeShellCommand(segment).map(t => t.value);
+  if (tokens.length === 0) return true;
+  if (tokens[0].includes('=')) return false;
+  const exe = executableName(tokens[0]);
+  const args = tokens.slice(1);
+  if (
+    VERSION_PROBE_EXECUTABLES.has(exe)
+    && args.length === 1
+    && ['--version', '-v', '-V'].includes(args[0])
+  ) {
+    return true;
+  }
+  const writing = WRITING_ARGS[exe];
+  if (writing && args.some(arg => writing.test(arg))) return false;
+  if (exe === 'git') {
+    const sub = gitSubcommand(args);
+    return sub !== null && READ_ONLY_GIT_SUBCOMMANDS.has(sub);
+  }
+  return READ_ONLY_EXECUTABLES.has(exe);
+}
+
+/** 命令能确定不改工作区文件时返回 true；拿不准一律 false。 */
+export function isWorkspaceReadOnlyShellCommand(command: string): boolean {
+  if (!command?.trim()) return false;
+  if (command.includes('`') || command.includes('$(')) return false;
+  const withoutHarmlessRedirects = command
+    .replace(/\s*\d?>&\d/g, ' ')
+    .replace(/\s*\d?>\s*(?:nul|\/dev\/null|\$null)(?=\s|$|[;&|])/gi, ' ');
+  if (/[<>]/.test(withoutHarmlessRedirects)) return false;
+  return splitShellCommandSegments(withoutHarmlessRedirects).every(isReadOnlySegment);
+}
+
+export function readOnlyCommandInventory(): WorkspaceFileInventory {
+  return Object.assign(emptyInventory(), { readOnlyCommand: true });
+}
+
 export function isShellWorkspaceTouchTool(
   toolName: string,
   args: Record<string, unknown> | undefined,
@@ -227,6 +322,147 @@ function cloneInventory(source: WorkspaceFileInventory): WorkspaceFileInventory 
 
 function isEnoent(error: unknown): boolean {
   return !!error && typeof error === 'object' && (error as { code?: string }).code === 'ENOENT';
+}
+
+interface WalkIgnoreRules {
+  /** 相对工作区根的目录（posix），进入即跳过 */
+  skipDirRels: Set<string>;
+  /** 任意层级的目录名 */
+  skipDirNames: Set<string>;
+  /** 任意层级的后缀，如 `.log` */
+  skipSuffixes: Set<string>;
+  /** 仅工作区根下的后缀，如 `/*.tgz` */
+  rootSkipSuffixes: Set<string>;
+}
+
+function parseWalkIgnoreRules(text: string): WalkIgnoreRules {
+  const rules: WalkIgnoreRules = {
+    skipDirRels: new Set(),
+    skipDirNames: new Set(),
+    skipSuffixes: new Set(),
+    rootSkipSuffixes: new Set(),
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('!')) continue;
+    const rooted = line.startsWith('/');
+    let pat = rooted ? line.slice(1) : line;
+    if (pat.endsWith('/*')) pat = pat.slice(0, -2);
+    else if (pat.endsWith('/')) pat = pat.slice(0, -1);
+    if (!pat || pat.includes('**') || pat.includes('?') || pat.includes('[')) continue;
+    if (pat.startsWith('*.') && !pat.includes('/')) {
+      const suffix = pat.slice(1);
+      if (rooted) rules.rootSkipSuffixes.add(suffix);
+      else rules.skipSuffixes.add(suffix);
+      continue;
+    }
+    if (pat.includes('*')) continue;
+    if (pat.includes('/')) {
+      rules.skipDirRels.add(pat);
+      continue;
+    }
+    if (!pat.includes('.')) rules.skipDirNames.add(pat);
+    else if (pat.startsWith('.')) rules.skipDirNames.add(pat);
+  }
+  return rules;
+}
+
+function mergeWalkIgnoreRules(into: WalkIgnoreRules, extra: WalkIgnoreRules): void {
+  for (const v of extra.skipDirRels) into.skipDirRels.add(v);
+  for (const v of extra.skipDirNames) into.skipDirNames.add(v);
+  for (const v of extra.skipSuffixes) into.skipSuffixes.add(v);
+  for (const v of extra.rootSkipSuffixes) into.rootSkipSuffixes.add(v);
+}
+
+async function loadWalkIgnoreRules(root: string): Promise<WalkIgnoreRules | null> {
+  const files = [path.join(root, '.gitignore'), path.join(root, '.git', 'info', 'exclude')];
+  let rules: WalkIgnoreRules | null = null;
+  for (const file of files) {
+    try {
+      const text = await fs.readFile(file, 'utf8');
+      const parsed = parseWalkIgnoreRules(text);
+      if (!rules) rules = parsed;
+      else mergeWalkIgnoreRules(rules, parsed);
+    } catch {
+      /* 没有 ignore 文件 */
+    }
+  }
+  return rules;
+}
+
+function shouldSkipWalkDir(relPosix: string, name: string, rules: WalkIgnoreRules | null): boolean {
+  if (SKIP_DIRS.has(name)) return true;
+  if (!rules) return false;
+  if (rules.skipDirNames.has(name)) return true;
+  if (rules.skipDirRels.has(relPosix)) return true;
+  return false;
+}
+
+function shouldSkipWalkFile(relPosix: string, name: string, rules: WalkIgnoreRules | null): boolean {
+  if (!rules) return false;
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return false;
+  const suffix = name.slice(dot);
+  if (rules.skipSuffixes.has(suffix)) return true;
+  if (!relPosix.includes('/') && rules.rootSkipSuffixes.has(suffix)) return true;
+  return false;
+}
+
+function isSkippedInventoryRel(rel: string): boolean {
+  const parts = rel.split('/');
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (SKIP_DIRS.has(part)) return true;
+    if (part.startsWith('.') && part !== '.env' && part !== '.gitignore' && i < parts.length - 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const GIT_LS_FILES_TIMEOUT_MS = 4_000;
+const GIT_LS_FILES_MAX_BUFFER = 16 * 1024 * 1024;
+
+async function listGitInventoryPaths(root: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      resolveGitExecutable(),
+      ['-C', root, '--no-pager', 'ls-files', '-z', '-co', '--exclude-standard'],
+      {
+        timeout: GIT_LS_FILES_TIMEOUT_MS,
+        maxBuffer: GIT_LS_FILES_MAX_BUFFER,
+        windowsHide: true,
+      },
+    );
+    const rels: string[] = [];
+    for (const rel of String(stdout).split('\0')) {
+      if (!rel || isSkippedInventoryRel(rel)) continue;
+      rels.push(rel.replace(/\\/g, '/'));
+    }
+    return rels;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastFullInventory(root: string, inventory: WorkspaceFileInventory): void {
+  const key = normalizeDirKey(root);
+  lastFullInventories.delete(key);
+  lastFullInventories.set(key, cloneInventory(inventory));
+  while (lastFullInventories.size > LAST_FULL_INVENTORY_ROOT_LIMIT) {
+    const oldest = lastFullInventories.keys().next().value as string | undefined;
+    if (!oldest) break;
+    lastFullInventories.delete(oldest);
+  }
+}
+
+function takeLastFullInventory(root: string): WorkspaceFileInventory | undefined {
+  const key = normalizeDirKey(root);
+  const inventory = lastFullInventories.get(key);
+  if (!inventory) return undefined;
+  lastFullInventories.delete(key);
+  lastFullInventories.set(key, inventory);
+  return inventory;
 }
 
 function resolveScopePaths(root: string, relPaths: readonly string[]): string[] {
@@ -302,6 +538,7 @@ async function collectInventoryFiles(
   dir: string,
   out: WorkspaceFileInventory,
   excluded: ReadonlySet<string>,
+  rules: WalkIgnoreRules | null,
 ): Promise<Array<{ abs: string; rel: string }>> {
   const files: Array<{ abs: string; rel: string }> = [];
   const walk = async (current: string): Promise<void> => {
@@ -320,13 +557,15 @@ async function collectInventoryFiles(
       }
       const abs = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
+        const relDir = path.relative(root, abs).split(path.sep).join('/');
+        if (shouldSkipWalkDir(relDir, entry.name, rules)) continue;
         await walk(abs);
         continue;
       }
       if (!entry.isFile()) continue;
       const rel = path.relative(root, abs).split(path.sep).join('/');
       if (!rel || rel.startsWith('..')) continue;
+      if (shouldSkipWalkFile(rel, entry.name, rules)) continue;
       files.push({ abs, rel });
     }
   };
@@ -367,9 +606,8 @@ export async function listWorkspaceFileInventory(
     ? resolveScopePaths(root, options.scopeRelPaths)
     : [];
   const scope = resolvedScope.length > 0 ? resolvedScope : undefined;
-  const touch = currentWorkspaceTouch();
   const baseline = options?.baseline
-    ?? (!scope && touch.lastFullInventory?.root === root ? touch.lastFullInventory.inventory : undefined);
+    ?? (!scope ? takeLastFullInventory(root) : undefined);
   const out = emptyInventory(scope);
   const reads = { n: 0 };
   const excluded = new Set((options?.excludeDirs ?? []).map(normalizeDirKey));
@@ -388,16 +626,28 @@ export async function listWorkspaceFileInventory(
         continue;
       }
       if (stat.isDirectory()) {
-        files.push(...await collectInventoryFiles(root, abs, out, excluded));
+        files.push(...await collectInventoryFiles(root, abs, out, excluded, null));
       } else if (stat.isFile()) {
         files.push({ abs, rel });
       }
     }
     await fillInventoryFiles(files, out, baseline, reads, true);
   } else {
-    const files = await collectInventoryFiles(root, root, out, excluded);
+    const gitRels = await listGitInventoryPaths(root);
+    let files: Array<{ abs: string; rel: string }>;
+    if (gitRels) {
+      files = [];
+      for (const rel of gitRels) {
+        const abs = path.join(root, ...rel.split('/'));
+        if (isInsideExcludedDir(abs, excluded)) continue;
+        files.push({ abs, rel });
+      }
+    } else {
+      const rules = await loadWalkIgnoreRules(root);
+      files = await collectInventoryFiles(root, root, out, excluded, rules);
+    }
     await fillInventoryFiles(files, out, baseline, reads, false);
-    if (out.complete) touch.lastFullInventory = { root, inventory: cloneInventory(out) };
+    if (out.complete) rememberLastFullInventory(root, out);
   }
 
   out.contentReads = reads.n;
@@ -408,7 +658,7 @@ function takeCachedContentHash(
   filePath: string,
   stat: Pick<import('node:fs').Stats, 'size' | 'mtimeMs' | 'ctimeMs'>,
 ): string | null {
-  const cache = currentWorkspaceTouch().contentHashCache;
+  const cache = contentHashCache;
   const cached = cache.get(filePath);
   if (
     !cached
@@ -432,7 +682,7 @@ function rememberCachedContentHash(
     contentHash: string;
   },
 ): void {
-  const cache = currentWorkspaceTouch().contentHashCache;
+  const cache = contentHashCache;
   cache.delete(filePath);
   cache.set(filePath, entry);
   while (cache.size > WORKSPACE_CONTENT_HASH_CACHE_LIMIT) {
@@ -526,7 +776,7 @@ export function getWorkspaceInventoryDiagnostics(): {
 } {
   const touch = currentWorkspaceTouch();
   return {
-    contentHashCacheSize: touch.contentHashCache.size,
+    contentHashCacheSize: contentHashCache.size,
     backgroundInventorySize: touch.backgroundCommandInventories.size,
     preCommandInventorySize: touch.preCommandInventories.size,
   };

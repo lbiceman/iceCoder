@@ -12,7 +12,9 @@ import {
   diffInventoryTouchedPaths,
   extractLikelyWritePathsFromCommand,
   getWorkspaceInventoryDiagnostics,
+  isWorkspaceReadOnlyShellCommand,
   listWorkspaceFileInventory,
+  runWithWorkspaceTouchScope,
   rememberBackgroundCommandInventory,
   takeBackgroundCommandInventory,
   WORKSPACE_CONTENT_HASH_CACHE_LIMIT,
@@ -34,6 +36,53 @@ describe('workspace-command-touch', () => {
     expect(extractLikelyWritePathsFromCommand('Set-Content -Path foo.txt -Value x')).toContain('foo.txt');
     expect(extractLikelyWritePathsFromCommand('npm test')).toEqual([]);
     expect(extractLikelyWritePathsFromCommand('echo hi 2>&1')).not.toContain('&1');
+  });
+
+  it('classifies obvious read-only shell commands', () => {
+    expect(isWorkspaceReadOnlyShellCommand('git status')).toBe(true);
+    expect(isWorkspaceReadOnlyShellCommand('git --no-pager diff --stat')).toBe(true);
+    expect(isWorkspaceReadOnlyShellCommand('ls -la src')).toBe(true);
+    expect(isWorkspaceReadOnlyShellCommand('node --version')).toBe(true);
+    expect(isWorkspaceReadOnlyShellCommand('npm test')).toBe(false);
+    expect(isWorkspaceReadOnlyShellCommand('git commit -m x')).toBe(false);
+    expect(isWorkspaceReadOnlyShellCommand('echo hi > out.txt')).toBe(false);
+    expect(isWorkspaceReadOnlyShellCommand('find . -delete')).toBe(false);
+  });
+
+  it('skips gitignore directories when walking a non-git workspace', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-gitignore-'));
+    try {
+      await fs.writeFile(path.join(root, '.gitignore'), 'junk/*\n*.log\n', 'utf8');
+      await fs.mkdir(path.join(root, 'junk'), { recursive: true });
+      await fs.writeFile(path.join(root, 'junk', 'big.bin'), 'skip-me', 'utf8');
+      await fs.writeFile(path.join(root, 'keep.ts'), 'keep', 'utf8');
+      await fs.writeFile(path.join(root, 'noise.log'), 'log', 'utf8');
+
+      const inventory = await listWorkspaceFileInventory(root);
+      expect([...inventory.keys()].sort()).toEqual(['.gitignore', 'keep.ts']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses file hashes across harness runs when metadata is unchanged', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-cmd-hash-reuse-'));
+    try {
+      await fs.writeFile(path.join(root, 'a.txt'), 'body', 'utf8');
+      const firstReads = await runWithWorkspaceTouchScope(async () => {
+        const listed = await listWorkspaceFileInventory(root);
+        return listed.contentReads;
+      });
+      expect(firstReads).toBeGreaterThan(0);
+
+      const secondReads = await runWithWorkspaceTouchScope(async () => {
+        const listed = await listWorkspaceFileInventory(root);
+        return listed.contentReads;
+      });
+      expect(secondReads).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('collectSessionTouchedPaths reads run_command redirects', () => {

@@ -124,7 +124,9 @@ export async function recompressIntentBlobFile(dir: string, hash: string): Promi
  */
 export class IntentBlobStore {
   readonly dir: string;
-  private existing: Set<string> | null = null;
+  private existing: Promise<Set<string>> | null = null;
+  /** 同一内容并发 put 时只写一次；Windows 上两个 rename 抢同一目标会失败。 */
+  private readonly pending = new Map<string, Promise<string>>();
   private readonly readCache = new Map<string, string>();
 
   constructor(sessionDir: string, sessionId: string) {
@@ -135,9 +137,19 @@ export class IntentBlobStore {
     const hash = hashIntentBlobContent(content);
     const existing = await this.existingHashes();
     if (existing.has(hash)) return hash;
-    await writeFileAtomic(path.join(this.dir, hash), await encodeIntentBlobFile(content));
-    existing.add(hash);
-    return hash;
+    const inFlight = this.pending.get(hash);
+    if (inFlight) return inFlight;
+    const write = (async () => {
+      await writeFileAtomic(path.join(this.dir, hash), await encodeIntentBlobFile(content));
+      existing.add(hash);
+      return hash;
+    })();
+    this.pending.set(hash, write);
+    try {
+      return await write;
+    } finally {
+      this.pending.delete(hash);
+    }
   }
 
   async read(hash: string, label: string): Promise<string> {
@@ -177,15 +189,21 @@ export class IntentBlobStore {
     }
   }
 
-  private async existingHashes(): Promise<Set<string>> {
-    if (this.existing) return this.existing;
+  private existingHashes(): Promise<Set<string>> {
+    this.existing ??= this.listExistingHashes();
+    return this.existing;
+  }
+
+  private async listExistingHashes(): Promise<Set<string>> {
     let names: string[] = [];
     try {
       names = await fs.readdir(this.dir);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.existing = null;
+        throw err;
+      }
     }
-    this.existing = new Set(names.filter((name) => BLOB_HASH_RE.test(name)));
-    return this.existing;
+    return new Set(names.filter((name) => BLOB_HASH_RE.test(name)));
   }
 }

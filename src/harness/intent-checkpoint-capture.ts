@@ -55,6 +55,23 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
+const pendingCaptures = new Map<string, Promise<unknown>>();
+
+/** 记录进行中的 Intent Checkpoint，供工具执行前等待。 */
+export function trackIntentCheckpointCapture<T>(sessionId: string, work: Promise<T>): Promise<T> {
+  pendingCaptures.set(sessionId, work);
+  return work.finally(() => {
+    if (pendingCaptures.get(sessionId) === work) pendingCaptures.delete(sessionId);
+  });
+}
+
+/** 捕获未完成时挡住写工具，避免把改过的文件当成用户消息前的快照。 */
+export async function waitForIntentCheckpointCapture(sessionId: string | undefined): Promise<void> {
+  if (!sessionId) return;
+  const pending = pendingCaptures.get(sessionId);
+  if (pending) await pending;
+}
+
 export async function captureIntentCheckpoint(
   params: CaptureIntentCheckpointParams,
 ): Promise<CaptureIntentCheckpointResult> {

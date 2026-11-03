@@ -367,7 +367,8 @@ export async function runHarnessToolRound(
   }
   // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断永远达不到阈值。
 
-  await saveTaskCheckpoint(
+  // 运行中落盘不挡下一轮 LLM；队列仍串行，终态 save 会排在后面。
+  void saveTaskCheckpoint(
     deps,
     'running',
     resolveCheckpointUserGoal(state, userMessage),

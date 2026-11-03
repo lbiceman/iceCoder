@@ -148,10 +148,24 @@ async function putJsonValue(store: IntentBlobStore, value: unknown): Promise<Sto
   return { b: await store.put(JSON.stringify(blanked)), h: holes };
 }
 
+/** blob 压缩和写盘都走 libuv 线程池，串行时首个归档要几百毫秒。 */
+const PUT_CONCURRENCY = 8;
+
+async function mapConcurrent<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      out[index] = await fn(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PUT_CONCURRENCY, items.length) }, worker));
+  return out;
+}
+
 async function putJsonList(store: IntentBlobStore, values: readonly unknown[]): Promise<StoredJsonRef[]> {
-  const refs: StoredJsonRef[] = [];
-  for (const value of values) refs.push(await putJsonValue(store, value));
-  return refs;
+  return mapConcurrent(values, (value) => putJsonValue(store, value));
 }
 
 function parseHoles(value: unknown, label: string): JsonHole[] {
@@ -315,13 +329,16 @@ export async function externalizeIntentCheckpoint(
   store: IntentBlobStore,
   archive: IntentCheckpointArchive,
 ): Promise<StoredIntentCheckpointV2> {
-  const fileRefs: Record<string, string | null> = {};
-  for (const [rel, content] of Object.entries(archive.workspaceFiles ?? {})) {
+  const fileEntries = Object.entries(archive.workspaceFiles ?? {});
+  for (const [rel, content] of fileEntries) {
     if (content !== null && typeof content !== 'string') {
       throw new TypeError(`workspaceFiles[${rel}] 不是字符串或 null`);
     }
-    setOwn(fileRefs, rel, content === null ? null : await store.put(content));
   }
+  const fileHashes = await mapConcurrent(fileEntries, ([, content]) =>
+    content === null ? Promise.resolve(null) : store.put(content));
+  const fileRefs: Record<string, string | null> = {};
+  fileEntries.forEach(([rel], index) => setOwn(fileRefs, rel, fileHashes[index]!));
 
   const stored: StoredIntentCheckpointV2 = {
     version: INTENT_CHECKPOINT_VERSION,

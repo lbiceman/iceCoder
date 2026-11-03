@@ -50,13 +50,16 @@ import {
   collectSessionTouchedPaths,
   touchSessionTouchedPaths,
 } from './intent-checkpoint-store.js';
+import { waitForIntentCheckpointCapture } from './intent-checkpoint-capture.js';
 import { remapPathToWorkspace } from './workspace-snapshot.js';
 import {
   diffInventoryTouchedPaths,
   extractLikelyWritePathsFromCommand,
   isShellWorkspaceTouchTool,
+  isWorkspaceReadOnlyShellCommand,
   limitTrackedCommandDiff,
   listWorkspaceFileInventory,
+  readOnlyCommandInventory,
   rememberBackgroundCommandInventory,
   discardPreCommandInventories,
   rememberPreCommandInventory,
@@ -312,6 +315,8 @@ export async function executeToolCallsStreaming(
   const currentToolNames = currentTools
     ? new Set(currentTools.map(tool => tool.name))
     : undefined;
+
+  await waitForIntentCheckpointCapture(checkpointSessionId);
 
   // 第一遍：权限检查 + 提交到流式执行器
   const submittedIds = new Set<string>();
@@ -631,13 +636,16 @@ export async function executeToolCallsStreaming(
       && tc.id
       && isShellWorkspaceTouchTool(tc.name, tc.arguments)
     ) {
+      const command = extractRunCommand(tc.arguments);
       rememberPreCommandInventory(
         commandInventoryScope,
         tc.id,
-        await listWorkspaceFileInventory(deps.workspaceRoot, {
-          scopeRelPaths: inventoryScopeForToolCall(tc),
-          excludeDirs: harnessOwnedDirs,
-        }),
+        command && isWorkspaceReadOnlyShellCommand(command)
+          ? readOnlyCommandInventory()
+          : await listWorkspaceFileInventory(deps.workspaceRoot, {
+            scopeRelPaths: inventoryScopeForToolCall(tc),
+            excludeDirs: harnessOwnedDirs,
+          }),
       );
     }
 
@@ -739,11 +747,13 @@ export async function executeToolCallsStreaming(
       | (ReturnType<typeof diffInventoryTouchedPaths> & { bulkCreatedSkipped: number })
       | undefined;
     if (inventoryBefore) {
-      const after = await listWorkspaceFileInventory(deps.workspaceRoot, {
-        baseline: inventoryBefore,
-        scopeRelPaths: inventoryBefore.scopeRelPaths,
-        excludeDirs: harnessOwnedDirs,
-      });
+      const after = inventoryBefore.readOnlyCommand
+        ? inventoryBefore
+        : await listWorkspaceFileInventory(deps.workspaceRoot, {
+          baseline: inventoryBefore,
+          scopeRelPaths: inventoryBefore.scopeRelPaths,
+          excludeDirs: harnessOwnedDirs,
+        });
       const fullDiff = diffInventoryTouchedPaths(deps.workspaceRoot, inventoryBefore, after);
       commandInventoryDiff = limitTrackedCommandDiff(fullDiff);
       if (commandInventoryDiff.bulkCreatedSkipped > 0) {

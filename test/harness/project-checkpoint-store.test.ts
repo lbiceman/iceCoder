@@ -360,6 +360,14 @@ describe('ProjectCheckpointStore', () => {
     expect((await store.load())?.identity.checkpointId).toBe('checkpoint-1');
   });
 
+  it('still durable-writes a save that was queued before persist was blocked', async () => {
+    const store = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-1' });
+    const pending = store.save(checkpoint());
+    store.setPersistBlocked(true);
+    await pending;
+    expect((await store.load())?.identity.checkpointId).toBe('checkpoint-1');
+  });
+
   it('isolates concurrent sessions', async () => {
     const left = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-a' });
     const right = new ProjectCheckpointStore({ sessionDir: tempDir, sessionId: 'session-b' });

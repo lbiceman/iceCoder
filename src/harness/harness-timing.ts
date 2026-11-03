@@ -16,16 +16,54 @@ export interface HarnessTimingSample {
 }
 
 const timingStorage = new AsyncLocalStorage<HarnessTimingSample[]>();
-/** 没有 run 作用域时的回退（基准脚本）。并发 run 各自用上面的存储。 */
-const fallbackSamples: HarnessTimingSample[] = [];
+/**
+ * 最近一次 run 作用域退出时的样本快照。
+ * 作用域内并发 run 仍各写各的存储；作用域结束后 `getStore()` 为空，
+ * 基准脚本要在 `harness.run()` 返回后汇总，只能读这里。
+ * 后结束的 run 会覆盖先结束的快照。
+ */
+let publishedSamples: HarnessTimingSample[] = [];
 
 function currentTimingSamples(): HarnessTimingSample[] {
-  return timingStorage.getStore() ?? fallbackSamples;
+  return timingStorage.getStore() ?? publishedSamples;
 }
 
-/** 包住一次 run，避免并发会话把计时样本写进同一个数组。 */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as PromiseLike<unknown>).then === 'function';
+}
+
+function publishTimingSamples(samples: HarnessTimingSample[]): void {
+  publishedSamples = samples.slice();
+}
+
+/**
+ * 包住一次 run，避免并发会话把计时样本写进同一个数组。
+ * fn 结束后把本次数组快照出去，作用域外仍能读到这一轮。
+ */
 export function runWithHarnessTimingScope<T>(fn: () => T): T {
-  return timingStorage.run([], fn);
+  const samples: HarnessTimingSample[] = [];
+  try {
+    const result = timingStorage.run(samples, fn);
+    if (isThenable(result)) {
+      return result.then(
+        (value) => {
+          publishTimingSamples(samples);
+          return value;
+        },
+        (err: unknown) => {
+          publishTimingSamples(samples);
+          throw err;
+        },
+      ) as T;
+    }
+    publishTimingSamples(samples);
+    return result;
+  } catch (err) {
+    publishTimingSamples(samples);
+    throw err;
+  }
 }
 
 export function harnessTimingEnabled(): boolean {

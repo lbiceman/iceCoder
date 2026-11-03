@@ -23,6 +23,8 @@ export const ChatUI = (() => {
 
   let streamReplyBuffer = '';
   let streamReasoningBuffer = '';
+  let streamReplyRenderRaf = 0;
+  let streamReplyRenderStrip = null;
 
   /**
    * 展开思考块时最多渲染的字数。模型长时间思考时思维链可达数万字，
@@ -3349,6 +3351,7 @@ export const ChatUI = (() => {
 
   function discardIncompleteStream(messages) {
     clearReasoningStream();
+    cancelStreamReplyRender();
     streamReplyBuffer = '';
     const streamEl = document.getElementById('streaming-msg');
     if (streamEl) streamEl.remove();
@@ -3414,6 +3417,49 @@ export const ChatUI = (() => {
     notifyTailLayoutChange();
   }
 
+  function paintStreamReply(stripStatusTagFn) {
+    const streamEl = document.getElementById('streaming-msg');
+    if (streamEl && streamEl._streamContentEl) {
+      setReplyContent(streamEl._streamContentEl, stripStatusTagFn(streamReplyBuffer));
+    } else if (streamEl) {
+      const contentEl = streamEl.lastChild;
+      if (contentEl) {
+        setReplyContent(contentEl, stripStatusTagFn(streamReplyBuffer));
+        streamEl._streamContentEl = contentEl;
+      }
+    }
+    if (autoScrollEnabled) scheduleScrollIfSticky();
+  }
+
+  function cancelStreamReplyRender() {
+    if (streamReplyRenderRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(streamReplyRenderRaf);
+    }
+    streamReplyRenderRaf = 0;
+    streamReplyRenderStrip = null;
+  }
+
+  function flushStreamReplyRender() {
+    const strip = streamReplyRenderStrip || lastStripStatusTagFn;
+    cancelStreamReplyRender();
+    paintStreamReply(strip);
+  }
+
+  function scheduleStreamReplyRender(stripStatusTagFn) {
+    streamReplyRenderStrip = stripStatusTagFn;
+    if (streamReplyRenderRaf) return;
+    if (typeof requestAnimationFrame !== 'function') {
+      paintStreamReply(stripStatusTagFn);
+      return;
+    }
+    streamReplyRenderRaf = requestAnimationFrame(() => {
+      streamReplyRenderRaf = 0;
+      const strip = streamReplyRenderStrip || stripStatusTagFn;
+      streamReplyRenderStrip = null;
+      paintStreamReply(strip);
+    });
+  }
+
   function appendStreamChunk(text, messages, stripStatusTagFn) {
     ensureChatLayout();
     const lastMsg = messages[messages.length - 1];
@@ -3457,16 +3503,7 @@ export const ChatUI = (() => {
       if (autoScrollEnabled) scheduleScrollIfSticky();
       return;
     }
-    if (streamEl && streamEl._streamContentEl) {
-      setReplyContent(streamEl._streamContentEl, stripStatusTagFn(streamReplyBuffer));
-    } else if (streamEl) {
-      const contentEl = streamEl.lastChild;
-      if (contentEl) {
-        setReplyContent(contentEl, stripStatusTagFn(streamReplyBuffer));
-        streamEl._streamContentEl = contentEl;
-      }
-    }
-    if (autoScrollEnabled) scheduleScrollIfSticky();
+    scheduleStreamReplyRender(stripStatusTagFn);
   }
 
   function finalizeStreamResponse(messages, stripStatusTagFn) {
@@ -3479,6 +3516,7 @@ export const ChatUI = (() => {
     if (lastMsg && lastMsg.role === 'agent' && lastMsg.completedAt == null) {
       lastMsg.completedAt = Date.now();
     }
+    if (streamReplyRenderRaf) flushStreamReplyRender();
     streamReplyBuffer = '';
     const streamEl = document.getElementById('streaming-msg');
     if (streamEl) {
@@ -3536,6 +3574,7 @@ export const ChatUI = (() => {
 
     streamEl.removeAttribute('id');
     delete streamEl._streamContentEl;
+    cancelStreamReplyRender();
     streamReplyBuffer = '';
   }
 

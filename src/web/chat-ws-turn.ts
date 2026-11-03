@@ -75,6 +75,8 @@ import { buildUserMessageDisplayFields } from './user-message-display.js';
 import {
   captureIntentCheckpoint,
   readUiSessionMessages,
+  trackIntentCheckpointCapture,
+  waitForIntentCheckpointCapture,
 } from '../harness/intent-checkpoint-capture.js';
 import {
   beginIntentCheckpointTurn,
@@ -492,6 +494,43 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       ];
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
+  trackIntentCheckpointCapture(runSessionId, (async () => {
+    try {
+      const priorTracked = await getPriorTrackedPaths(runSessionId);
+      const uiMessages = await readUiSessionMessages(SESSIONS_DIR, runSessionId);
+      const structuredBase = existingMessages ? [...existingMessages] : [];
+      structuredBase.push({
+        role: 'user',
+        content: Array.isArray(userMessageContent) ? userMessageContent : harnessUserMessage,
+      });
+      const userUi = uiMessages.find((m) => m.id === userMsgId);
+      await captureIntentCheckpoint({
+        sessionDir: SESSIONS_DIR,
+        sessionId: runSessionId,
+        messageId: userMsgId,
+        userMessageTime: userUi?.sentAt ?? Date.now(),
+        workspaceRoot: effectiveWorkspace,
+        workspaceState: sessionToolCtx.workspace.state,
+        structuredMessages: structuredBase,
+        uiMessages,
+        priorTrackedPaths: priorTracked,
+      });
+      broadcastToSession(runSessionId, {
+        type: 'checkpoint_captured',
+        sessionId: runSessionId,
+        messageId: userMsgId,
+      });
+      broadcastHarnessState(runSessionId);
+    } catch (err) {
+      console.error('[chat-ws] intent checkpoint capture failed:', err);
+      broadcastToSession(runSessionId, {
+        type: 'checkpoint_capture_failed',
+        sessionId: runSessionId,
+        messageId: userMsgId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })());
   const assembled = await loadAssembledPrompt(effectiveWorkspace);
   const harnessDynamic = harnessOverlayToContextFields(assembled);
 
@@ -600,42 +639,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   }
 
   const harness = new Harness(harnessConfig, runToolExecutor);
-
-  try {
-    const priorTracked = await getPriorTrackedPaths(runSessionId);
-    const uiMessages = await readUiSessionMessages(SESSIONS_DIR, runSessionId);
-    const structuredBase = existingMessages ? [...existingMessages] : [];
-    structuredBase.push({
-      role: 'user',
-      content: Array.isArray(userMessageContent) ? userMessageContent : harnessUserMessage,
-    });
-    const userUi = uiMessages.find((m) => m.id === userMsgId);
-    await captureIntentCheckpoint({
-      sessionDir: SESSIONS_DIR,
-      sessionId: runSessionId,
-      messageId: userMsgId,
-      userMessageTime: userUi?.sentAt ?? Date.now(),
-      workspaceRoot: effectiveWorkspace,
-      workspaceState: sessionToolCtx.workspace.state,
-      structuredMessages: structuredBase,
-      uiMessages,
-      priorTrackedPaths: priorTracked,
-    });
-    broadcastToSession(runSessionId, {
-      type: 'checkpoint_captured',
-      sessionId: runSessionId,
-      messageId: userMsgId,
-    });
-    broadcastHarnessState(runSessionId);
-  } catch (err) {
-    console.error('[chat-ws] intent checkpoint capture failed:', err);
-    broadcastToSession(runSessionId, {
-      type: 'checkpoint_capture_failed',
-      sessionId: runSessionId,
-      messageId: userMsgId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 
   harness.getStopHookManager().register(async (messages, lastContent) =>
     evaluateIncompleteTaskStopHook(messages, lastContent),
@@ -879,6 +882,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     }
     if (!isSessionTombstoned(runSessionId)) {
       try {
+        await waitForIntentCheckpointCapture(runSessionId);
         await finalizeIntentCheckpointTurn(SESSIONS_DIR, runSessionId, userMsgId);
       } catch (turnSnapErr) {
         console.error('[chat-ws] intent checkpoint turn snapshot finalize failed:', turnSnapErr);
