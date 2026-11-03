@@ -383,19 +383,34 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
   });
 
   /**
-   * PATCH /api/sessions/:id - 重命名会话
+   * PATCH /api/sessions/:id - 重命名，或置顶 / 取消置顶。
+   * 置顶只写 pinnedAt，不改 updatedAt，避免打乱未置顶会话的时间顺序。
    */
   router.patch('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
     if (rejectUnsafeSessionId(res, sessionId)) return;
-    const { title } = req.body as { title?: string };
-    if (!title) { res.status(400).json({ error: 'title required' }); return; }
+    const body = req.body as { title?: string; pinned?: boolean };
+    const hasTitle = typeof body.title === 'string' && body.title.length > 0;
+    const hasPinned = typeof body.pinned === 'boolean';
+    if (!hasTitle && !hasPinned) {
+      res.status(400).json({ error: 'title or pinned required' });
+      return;
+    }
     let entry: SessionMeta | undefined;
     await mutateSessionIndex((index) => {
       entry = index.find(s => s.id === sessionId);
       if (!entry) return index;
-      entry.title = title;
-      entry.updatedAt = Date.now();
+      if (hasTitle) {
+        entry.title = body.title as string;
+        entry.updatedAt = Date.now();
+      }
+      if (hasPinned) {
+        if (body.pinned) {
+          if (typeof entry.pinnedAt !== 'number') entry.pinnedAt = Date.now();
+        } else {
+          delete entry.pinnedAt;
+        }
+      }
       return index;
     });
     if (!entry) { res.status(404).json({ error: 'not found' }); return; }

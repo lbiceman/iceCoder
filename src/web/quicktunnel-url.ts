@@ -1,1 +1,1 @@
-export * from './tunnel-stubs/quicktunnel-url.js';
+export * from '../dev/tunnel/quicktunnel-url.js';

@@ -380,6 +380,55 @@ export const ChatSessionStore = (() => {
   }
 
   /**
+   * 置顶 / 取消置顶。pinnedAt 写入 data/sessions/index.json。
+   * 已置顶再置顶不改时间，保证先置顶的仍在上面。
+   */
+  function setSessionPinned(sessionId, pinned, callback) {
+    const idx = sessions.findIndex((s) => s.id === sessionId);
+    if (idx < 0) {
+      if (callback) callback(false, null);
+      return;
+    }
+    const prevAt = sessions[idx].pinnedAt;
+    if (pinned) {
+      if (typeof prevAt !== 'number') sessions[idx].pinnedAt = Date.now();
+    } else if (typeof prevAt === 'number') {
+      delete sessions[idx].pinnedAt;
+    }
+    emit();
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: !!pinned }),
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then((result) => {
+        const at = sessions.findIndex((s) => s.id === sessionId);
+        if (!result.ok || !result.data.success || !result.data.session) {
+          if (at >= 0) {
+            if (typeof prevAt === 'number') sessions[at].pinnedAt = prevAt;
+            else delete sessions[at].pinnedAt;
+          }
+          emit();
+          if (callback) callback(false, null);
+          return;
+        }
+        if (at >= 0) sessions[at] = result.data.session;
+        emit();
+        if (callback) callback(true, result.data.session);
+      })
+      .catch(() => {
+        const at = sessions.findIndex((s) => s.id === sessionId);
+        if (at >= 0) {
+          if (typeof prevAt === 'number') sessions[at].pinnedAt = prevAt;
+          else delete sessions[at].pinnedAt;
+        }
+        emit();
+        if (callback) callback(false, null);
+      });
+  }
+
+  /**
    * 切换活跃会话
    * 通过 WS 发送 switch_session，等待 session_switched 回复
    */
@@ -593,6 +642,7 @@ export const ChatSessionStore = (() => {
     patchSession,
     maybeAutoTitleFromPrompt,
     renameSession,
+    setSessionPinned,
     deleteSession,
     switchSession,
     getSessions,

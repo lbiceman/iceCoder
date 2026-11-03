@@ -430,4 +430,53 @@ describe('Sessions API (multi-session)', () => {
     expect(body.ok).toBe(false);
     expect(body.error).toBeTruthy();
   });
+
+  it('PATCH pinned 写入 index.json，再次置顶不改时间，取消后字段消失', async () => {
+    const created = await fetch(`${baseUrl}/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '要置顶' }),
+    });
+    expect(created.ok).toBe(true);
+    const createdBody = await created.json() as { session: { id: string } };
+    const id = createdBody.session.id;
+
+    const pin = await fetch(`${baseUrl}/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: true }),
+    });
+    expect(pin.ok).toBe(true);
+    const pinned = await pin.json() as { session: { pinnedAt?: number; updatedAt: number } };
+    expect(typeof pinned.session.pinnedAt).toBe('number');
+    const firstPinnedAt = pinned.session.pinnedAt as number;
+    const updatedAt = pinned.session.updatedAt;
+
+    const again = await fetch(`${baseUrl}/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: true }),
+    });
+    const againBody = await again.json() as { session: { pinnedAt?: number; updatedAt: number } };
+    expect(againBody.session.pinnedAt).toBe(firstPinnedAt);
+    expect(againBody.session.updatedAt).toBe(updatedAt);
+
+    const listed = await fetch(`${baseUrl}/`);
+    const listBody = await listed.json() as { sessions: { id: string; pinnedAt?: number }[] };
+    expect(listBody.sessions.find((s) => s.id === id)?.pinnedAt).toBe(firstPinnedAt);
+
+    const indexRaw = await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8');
+    const index = JSON.parse(indexRaw) as { id: string; pinnedAt?: number }[];
+    expect(index.find((s) => s.id === id)?.pinnedAt).toBe(firstPinnedAt);
+
+    const unpin = await fetch(`${baseUrl}/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: false }),
+    });
+    const unpinned = await unpin.json() as { session: { pinnedAt?: number } };
+    expect(unpinned.session.pinnedAt).toBeUndefined();
+    const indexAfter = JSON.parse(await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8')) as { id: string; pinnedAt?: number }[];
+    expect(indexAfter.find((s) => s.id === id)?.pinnedAt).toBeUndefined();
+  });
 });

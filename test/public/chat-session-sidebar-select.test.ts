@@ -80,6 +80,19 @@ async function openSidebarPage(): Promise<Page> {
         if (wasActive && state.sessions[0]) state.activeSessionId = state.sessions[0].id;
         if (cb) cb(true, wasActive && state.sessions[0] ? { switchedTo: state.sessions[0].id } : null);
       },
+      setSessionPinned(id: string, pinned: boolean, cb?: (ok: boolean) => void) {
+        const session = state.sessions.find((s) => s.id === id) as { pinnedAt?: number } | undefined;
+        if (!session) {
+          if (cb) cb(false);
+          return;
+        }
+        if (pinned) {
+          if (typeof session.pinnedAt !== 'number') session.pinnedAt = Date.now();
+        } else {
+          delete session.pinnedAt;
+        }
+        if (cb) cb(true);
+      },
     };
     (window as any).Modal = {
       confirm() { return Promise.resolve(true); },
@@ -118,8 +131,32 @@ describe('侧栏会话多选与层次', () => {
         labels: Array.from(document.querySelectorAll('.app-menu-item .app-menu-label')).map((n) => n.textContent),
       };
     });
-    expect(menu).toEqual({ open: true, labels: ['重命名', '选择', '删除'] });
+    expect(menu).toEqual({ open: true, labels: ['重命名', '置顶', '选择', '删除'] });
     expect(await page.evaluate(() => (window as any).ChatSessionStore.getActiveSessionId())).toBe('s2');
+  });
+
+  it('先置顶的会话排在后置顶的上面', async () => {
+    const page = await openSidebarPage();
+    await page.locator('.chat-sidebar-item[data-id="s3"]').click({ button: 'right' });
+    await page.locator('.app-menu-item[data-action="pin"]').click();
+    await page.locator('.chat-sidebar-item[data-id="s2"]').click({ button: 'right' });
+    await page.locator('.app-menu-item[data-action="pin"]').click();
+    const order = await page.evaluate(() => (
+      Array.from(document.querySelectorAll('.chat-sidebar-item')).map((el) => el.getAttribute('data-id'))
+    ));
+    expect(order.slice(0, 2)).toEqual(['s3', 's2']);
+    expect(await page.locator('.chat-sidebar-item[data-id="s3"] .chat-sidebar-item-chip').innerText()).toBe('置顶');
+
+    await page.locator('.chat-sidebar-item[data-id="s3"]').click({ button: 'right' });
+    const label = await page.locator('.app-menu-item[data-action="pin"] .app-menu-label').innerText();
+    expect(label).toBe('取消置顶');
+    await page.locator('.app-menu-item[data-action="pin"]').click();
+    const after = await page.evaluate(() => (
+      Array.from(document.querySelectorAll('.chat-sidebar-item')).map((el) => el.getAttribute('data-id'))
+    ));
+    expect(after[0]).toBe('s2');
+    expect(after).toContain('s3');
+    expect(after.indexOf('s2')).toBeLessThan(after.indexOf('s3'));
   });
 
   it('选择后出现勾选和删除条，点其他会话只切换勾选，可批量删除', async () => {

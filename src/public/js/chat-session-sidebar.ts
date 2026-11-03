@@ -392,8 +392,20 @@ export const ChatSessionSidebar = (() => {
     return { text: '任务', error: false, title: detail };
   }
 
+  function pinnedAtOf(session) {
+    const value = session && session.pinnedAt;
+    return typeof value === 'number' && value > 0 ? value : 0;
+  }
+
   function sortByRecent(list) {
-    list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    list.sort((a, b) => {
+      const ap = pinnedAtOf(a);
+      const bp = pinnedAtOf(b);
+      if (ap && bp) return ap - bp;
+      if (ap) return -1;
+      if (bp) return 1;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
     return list;
   }
 
@@ -555,12 +567,14 @@ export const ChatSessionSidebar = (() => {
       y,
       items: [
         { id: 'rename', label: '重命名', icon: 'edit' },
+        { id: 'pin', label: isPinned(sessionId) ? '取消置顶' : '置顶', icon: 'pin' },
         { id: 'select', label: selecting ? '取消选择' : '选择', icon: 'check' },
         { id: 'delete', label: '删除', icon: 'trash', danger: true },
       ],
       onSelect(item) {
         if (!item) return;
         if (item.id === 'rename') renameFromMenu(sessionId);
+        else if (item.id === 'pin') togglePin(sessionId);
         else if (item.id === 'select') enterOrToggleSelect(sessionId);
         else if (item.id === 'delete') deleteSessions([sessionId]);
       },
@@ -570,6 +584,19 @@ export const ChatSessionSidebar = (() => {
     clearMenuOpenItem();
     const item = sidebar.querySelector(`.chat-sidebar-item[data-id="${cssEscape(sessionId)}"]`);
     if (item) item.classList.add('is-menu-open');
+  }
+
+  function isPinned(sessionId) {
+    const sessions = Store.getSessions();
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessions[i].id === sessionId) return pinnedAtOf(sessions[i]) > 0;
+    }
+    return false;
+  }
+
+  function togglePin(sessionId) {
+    if (!Store.setSessionPinned) return;
+    Store.setSessionPinned(sessionId, !isPinned(sessionId), () => { renderList(); });
   }
 
   function renameFromMenu(sessionId) {
@@ -613,15 +640,18 @@ export const ChatSessionSidebar = (() => {
       let lastTimeLabel = '';
       for (let i = 0; i < visible.length; i++) {
         const s = visible[i];
-        const label = timeSectionLabel(s.updatedAt);
-        if (label && label !== lastTimeLabel) {
-          const timeEl = document.createElement('div');
-          timeEl.className = 'chat-sidebar-time';
-          timeEl.textContent = label;
-          list.appendChild(timeEl);
-          lastTimeLabel = label;
+        const pinned = pinnedAtOf(s) > 0;
+        if (!pinned) {
+          const label = timeSectionLabel(s.updatedAt);
+          if (label && label !== lastTimeLabel) {
+            const timeEl = document.createElement('div');
+            timeEl.className = 'chat-sidebar-time';
+            timeEl.textContent = label;
+            list.appendChild(timeEl);
+            lastTimeLabel = label;
+          }
         }
-        list.appendChild(renderItem(s, activeId, highlightActive, taskStateOf(s.id)));
+        list.appendChild(renderItem(s, activeId, highlightActive, taskStateOf(s.id), pinned));
       }
     }
     if (window.AppIcon) window.AppIcon.hydrate(list);
@@ -631,7 +661,7 @@ export const ChatSessionSidebar = (() => {
   }
 
   /** taskState 非空表示任务会话：标题去前缀，meta 行显示任务状态 */
-  function renderItem(s, activeId, highlightActive, taskState) {
+  function renderItem(s, activeId, highlightActive, taskState, pinned) {
     const isActive = highlightActive && s.id === activeId;
     const checked = selectMode && selectedIds.has(s.id);
     const item = document.createElement('div');
@@ -673,6 +703,14 @@ export const ChatSessionSidebar = (() => {
       startRename(s.id, titleSpan, s.title || '未命名');
     });
     titleRow.appendChild(titleSpan);
+
+    if (pinned) {
+      const pinChip = document.createElement('span');
+      pinChip.className = 'chat-sidebar-item-chip';
+      pinChip.textContent = '置顶';
+      pinChip.title = '已置顶';
+      titleRow.appendChild(pinChip);
+    }
 
     const chipInfo = taskChip(taskState);
     if (chipInfo) {

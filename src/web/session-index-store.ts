@@ -25,6 +25,8 @@ export interface SessionMeta {
   messageCount: number;
   /** 定时任务专属会话（含任务已换绑 / 已删除后留下的旧会话）所属任务 id */
   scheduledTaskId?: string;
+  /** 置顶时间。越小越早置顶，侧栏越靠上。缺省表示未置顶。 */
+  pinnedAt?: number;
 }
 
 interface ChatMessageLike {
