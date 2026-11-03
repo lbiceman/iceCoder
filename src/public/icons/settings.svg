@@ -1,6 +1,4 @@
-<!-- ��n  ��������n
-n -->
 <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/>
-  <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M5.78 4.15L6.83 1.96L9.17 1.96L10.23 4.15L12.64 3.97L13.81 6L12.45 8L13.81 10L12.64 12.03L10.23 11.85L9.17 14.04L6.83 14.04L5.78 11.85L3.36 12.03L2.19 10L3.55 8L2.19 6L3.36 3.97L5.78 4.15Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+  <circle cx="8" cy="8" r="1.9" stroke="currentColor" stroke-width="1.2"/>
 </svg>

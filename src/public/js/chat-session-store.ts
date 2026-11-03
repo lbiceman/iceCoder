@@ -18,6 +18,7 @@ export const ChatSessionStore = (() => {
   const TITLE_MAX_LEN = 20;
   const PLACEHOLDER_TITLES = { '新会话': true, '默认会话': true, '未命名': true };
   let defaultWorkDir = '';
+  let localUser = '';
   /** sessionId → workspaceRoot */
   let workspacesBySession = {};
   /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
@@ -50,6 +51,7 @@ export const ChatSessionStore = (() => {
     if (typeof data.defaultWorkDir === 'string' && data.defaultWorkDir) {
       defaultWorkDir = data.defaultWorkDir;
     }
+    if (typeof data.localUser === 'string') localUser = data.localUser;
     if (data.workspaces && typeof data.workspaces === 'object') {
       workspacesBySession = data.workspaces;
     }
@@ -74,6 +76,8 @@ export const ChatSessionStore = (() => {
   }
 
   function getDefaultWorkDir() { return defaultWorkDir; }
+
+  function getLocalUser() { return localUser; }
 
   function getSessionWorkspace(sessionId) {
     const root = workspacesBySession[sessionId];
@@ -593,6 +597,7 @@ export const ChatSessionStore = (() => {
     switchSession,
     getSessions,
     getDefaultWorkDir,
+    getLocalUser,
     getSessionWorkspace,
     isDefaultWorkspace,
     setSessionWorkspace,

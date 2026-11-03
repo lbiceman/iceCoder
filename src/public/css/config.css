@@ -137,7 +137,9 @@
 }
 
 .config-list-panel-head .chat-sidebar-new-btn {
+  width: auto;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .config-list-panel-title {

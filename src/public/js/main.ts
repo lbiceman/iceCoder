@@ -6,6 +6,7 @@
 import './icon.ts';
 import './notification.ts';
 import './modal.ts';
+import './menu.ts';
 import './diff-viewer.ts';
 import './etl-prefs.ts';
 import './model-names.ts';

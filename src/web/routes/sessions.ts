@@ -6,6 +6,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import path from 'path';
 import '../../cli/paths.js';
@@ -345,8 +346,11 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
       bootstrapActiveSessionIdFromIndex(),
       buildScheduledTaskIndex(index, deps.listScheduledTasks),
     ]);
+    let localUser = '';
+    try { localUser = os.userInfo().username || ''; } catch { /* 无用户信息时侧栏用本地昵称 */ }
     res.json({
       sessions: index,
+      localUser,
       defaultWorkDir,
       workspaces,
       shellCollabActive,
