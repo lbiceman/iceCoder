@@ -21,8 +21,8 @@ export interface TodoDraft {
   destroy(): void;
 }
 
-const WIDTH = 300;
-const BAR_H = 36;
+const WIDTH = 320;
+const BAR_H = 44;
 const ERROR_H = 18;
 
 function readText(payload: unknown): string {
@@ -173,8 +173,10 @@ export function createTodoDraft(next: {
       alwaysOnTop: true,
       focusable: true,
       show: false,
-      backgroundColor: '#1c1f22',
-      roundedCorners: true,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      roundedCorners: false,
       ...(process.platform === 'win32' ? { thickFrame: false } : {}),
       webPreferences: {
         preload: path.join(__dirname, '..', 'ping-todo-preload.js'),

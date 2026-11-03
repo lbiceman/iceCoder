@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 待办页（#/todos、移动端 mTodos）：短列表、勾选、补记一条。截图在桌面轮盘里附上。
+ * 待办页（#/todos、移动端 mTodos）：短列表、勾选、补记一条。记下时可以附一张图。
  */
 
 /* exported TodosPage */
@@ -13,6 +13,9 @@ export const TodosPage = (() => {
   let loadGen = 0;
   let onKey = null;
   let saving = false;
+  let pendingImage = null;
+  const IMAGE_MAX_EDGE = 1600;
+  const IMAGE_MAX_CHARS = 1_200_000;
 
   function escapeHtml(str) {
     return String(str == null ? '' : str)
@@ -44,6 +47,7 @@ export const TodosPage = (() => {
     }
     rootEl = null;
     saving = false;
+    pendingImage = null;
   }
 
   function setError(message) {
@@ -142,15 +146,99 @@ export const TodosPage = (() => {
     }
   }
 
+  function clearPendingImage() {
+    pendingImage = null;
+    if (!rootEl) return;
+    const box = rootEl.querySelector('.todo-compose-shot');
+    const file = rootEl.querySelector('.todo-file');
+    if (box) {
+      const img = box.querySelector('img');
+      if (img) img.removeAttribute('src');
+      box.hidden = true;
+    }
+    if (file) file.value = '';
+  }
+
+  function showPendingImage(dataUrl) {
+    pendingImage = dataUrl;
+    if (!rootEl) return;
+    const box = rootEl.querySelector('.todo-compose-shot');
+    const img = box && box.querySelector('img');
+    if (!box || !img) return;
+    img.src = dataUrl;
+    box.hidden = false;
+  }
+
+  /** 选中的图统一收成 PNG，边长过大时缩小，避免撑过保存接口。 */
+  function fileToPng(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let width = img.naturalWidth;
+        let height = img.naturalHeight;
+        if (!width || !height) {
+          reject(new Error('这张图打不开'));
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('这张图打不开'));
+          return;
+        }
+        let dataUrl = '';
+        for (let i = 0; i < 7; i++) {
+          const edge = Math.max(width, height);
+          if (edge > IMAGE_MAX_EDGE) {
+            const scale = IMAGE_MAX_EDGE / edge;
+            width = Math.max(1, Math.round(width * scale));
+            height = Math.max(1, Math.round(height * scale));
+          }
+          canvas.width = width;
+          canvas.height = height;
+          ctx.drawImage(img, 0, 0, width, height);
+          dataUrl = canvas.toDataURL('image/png');
+          if (dataUrl.length <= IMAGE_MAX_CHARS) break;
+          width = Math.max(1, Math.round(width * 0.75));
+          height = Math.max(1, Math.round(height * 0.75));
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('这张图打不开'));
+      };
+      img.src = url;
+    });
+  }
+
+  async function attachImageFile(file) {
+    if (!file || saving) return;
+    const fileInput = rootEl && rootEl.querySelector('.todo-file');
+    if (fileInput) fileInput.value = '';
+    setError('');
+    try {
+      showPendingImage(await fileToPng(file));
+    } catch (err) {
+      setError(err.message || '这张图打不开');
+    }
+  }
+
   async function createTodo(text) {
     const trimmed = String(text || '').trim();
-    if (!trimmed || saving) return;
+    const image = pendingImage;
+    if (saving || (!trimmed && !image)) return;
     saving = true;
     setError('');
     try {
-      await api('POST', '/api/todos', { text: trimmed });
-      const input = rootEl && rootEl.querySelector('.todo-compose input');
+      const body = { text: trimmed };
+      if (image) body.image = image;
+      await api('POST', '/api/todos', body);
+      const input = rootEl && rootEl.querySelector('.todo-compose input[type="text"]');
       if (input) input.value = '';
+      clearPendingImage();
       await load();
     } catch (err) {
       setError(err.message || '没有记上');
@@ -189,6 +277,15 @@ export const TodosPage = (() => {
       closeLightbox();
       return;
     }
+    if (event.target.closest('[data-todo-pick]')) {
+      const file = rootEl && rootEl.querySelector('.todo-file');
+      if (file) file.click();
+      return;
+    }
+    if (event.target.closest('[data-todo-clear-shot]')) {
+      clearPendingImage();
+      return;
+    }
     const del = event.target.closest('[data-todo-delete]');
     if (del) {
       deleteTodo(del.getAttribute('data-todo-delete'));
@@ -203,14 +300,36 @@ export const TodosPage = (() => {
 
   function onSubmit(event) {
     event.preventDefault();
-    const input = rootEl && rootEl.querySelector('.todo-compose input');
+    const input = rootEl && rootEl.querySelector('.todo-compose input[type="text"]');
     createTodo(input ? input.value : '');
+  }
+
+  function onFileChange(event) {
+    const file = event.target.files && event.target.files[0];
+    if (file) attachImageFile(file);
+  }
+
+  function onPaste(event) {
+    const items = event.clipboardData && event.clipboardData.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind !== 'file' || !item.type || item.type.indexOf('image/') !== 0) continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      event.preventDefault();
+      attachImageFile(file);
+      return;
+    }
   }
 
   function render(parentEl) {
     destroy();
     if (window.TaskTabs) window.TaskTabs.remember('todos');
     const tabs = window.TaskTabs ? window.TaskTabs.html('todos') : '';
+    const plus = window.AppIcon
+      ? window.AppIcon.html('plus', { width: 18 })
+      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
     parentEl.innerHTML =
       '<div class="tasks-root">' +
         '<header class="tasks-header">' +
@@ -225,9 +344,15 @@ export const TodosPage = (() => {
             '<div class="todo-toolbar">' +
               '<form class="todo-compose">' +
                 '<input type="text" maxlength="500" placeholder="记一条，回车保存" aria-label="待办内容" autocomplete="off">' +
+                '<button type="button" class="btn-icon btn-icon-ghost" data-todo-pick title="附一张图" aria-label="附一张图">' + plus + '</button>' +
                 '<button type="submit" class="skills-btn skills-btn-primary">记下</button>' +
+                '<input type="file" class="todo-file" accept="image/*" hidden aria-label="选择图片">' +
               '</form>' +
               '<span class="todo-count">0 条未完成</span>' +
+            '</div>' +
+            '<div class="todo-compose-shot pending-image-item" hidden>' +
+              '<img class="pending-image-thumb" alt="待附上的图">' +
+              '<button type="button" class="pending-image-remove" data-todo-clear-shot title="移除图片" aria-label="移除图片">×</button>' +
             '</div>' +
             '<p class="todo-error" hidden></p>' +
             '<div class="todo-list-host"><div class="skills-empty">载入中…</div></div>' +
@@ -241,8 +366,15 @@ export const TodosPage = (() => {
     rootEl = parentEl.querySelector('.tasks-root');
     const header = parentEl.querySelector('.tasks-header');
     if (window.TaskTabs) window.TaskTabs.bind(header);
+    if (window.AppIcon && typeof window.AppIcon.hydrate === 'function') {
+      window.AppIcon.hydrate(parentEl.querySelector('[data-todo-pick]'));
+    }
     const form = parentEl.querySelector('.todo-compose');
     if (form) form.addEventListener('submit', onSubmit);
+    const fileInput = parentEl.querySelector('.todo-file');
+    if (fileInput) fileInput.addEventListener('change', onFileChange);
+    const textInput = parentEl.querySelector('.todo-compose input[type="text"]');
+    if (textInput) textInput.addEventListener('paste', onPaste);
     rootEl.addEventListener('click', onRootClick);
     rootEl.addEventListener('change', onRootChange);
     onKey = (event) => {

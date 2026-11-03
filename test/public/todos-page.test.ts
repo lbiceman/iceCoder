@@ -125,13 +125,37 @@ describe('待办页', () => {
     ]));
     await expect.poll(() => page.locator('.todo-item.is-done').count()).toBe(2);
 
-    await page.locator('.todo-compose input').fill('新的一条');
-    await page.locator('.todo-compose button').click();
+    await page.locator('.todo-compose input[type="text"]').fill('新的一条');
+    await page.locator('.todo-compose button[type="submit"]').click();
     await expect.poll(() => page.locator('.todo-item').first().innerText()).toContain('新的一条');
     expect(await page.locator('.todo-count').innerText()).toBe('1 条未完成');
+
+    expect(await page.locator('[data-todo-pick]').count()).toBe(1);
 
     await page.locator('[data-task-tab="scheduled"]').click();
     await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/tasks');
     await expect.poll(() => page.evaluate(() => localStorage.getItem('ice-task-tab'))).toBe('scheduled');
+  });
+
+  it('记下时可以附上一张图', async () => {
+    const page = await openTodos([]);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    await page.locator('.todo-compose input[type="text"]').fill('带图');
+    await page.locator('.todo-file').setInputFiles({
+      name: 'shot.png',
+      mimeType: 'image/png',
+      buffer: png,
+    });
+    await expect.poll(() => page.locator('.todo-compose-shot').getAttribute('hidden')).toBeNull();
+    await page.locator('.todo-compose button[type="submit"]').click();
+    await expect.poll(() => page.evaluate(() => {
+      const sent = ((window as any).__calls as { method: string; url: string; body: { text?: string; image?: string } | null }[])
+        .filter((call) => call.method === 'POST' && call.url === '/api/todos');
+      const last = sent[sent.length - 1];
+      return last ? { text: last.body && last.body.text, png: !!(last.body && last.body.image && last.body.image.indexOf('data:image/png') === 0) } : null;
+    })).toEqual({ text: '带图', png: true });
   });
 });

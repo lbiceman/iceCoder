@@ -41,6 +41,25 @@
   color: var(--text-muted);
 }
 
+.todo-compose-shot {
+  margin: 2px 0 14px;
+}
+
+.todo-compose-shot[hidden] {
+  display: none;
+}
+
+.todo-compose-shot .pending-image-remove {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.todo-compose-shot:hover .pending-image-remove,
+.todo-compose-shot:focus-within .pending-image-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .todo-error {
   margin: 0 0 12px;
   font-size: 13px;

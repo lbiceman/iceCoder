@@ -3,49 +3,78 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    html, body { margin: 0; height: 100%; background: #1c1f22; color: #f2f2f2; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: transparent;
+      color: #f4f4f5;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
     .bar {
       box-sizing: border-box;
-      height: 36px;
+      height: 44px;
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 6px 4px 8px;
-      border: 1px solid #c8aa6e;
-      border-radius: 8px;
+      padding: 6px 6px 6px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      background: #18181b;
     }
     input {
       flex: 1;
       min-width: 0;
-      height: 28px;
+      height: 32px;
       border: none;
       background: transparent;
-      color: #f2f2f2;
-      font-size: 14px;
+      color: #f4f4f5;
+      font-size: 13px;
       outline: none;
       padding: 0;
     }
-    button.snip {
-      width: 28px;
-      height: 28px;
-      flex-shrink: 0;
+    input::placeholder { color: #71717a; }
+    .actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    button {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      padding: 0;
       border: none;
-      border-radius: 6px;
-      background: #243028;
-      color: #3ddc97;
       cursor: pointer;
-      padding: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
     }
-    button.snip:hover { background: #2c3b32; }
+    button.snip {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: transparent;
+      color: #a1a1aa;
+    }
+    button.snip:hover { background: rgba(255, 255, 255, 0.08); color: #f4f4f5; }
+    button.snip.has-shot { color: #e4e4e7; }
+    button.save {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #e4e4e7;
+      color: #18181b;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+    button.save:hover { background: #fafafa; }
+    button.save:active { transform: scale(0.96); }
+    button svg { display: block; }
     .shot {
       width: 28px;
       height: 28px;
       flex-shrink: 0;
       object-fit: cover;
-      border-radius: 4px;
-      background: #111416;
+      border-radius: 6px;
+      background: #27272a;
     }
-    .error { margin: 0; padding: 0 8px 4px; font-size: 11px; line-height: 14px; color: #ff8d8d; }
+    .error { margin: 0; padding: 0 12px 6px; font-size: 11px; line-height: 14px; color: #f87171; }
     .error[hidden], .shot[hidden] { display: none; }
   </style>
 </head>
@@ -53,16 +82,26 @@
   <form class="bar" id="bar">
     <img id="shot" class="shot" alt="" hidden>
     <input id="text" maxlength="500" placeholder="记一条待办" autocomplete="off" spellcheck="false" aria-label="待办内容">
-    <button type="button" id="snip" title="框选一张图附上" aria-label="框选一张图附上">
-      <svg viewBox="0 0 64 78" width="18" height="18" aria-hidden="true">
-        <path fill="currentColor" fill-rule="evenodd" d="M8 30 V12 H30 V18 H14 V30 Z M34 12 H56 V30 H50 V18 H34 Z M56 48 V66 H34 V60 H50 V48 Z M8 48 H14 V60 H30 V66 H8 Z M22 28 H42 V52 H22 Z M26 32 V48 H38 V32 Z"/>
-      </svg>
-    </button>
+    <div class="actions">
+      <button type="button" class="snip" id="snip" title="框选一张图" aria-label="框选一张图">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+          <path d="M8 3H4v4M16 3h4v4M8 21H4v-4M16 21h4v-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="8" y="8" width="8" height="8" rx="1.2" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+      </button>
+      <button type="submit" class="save" id="save" title="记下" aria-label="记下">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+          <polyline points="6 12 12 6 18 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="12" y1="6" x2="12" y2="20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
   </form>
   <p id="error" class="error" hidden></p>
   <script>
     const text = document.getElementById('text');
     const shot = document.getElementById('shot');
+    const snip = document.getElementById('snip');
     const error = document.getElementById('error');
     const api = window.todoDraft;
 
@@ -78,9 +117,11 @@
       if (state && state.image) {
         shot.hidden = false;
         shot.src = state.image;
+        snip.classList.add('has-shot');
       } else {
         shot.hidden = true;
         shot.removeAttribute('src');
+        snip.classList.remove('has-shot');
       }
       const message = state && typeof state.error === 'string' ? state.error : '';
       error.textContent = message;
@@ -92,7 +133,7 @@
       event.preventDefault();
       if (api) api.submit(text.value);
     });
-    document.getElementById('snip').addEventListener('click', () => {
+    snip.addEventListener('click', () => {
       if (api) api.snip(text.value);
     });
     window.addEventListener('keydown', (event) => {
