@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { PASTE_SLICE, QUESTION_SLICE, cropAroundPoint, cropCssSize, normalizeCropPx, physicalToLocal, wheelSlice } from '../../desktop/src/ping/geometry.js';
+import { PASTE_SLICE, QUESTION_SLICE, SNIP_SLICE, clampCaptureRect, cropAroundPoint, cropCssSize, localCssToPhysical, normalizeCropPx, physicalToLocal, wheelReleaseAction, wheelSlice } from '../../desktop/src/ping/geometry.js';
 import { INITIAL_GESTURE, reduceGesture } from '../../desktop/src/ping/gesture.js';
 
 describe('问号轮盘几何', () => {
   it('四个正方向对上扇区，斜向并进最近的一边', () => {
     expect(wheelSlice(0, -120)).toBe(0);
-    expect(wheelSlice(120, 0)).toBe(1);
+    expect(wheelSlice(120, 0)).toBe(SNIP_SLICE);
     expect(wheelSlice(0, 120)).toBe(PASTE_SLICE);
     expect(wheelSlice(-120, 0)).toBe(QUESTION_SLICE);
     expect(wheelSlice(40, -100)).toBe(0);
@@ -13,6 +13,33 @@ describe('问号轮盘几何', () => {
     expect(wheelSlice(40, 100)).toBe(PASTE_SLICE);
     expect(wheelSlice(-100, 40)).toBe(QUESTION_SLICE);
     expect(wheelSlice(-40, -100)).toBe(0);
+  });
+
+  it('松开时左边交给模型，右边框选复制，下方记待办，上方只落标记', () => {
+    expect(wheelReleaseAction(null)).toBe('cancel');
+    expect(wheelReleaseAction(QUESTION_SLICE)).toBe('ask');
+    expect(wheelReleaseAction(SNIP_SLICE)).toBe('snip');
+    expect(wheelReleaseAction(PASTE_SLICE)).toBe('todo');
+    expect(wheelReleaseAction(0)).toBe('signal');
+  });
+
+  it('框选区域从浮层像素换成物理像素，贴边时收进屏幕', () => {
+    expect(localCssToPhysical(
+      { x: 10, y: 20, width: 100, height: 40 },
+      { physX: 3840, physY: 0, scale: 2 },
+    )).toEqual({ x: 3860, y: 40, width: 200, height: 80 });
+    expect(clampCaptureRect(
+      { x: -20, y: -10, width: 100, height: 50 },
+      { left: 0, top: 0, width: 1920, height: 1080 },
+    )).toEqual({ x: 0, y: 0, width: 80, height: 40 });
+    expect(clampCaptureRect(
+      { x: 1900, y: 1000, width: 80, height: 80 },
+      { left: 0, top: 0, width: 1920, height: 1080 },
+    )).toEqual({ x: 1900, y: 1000, width: 20, height: 80 });
+    expect(clampCaptureRect(
+      { x: 2000, y: 10, width: 20, height: 20 },
+      { left: 0, top: 0, width: 1920, height: 1080 },
+    )).toBeNull();
   });
 
   it('中心圆内松手不算选中', () => {

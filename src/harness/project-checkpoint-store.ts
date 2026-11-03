@@ -231,8 +231,12 @@ export class ProjectCheckpointStore {
       throw new TypeError(`Checkpoint sessionId ${snapshot.identity.sessionId} does not match ${this.sessionId}`);
     }
 
+    // 快照在入队前已经 clone。工具轮开始后会再挡住新写入；
+    // 已经入队的 running 落盘仍要写出，否则 fire-and-forget 会被下一轮 skip 掉。
+    const writeEvenIfLaterBlocked = restoreOverride || !this.writeState.persistBlocked;
+
     return this.enqueue(async () => {
-      if (this.writeState.persistBlocked && !restoreOverride) {
+      if (!writeEvenIfLaterBlocked) {
         return {
           checkpoint: cloneProjectCheckpointV3(snapshot),
           generation: this.writeState.generation,

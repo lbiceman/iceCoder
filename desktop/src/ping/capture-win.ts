@@ -3,7 +3,7 @@
  */
 import { nativeImage } from 'electron';
 import koffi from 'koffi';
-import { cropAroundPoint, type CropRect } from './geometry';
+import { clampCaptureRect, cropAroundPoint, type CropRect, type ScreenRect } from './geometry';
 
 const SRCCOPY = 0x00cc0020;
 const SM_XVIRTUALSCREEN = 76;
@@ -87,19 +87,7 @@ export interface RegionShot {
   height: number;
 }
 
-/** 以物理像素落点为中心截一块矩形，返回 PNG data URL。 */
-export function captureRegionAround(
-  pointX: number,
-  pointY: number,
-  width?: number,
-  height?: number,
-): RegionShot {
-  if (process.platform !== 'win32') {
-    throw new Error('屏幕问号截图只在 Windows 上可用');
-  }
-  const win = native();
-  const screen = virtualScreen(win);
-  const crop: CropRect = cropAroundPoint(pointX, pointY, screen, width, height);
+function captureRect(win: CaptureApi, crop: CropRect): RegionShot {
   const hdc = win.getDC(null);
   if (!hdc) throw new Error(`GetDC failed (${win.getLastError()})`);
   let memory: unknown = null;
@@ -142,4 +130,36 @@ export function captureRegionAround(
     if (memory) win.deleteDC(memory);
     win.releaseDC(null, hdc);
   }
+}
+
+/** 以物理像素落点为中心截一块矩形，返回 PNG data URL。 */
+export function captureRegionAround(
+  pointX: number,
+  pointY: number,
+  width?: number,
+  height?: number,
+): RegionShot {
+  if (process.platform !== 'win32') {
+    throw new Error('屏幕问号截图只在 Windows 上可用');
+  }
+  const win = native();
+  const screen = virtualScreen(win);
+  const crop: CropRect = cropAroundPoint(pointX, pointY, screen, width, height);
+  return captureRect(win, crop);
+}
+
+/** 按物理像素矩形截图。贴出屏幕的部分会被裁掉。 */
+export function capturePhysicalRect(rect: ScreenRect): RegionShot {
+  if (process.platform !== 'win32') {
+    throw new Error('屏幕问号截图只在 Windows 上可用');
+  }
+  const win = native();
+  const screen = virtualScreen(win);
+  const clamped = clampCaptureRect(rect, screen);
+  if (!clamped) throw new Error('截图区域不在屏幕上');
+  return captureRect(win, {
+    ...clamped,
+    anchorX: Math.round(clamped.width / 2),
+    anchorY: Math.round(clamped.height / 2),
+  });
 }

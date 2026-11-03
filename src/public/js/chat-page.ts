@@ -932,12 +932,33 @@ export const ChatPage = (() => {
     });
   }
 
+  function syncComposerWorkspace() {
+    const el = document.getElementById('composer-workspace');
+    if (!el) return;
+    const textEl = el.querySelector('.composer-workspace-text');
+    const Store = window.ChatSessionStore;
+    const sid = Store && typeof Store.getActiveSessionId === 'function' ? Store.getActiveSessionId() : '';
+    const root = Store && typeof Store.getSessionWorkspace === 'function' ? Store.getSessionWorkspace(sid) : '';
+    const def = Store && typeof Store.getDefaultWorkDir === 'function' ? Store.getDefaultWorkDir() : '';
+    const full = root || def || '';
+    if (textEl) textEl.textContent = full;
+    el.hidden = !full;
+    if (full) {
+      el.title = `当前会话工作区\n${full}`;
+      el.setAttribute('aria-label', `当前工作区 ${full}`);
+    } else {
+      el.removeAttribute('title');
+      el.removeAttribute('aria-label');
+    }
+  }
+
   function syncSidebarWorkspace(data) {
     if (!data || !window.ChatSessionSidebar) return;
     const sid = data.sessionId || data.activeSessionId;
     if (sid && typeof window.ChatSessionSidebar.notifyWorkspaceUpdated === 'function') {
       window.ChatSessionSidebar.notifyWorkspaceUpdated({ sessionId: sid, ...data });
     }
+    syncComposerWorkspace();
   }
 
   function closeComposerOverlays() {
@@ -1117,6 +1138,7 @@ export const ChatPage = (() => {
     if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
     syncPlanModeChip();
+    syncComposerWorkspace();
   }
 
   function paintInitialChatView() {
@@ -2458,37 +2480,44 @@ export const ChatPage = (() => {
               '</div>' +
             '</div>' +
             '<div class="composer-toolbar">' +
-              '<div class="composer-file-btn" id="btn-file">' +
-                '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="上传文件" aria-label="上传文件">' +
-                '<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">' +
-                  (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+') +
-                '</span>' +
+              '<div class="composer-toolbar-start">' +
+                '<div class="composer-file-btn" id="btn-file">' +
+                  '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="上传文件" aria-label="上传文件">' +
+                  '<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">' +
+                    (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+') +
+                  '</span>' +
+                '</div>' +
+                '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
+                  '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                  (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
+                '</button>' +
+                '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
+                  ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
+                  ' aria-valuenow="0" tabindex="0">' +
+                  '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
+                  '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
+                '</div>' +
+                '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
+                + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
+                + 'aria-label="Shell 协作模式">'
+                + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
+                + '<span class="shell-collab-label">Shell协作</span>'
+                + '</span>' +
               '</div>' +
-              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
-                '<span class="chip-label" id="chip-model-label">加载中…</span>' +
-                (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
-              '</button>' +
-              '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
-                ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
-                ' aria-valuenow="0" tabindex="0">' +
-                '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
-                '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
-              '</div>' +
-              '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
-              + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
-              + 'aria-label="Shell 协作模式">'
-              + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
-              + '<span class="shell-collab-label">Shell协作</span>'
-              + '</span>' +
-              '<div class="composer-toolbar-spacer" aria-hidden="true"></div>' +
-              '<div class="cmd-palette-anchor">' +
-                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
-                  (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
+              '<div class="composer-toolbar-end">' +
+                '<div class="composer-workspace" id="composer-workspace">' +
+                  '<span class="composer-workspace-label">工作区</span>' +
+                  '<span class="composer-workspace-text"></span>' +
+                '</div>' +
+                '<div class="cmd-palette-anchor">' +
+                  '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                    (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
+                  '</button>' +
+                '</div>' +
+                '<button class="btn-send" id="btn-send" type="button" title="发送" aria-label="Send">' +
+                  (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +
-              '<button class="btn-send" id="btn-send" type="button" title="发送" aria-label="Send">' +
-                (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
-              '</button>' +
             '</div>' +
           '</div>' +
           '</div>' +
@@ -2725,6 +2754,10 @@ export const ChatPage = (() => {
 
     syncShellCollabIndicator();
     syncPlanModeChip();
+    syncComposerWorkspace();
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.onChange === 'function') {
+      window.ChatSessionStore.onChange(syncComposerWorkspace);
+    }
     bindTaskDoneNotifyClick();
 
     // 连接 WebSocket

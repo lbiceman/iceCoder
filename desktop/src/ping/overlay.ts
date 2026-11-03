@@ -3,9 +3,10 @@
  * 窗口比屏幕少 1 像素，避免资源管理器把它当成全屏程序藏起任务栏。
  */
 import path from 'node:path';
-import { BrowserWindow, screen, type Display, type Rectangle } from 'electron';
+import { BrowserWindow, ipcMain, screen, type Display, type IpcMainEvent, type Rectangle } from 'electron';
 import { IPC } from '../constants';
-import { cropCssSize, physicalToLocal, type DisplayMap } from './geometry';
+import { cropCssSize, physicalToLocal, type DisplayMap, type ScreenRect } from './geometry';
+import { askAnchorNear, physicalRectToLocal, snipBarPlacement, snipChromeDisplay } from './snip-session';
 
 export interface WheelView {
   show: boolean;
@@ -32,6 +33,23 @@ interface SignalView {
   slice: number;
 }
 
+interface SnipShow {
+  show: boolean;
+  scale: number;
+  rect?: { x: number; y: number; w: number; h: number } | null;
+  chosen?: boolean;
+  /** 本屏要不要画完成按钮。跨屏时只有选区右下角所在的那块屏幕为 true。 */
+  bar?: { x: number; y: number } | null;
+  label?: string;
+  /** copy 复制进输入框，ask 交给模型，todo 附到待办草稿。 */
+  purpose?: 'copy' | 'ask' | 'todo';
+}
+
+interface SnipHandlers {
+  onOk: () => void;
+  onCancel: () => void;
+}
+
 interface OverlaySlot {
   displayId: number;
   win: BrowserWindow;
@@ -39,6 +57,9 @@ interface OverlaySlot {
   wheel: WheelView | null;
   marker: MarkerView | null;
   pendingSignals: SignalView[];
+  pendingSnip: SnipShow | null;
+  /** 这块屏幕上的选区，坐标相对浮层，可以伸出屏幕。 */
+  askRegion: { x: number; y: number; w: number; h: number } | null;
 }
 
 function overlayHtmlPath(): string {
@@ -85,9 +106,16 @@ export interface PingOverlay {
   patchMarker(phase: MarkerView['phase'], text: string): void;
   /** 问号已经在落点上，只补矩形，不移动问号。 */
   showCrop(cropWidth: number, cropHeight: number): void;
+  /** 在框选区域下沿旁显示问号和回答，并描出这块区域。 */
+  showAsk(rect: ScreenRect, phase: MarkerView['phase'], text: string): void;
   hideMarker(): void;
-  /** 轮盘上的普通标记。问号不走这里。 */
+  /** 轮盘上的普通标记。问号和框选不走这里。 */
   showSignal(originX: number, originY: number, slice: number): void;
+  /** 左右松手后铺满每块屏幕，让用户自己拖出截图区域。 */
+  beginSnip(handlers: SnipHandlers, purpose: 'copy' | 'ask' | 'todo'): void;
+  /** 把同一块物理矩形画到每一块屏幕上。坐标可以伸出本屏。 */
+  paintSnip(rect: ScreenRect | null, chosen: boolean): void;
+  endSnip(): void;
   reveal(): void;
   destroy(): void;
 }
@@ -101,10 +129,25 @@ function excludeFromCapture(win: BrowserWindow): void {
   win.setContentProtection(true);
 }
 
+function readSnipResult(payload: unknown): { action: 'cancel' } | { action: 'ok' } | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const action = (payload as { action?: unknown }).action;
+  if (action === 'cancel') return { action: 'cancel' };
+  if (action === 'ok') return { action: 'ok' };
+  return null;
+}
+
+/** 钩子和框选会话要用同一套屏幕映射。 */
+export function readPingDisplayMaps(): DisplayMap[] {
+  return currentMaps();
+}
+
 export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   const slots = new Map<number, OverlaySlot>();
   let listenerBound = false;
   let refreshing = false;
+  let snipHandlers: SnipHandlers | null = null;
+  let snipPurpose: 'copy' | 'ask' | 'todo' = 'copy';
   const onDisplayChange = (): void => {
     if (refreshing) return;
     refreshing = true;
@@ -179,6 +222,8 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
       wheel: null,
       marker: null,
       pendingSignals: [],
+      pendingSnip: null,
+      askRegion: null,
     };
     // 混合缩放时第一帧的窗口位置会偏，标记就会跟着往右下挪。准备好后再钉一次。
     win.once('ready-to-show', () => {
@@ -190,6 +235,7 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
       slot.ready = true;
       push(slot);
       flushSignals(slot);
+      if (slot.pendingSnip) slot.win.webContents.send(IPC.SCREEN_PING_SNIP, slot.pendingSnip);
     });
     void win.loadFile(overlayHtmlPath());
     return slot;
@@ -247,9 +293,10 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   function push(slot: OverlaySlot): void {
     if (!slot.ready || slot.win.isDestroyed()) return;
     slot.win.webContents.send(IPC.SCREEN_PING_WHEEL, slot.wheel ?? { show: false, x: 0, y: 0, slice: null });
-    slot.win.webContents.send(IPC.SCREEN_PING_MARKER, slot.marker ?? {
-      show: false, x: 0, y: 0, phase: 'loading', text: '', cropW: 0, cropH: 0, frame: false,
-    });
+    const marker = slot.marker ?? {
+      show: false, x: 0, y: 0, phase: 'loading' as const, text: '', cropW: 0, cropH: 0, frame: false,
+    };
+    slot.win.webContents.send(IPC.SCREEN_PING_MARKER, { ...marker, region: slot.askRegion });
   }
 
   function revealSlot(slot: OverlaySlot): void {
@@ -267,7 +314,10 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
   }
 
   function clearMarker(): void {
-    for (const slot of slots.values()) slot.marker = null;
+    for (const slot of slots.values()) {
+      slot.marker = null;
+      slot.askRegion = null;
+    }
   }
 
   function destroyWindows(): void {
@@ -276,6 +326,55 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
     }
     slots.clear();
   }
+
+  function sendSnip(slot: OverlaySlot, payload: SnipShow): void {
+    slot.pendingSnip = payload.show ? payload : null;
+    if (!slot.ready || slot.win.isDestroyed()) return;
+    slot.win.webContents.send(IPC.SCREEN_PING_SNIP, payload);
+  }
+
+  function armSnipInput(slot: OverlaySlot): void {
+    if (slot.win.isDestroyed()) return;
+    showPinned(slot);
+    slot.win.setAlwaysOnTop(true, 'screen-saver');
+    slot.win.setFocusable(true);
+    slot.win.setIgnoreMouseEvents(false);
+  }
+
+  function disarmSnipInput(slot: OverlaySlot): void {
+    if (slot.win.isDestroyed()) return;
+    try { slot.win.blur(); } catch { /* 没有焦点 */ }
+    slot.win.setIgnoreMouseEvents(true, { forward: true });
+    try { slot.win.setFocusable(false); } catch { /* 窗口正在销毁时系统会拒绝 */ }
+  }
+
+  function hideSnipUi(): void {
+    for (const slot of slots.values()) {
+      sendSnip(slot, { show: false, scale: 1 });
+      disarmSnipInput(slot);
+    }
+  }
+
+  function focusCursorSlot(): void {
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursor);
+    const slot = slots.get(display.id);
+    if (!slot || slot.win.isDestroyed()) return;
+    try { slot.win.focus(); } catch { /* 没焦点时仍可以拖，Esc 由钩子收 */ }
+  }
+
+  function onSnipResult(_event: IpcMainEvent, payload: unknown): void {
+    const handlers = snipHandlers;
+    if (!handlers) return;
+    const parsed = readSnipResult(payload);
+    if (!parsed) return;
+    snipHandlers = null;
+    hideSnipUi();
+    if (parsed.action === 'cancel') handlers.onCancel();
+    else handlers.onOk();
+  }
+
+  ipcMain.on(IPC.SCREEN_PING_SNIP_RESULT, onSnipResult);
 
   return {
     warm,
@@ -298,6 +397,20 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
     hideWheel() {
       clearWheel();
       syncAll();
+    },
+    showAsk(rect, phase, text) {
+      const maps = currentMaps();
+      const anchor = askAnchorNear(rect, maps);
+      const hit = physicalToLocal(anchor.x, anchor.y, maps);
+      for (const slot of slots.values()) {
+        const map = maps.find((item) => item.id === slot.displayId);
+        slot.askRegion = map ? physicalRectToLocal(rect, map) : null;
+        slot.marker = hit && hit.id === slot.displayId
+          ? { show: true, x: hit.x, y: hit.y, phase, text, cropW: 0, cropH: 0, frame: false }
+          : null;
+        showPinned(slot);
+        push(slot);
+      }
     },
     showMarker(originX, originY, phase, text) {
       clearMarker();
@@ -345,6 +458,40 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
       showPinned(found.slot);
       emitSignal(found.slot, { x: found.local.x, y: found.local.y, slice });
     },
+    beginSnip(handlers, purpose) {
+      snipHandlers = handlers;
+      snipPurpose = purpose === 'ask' || purpose === 'todo' ? purpose : 'copy';
+      for (const slot of slots.values()) armSnipInput(slot);
+      this.paintSnip(null, false);
+      focusCursorSlot();
+    },
+    paintSnip(rect, chosen) {
+      if (!snipHandlers) return;
+      const maps = currentMaps();
+      const owner = rect && chosen ? snipChromeDisplay(rect, maps) : null;
+      const label = rect ? `${Math.round(rect.width)} × ${Math.round(rect.height)}` : '';
+      for (const slot of slots.values()) {
+        const map = maps.find((item) => item.id === slot.displayId);
+        const scale = map && map.scale > 0 ? map.scale : 1;
+        const local = rect && map ? physicalRectToLocal(rect, map) : null;
+        const bar = local && owner === slot.displayId && map
+          ? snipBarPlacement(local, { width: map.dip.width, height: map.dip.height })
+          : null;
+        sendSnip(slot, {
+          show: true,
+          scale,
+          rect: local,
+          chosen,
+          bar,
+          label,
+          purpose: snipPurpose,
+        });
+      }
+    },
+    endSnip() {
+      snipHandlers = null;
+      hideSnipUi();
+    },
     reveal() {
       for (const slot of slots.values()) {
         showPinned(slot);
@@ -352,6 +499,8 @@ export function createPingOverlay(onDisplaysChanged: () => void): PingOverlay {
       }
     },
     destroy() {
+      ipcMain.removeListener(IPC.SCREEN_PING_SNIP_RESULT, onSnipResult);
+      snipHandlers = null;
       unbindDisplayListener();
       destroyWindows();
     },

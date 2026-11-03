@@ -35,6 +35,7 @@ import {
   registerSessionCleanupHook,
 } from '../../web/routes/sessions.js';
 import { createScheduledTasksRouter } from '../../web/routes/scheduled-tasks.js';
+import { createTodosRouter } from '../../web/routes/todos.js';
 import {
   createScheduledTaskExecutor,
   ensureScheduledTaskSession,
@@ -49,6 +50,7 @@ import { registerSessionToolProvider } from '../../tools/session-tool-providers.
 import { enableOsSchedulerGuard } from '../../tools/shell-os-scheduler-guard.js';
 import { registerHostListenPort } from '../../tools/shell-host-guard.js';
 import { ScheduledTaskStore } from '../../session/scheduled-task-store.js';
+import { TodoStore } from '../../session/todo-store.js';
 import { ScheduledTaskScheduler } from '../../session/scheduled-task-scheduler.js';
 import { registerScheduledTaskResultHandler } from '../../session/scheduled-task-events.js';
 import path from 'node:path';
@@ -90,6 +92,10 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const setupState = { required: ctx.needsSetup };
 
   const scheduledTaskStore = new ScheduledTaskStore(path.join(paths.dataDir, 'scheduled-tasks.json'));
+  const todoStore = new TodoStore(
+    path.join(paths.dataDir, 'todos.json'),
+    path.join(paths.dataDir, 'todo-files'),
+  );
   scheduledTaskStore.onChange(notifySessionListChanged);
   const scheduledTaskSessionDeps = {
     store: scheduledTaskStore,
@@ -153,6 +159,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
       { path: '/api/user-rules', router: createUserRulesRouter() },
+      { path: '/api/todos', router: createTodosRouter(todoStore) },
       { path: '/api/scheduled-tasks', router: createScheduledTasksRouter({
         ...scheduledTaskServiceDeps,
         sessionExists: scheduledTaskSessionExists,

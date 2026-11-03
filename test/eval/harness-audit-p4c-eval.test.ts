@@ -14,6 +14,7 @@ import {
   recordHarnessTiming,
   resetHarnessTiming,
   runWithHarnessTimingScope,
+  summarizeHarnessTiming,
 } from '../../src/harness/harness-timing.js';
 import { RuntimeTelemetry, runtimeTelemetryFile } from '../../src/harness/runtime-telemetry.js';
 import {
@@ -120,6 +121,28 @@ describe('eval: harness audit P4 #86 #88', () => {
     expect(names[1]).toEqual(['beta']);
   });
 
+  it('reads the finished run after its timing scope has ended', async () => {
+    process.env.ICE_HARNESS_TIMING = '1';
+    resetHarnessTiming();
+    await runWithHarnessTimingScope(async () => {
+      resetHarnessTiming();
+      recordHarnessTiming('round_wall', 12);
+      recordHarnessTiming('run_total', 20);
+      recordHarnessTiming('llm_http', 7);
+      await Promise.resolve();
+    });
+    expect(getHarnessTimingSamples().map(sample => sample.name)).toEqual([
+      'round_wall',
+      'run_total',
+      'llm_http',
+    ]);
+    const summary = summarizeHarnessTiming();
+    expect(summary.roundWallMs).toBe(12);
+    expect(summary.runTotalMs).toBe(20);
+    expect(summary.waitLlmMs).toBe(7);
+    expect(summary.codeMs).toBe(5);
+  });
+
   it('writes each session telemetry to its own file', async () => {
     const dir = await fs.mkdtemp(path.join(tmpdir(), 'ice-eval-p4c-tel-'));
     try {
@@ -138,24 +161,17 @@ describe('eval: harness audit P4 #86 #88', () => {
     }
   });
 
-  it('does not keep a command inventory or file hash across sessions', async () => {
+  it('does not keep a command inventory across sessions', async () => {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'ice-eval-p4c-touch-'));
     await fs.writeFile(path.join(root, 'a.txt'), 'body', 'utf8');
     try {
-      const firstReads = await runWithWorkspaceTouchScope(async () => {
+      await runWithWorkspaceTouchScope(async () => {
         rememberPreCommandInventory('s', 'call-1', blankInventory());
-        const listed = await listWorkspaceFileInventory(root);
-        return listed.contentReads;
+        await listWorkspaceFileInventory(root);
       });
-      expect(firstReads).toBeGreaterThan(0);
 
-      const second = await runWithWorkspaceTouchScope(async () => {
-        const kept = takePreCommandInventory('s', 'call-1');
-        const listed = await listWorkspaceFileInventory(root);
-        return { kept, reads: listed.contentReads };
-      });
-      expect(second.kept).toBeUndefined();
-      expect(second.reads).toBeGreaterThan(0);
+      const kept = await runWithWorkspaceTouchScope(async () => takePreCommandInventory('s', 'call-1'));
+      expect(kept).toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

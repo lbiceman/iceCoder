@@ -44,10 +44,114 @@
     #wheel .icon.hot { filter: none; }
     #wheel .icon.hot .zoom { transform: scale(1.12); }
     #wheel .icon.is-alert,
-    #wheel .icon.is-way { filter: none; }
+    #wheel .icon.is-snip { filter: none; }
     .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
     .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
     #signals { position: absolute; inset: 0; pointer-events: none; }
+
+    #snip {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      cursor: crosshair;
+      pointer-events: auto;
+      /* 几乎看不出的底色，让 Windows 在透明窗的选区内也能点到。 */
+      background: rgba(0, 0, 0, 0.012);
+    }
+    #snip.on { display: block; }
+    .snip-mask {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.45);
+    }
+    #snip-box {
+      position: absolute;
+      display: none;
+      box-sizing: border-box;
+      border: 1px solid #fff;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+      background: rgba(255, 255, 255, 0.01);
+    }
+    #snip-box.on { display: block; }
+    #snip-box.chosen { cursor: move; }
+    #snip-size {
+      position: absolute;
+      left: 0;
+      top: -26px;
+      padding: 2px 6px;
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      font: 12px/1.4 "Segoe UI", "Microsoft YaHei", sans-serif;
+      border-radius: 2px;
+      white-space: nowrap;
+    }
+    .snip-handle {
+      display: none;
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      box-sizing: border-box;
+      background: #fff;
+      border: 1px solid #111;
+    }
+    #snip-box.chosen .snip-handle { display: block; }
+    .snip-handle[data-h="nw"] { left: -4px; top: -4px; cursor: nwse-resize; }
+    .snip-handle[data-h="n"] { left: calc(50% - 4px); top: -4px; cursor: ns-resize; }
+    .snip-handle[data-h="ne"] { right: -4px; top: -4px; cursor: nesw-resize; }
+    .snip-handle[data-h="e"] { right: -4px; top: calc(50% - 4px); cursor: ew-resize; }
+    .snip-handle[data-h="se"] { right: -4px; bottom: -4px; cursor: nwse-resize; }
+    .snip-handle[data-h="s"] { left: calc(50% - 4px); bottom: -4px; cursor: ns-resize; }
+    .snip-handle[data-h="sw"] { left: -4px; bottom: -4px; cursor: nesw-resize; }
+    .snip-handle[data-h="w"] { left: -4px; top: calc(50% - 4px); cursor: ew-resize; }
+    #snip-bar {
+      position: absolute;
+      display: none;
+      box-sizing: border-box;
+      width: 148px;
+      height: 40px;
+      gap: 8px;
+      padding: 6px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+    }
+    #snip-bar.on { display: flex; }
+    #snip-bar button {
+      box-sizing: border-box;
+      width: 64px;
+      height: 28px;
+      border: 0;
+      border-radius: 4px;
+      padding: 0;
+      font: 600 13px "Segoe UI", "Microsoft YaHei", sans-serif;
+      cursor: pointer;
+    }
+    #snip-ok { background: #07c160; color: #fff; }
+    #snip-cancel { background: #f2f2f2; color: #222; }
+    #snip-tip {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: 28px;
+      transform: translateX(-50%);
+      padding: 8px 14px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      border-radius: 6px;
+      font: 13px/1.4 "Segoe UI", "Microsoft YaHei", sans-serif;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #snip.on:not(.busy) #snip-tip { display: block; }
+    #ask-region {
+      display: none;
+      position: absolute;
+      box-sizing: border-box;
+      border: 1.5px solid rgba(242, 214, 120, 0.78);
+      background: rgba(242, 197, 24, 0.035);
+      pointer-events: none;
+    }
+    #ask-region.on { display: block; }
 
     .ping {
       position: absolute;
@@ -142,6 +246,29 @@
 <body>
   <div id="wheel"></div>
   <div id="signals"></div>
+  <div id="snip">
+    <div class="snip-mask" id="snip-mask-top"></div>
+    <div class="snip-mask" id="snip-mask-left"></div>
+    <div class="snip-mask" id="snip-mask-right"></div>
+    <div class="snip-mask" id="snip-mask-bottom"></div>
+    <div id="snip-box">
+      <span id="snip-size"></span>
+      <i class="snip-handle" data-h="nw"></i>
+      <i class="snip-handle" data-h="n"></i>
+      <i class="snip-handle" data-h="ne"></i>
+      <i class="snip-handle" data-h="e"></i>
+      <i class="snip-handle" data-h="se"></i>
+      <i class="snip-handle" data-h="s"></i>
+      <i class="snip-handle" data-h="sw"></i>
+      <i class="snip-handle" data-h="w"></i>
+    </div>
+    <div id="snip-bar">
+      <button type="button" id="snip-ok" title="复制到剪贴板，并放进输入框">完成</button>
+      <button type="button" id="snip-cancel">取消</button>
+    </div>
+    <div id="snip-tip">拖出区域，可以跨到另一块屏幕。松开后直接完成。Esc 取消</div>
+  </div>
+  <div id="ask-region"></div>
   <div class="ping" id="mark">
     <div class="crop-frame" id="crop-frame"></div>
     <div class="ground"></div>
@@ -174,10 +301,10 @@
         + '</svg>';
     }
 
-    /** 自上顺时针四个方向：危险感叹号、正在路上、旗、问号。图形自绘，底边贴着落点。 */
+    /** 自上顺时针四个方向：危险感叹号、框选截图、旗、问号。图形自绘，底边贴着落点。 */
     const MARKS = [
       { color: '#ff2a3c', ink: '#ff2a3c', cls: 'is-alert', body: '<path fill="currentColor" d="M24 2 H40 L36 46 H28 Z"/><rect x="26" y="56" width="12" height="16" rx="2.5" fill="currentColor"/>' },
-      { color: '#2e8bff', ink: '#2e8bff', cls: 'is-way', body: '<path fill="currentColor" d="M32 2 L58 34 H44 V76 H20 V34 H6 Z"/>' },
+      { color: '#3ddc97', ink: '#3ddc97', cls: 'is-snip', body: '<path fill="currentColor" fill-rule="evenodd" d="M8 30 V12 H30 V18 H14 V30 Z M34 12 H56 V30 H50 V18 H34 Z M56 48 V66 H34 V60 H50 V48 Z M8 48 H14 V60 H30 V66 H8 Z M22 28 H42 V52 H22 Z M26 32 V48 H38 V32 Z"/>' },
       { color: '#2e8bff', ink: '#e6d3a1', cls: '', body: '<path fill="currentColor" d="M18 2 H24 V78 H18 Z"/><path fill="currentColor" d="M24 8 H54 L44 24 H24 Z"/>' },
       { color: '#f2c518', ink: '#e6d3a1', cls: 'is-q', body: '' },
     ];
@@ -367,11 +494,29 @@
     }
 
     let markPlaced = false;
+    const askRegion = document.getElementById('ask-region');
+
+    function paintAskRegion(region) {
+      if (!region || region.w < 1 || region.h < 1) {
+        askRegion.classList.remove('on');
+        return;
+      }
+      const radius = Math.max(12, Math.round(Math.min(Math.abs(region.w), Math.abs(region.h)) * 0.12));
+      askRegion.style.left = region.x + 'px';
+      askRegion.style.top = region.y + 'px';
+      askRegion.style.width = region.w + 'px';
+      askRegion.style.height = region.h + 'px';
+      askRegion.style.borderRadius = radius + 'px';
+      askRegion.classList.add('on');
+    }
 
     function setMarker(payload) {
       if (payload && payload.frameOnly) {
         if (markPlaced) paintFrame(payload);
         return;
+      }
+      if (payload && Object.prototype.hasOwnProperty.call(payload, 'region')) {
+        paintAskRegion(payload.region);
       }
       if (!payload || !payload.show) {
         markPlaced = false;
@@ -379,8 +524,8 @@
         cropFrame.classList.remove('on');
         return;
       }
-      // 问号只落一次。后面的矩形和文字都不再写 left/top。
-      if (!markPlaced) {
+      // 带选区的消息是新一次提问，问号要挪到这块区域旁边。之后只改文字，不再写坐标。
+      if (!markPlaced || Object.prototype.hasOwnProperty.call(payload, 'region')) {
         mark.style.left = payload.x + 'px';
         mark.style.top = payload.y + 'px';
         mark.classList.add('on');
@@ -389,13 +534,200 @@
       paintCard(payload);
     }
 
+    const snip = document.getElementById('snip');
+    const snipBox = document.getElementById('snip-box');
+    const snipSize = document.getElementById('snip-size');
+    const snipBar = document.getElementById('snip-bar');
+    const snipTip = document.getElementById('snip-tip');
+    const snipOk = document.getElementById('snip-ok');
+    const snipMaskTop = document.getElementById('snip-mask-top');
+    const snipMaskLeft = document.getElementById('snip-mask-left');
+    const snipMaskRight = document.getElementById('snip-mask-right');
+    const snipMaskBottom = document.getElementById('snip-mask-bottom');
+    let snipOpen = false;
+    let snipChosen = false;
+    let snipRect = null;
+    let snipScale = 1;
+    let snipLabel = '';
+    let snipBarGiven = false;
+    let snipBarPos = null;
+
+    function snipClamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snipPublish(payload) {
+      window.__pingLastSnip = payload;
+      const bridge = window.pingOverlay;
+      if (bridge && typeof bridge.sendSnip === 'function') bridge.sendSnip(payload);
+    }
+
+    function snipClose() {
+      snipOpen = false;
+      snipChosen = false;
+      snipRect = null;
+      snipLabel = '';
+      snipBarGiven = false;
+      snipBarPos = null;
+      snip.classList.remove('on', 'busy');
+    }
+
+    function snipPlaceMask(node, x, y, w, h) {
+      node.style.left = x + 'px';
+      node.style.top = y + 'px';
+      node.style.width = Math.max(0, w) + 'px';
+      node.style.height = Math.max(0, h) + 'px';
+    }
+
+    function snipPlaceBar(left, top) {
+      snipBar.style.left = left + 'px';
+      snipBar.style.top = top + 'px';
+      snipBar.classList.add('on');
+    }
+
+    function snipLayout() {
+      const viewW = window.innerWidth;
+      const viewH = window.innerHeight;
+      snip.classList.toggle('busy', !!snipRect);
+      if (!snipRect || snipRect.w < 1 || snipRect.h < 1) {
+        snipPlaceMask(snipMaskTop, 0, 0, viewW, viewH);
+        snipPlaceMask(snipMaskLeft, 0, 0, 0, 0);
+        snipPlaceMask(snipMaskRight, 0, 0, 0, 0);
+        snipPlaceMask(snipMaskBottom, 0, 0, 0, 0);
+        snipBox.classList.remove('on', 'chosen');
+        snipBar.classList.remove('on');
+        return;
+      }
+      const rect = snipRect;
+      const topH = Math.max(0, Math.min(rect.y, viewH));
+      const botY = Math.max(0, Math.min(rect.y + rect.h, viewH));
+      const leftW = Math.max(0, Math.min(rect.x, viewW));
+      const rightX = Math.max(0, Math.min(rect.x + rect.w, viewW));
+      snipPlaceMask(snipMaskTop, 0, 0, viewW, topH);
+      snipPlaceMask(snipMaskBottom, 0, botY, viewW, Math.max(0, viewH - botY));
+      snipPlaceMask(snipMaskLeft, 0, topH, leftW, Math.max(0, botY - topH));
+      snipPlaceMask(snipMaskRight, rightX, topH, Math.max(0, viewW - rightX), Math.max(0, botY - topH));
+      snipBox.style.left = rect.x + 'px';
+      snipBox.style.top = rect.y + 'px';
+      snipBox.style.width = rect.w + 'px';
+      snipBox.style.height = rect.h + 'px';
+      snipBox.classList.add('on');
+      snipBox.classList.toggle('chosen', snipChosen);
+      const scale = snipScale > 0 ? snipScale : 1;
+      snipSize.textContent = snipLabel || (Math.round(rect.w * scale) + ' × ' + Math.round(rect.h * scale));
+      snipSize.style.top = rect.y >= 28 ? '-26px' : (Math.max(0, -rect.y) + 4) + 'px';
+      if (snipBarGiven) {
+        if (snipBarPos) snipPlaceBar(snipBarPos.x, snipBarPos.y);
+        else snipBar.classList.remove('on');
+        return;
+      }
+      if (!snipChosen) {
+        snipBar.classList.remove('on');
+        return;
+      }
+      const gap = 8;
+      const barW = 148;
+      const barH = 40;
+      let top = rect.y + rect.h + gap;
+      let left = rect.x + rect.w - barW;
+      if (top + barH > viewH - 4) {
+        top = rect.y - barH - gap;
+        if (rect.y >= 28) top -= 22;
+      }
+      if (top < 4) top = 4;
+      left = snipClamp(left, 4, Math.max(4, viewW - barW - 4));
+      snipPlaceBar(left, top);
+    }
+
+    function snipConfirm() {
+      if (!snipOpen || !snipChosen || !snipRect) return;
+      snipClose();
+      snipPublish({ action: 'ok' });
+    }
+
+    function snipCancel() {
+      if (!snipOpen) return;
+      snipClose();
+      snipPublish({ action: 'cancel' });
+    }
+
+    function setSnip(payload) {
+      if (!payload || !payload.show) {
+        snipClose();
+        return;
+      }
+      snipScale = payload.scale > 0 && isFinite(payload.scale) ? payload.scale : 1;
+      if (!snipOpen) {
+        snipOpen = true;
+        snip.classList.add('on');
+      }
+      if (payload.rect && payload.rect.w > 0 && payload.rect.h > 0) {
+        snipRect = { x: payload.rect.x, y: payload.rect.y, w: payload.rect.w, h: payload.rect.h };
+      } else {
+        snipRect = null;
+      }
+      snipChosen = !!payload.chosen && !!snipRect;
+      snipLabel = typeof payload.label === 'string' ? payload.label : '';
+      if (payload.purpose === 'ask') {
+        snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后交给模型看这块画面。Esc 取消';
+        snipOk.title = '交给模型看这块画面';
+      } else if (payload.purpose === 'todo') {
+        snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后附到这条待办。Esc 回到草稿';
+        snipOk.title = '附到这条待办';
+      } else if (payload.purpose === 'copy') {
+        snipTip.textContent = '拖出区域，可以跨到另一块屏幕。松开后复制到剪贴板，并放进输入框。Esc 取消';
+        snipOk.title = '复制到剪贴板，并放进输入框';
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'bar')) {
+        snipBarGiven = true;
+        snipBarPos = payload.bar || null;
+      } else {
+        snipBarGiven = false;
+        snipBarPos = null;
+      }
+      snipLayout();
+    }
+    snip.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      snipCancel();
+    });
+    snipBox.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      snipConfirm();
+    });
+    document.getElementById('snip-ok').addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      snipConfirm();
+    });
+    document.getElementById('snip-cancel').addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      snipCancel();
+    });
+    window.addEventListener('keydown', (event) => {
+      if (!snipOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        snipCancel();
+      } else if (event.key === 'Enter' && snipChosen) {
+        event.preventDefault();
+        snipConfirm();
+      }
+    }, true);
+    window.addEventListener('resize', () => {
+      if (snipOpen) snipLayout();
+    });
+
     const api = window.pingOverlay;
     if (api) {
       api.onWheel(setWheel);
       api.onMarker(setMarker);
       if (api.onSignal) api.onSignal(spawnSignal);
+      if (api.onSnip) api.onSnip(setSnip);
     }
-    window.__pingPreview = { setWheel, setMarker, spawnSignal };
+    window.__pingPreview = { setWheel, setMarker, spawnSignal, setSnip };
   </script>
 </body>
 </html>

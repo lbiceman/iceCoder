@@ -43,14 +43,14 @@ select:focus-visible,
 
 .chat-sidebar-brand {
   justify-content: flex-start;
-  min-height: 64px;
-  padding: 0 var(--space-5);
-  border-bottom-color: var(--border-subtle);
+  min-height: 56px;
+  padding: 0 14px;
+  border-bottom: none;
 }
 
 .chat-sidebar-brand-icon {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
 }
 
@@ -59,25 +59,26 @@ select:focus-visible,
   padding-left: 0;
   color: var(--text-primary);
   background: none;
-  font-size: 17px;
-  font-weight: 720;
+  font-size: 15px;
+  font-weight: 600;
   letter-spacing: -0.02em;
   animation: none;
 }
 
 .chat-sidebar-nav {
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-bottom-color: var(--border-subtle);
+  gap: 6px;
+  padding: 4px 8px 6px;
+  border-bottom: none;
 }
 
 .chat-sidebar-nav-btn {
-  height: 38px;
-  padding: 0 var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
   color: var(--text-secondary);
-  font-weight: 560;
+  font-size: 12.5px;
+  font-weight: 450;
   transition:
     color var(--transition-fast),
     background var(--transition-fast),
@@ -97,17 +98,17 @@ select:focus-visible,
 }
 
 .chat-sidebar-header {
-  align-items: center;
-  padding: var(--space-4) var(--space-3) var(--space-2);
+  align-items: stretch;
+  padding: 4px 10px 2px;
 }
 
 .chat-sidebar-title {
-  padding-left: var(--space-1);
-  color: var(--text-muted);
+  padding-left: 2px;
+  color: var(--text-primary);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .chat-sidebar-new-btn {
@@ -119,23 +120,41 @@ select:focus-visible,
   color: var(--text-secondary);
 }
 
+.chat-sidebar-header .chat-sidebar-new-btn {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
 .chat-sidebar-new-btn:hover {
   border-color: var(--accent-border);
   background: var(--surface-raised);
   color: var(--text-primary);
 }
 
+.chat-sidebar-header .chat-sidebar-new-btn:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--surface-raised) 82%, var(--text-primary));
+  color: var(--text-primary);
+}
+
 .chat-sidebar-list {
-  gap: 3px;
-  padding: var(--space-1) var(--space-3) var(--space-4);
+  gap: 6px;
+  padding: 4px 8px 8px;
 }
 
 .chat-sidebar-item {
   position: relative;
-  min-height: 54px;
-  padding: 9px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  min-height: 30px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
 }
@@ -145,29 +164,21 @@ select:focus-visible,
   background: var(--interactive-hover);
 }
 
-.chat-sidebar-item.active {
-  color: var(--accent);
+.chat-sidebar-item.active,
+.chat-sidebar-item.is-checked {
+  color: var(--text-primary);
   border-color: transparent;
   background: var(--interactive-active);
   box-shadow: none;
 }
 
-/* 选中项左侧主色指示条 */
 .chat-sidebar-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 60%;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent);
+  content: none;
 }
 
 .chat-sidebar-item-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 400;
 }
 
 .chat-sidebar-item-run-dot {
@@ -185,30 +196,30 @@ select:focus-visible,
 }
 
 .chat-sidebar-footer {
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3) var(--space-3);
-  border-top-color: var(--border-subtle);
-  background: var(--surface-sidebar);
+  gap: 0;
+  padding: 7px 8px 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
 }
 
 .chat-sidebar-control {
-  height: 34px;
-  padding: 0 9px;
-  border-color: transparent;
-  border-radius: var(--radius);
+  height: 40px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 10px;
   background: transparent;
   color: var(--text-secondary);
 }
 
 .chat-sidebar-control:hover {
-  border-color: var(--border-subtle);
+  border-color: transparent;
   background: var(--interactive-hover);
   color: var(--text-primary);
   opacity: 1;
 }
 
 .chat-sidebar-settings-btn {
-  border-color: transparent;
+  border: none;
 }
 
 .chat-sidebar-settings-btn.is-active {
@@ -370,14 +381,9 @@ select:focus-visible,
 }
 
 .composer-toolbar {
+  justify-content: space-between;
   padding: 6px 10px 10px;
   border-top-color: var(--border-subtle);
-}
-
-/* 左侧状态组与右侧操作组之间的弹性留白 */
-.composer-toolbar-spacer {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 /* 工具栏图标按钮：统一 hover 反馈 */
@@ -396,8 +402,8 @@ select:focus-visible,
 
 /* 发送按钮：圆形主色，hover 微抬升 */
 .composer-toolbar .btn-send {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   transition:
     background var(--transition-fast),

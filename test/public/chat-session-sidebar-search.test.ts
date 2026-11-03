@@ -95,27 +95,20 @@ async function openSidebarPage(): Promise<Page> {
 
 async function snapshot(page: Page) {
   return page.evaluate(() => {
-    const group = (name: string) => {
-      const g = document.querySelector(`.chat-sidebar-group[data-group="${name}"]`);
-      if (!g) return null;
-      return {
-        expanded: g.querySelector('.chat-sidebar-group-toggle')?.getAttribute('aria-expanded'),
-        count: g.querySelector('.chat-sidebar-group-count')?.textContent,
-        empty: g.querySelector('.chat-sidebar-group-empty')?.textContent ?? null,
-        ids: Array.from(g.querySelectorAll('.chat-sidebar-item')).map((el) => el.getAttribute('data-id')),
-      };
-    };
     const box = document.querySelector('.chat-sidebar-search') as HTMLElement | null;
     const input = document.querySelector('.chat-sidebar-search-input') as HTMLInputElement | null;
     const btn = document.querySelector('.chat-sidebar-search-btn');
+    const empty = document.querySelector('.chat-sidebar-list-empty');
     return {
       searchOpen: !!box && !box.hidden,
       inputFocused: !!input && document.activeElement === input,
       inputValue: input ? input.value : null,
       btnExpanded: btn ? btn.getAttribute('aria-expanded') : null,
       btnActive: !!btn && btn.classList.contains('is-active'),
-      normal: group('normal'),
-      task: group('task'),
+      empty: empty ? empty.textContent : null,
+      groups: document.querySelectorAll('.chat-sidebar-group').length,
+      ids: Array.from(document.querySelectorAll('.chat-sidebar-item')).map((el) => el.getAttribute('data-id')),
+      taskIds: Array.from(document.querySelectorAll('.chat-sidebar-item-chip')).map((el) => el.closest('.chat-sidebar-item')?.getAttribute('data-id')),
     };
   });
 }
@@ -147,19 +140,24 @@ describe('侧栏会话搜索（按标题）', () => {
     });
   });
 
-  it('关键字同时过滤普通会话和任务会话，忽略大小写，分组计数为匹配数', async () => {
+  it('关键字同时过滤普通会话和任务会话，忽略大小写', async () => {
     const page = await openSidebarPage();
     await page.locator('.chat-sidebar-search-btn').click();
 
     await typeKeyword(page, '周报');
     let s = await snapshot(page);
-    expect(s.normal).toMatchObject({ expanded: 'true', count: '1', ids: ['n1'] });
-    expect(s.task).toMatchObject({ expanded: 'true', count: '1', ids: ['t1'] });
+    expect(s.ids).toEqual(['n1', 't1']);
+    expect(s.taskIds).toEqual(['t1']);
 
     await typeKeyword(page, 'NETTY');
     s = await snapshot(page);
-    expect(s.normal?.ids).toEqual(['n2']);
-    expect(s.task).toMatchObject({ count: '0', ids: [], empty: '无匹配会话' });
+    expect(s.ids).toEqual(['n2']);
+    expect(s.taskIds).toEqual([]);
+
+    await typeKeyword(page, '没有这个会话');
+    s = await snapshot(page);
+    expect(s.ids).toEqual([]);
+    expect(s.empty).toBe('无匹配会话');
   });
 
   it('只做本地过滤，不发额外请求', async () => {
@@ -167,30 +165,26 @@ describe('侧栏会话搜索（按标题）', () => {
     const before = await page.evaluate(() => (window as any).__fetchUrls.length);
     await page.locator('.chat-sidebar-search-btn').click();
     await typeKeyword(page, 'agent');
-    expect((await snapshot(page)).normal?.ids).toEqual(['n3']);
+    expect((await snapshot(page)).ids).toEqual(['n3']);
     expect(await page.evaluate(() => (window as any).__fetchUrls.length)).toBe(before);
   });
 
-  it('搜索期间可以手动折叠分组，改关键字后重新展开有结果的分组', async () => {
+  it('任务会话和普通会话在同一条列表里，不再按折叠标题分开', async () => {
     const page = await openSidebarPage();
-    await page.locator('.chat-sidebar-search-btn').click();
-    await typeKeyword(page, '周报');
-    await page.locator('.chat-sidebar-group[data-group="task"] .chat-sidebar-group-toggle').click();
-    expect((await snapshot(page)).task).toMatchObject({ expanded: 'false', ids: [] });
-
-    await typeKeyword(page, '周');
-    expect((await snapshot(page)).task).toMatchObject({ expanded: 'true', ids: ['t1'] });
+    const s = await snapshot(page);
+    expect(s.groups).toBe(0);
+    expect(s.ids).toEqual(['n1', 'n2', 'n3', 't1', 't2']);
+    expect(s.taskIds).toEqual(['t1', 't2']);
   });
 
-  it('Esc 清空并收起搜索，分组恢复搜索前的折叠状态', async () => {
+  it('Esc 清空并收起搜索，列表恢复全部会话', async () => {
     const page = await openSidebarPage();
     await page.locator('.chat-sidebar-search-btn').click();
     await typeKeyword(page, '周报');
     await page.locator('.chat-sidebar-search-input').press('Escape');
     const s = await snapshot(page);
     expect(s).toMatchObject({ searchOpen: false, inputValue: '', btnExpanded: 'false', btnActive: false });
-    expect(s.normal).toMatchObject({ expanded: 'true', count: '3' });
-    expect(s.task).toMatchObject({ expanded: 'false', count: '2', ids: [] });
+    expect(s.ids).toEqual(['n1', 'n2', 'n3', 't1', 't2']);
   });
 
   it('再次点击搜索按钮也会清空并收起', async () => {
@@ -200,7 +194,7 @@ describe('侧栏会话搜索（按标题）', () => {
     await page.locator('.chat-sidebar-search-btn').click();
     const s = await snapshot(page);
     expect(s).toMatchObject({ searchOpen: false, inputValue: '' });
-    expect(s.normal?.ids).toEqual(['n1', 'n2', 'n3']);
+    expect(s.ids).toEqual(['n1', 'n2', 'n3', 't1', 't2']);
   });
 
   it('搜索中新建会话会退出搜索，新会话可见', async () => {
@@ -208,7 +202,7 @@ describe('侧栏会话搜索（按标题）', () => {
     await page.locator('.chat-sidebar-search-btn').click();
     await typeKeyword(page, 'netty');
     await page.locator('.chat-sidebar-new-btn').click();
-    await expect.poll(async () => (await snapshot(page)).normal?.ids).toEqual(['n9', 'n1', 'n2', 'n3']);
+    await expect.poll(async () => (await snapshot(page)).ids).toEqual(['n9', 'n1', 'n2', 'n3', 't1', 't2']);
     expect((await snapshot(page)).searchOpen).toBe(false);
   });
 
@@ -219,7 +213,6 @@ describe('侧栏会话搜索（按标题）', () => {
     await page.evaluate(() => { (window as any).ChatSessionStore.applySessionRunState('t1', 'running'); });
     const s = await snapshot(page);
     expect(s).toMatchObject({ searchOpen: true, inputFocused: true, inputValue: '周报' });
-    expect(s.normal?.ids).toEqual(['n1']);
-    expect(s.task?.ids).toEqual(['t1']);
+    expect(s.ids).toEqual(['n1', 't1']);
   });
 });
