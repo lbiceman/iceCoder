@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 会话侧栏组件
  * 职责：侧栏 DOM 创建与渲染、会话列表、新建按钮、编辑标题、选中高亮
@@ -61,13 +62,13 @@ export const ChatSessionSidebar = (() => {
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
       `<div class="chat-sidebar-brand"><span class="chat-sidebar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="chat-sidebar-brand-logo">IceCoder</span></div>` +
-      `<nav class="chat-sidebar-nav" role="tablist" aria-label="主导航"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">工作</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">任务</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">知识库</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">统计</span></button></nav>` +
-      `<div class="chat-sidebar-header"><button class="chat-sidebar-new-btn" title="新建会话"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">新建会话</span></button><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">会话</span><button class="chat-sidebar-search-btn" type="button" title="搜索会话" aria-label="搜索会话" aria-expanded="false">${ic('search', 14)}</button></div></div>` +
-      `<div class="chat-sidebar-search" hidden><span class="chat-sidebar-search-icon" aria-hidden="true">${ic('search', 13)}</span><input class="chat-sidebar-search-input" type="search" placeholder="搜索会话标题" aria-label="搜索会话标题" autocomplete="off" spellcheck="false"></div>` +
-      `<div class="chat-sidebar-selectbar" hidden><span class="chat-sidebar-selectbar-text">已选择 <span class="chat-sidebar-selectbar-count">0</span> 个会话</span><button type="button" class="chat-sidebar-selectbar-close" aria-label="退出多选">×</button></div>` +
+      `<nav class="chat-sidebar-nav" role="tablist" aria-label="${t('nav.primary')}"><button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('work')}</span><span class="chat-sidebar-nav-btn-label">${t('nav.work')}</span></button><button class="chat-sidebar-nav-btn" data-page="tasks" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('tasks')}</span><span class="chat-sidebar-nav-btn-label">${t('nav.tasks')}</span></button><button class="chat-sidebar-nav-btn" data-page="knowledge" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('knowledge')}</span><span class="chat-sidebar-nav-btn-label">${t('nav.knowledge')}</span></button><button class="chat-sidebar-nav-btn" data-page="stats" role="tab" aria-selected="false"><span class="chat-sidebar-nav-btn-icon" aria-hidden="true">${ic('stats')}</span><span class="chat-sidebar-nav-btn-label">${t('nav.usage')}</span></button></nav>` +
+      `<div class="chat-sidebar-header"><button class="chat-sidebar-new-btn" title="${t('session.newChat')}"><span class="chat-sidebar-new-btn-icon" aria-hidden="true">${ic('plus', 14)}</span><span class="chat-sidebar-new-btn-label">${t('session.newChat')}</span></button><div class="chat-sidebar-header-top"><span class="chat-sidebar-title">${t('nav.sessions')}</span><button class="chat-sidebar-search-btn" type="button" title="${t('session.search')}" aria-label="${t('session.search')}" aria-expanded="false">${ic('search', 14)}</button></div></div>` +
+      `<div class="chat-sidebar-search" hidden><span class="chat-sidebar-search-icon" aria-hidden="true">${ic('search', 13)}</span><input class="chat-sidebar-search-input" type="search" placeholder="${t('session.searchPlaceholder')}" aria-label="${t('session.searchPlaceholder')}" autocomplete="off" spellcheck="false"></div>` +
+      `<div class="chat-sidebar-selectbar" hidden><span class="chat-sidebar-selectbar-text">${t('session.selected', { n: 0 })}</span><button type="button" class="chat-sidebar-selectbar-close" aria-label="${t('session.exitSelect')}">×</button></div>` +
       `<div class="chat-sidebar-list"></div>` +
-      `<div class="chat-sidebar-batchbar" hidden><button type="button" class="chat-sidebar-batch-delete" disabled><span class="chat-sidebar-batch-delete-icon" aria-hidden="true">${ic('trash', 14)}</span><span>删除</span></button></div>` +
-      `<div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置" aria-label="设置"><span class="chat-sidebar-user-avatar" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="5.35" r="2.65" stroke="currentColor" stroke-width="1.45"/><path d="M2.7 14.15a5.3 5.3 0 0 1 10.6 0" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg></span><span class="chat-sidebar-user-meta"><span class="chat-sidebar-user-name" title="右键修改昵称"></span><span class="chat-sidebar-control-label">设置</span></span><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings', 16)}</span></button></div>`;
+      `<div class="chat-sidebar-batchbar" hidden><button type="button" class="chat-sidebar-batch-delete" disabled><span class="chat-sidebar-batch-delete-icon" aria-hidden="true">${ic('trash', 14)}</span><span>${t('common.delete')}</span></button></div>` +
+      `<div class="chat-sidebar-footer"><button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="${t('nav.settings')}" aria-label="${t('nav.settings')}"><span class="chat-sidebar-user-avatar" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="5.35" r="2.65" stroke="currentColor" stroke-width="1.45"/><path d="M2.7 14.15a5.3 5.3 0 0 1 10.6 0" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg></span><span class="chat-sidebar-user-meta"><span class="chat-sidebar-user-name" title="${t('session.nicknameTip')}"></span><span class="chat-sidebar-control-label">${t('nav.settings')}</span></span><span class="chat-sidebar-control-icon" aria-hidden="true">${ic('settings', 16)}</span></button></div>`;
 
     const mainEl = host.querySelector('.app-main');
     if (mainEl) {
@@ -294,7 +295,7 @@ export const ChatSessionSidebar = (() => {
   let searchKeyword = '';
 
   function matchesSearch(s) {
-    return !searchKeyword || String(s.title || '未命名').toLowerCase().indexOf(searchKeyword) !== -1;
+    return !searchKeyword || String(s.title || t('session.untitled')).toLowerCase().indexOf(searchKeyword) !== -1;
   }
 
   function setSearchKeyword(value) {
@@ -363,19 +364,19 @@ export const ChatSessionSidebar = (() => {
   /** 任务会话 meta 行文案；状态未知时返回 null（回退为相对时间） */
   function describeTaskSession(st) {
     if (!st) return null;
-    if (st.state === 'deleted') return { text: '任务已删除', error: false };
-    if (st.state === 'history') return { text: '历史', error: false };
+    if (st.state === 'deleted') return { text: t('session.taskDeleted'), error: false };
+    if (st.state === 'history') return { text: t('session.history'), error: false };
     if (st.state !== 'current') return null;
     const failed = st.lastStatus === 'error';
     const parts = [];
-    if (failed) parts.push('上次失败');
-    if (!st.enabled) parts.push('已停用');
-    else if (st.nextRunAt) parts.push(`下次 ${formatClock(st.nextRunAt)}`);
+    if (failed) parts.push(t('session.lastFailed'));
+    if (!st.enabled) parts.push(t('session.disabled'));
+    else if (st.nextRunAt) parts.push(t('session.nextRun', { time: formatClock(st.nextRunAt) }));
     return parts.length ? { text: parts.join(' · '), error: failed } : null;
   }
 
   function displayTitle(s, isTask) {
-    const title = s.title || '未命名';
+    const title = s.title || t('session.untitled');
     if (!isTask || title.indexOf(TASK_TITLE_PREFIX) !== 0) return title;
     return title.slice(TASK_TITLE_PREFIX.length) || title;
   }
@@ -384,12 +385,12 @@ export const ChatSessionSidebar = (() => {
   function taskChip(st) {
     if (!st) return null;
     const described = describeTaskSession(st);
-    const detail = described ? described.text : '定时任务';
-    if (st.state === 'deleted') return { text: '已删除', error: false, title: detail };
-    if (st.state === 'history') return { text: '历史', error: false, title: detail };
-    if (described && described.error) return { text: '失败', error: true, title: detail };
-    if (st.state === 'current' && st.enabled === false) return { text: '已停用', error: false, title: detail };
-    return { text: '任务', error: false, title: detail };
+    const detail = described ? described.text : t('session.scheduled');
+    if (st.state === 'deleted') return { text: t('session.taskDeletedShort'), error: false, title: detail };
+    if (st.state === 'history') return { text: t('session.history'), error: false, title: detail };
+    if (described && described.error) return { text: t('session.failed'), error: true, title: detail };
+    if (st.state === 'current' && st.enabled === false) return { text: t('session.disabled'), error: false, title: detail };
+    return { text: t('session.task'), error: false, title: detail };
   }
 
   function pinnedAtOf(session) {
@@ -417,9 +418,9 @@ export const ChatSessionSidebar = (() => {
     const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const diff = dayStart(now) - dayStart(new Date(time));
     const day = 86400000;
-    if (diff <= 0) return '今天';
-    if (diff < 7 * day) return '7天内';
-    if (diff < 30 * day) return '30天内';
+    if (diff <= 0) return t('session.today');
+    if (diff < 7 * day) return t('session.within7');
+    if (diff < 30 * day) return t('session.within30');
     const d = new Date(time);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
@@ -442,7 +443,7 @@ export const ChatSessionSidebar = (() => {
     if (matched && matched[1] && matched[1] !== '.' && matched[1].toLowerCase() !== 'public') {
       return matched[1];
     }
-    return '本地用户';
+    return t('session.localUser');
   }
 
   function renderProfile() {
@@ -453,7 +454,7 @@ export const ChatSessionSidebar = (() => {
     if (!nameEl && input) {
       nameEl = document.createElement('span');
       nameEl.className = 'chat-sidebar-user-name';
-      nameEl.title = '右键修改昵称';
+      nameEl.title = t('session.nicknameTip');
       input.replaceWith(nameEl);
     }
     if (nameEl) nameEl.textContent = name;
@@ -468,10 +469,10 @@ export const ChatSessionSidebar = (() => {
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'chat-sidebar-user-name-input';
-    input.value = current === '本地用户' ? '' : current;
-    input.placeholder = '昵称';
+    input.value = current === t('session.localUser') ? '' : current;
+    input.placeholder = t('session.nickname');
     input.maxLength = 24;
-    input.setAttribute('aria-label', '修改昵称');
+    input.setAttribute('aria-label', t('session.editNickname'));
     nameEl.replaceWith(input);
     input.addEventListener('click', (e) => { e.stopPropagation(); });
     input.addEventListener('mousedown', (e) => { e.stopPropagation(); });
@@ -503,11 +504,11 @@ export const ChatSessionSidebar = (() => {
     sidebar.classList.toggle('is-selecting', selectMode);
     const bar = sidebar.querySelector('.chat-sidebar-selectbar');
     const batch = sidebar.querySelector('.chat-sidebar-batchbar');
-    const countEl = sidebar.querySelector('.chat-sidebar-selectbar-count');
+    const countText = sidebar.querySelector('.chat-sidebar-selectbar-text');
     const del = sidebar.querySelector('.chat-sidebar-batch-delete');
     if (bar) bar.hidden = !selectMode;
     if (batch) batch.hidden = !selectMode;
-    if (countEl) countEl.textContent = String(selectedIds.size);
+    if (countText) countText.innerHTML = t('session.selected', { n: selectedIds.size });
     if (del) del.disabled = selectedIds.size === 0;
   }
 
@@ -566,10 +567,10 @@ export const ChatSessionSidebar = (() => {
       x,
       y,
       items: [
-        { id: 'rename', label: '重命名', icon: 'edit' },
-        { id: 'pin', label: isPinned(sessionId) ? '取消置顶' : '置顶', icon: 'pin' },
-        { id: 'select', label: selecting ? '取消选择' : '选择', icon: 'check' },
-        { id: 'delete', label: '删除', icon: 'trash', danger: true },
+        { id: 'rename', label: t('session.rename'), icon: 'edit' },
+        { id: 'pin', label: isPinned(sessionId) ? t('session.unpin') : t('session.pin'), icon: 'pin' },
+        { id: 'select', label: selecting ? t('session.unselect') : t('session.select'), icon: 'check' },
+        { id: 'delete', label: t('common.delete'), icon: 'trash', danger: true },
       ],
       onSelect(item) {
         if (!item) return;
@@ -604,7 +605,7 @@ export const ChatSessionSidebar = (() => {
     const titleEl = sidebar.querySelector(`.chat-sidebar-item[data-id="${cssEscape(sessionId)}"] .chat-sidebar-item-title`);
     if (!titleEl) return;
     const sessions = Store.getSessions();
-    let current = titleEl.textContent || '未命名';
+    let current = titleEl.textContent || t('session.untitled');
     for (let i = 0; i < sessions.length; i++) {
       if (sessions[i].id === sessionId) {
         current = sessions[i].title || current;
@@ -634,7 +635,7 @@ export const ChatSessionSidebar = (() => {
     if (!visible.length) {
       const empty = document.createElement('div');
       empty.className = 'chat-sidebar-list-empty';
-      empty.textContent = searchKeyword ? '无匹配会话' : '暂无会话';
+      empty.textContent = searchKeyword ? t('session.noMatch') : t('session.empty');
       list.appendChild(empty);
     } else {
       let lastTimeLabel = '';
@@ -676,7 +677,7 @@ export const ChatSessionSidebar = (() => {
       check.type = 'button';
       check.className = 'chat-sidebar-item-check';
       check.setAttribute('aria-pressed', checked ? 'true' : 'false');
-      check.setAttribute('aria-label', checked ? '取消选择' : '选择会话');
+      check.setAttribute('aria-label', checked ? t('session.unselect') : t('session.selectSession'));
       check.innerHTML = '<span class="chat-sidebar-item-check-icon" aria-hidden="true"></span>';
       check.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -695,20 +696,20 @@ export const ChatSessionSidebar = (() => {
     titleSpan.className = 'chat-sidebar-item-title';
     titleSpan.textContent = displayTitle(s, !!taskState);
     const pathTip = fullWorkspacePath(s.id);
-    titleSpan.title = pathTip ? `${s.title || '未命名'}\n${pathTip}` : (s.title || '未命名');
+    titleSpan.title = pathTip ? `${s.title || t('session.untitled')}\n${pathTip}` : (s.title || t('session.untitled'));
 
     titleSpan.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       if (selectMode) return;
-      startRename(s.id, titleSpan, s.title || '未命名');
+      startRename(s.id, titleSpan, s.title || t('session.untitled'));
     });
     titleRow.appendChild(titleSpan);
 
     if (pinned) {
       const pinChip = document.createElement('span');
       pinChip.className = 'chat-sidebar-item-chip';
-      pinChip.textContent = '置顶';
-      pinChip.title = '已置顶';
+      pinChip.textContent = t('session.pin');
+      pinChip.title = t('session.pinned');
       titleRow.appendChild(pinChip);
     }
 
@@ -724,8 +725,8 @@ export const ChatSessionSidebar = (() => {
     if (Store.getShellCollabActive && Store.getShellCollabActive(s.id)) {
       const shellBadge = document.createElement('span');
       shellBadge.className = 'chat-sidebar-item-shell-badge';
-      shellBadge.title = 'Shell 协作模式已固定；需要普通 Agent 请新建会话';
-      shellBadge.setAttribute('aria-label', 'Shell 协作模式');
+      shellBadge.title = t('session.shellFixed');
+      shellBadge.setAttribute('aria-label', t('session.shellMode'));
       shellBadge.innerHTML =
         `${ic('terminal', 11)}<span class="chat-sidebar-item-shell-label">Shell</span>`;
       titleRow.appendChild(shellBadge);
@@ -739,7 +740,7 @@ export const ChatSessionSidebar = (() => {
       runDot.className = `chat-sidebar-item-run-dot is-${runPhase}`;
       runDot.setAttribute(
         'aria-label',
-        runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败',
+        runPhase === 'running' ? t('session.running') : runPhase === 'done' ? t('session.done') : t('session.runFailed'),
       );
       titleRow.appendChild(runDot);
     }
@@ -748,8 +749,8 @@ export const ChatSessionSidebar = (() => {
       const moreBtn = document.createElement('button');
       moreBtn.type = 'button';
       moreBtn.className = 'chat-sidebar-item-more';
-      moreBtn.title = '会话操作';
-      moreBtn.setAttribute('aria-label', '会话操作');
+      moreBtn.title = t('session.actions');
+      moreBtn.setAttribute('aria-label', t('session.actions'));
       moreBtn.innerHTML = ic('more-dots', 14);
       moreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -802,13 +803,13 @@ export const ChatSessionSidebar = (() => {
     if (seen[active]) ordered.push(active);
     const many = unique.length > 1;
     Modal.confirm({
-      title: '删除会话',
+      title: t('session.deleteTitle'),
       message: many
-        ? `确定要删除选中的 ${unique.length} 个会话吗？此操作不可撤销。`
-        : '确定要删除该会话吗？此操作不可撤销。',
+        ? t('session.deleteMany', { n: unique.length })
+        : t('session.deleteOne'),
       type: 'danger',
-      confirmText: '删除',
-      cancelText: '取消',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     }).then((ok) => {
       if (!ok) return;
@@ -946,7 +947,7 @@ export const ChatSessionSidebar = (() => {
       handle.setAttribute('role', 'separator');
       handle.setAttribute('aria-orientation', 'vertical');
       handle.tabIndex = 0;
-      handle.setAttribute('aria-label', '拖动调整左侧栏宽度');
+      handle.setAttribute('aria-label', t('session.resize'));
       handle.setAttribute('aria-valuemin', String(SIDEBAR_MIN));
       handle.setAttribute('aria-valuemax', String(SIDEBAR_MAX));
       sidebar.appendChild(handle);

@@ -3,6 +3,7 @@
  * 导入所有页面模块。
  * CSS 通过 index.html 的 <link> 标签加载，兼容非 Vite 环境。
  */
+import './i18n.ts';
 import './icon.ts';
 import './notification.ts';
 import './modal.ts';

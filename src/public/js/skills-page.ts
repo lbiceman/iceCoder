@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 知识库 ·「技能」页签：列表、查看、新增简单技能、编辑与删除。
  * 带脚本的技能不在此创建，引导到聊天区使用「创建技能」。
@@ -687,11 +688,11 @@ export const SkillsPage = (() => {
     header.className = 'skills-header knowledge-header';
     header.innerHTML =
       '<div class="skills-header-text">' +
-        '<h1 class="skills-title">知识库</h1>' +
-        '<p class="skills-hint">技能以 Markdown 文件存储，与 <code>user-memory</code> 同级。在聊天输入框输入 <code>#</code> 可快速选用技能。</p>' +
+        '<h1 class="skills-title">' + t('nav.knowledge') + '</h1>' +
+        '<p class="skills-hint">' + t('skills.hint') + '</p>' +
       '</div>' +
       '<div class="skills-header-actions">' +
-        '<button type="button" class="skills-btn skills-btn-primary" data-action="create">新增</button>' +
+        '<button type="button" class="skills-btn skills-btn-primary" data-action="create">' + t('skills.new') + '</button>' +
         '<span class="skills-count" id="skills-total-count">载入中…</span>' +
       '</div>' +
       (Tabs ? Tabs.html('skills') : '');
@@ -702,7 +703,7 @@ export const SkillsPage = (() => {
     main.innerHTML =
       '<aside class="skills-list-panel" id="skills-list-panel">' +
         '<div class="skills-list-toolbar">' +
-          '<button type="button" class="skills-btn skills-btn-primary" data-action="create">新增</button>' +
+          '<button type="button" class="skills-btn skills-btn-primary" data-action="create">' + t('skills.new') + '</button>' +
         '</div>' +
         '<div class="skills-list" id="skills-list"></div>' +
       '</aside>' +

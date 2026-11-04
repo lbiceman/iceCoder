@@ -100,7 +100,7 @@ describe('settings switch markup', () => {
     expect(src).toContain('settings-use-windows-input');
     expect(src).toContain('/api/config/use-windows');
     expect(src).toContain('useWindows');
-    expect(src).toContain('实验性');
-    expect(src).toContain('取决于模型能力');
+    expect(src).toContain("t('settings.windows.badge')");
+    expect(src).toContain("t('settings.windows.desc')");
   });
 });

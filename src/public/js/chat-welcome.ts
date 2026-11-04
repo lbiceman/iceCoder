@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 聊天空状态欢迎页：状态卡片、快速上手与当前上下文。
  */
@@ -21,27 +22,27 @@ export const ChatWelcome = (() => {
   const TIPS = [
     {
       key: 'cmd',
-      title: '命令面板',
-      desc: '输入 /open 浏览磁盘目录；命令按钮用于扫码、遥测等',
-      descRemote: '输入 /open 浏览磁盘目录；命令按钮用于遥测等',
+      title: t('welcome.cmd'),
+      desc: t('welcome.cmdDesc'),
+      descRemote: t('welcome.cmdDescRemote'),
       icon: 'command-list',
     },
     {
       key: 'at',
-      title: '@ 引用文件',
-      desc: '输入 @ 从工作区选择文件，引用绝对路径供Agent读取',
+      title: t('welcome.at'),
+      desc: t('welcome.atDesc'),
       icon: 'at',
     },
     {
       key: 'hash',
-      title: '# 技能',
-      desc: '输入 # 选用技能，或在侧栏「技能」页浏览全部技能',
+      title: t('welcome.hash'),
+      desc: t('welcome.hashDesc'),
       icon: 'hash',
     },
     {
       key: 'slash',
-      title: '/ 指令',
-      desc: '在输入框输入 /，选用 /plan、/shell、/next 等本地指令',
+      title: t('welcome.slash'),
+      desc: t('welcome.slashDesc'),
       icon: 'slash',
     },
   ];
@@ -77,7 +78,7 @@ export const ChatWelcome = (() => {
     }).join('');
 
     return (
-      `<div class="chat-welcome-inner"><header class="chat-welcome-header"><div class="chat-welcome-brand"><div class="chat-welcome-headings"><h1 class="chat-welcome-title">IceCoder 已就绪</h1><p class="chat-welcome-lead">直接输入消息，或用下面的方式开始。</p></div></div></header><div class="chat-welcome-stats"><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon">${statIconSvg('memory')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Memory</span><span class="chat-welcome-stat-value" data-welcome-memory>载入中…</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-harness" data-welcome-harness-icon>${statIconSvg('harness')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Harness</span><span class="chat-welcome-stat-value" data-welcome-harness title="L1 主循环：消息预处理 → LLM → 工具执行">—</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>${statIconSvg('l2')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">验收门控</span><span class="chat-welcome-stat-value" data-welcome-pipeline title="工具执行前的审批：allow / confirm / deny">—</span></div></div></div><section class="chat-welcome-section"><h2 class="chat-welcome-section-title">快速上手</h2><div class="chat-welcome-tips">${tipsHtml}</div></section><section class="chat-welcome-section chat-welcome-context"><h2 class="chat-welcome-section-title">当前上下文</h2><div class="chat-welcome-context-rows"><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">工作区</span><span class="chat-welcome-context-value" data-welcome-workspace title="">—</span></div><div class="chat-welcome-context-row chat-welcome-context-row--tools"><span class="chat-welcome-context-label">系统工具</span><div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">载入中…</div></div><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">上下文大小</span><span class="chat-welcome-context-value" data-welcome-context-size title="">载入中…</span></div></div></section></div>`
+      `<div class="chat-welcome-inner"><header class="chat-welcome-header"><div class="chat-welcome-brand"><div class="chat-welcome-headings"><h1 class="chat-welcome-title">${t('welcome.ready')}</h1><p class="chat-welcome-lead">${t('welcome.lead')}</p></div></div></header><div class="chat-welcome-stats"><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon">${statIconSvg('memory')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Memory</span><span class="chat-welcome-stat-value" data-welcome-memory>${t('common.loadingPage')}</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-harness" data-welcome-harness-icon>${statIconSvg('harness')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">Harness</span><span class="chat-welcome-stat-value" data-welcome-harness title="${t('welcome.harnessTitle')}">—</span></div></div><div class="chat-welcome-stat"><span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>${statIconSvg('l2')}</span><div class="chat-welcome-stat-body"><span class="chat-welcome-stat-label">${t('welcome.gate')}</span><span class="chat-welcome-stat-value" data-welcome-pipeline title="${t('welcome.gateTitle')}">—</span></div></div></div><section class="chat-welcome-section"><h2 class="chat-welcome-section-title">${t('welcome.quick')}</h2><div class="chat-welcome-tips">${tipsHtml}</div></section><section class="chat-welcome-section chat-welcome-context"><h2 class="chat-welcome-section-title">${t('welcome.context')}</h2><div class="chat-welcome-context-rows"><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">${t('welcome.workspace')}</span><span class="chat-welcome-context-value" data-welcome-workspace title="">—</span></div><div class="chat-welcome-context-row chat-welcome-context-row--tools"><span class="chat-welcome-context-label">${t('welcome.tools')}</span><div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">${t('common.loadingPage')}</div></div><div class="chat-welcome-context-row"><span class="chat-welcome-context-label">${t('welcome.contextSize')}</span><span class="chat-welcome-context-value" data-welcome-context-size title="">${t('common.loadingPage')}</span></div></div></section></div>`
     );
   }
 
@@ -91,7 +92,7 @@ export const ChatWelcome = (() => {
     elRoot.className = 'chat-welcome hidden';
     elRoot.id = 'chat-welcome';
     elRoot.setAttribute('role', 'region');
-    elRoot.setAttribute('aria-label', '欢迎与快速上手');
+    elRoot.setAttribute('aria-label', t('welcome.region'));
     elRoot.innerHTML = buildMarkup(!!remoteMode);
     if (window.AppIcon) window.AppIcon.hydrate(elRoot);
 
@@ -125,13 +126,13 @@ export const ChatWelcome = (() => {
 
   function formatToolCount(n) {
     if (n == null || n <= 0) return '—';
-    return `${n} 个`;
+    return t('welcome.toolCount', { n });
   }
 
   function buildToolSegHtml(name, count, opts) {
     opts = opts || {};
     const countText = opts.countCompact
-      ? (count == null || count <= 0 ? '—' : `${count}个`)
+      ? (count == null || count <= 0 ? '—' : t('welcome.toolCountCompact', { n: count }))
       : formatToolCount(count);
     return (
       '<span class="chat-welcome-tool-seg"' +
@@ -149,14 +150,14 @@ export const ChatWelcome = (() => {
     const doc = categories.doc && typeof categories.doc.count === 'number' ? categories.doc.count : 0;
     const shell = categories.shell && typeof categories.shell.count === 'number' ? categories.shell.count : 0;
     return (
-      buildToolSegHtml('常用', chat, {
-        title: '普通模式默认可用：文件读写、搜索、命令执行等',
+      buildToolSegHtml(t('welcome.common'), chat, {
+        title: t('welcome.commonTitle'),
       }) +
-      buildToolSegHtml('解析', doc, {
-        title: '文档/媒体解析工具；检测到相关文件或意图后按需携带',
+      buildToolSegHtml(t('welcome.parse'), doc, {
+        title: t('welcome.parseTitle'),
       }) +
-      buildToolSegHtml('shell模式', shell, {
-        title: 'Shell 模式专用；输入 /shell 进入协作会话后可用',
+      buildToolSegHtml(t('welcome.shellMode'), shell, {
+        title: t('welcome.shellTitle'),
         countCompact: true,
       })
     );
@@ -169,14 +170,14 @@ export const ChatWelcome = (() => {
   }
 
   function formatContextSizeLabel(max, used) {
-    if (max == null) return { text: '载入中…', title: '' };
+    if (max == null) return { text: t('common.loadingPage'), title: '' };
     if (!max || max <= 0) return { text: '—', title: '' };
     const maxLabel = formatContextWindow(max);
     const title = `${Number(max).toLocaleString('en-US')} tokens`;
     if (typeof used === 'number' && used > 0) {
       const usedLabel = Number(used).toLocaleString('en-US');
       const pct = ((used / max) * 100).toFixed(1);
-      return { text: `${usedLabel} / ${maxLabel}`, title: `${title} · 已用 ${pct}%` };
+      return { text: `${usedLabel} / ${maxLabel}`, title: t('welcome.usedPct', { title, pct }) };
     }
     return { text: maxLabel, title };
   }
@@ -286,7 +287,7 @@ export const ChatWelcome = (() => {
     const toolsInlineEl = r.querySelector('[data-welcome-tools-inline]');
     if (toolsInlineEl) {
       if (!toolsCategories) {
-        toolsInlineEl.textContent = '载入中…';
+        toolsInlineEl.textContent = t('common.loadingPage');
         toolsInlineEl.removeAttribute('title');
       } else {
         toolsInlineEl.innerHTML = buildToolsInlineHtml(toolsCategories);
@@ -347,10 +348,10 @@ export const ChatWelcome = (() => {
     const el = r.querySelector('[data-welcome-memory]');
     if (!el) return;
     if (memoryCount == null) {
-      el.textContent = '载入中…';
+      el.textContent = t('common.loadingPage');
       return;
     }
-    el.textContent = memoryCount > 0 ? (`已加载 ${memoryCount} 条`) : '暂无记忆';
+    el.textContent = memoryCount > 0 ? t('welcome.memoryLoaded', { n: memoryCount }) : t('memory.empty');
   }
 
   function setStatValue(el, iconEl, text, tone) {
@@ -390,7 +391,7 @@ export const ChatWelcome = (() => {
       setStatValue(el, iconEl, '待配置', 'warn');
       return;
     }
-    setStatValue(el, iconEl, '就绪', 'success');
+    setStatValue(el, iconEl, t('welcome.readyValue'), 'success');
   }
 
   function updatePipelineLabel(opts, root) {
@@ -404,7 +405,7 @@ export const ChatWelcome = (() => {
       setStatValue(el, iconEl, '未激活', 'muted');
       return;
     }
-    setStatValue(el, iconEl, '就绪', 'success');
+    setStatValue(el, iconEl, t('welcome.readyValue'), 'success');
   }
 
   function resolveRoot(root) {

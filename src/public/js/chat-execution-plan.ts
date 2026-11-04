@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
@@ -19,12 +20,12 @@ export const ChatExecutionPlan = (() => {
   const MAX_TOOLS_PER_ROUND_DOM = 80;
 
   const STATE_LABELS = {
-    pending: '待执行',
-    running: '进行中',
-    done: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-    fallback: '备选',
+    get pending() { return t('etl.state.pending'); },
+    get running() { return t('etl.state.running'); },
+    get done() { return t('etl.state.done'); },
+    get failed() { return t('etl.state.failed'); },
+    get skipped() { return t('etl.state.skipped'); },
+    get fallback() { return t('etl.state.fallback'); },
   };
 
   const STATE_ICONS = {
@@ -37,13 +38,13 @@ export const ChatExecutionPlan = (() => {
   };
 
   const INTENT_LABELS = {
-    edit: '实现',
-    debug: '排查',
-    test: '测试',
-    refactor: '重构',
-    inspect: '查阅',
-    docs: '文档',
-    question: '问答',
+    get edit() { return t('etl.intent.edit'); },
+    get debug() { return t('etl.intent.debug'); },
+    get test() { return t('etl.intent.test'); },
+    get refactor() { return t('etl.intent.refactor'); },
+    get inspect() { return t('etl.intent.inspect'); },
+    get docs() { return t('etl.intent.docs'); },
+    get question() { return t('etl.intent.question'); },
   };
 
   let currentPlan = null;
@@ -268,12 +269,12 @@ export const ChatExecutionPlan = (() => {
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
-    if (h > 0) return `${h}小时${m}分${s}秒`;
+    if (h > 0) return t('time.hms', { h, m, s });
     if (m > 0) {
-      if (s === 0) return `${m}分`;
-      return `${m}分${s}秒`;
+      if (s === 0) return t('time.m', { m });
+      return t('time.ms', { m, s });
     }
-    return `${s}秒`;
+    return t('time.s', { s });
   }
 
   function formatStepDuration(step) {
@@ -403,16 +404,16 @@ export const ChatExecutionPlan = (() => {
   }
 
   function headerActionsHtml() {
-    return `<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">${minimizeIconHtml()}</button>`;
+    return `<button type="button" class="etl-minimize" title="${t('etl.minimize')}" aria-label="${t('etl.minimizePanel')}">${minimizeIconHtml()}</button>`;
   }
 
   function filesSheetHtml() {
-    return `<div class="etl-files-sheet hidden" id="etl-snapshot-files"><div class="etl-files-sheet-head"><span class="etl-files-sheet-title">变更文件</span><span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span><button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" title="收起" aria-label="收起">${minimizeIconHtml()}</button></div><div class="etl-files-sheet-body"><div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div><ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol></div></div>`;
+    return `<div class="etl-files-sheet hidden" id="etl-snapshot-files"><div class="etl-files-sheet-head"><span class="etl-files-sheet-title">${t('etl.changedFiles')}</span><span class="etl-snapshot-header-count" id="etl-snapshot-files-count">${t('etl.noFiles')}</span><button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" title="${t('common.collapse')}" aria-label="${t('common.collapse')}">${minimizeIconHtml()}</button></div><div class="etl-files-sheet-body"><div class="etl-empty etl-snapshot-files-empty">${t('etl.noChanges')}</div><ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol></div></div>`;
   }
 
   /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
   function workbenchHtml() {
-    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">检查点</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p></div><div class="etl-chapter-empty etl-empty">等待模型开始执行</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="拖动调整检查点与执行流高度"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">执行流</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">等待模型开始执行</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
+    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.checkpoints')}</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p></div><div class="etl-chapter-empty etl-empty">${t('etl.waiting')}</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="拖动调整检查点与执行流高度"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.flow')}</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">${t('etl.waiting')}</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
   }
 
   function sharedBodyHtml() {
@@ -608,11 +609,11 @@ export const ChatExecutionPlan = (() => {
     rootEl.id = PANEL_ID;
     rootEl.className = 'etl-panel';
     rootEl.setAttribute('role', 'complementary');
-    rootEl.setAttribute('aria-label', 'iceCoder工作台');
+    rootEl.setAttribute('aria-label', t('etl.workbench'));
     rootEl.setAttribute('aria-hidden', 'true');
 
     rootEl.innerHTML =
-      `<div class="etl-panel-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整工作台宽度" aria-valuemin="${PANEL_WIDTH_MIN}" aria-valuemax="${PANEL_WIDTH_MAX}"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
+      `<div class="etl-panel-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="${t('etl.resize')}" aria-valuemin="${PANEL_WIDTH_MIN}" aria-valuemax="${PANEL_WIDTH_MAX}"></div><header class="etl-header"><span class="etl-title">${t('etl.workbench')}</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
 
     document.body.appendChild(rootEl);
     hostEl = rootEl;
@@ -1162,14 +1163,14 @@ export const ChatExecutionPlan = (() => {
     if (leftoverTime && leftoverTime.parentNode) leftoverTime.parentNode.removeChild(leftoverTime);
     if (footerEl.querySelector('.etl-foot-token')) return;
     footerEl.innerHTML = '';
-    footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', '—'));
+    footerEl.appendChild(makeFootItem('etl-foot-token', t('etl.context'), '—'));
     footerEl.appendChild(makeFootToggleItem(
-      'etl-foot-tool', 'etl-foot-tool', '工具', '—',
-      '本会话使用过的工具，点击查看', 'tools'
+      'etl-foot-tool', 'etl-foot-tool', t('etl.tools'), '—',
+      t('etl.toolsTip'), 'tools'
     ));
     footerEl.appendChild(makeFootToggleItem(
-      'etl-foot-files', 'etl-foot-files', '文件', '0',
-      '本会话变更的文件，点击查看', 'files'
+      'etl-foot-files', 'etl-foot-files', t('etl.files'), '0',
+      t('etl.filesTip'), 'files'
     ));
   }
 
@@ -1586,7 +1587,7 @@ export const ChatExecutionPlan = (() => {
     const agentTasks = tools.filter((t) => t.toolName === 'task');
     if (agentTasks.length > 0) {
       const rest = tools.filter((t) => t.toolName !== 'task');
-      const head = `派出 ${agentTasks.length} 个 Agent`;
+      const head = t('etl.delegateAgents', { n: agentTasks.length });
       return rest.length ? [head].concat(deriveRoundToolIntents(rest)) : [head];
     }
     if (tools.length > 3) return summarizeToolIntents(tools);
@@ -3760,7 +3761,7 @@ export const ChatExecutionPlan = (() => {
     const ch = getSelectedChapter();
     const rounds = (ch && ch.rounds) || [];
     if (empty) {
-      empty.textContent = ch ? '本章暂无执行步骤' : '等待模型开始执行';
+      empty.textContent = ch ? t('etl.emptyChapter') : t('etl.waiting');
       empty.classList.toggle('hidden', rounds.length > 0);
     }
     for (let r = 0; r < rounds.length; r++) {
@@ -4992,8 +4993,8 @@ export const ChatExecutionPlan = (() => {
       if (!list) return;
       const files = snapshotChangedFiles.slice(0, 200);
       if (titleEl) titleEl.textContent = files.length ? (`变更文件 · ${files.length}`) : '变更文件';
-      if (countEl) countEl.textContent = files.length ? (`${files.length} 个文件`) : '暂无文件';
-      if (emptyEl) emptyEl.textContent = '尚无变更文件';
+      if (countEl) countEl.textContent = files.length ? t('etl.filesCount', { n: files.length }) : t('etl.noFiles');
+      if (emptyEl) emptyEl.textContent = t('etl.noChanges');
       list.innerHTML = '';
       if (!files.length) {
         if (emptyEl) emptyEl.classList.remove('hidden');

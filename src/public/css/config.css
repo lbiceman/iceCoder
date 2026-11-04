@@ -1194,6 +1194,36 @@ body.setup-required .chat-sidebar-settings-btn {
   flex-shrink: 0;
 }
 
+.settings-locale-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-locale-option {
+  min-width: 108px;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settings-locale-option:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.settings-locale-option.is-active {
+  border-color: var(--accent-border-strong);
+  color: var(--text-primary);
+}
+
 .config-tab-panel[data-panel="general"].is-active {
   display: block;
   overflow: auto;

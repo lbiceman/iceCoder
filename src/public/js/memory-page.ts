@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 记忆图谱页面：每条记忆为纯色小圆结点，共用 tags 时连线；
  * 结点颜色取自冰豆色板哈希；画布支持滚轮缩放与拖拽平移。
@@ -1146,9 +1147,9 @@ export const MemoryPage = (() => {
     header.className = 'memory-header knowledge-header';
     header.innerHTML =
       '<div class="memory-header-text">' +
-      '<h1 class="memory-title">知识库</h1>' +
-      '<p class="memory-header-hint" title="左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。">' +
-      '记忆图谱：点标签筛选，滚轮缩放，拖动平移。' +
+      '<h1 class="memory-title">' + t('nav.knowledge') + '</h1>' +
+      '<p class="memory-header-hint" title="' + t('memory.hintTitle') + '">' +
+      t('memory.hint') +
       '</p>' +
       '</div>' +
       '<div class="memory-header-actions">' +

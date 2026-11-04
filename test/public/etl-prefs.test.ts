@@ -194,7 +194,7 @@ describe('phase 1-3 wiring', () => {
       'utf-8',
     ));
     expect(src).toMatch(/requestExpandFromPet/);
-    expect(src).toMatch(/双击展开执行透明层/);
+    expect(src).toMatch(/t\('chat\.petExpandHint'\)|t\('chat\.petCanvas'/);
   });
 
   it('chat-page 将后端累计 Token 和工具次数同步到面板 Footer', () => {

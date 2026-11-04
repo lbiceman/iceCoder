@@ -2,9 +2,10 @@
  * 冰豆（Ice Bean）色板与 token 下标工具（浏览器与 Vitest 共用，ESM）
  * 圆环进度用 token 百分比；眼睛颜色固定为 SESSION_PET_EYE_COLOR。
  */
+import { t } from './i18n.ts';
 
 /** 会话指示器在用户界面中的显示名称（无障碍与文案统一入口） */
-export const SESSION_PET_DISPLAY_NAME = '冰豆';
+export const SESSION_PET_DISPLAY_NAME = t('pet.name');
 
 export const SESSION_PET_PALETTE_COLORS = [
   '#88EDC7',
@@ -66,15 +67,9 @@ export function pickRandomPaletteColor(colors) {
  * @param {string} o.outputLabel
  */
 export function buildSessionPetCanvasAriaLabel(o) {
-  const ring =
-    '外圈圆环自顶端顺时针延伸，表示上下文占用比例。';
-  const usage =
-    '当前约 ' +
-    o.tokenPct +
-    '%' +
-    (o.tokenMax ? `（${o.tokenUsedLabel}/${o.tokenMaxLabel}）` : '') +
-    '。本轮输出 ' +
-    o.outputLabel +
-    '。';
-  return `${SESSION_PET_DISPLAY_NAME}。${ring} ${usage}`;
+  const ring = t('pet.ring');
+  let usage = t('pet.usage', { pct: o.tokenPct });
+  if (o.tokenMax) usage += t('pet.usageDetail', { used: o.tokenUsedLabel, max: o.tokenMaxLabel });
+  usage += t('pet.output', { output: o.outputLabel });
+  return t('pet.name') + '。' + ring + ' ' + usage;
 }

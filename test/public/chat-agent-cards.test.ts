@@ -490,6 +490,6 @@ describe('子 Agent 前端接线', () => {
     expect(stream).toContain('onAgentStep(step)');
     expect(stream).toContain('if (data.agentId) return');
     const plan = read('chat-execution-plan.ts');
-    expect(plan).toContain('派出 ${agentTasks.length} 个 Agent');
+    expect(plan).toContain("t('etl.delegateAgents'");
   });
 });

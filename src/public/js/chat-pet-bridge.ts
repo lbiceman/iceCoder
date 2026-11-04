@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 冰豆状态桥接模块
  * 负责：将 Harness StepEvent 映射到表情状态 + 气泡文案
@@ -21,7 +22,7 @@ export const ChatPetBridge = (() => {
   let tunnelReadyResetTimer = null;
   const TUNNEL_READY_NOTICE_MS = 5200;
   let userCheckpointNoticeActive = false;
-  const USER_CHECKPOINT_BUBBLE = '已暂停，需要你介入啦';
+  function userCheckpointBubble() { return t('pet.checkpointBubble'); }
   const USER_CHECKPOINT_TURN = '已暂停 · 请接管';
   let modelDoneNoticeActive = false;
   let modelDoneResetTimer = null;
@@ -85,7 +86,7 @@ export const ChatPetBridge = (() => {
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
       sessionPet.setState('user_checkpoint');
-      sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
+      sessionPet.setBubbleText(userCheckpointBubble());
       sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
       return;
     }
@@ -274,7 +275,7 @@ export const ChatPetBridge = (() => {
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('user_checkpoint');
-    sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
+    sessionPet.setBubbleText(userCheckpointBubble());
     sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
   }
 

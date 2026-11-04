@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * Token 用量统计页：上图保留会话 / 子 Agent / 记忆，并叠加当前范围内 Token 前三的模型。
  * 日 / 当周 / 当月 / 当年为滚动窗口：24 小时 / 7 天 / 30 天 / 365 天。
@@ -89,7 +90,7 @@ export const StatsPage = (() => {
     destroy();
     containerEl = parentEl;
     parentEl.innerHTML =
-      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">统计</h1><p class="stats-hint">查看 Token 消耗与记忆活动的近期趋势</p></div><div class="stats-range" role="group" aria-label="时间范围">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
+      `<div class="stats-root"><header class="stats-header"><div class="stats-header-text"><h1 class="stats-title">${t('stats.title')}</h1><p class="stats-hint">${t('stats.hint')}</p></div><div class="stats-range" role="group" aria-label="${t('stats.range')}">${renderRangeButtons()}</div></header><main class="stats-main"></main><div class="stats-tooltip" hidden></div></div>`;
     mainEl = parentEl.querySelector('.stats-main');
     tooltipEl = parentEl.querySelector('.stats-tooltip');
     bindRangeButtons(containerEl);

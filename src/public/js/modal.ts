@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 通用 Modal 组件
  * 确认框一律走 Modal.confirm：回滚、消息/会话/记忆/技能删除、
@@ -29,8 +30,8 @@ export const Modal = (() => {
    * @param {string}  opts.title        - 标题
    * @param {string}  [opts.message]    - 正文
    * @param {'danger'|'warning'|'info'} [opts.type='warning']
-   * @param {string}  [opts.confirmText='确认']
-   * @param {string}  [opts.cancelText='取消']
+   * @param {string}  [opts.confirmText]
+   * @param {string}  [opts.cancelText]
    * @param {boolean} [opts.dangerConfirm=false] - 确认按钮使用 danger 样式
    * @param {'confirm'|'cancel'} [opts.defaultFocus='confirm'] - 默认焦点按钮
    * @returns {Promise<boolean>} resolve(true) 确认 / resolve(false) 取消
@@ -62,7 +63,7 @@ export const Modal = (() => {
       const titleEl = document.createElement('div');
       titleEl.className = 'modal-title';
       titleEl.id = 'modal-confirm-title';
-      titleEl.textContent = opts.title || '确认';
+      titleEl.textContent = opts.title || t('common.confirm');
       header.appendChild(titleEl);
       box.appendChild(header);
       box.setAttribute('aria-labelledby', 'modal-confirm-title');
@@ -81,12 +82,12 @@ export const Modal = (() => {
 
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'modal-btn';
-      cancelBtn.textContent = opts.cancelText || '取消';
+      cancelBtn.textContent = opts.cancelText || t('common.cancel');
       footer.appendChild(cancelBtn);
 
       const confirmBtn = document.createElement('button');
       confirmBtn.className = 'modal-btn' + (opts.dangerConfirm ? ' danger' : ' primary');
-      confirmBtn.textContent = opts.confirmText || '确认';
+      confirmBtn.textContent = opts.confirmText || t('common.confirm');
       footer.appendChild(confirmBtn);
 
       box.appendChild(footer);
@@ -233,7 +234,7 @@ export const Modal = (() => {
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'btn-icon btn-icon-ghost modal-panel-close';
-    closeBtn.setAttribute('aria-label', '关闭');
+    closeBtn.setAttribute('aria-label', t('common.close'));
     closeBtn.innerHTML = CLOSE_ICON;
 
     header.appendChild(heading);

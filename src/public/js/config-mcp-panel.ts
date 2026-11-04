@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 配置页 — MCP 配置面板（左服务器列表 + 右详情 / 工具表 / JSON 编辑）。
  */
@@ -101,7 +102,7 @@ export const McpConfigPanel = (() => {
   function mcpStatusPresentation(srv) {
     const status = srv && srv.status;
     if (status === 'ready' && srv.backendSession === 'detached') {
-      return { label: '运行中 · 未挂上标签', dot: 'dot-warn' };
+      return { label: t('mcp.detached'), dot: 'dot-warn' };
     }
     return { label: statusLabel(status), dot: dotClass(status) };
   }
