@@ -54,9 +54,9 @@
 }
 
 [data-theme="fresh"] .stats-root {
-  --model-line-1: oklch(0.52 0.14 25);
-  --model-line-2: oklch(0.46 0.12 320);
-  --model-line-3: oklch(0.48 0.10 230);
+  --model-line-1: #C95A5A;
+  --model-line-2: #4F8FA8;
+  --model-line-3: #D9A441;
   --mem-1: oklch(0.48 0.10 220);
   --mem-2: oklch(0.44 0.12 305);
   --mem-3: oklch(0.46 0.10 195);

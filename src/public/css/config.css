@@ -1109,13 +1109,13 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-theme-preview-fresh {
-  --stp-side: #f6f1e7;
-  --stp-bg: #fdf9f2;
-  --stp-card: #fbf7ef;
-  --stp-line: #e9dfcd;
-  --stp-accent: #2e7d4f;
-  --stp-user: #f7ecd6;
-  --stp-input: #faf5ec;
+  --stp-side: #E8EEE6;
+  --stp-bg: #F5F7F2;
+  --stp-card: #FFFFFF;
+  --stp-line: #D7E0D8;
+  --stp-accent: #2F6B4F;
+  --stp-user: #DCE8DF;
+  --stp-input: #FFFFFF;
 }
 
 .stp-side {

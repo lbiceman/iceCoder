@@ -101,7 +101,7 @@ export const SettingsPage = (() => {
       { id: 'dark', label: t('theme.dark'), icon: 'moon' },
       { id: 'light', label: t('theme.light'), icon: 'sun' },
       { id: 'modern', label: t('theme.modern'), icon: 'work' },
-      // 暖阳用 spark 而非 sun：浅色已占用 sun，重复图标会让人分不清两张卡
+      // 森绿用 spark 而非 sun：浅色已占用 sun，重复图标会让人分不清两张卡
       { id: 'fresh', label: t('theme.fresh'), icon: 'spark' },
     ];
     const themeOptionsHtml = themeChoices.map((choice) => {

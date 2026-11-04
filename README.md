@@ -26,7 +26,7 @@ Left nav: **Work / Tasks / Knowledge / Stats**. Footer: avatar, name, and **Sett
 
 ![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
 
-**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP. General includes four themes (dark / light / modern / fresh), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
+**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP. General includes four themes (dark / light / modern / forest), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
 
 ### Mobile H5
 
