@@ -23,7 +23,11 @@ function appendEphemeral(view: UnifiedMessage[], ephemeral: EphemeralInjections)
   const blocks = (ephemeral.blocks ?? []).filter((block): block is string => Boolean(block));
   if (blocks.length === 0) return;
 
-  view.push({ role: 'user', content: blocks.join('\n\n') });
+  view.push({
+    role: 'user',
+    content: blocks.join('\n\n'),
+    promptCacheEphemeral: true,
+  });
 }
 
 /**

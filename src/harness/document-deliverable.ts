@@ -421,6 +421,12 @@ export function isFileDeliverableOrientedTask(
   return hasUnfulfilledFileDeliverableGoal(goal, filesChanged);
 }
 
+/**
+ * 任务明确要求只读时，正文里的 file / write 不再当成未交付文件。
+ * 「Do NOT modify any file」和「read-only investigation」都走这里。
+ */
+const READ_ONLY_ASSIGNMENT = /read-only|\bdo not\s+modify\b|\bdon't\s+modify\b|不要修改|不要写|只读/i;
+
 /** 目标要求写文件交付物但尚未写入（拦截无交付物早停） */
 export function hasUnfulfilledFileDeliverableGoal(
   goal: string,
@@ -432,13 +438,15 @@ export function hasUnfulfilledFileDeliverableGoal(
 
   const g = goal.trim();
   if (!g) return false;
+  if (READ_ONLY_ASSIGNMENT.test(g)) return false;
 
   if (/整理.*(?:md|文档)|写成.*(?:文档|md|file)|生成.*(?:文档|md|file)|输出.*文件|导出.*文件|保存.*文件/i.test(g)) {
     return true;
   }
 
   // 「放到」「put」只是位置动词，必须与文件名词或带扩展名的文件名同时出现。
+  // 英文动词用整词，避免 rewriting / input / written 误伤。
   const hasFileNoun = /readme|文档|markdown|docx|pptx|xlsx|\bfile\b|\b[\w.-]+\.(?:md|txt|csv|json|html?|pdf|docx|xlsx|pptx|ya?ml|xml|log)\b/i.test(g);
-  const hasWriteVerb = /写|生成|整理|放到|保存|导出|输出|write|save|export|create|put/i.test(g);
+  const hasWriteVerb = /写|生成|整理|放到|保存|导出|输出|\b(?:write|save|export|create|put)\b/i.test(g);
   return hasFileNoun && hasWriteVerb;
 }

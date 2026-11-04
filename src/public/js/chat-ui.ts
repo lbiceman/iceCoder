@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t, intlLocale } from './i18n.ts';
 /**
  * 聊天 UI 渲染模块
  * 负责：消息渲染、流式输出、工具调用展示、滚动控制、输入框管理
@@ -2646,7 +2647,7 @@ export const ChatUI = (() => {
   function formatTokenCount(n) {
     const num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
     try {
-      return num.toLocaleString();
+      return num.toLocaleString(intlLocale());
     } catch (_e) {
       return String(num);
     }
@@ -2680,7 +2681,7 @@ export const ChatUI = (() => {
     const total = normalized ? (normalized.inputTokens + normalized.outputTokens) : 0;
     const bar = document.createElement('div');
     bar.className = 'msg-token-usage';
-    bar.setAttribute('aria-label', model ? (`Token 消耗，模型 ${model}`) : 'Token 消耗');
+    bar.setAttribute('aria-label', model ? t('chat.tokenUsageModel', { model }) : t('chat.tokenUsage'));
 
     function addItem(label, value, extraClass) {
       const item = document.createElement('span');
@@ -2698,17 +2699,17 @@ export const ChatUI = (() => {
     }
 
     if (normalized) {
-      addItem('输入', formatTokenCount(normalized.inputTokens));
-      addItem('输出', formatTokenCount(normalized.outputTokens));
+      addItem(t('chat.input'), formatTokenCount(normalized.inputTokens));
+      addItem(t('chat.output'), formatTokenCount(normalized.outputTokens));
       if (subAgents) {
-        addItem('主 Agent', formatTokenCount(total));
-        addItem(`子 Agent ×${subAgents.agents}`, formatTokenCount(subAgents.tokens), 'msg-token-usage__item--sub-agent');
+        addItem(t('chat.mainAgent'), formatTokenCount(total));
+        addItem(t('chat.subAgentCount', { n: subAgents.agents }), formatTokenCount(subAgents.tokens), 'msg-token-usage__item--sub-agent');
       } else {
-        addItem('合计', formatTokenCount(total));
+        addItem(t('chat.total'), formatTokenCount(total));
       }
     }
     if (model) {
-      const modelItem = addItem('模型', model, 'msg-token-usage__item--model');
+      const modelItem = addItem(t('chat.model'), model, 'msg-token-usage__item--model');
       modelItem.title = model;
     }
     return bar;

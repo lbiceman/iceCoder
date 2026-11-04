@@ -154,16 +154,23 @@ export function collectToolOperationOutcomes(
 
     const output = toolMessage.content;
     const signature = toolCallSignature(toolCall);
-    const userDenied = /user denied/i.test(output);
-    const implicitPolicyBlock =
-      /denied by policy|\[.*blocked\]|not available in this turn/i.test(output);
+    // 只读工具的输出是被查看的内容。确认、拒绝、策略、后台这些句子只从
+    // run_command 一类会自己产生状态的结果里认；只读只信执行器签名。
+    const readOnly = getToolMetadata(toolCall.name).isReadOnly;
+    const userDenied = !readOnly && /user denied/i.test(output);
+    const implicitPolicyBlock = !readOnly && (
+      /denied by policy|\[.*blocked\]|not available in this turn/i.test(output)
+    );
     const isPolicyBlocked = policyBlocked.has(signature) || implicitPolicyBlock;
     const isFailed = failed.has(signature)
       || isPolicyBlocked
       || userDenied
-      || /tool execution was interrupted/i.test(output);
-    const awaitingApproval =
-      /requires? (?:shell mandatory )?confirmation.*no .*handler/i.test(output);
+      || (readOnly
+        ? isSyntheticToolInterruption(output)
+        : /tool execution was interrupted/i.test(output));
+    const awaitingApproval = !readOnly && (
+      /requires? (?:shell mandatory )?confirmation.*no .*handler/i.test(output)
+    );
 
     outcomes.push(normalizeOperationOutcome(toolCall, {
       success: !isFailed && !awaitingApproval,
@@ -209,7 +216,7 @@ export function normalizeOperationOutcome(
   options: NormalizeOperationOutcomeOptions = {},
 ): OperationOutcome {
   const parsed = parseObject(result.output);
-  const status = result.status ?? inferStatus(result, parsed);
+  const status = result.status ?? inferStatus(toolCall.name, result, parsed);
   const effect = result.effect ?? inferEffect(toolCall.name);
   const risk = result.risk ?? (isDestructiveToolCall(toolCall) ? 'high' : 'low');
   const receipt = result.receipt ?? inferReceipt(toolCall, result, parsed, status);
@@ -232,10 +239,23 @@ export function normalizeOperationOutcome(
   };
 }
 
+/** harness 为未跑完的工具补的整段结果，不是文件正文里的同名句子。 */
+function isSyntheticToolInterruption(output: string): boolean {
+  return /^Tool execution was interrupted\b/i.test(output.trim());
+}
+
 function inferStatus(
+  toolName: string,
   result: ToolResult,
   parsed: Record<string, unknown> | null,
 ): ToolResultStatus {
+  if (getToolMetadata(toolName).isReadOnly) {
+    if (!result.success || isSyntheticToolInterruption(result.output) || isSyntheticToolInterruption(result.error ?? '')) {
+      return 'failed';
+    }
+    return 'completed';
+  }
+
   const text = `${result.error ?? ''}\n${result.output}`;
   if (/requires? (?:shell mandatory )?confirmation|awaiting[_ -]approval/i.test(text)) {
     return 'awaiting_approval';

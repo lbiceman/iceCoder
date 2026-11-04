@@ -266,8 +266,8 @@ describe('统计页 Token 图表', () => {
     expect(snapshot.trendStrokeColors).toEqual([...snapshot.kindColors, ...snapshot.modelColors]);
     expect(snapshot.trendDashed).toEqual([false, false, false, true, true, true]);
     expect(new Set(snapshot.trendStrokeColors).size).toBe(6);
-    expect(snapshot.trendMetrics).toBe(4);
-    expect(snapshot.trendMetricLabels).toEqual(['会话', '子 Agent', '记忆', '请求次数']);
+    expect(snapshot.trendMetrics).toBe(5);
+    expect(snapshot.trendMetricLabels).toEqual(['会话', '子 Agent', '记忆', '请求次数', '缓存命中']);
     expect(snapshot.trendLegend).toEqual(['会话', '子 Agent', '记忆', 'gpt-4o', 'DeepSeek-V3.2', 'claude-sonnet']);
 
     const weekTip = await page.evaluate(() => {
@@ -411,5 +411,26 @@ describe('统计页 Token 图表', () => {
     expect(view.memoryTicks.length).toBeGreaterThan(0);
     expect(view.memoryTicks.every((tick) => /^\d{2}\/\d{1,2}$/.test(tick || ''))).toBe(true);
     expect(view.rangeRight).toBeLessThanOrEqual(view.headerRight + 1);
+  });
+
+  it('在 Token 卡片上显示当前范围的缓存命中率', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    const payload = samplePayload();
+    const daily = (payload.series as { daily: Array<Record<string, number>> }).daily;
+    const last = daily[daily.length - 1]!;
+    last.cacheReadTokens = 80;
+    last.cacheMissTokens = 20;
+    await loadStats(page, payload);
+
+    const card = page.locator('[data-role="cache-hit"]');
+    expect(await card.locator('.stats-aux-metric-label').textContent()).toBe('缓存命中');
+    expect(await card.locator('.stats-aux-metric-value').textContent()).toBe('80%');
+    const labels = await page.locator('[data-role="trend-metrics"] .stats-aux-metric-label').allTextContents();
+    expect(labels[4]).toBe('缓存命中');
+
+    await page.click('.stats-range-btn[data-range="year"]');
+    await page.waitForFunction(() => (window as unknown as { __telemetryDays?: string }).__telemetryDays === '365');
+    expect(await page.locator('[data-role="cache-hit"] .stats-aux-metric-value').textContent()).toBe('—');
   });
 });
