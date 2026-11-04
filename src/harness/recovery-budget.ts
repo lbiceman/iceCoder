@@ -27,7 +27,7 @@ export const RECOVERY_BUDGET: {
   embeddedToolSyntax: { max: 1, reset: '新的用户消息' },
   amnesia: { max: 1, reset: '发生压缩时清零' },
   stopHook: { max: 5, reset: '钩子不再要求继续，或工具轮出现有效进展' },
-  verificationContinuation: { max: 1, reset: '验收计划指纹或工作区改动版本变化' },
+  verificationContinuation: { max: 2, reset: '验收计划指纹或工作区改动版本变化；同一份失败输出不重复续' },
   failureEvidenceLadder: {
     evidenceStart: 2,
     evidenceEnd: 6,

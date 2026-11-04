@@ -32,6 +32,8 @@ export interface VerificationRuntimeState extends VerificationFreshness {
   /** continuationCount 所属的「计划指纹 + mutation version」；工作区再改动或换计划后计数归零。 */
   continuationScope: string | null;
   blockingSignature: string | null;
+  /** 本 scope 上一次已经续跑过的失败输出。同一份输出不再续。 */
+  continuedFailureKey: string | null;
   lastResult: VerificationLastResult | null;
   commandProgress: VerificationCommandProgress[];
 }
@@ -79,6 +81,7 @@ export function createVerificationRuntimeState(): VerificationRuntimeState {
     continuationCount: 0,
     continuationScope: null,
     blockingSignature: null,
+    continuedFailureKey: null,
     lastResult: null,
     commandProgress: [],
   };
@@ -133,6 +136,7 @@ export function markVerificationPassed(
   state.attemptedMutationVersion = state.workspaceMutationVersion;
   state.attemptedPlanFingerprint = options.planFingerprint;
   state.blockingSignature = null;
+  state.continuedFailureKey = null;
   state.lastResult = buildLastResult('passed', options);
   return state;
 }
@@ -178,6 +182,7 @@ export function sanitizeVerificationRuntimeState(value: unknown): VerificationRu
     continuationCount: nonNegativeInteger(record.continuationCount),
     continuationScope: nonEmptyString(record.continuationScope),
     blockingSignature: nonEmptyString(record.blockingSignature),
+    continuedFailureKey: nonEmptyString(record.continuedFailureKey),
     lastResult: sanitizeLastResult(record.lastResult),
     commandProgress: sanitizeCommandProgress(record.commandProgress),
   };
@@ -275,23 +280,27 @@ export function recordVerificationCommandResult(
 }
 
 /**
- * 每个「计划 + 工作区版本」最多续轮 maxContinuations 次。模型改了文件再停手算新一次尝试；
- * 不改文件直接再停手则预算已用完，由模型的停手决定收尾。
+ * 每个「计划 + 工作区版本」最多续轮 maxContinuations 次。
+ * 工作区再改动或换计划后计数归零，允许再试。
+ * 同一 scope 里失败输出（failureKey）和上次续跑相同则不再续。
  */
 export function tryConsumeVerificationContinuation(
   state: VerificationRuntimeState,
   maxContinuations: number,
   planFingerprint = '',
+  failureKey = '',
 ): boolean {
   if (!isNonNegativeInteger(maxContinuations)) return false;
   const scope = `${planFingerprint}@${state.workspaceMutationVersion}`;
-  const current = state.continuationScope === scope
-    && isNonNegativeInteger(state.continuationCount)
+  const sameScope = state.continuationScope === scope;
+  const current = sameScope && isNonNegativeInteger(state.continuationCount)
     ? state.continuationCount
     : 0;
   if (current >= maxContinuations) return false;
+  if (current > 0 && failureKey && state.continuedFailureKey === failureKey) return false;
   state.continuationScope = scope;
   state.continuationCount = current + 1;
+  state.continuedFailureKey = failureKey || null;
   return true;
 }
 

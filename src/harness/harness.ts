@@ -17,6 +17,7 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { clearReadBeforeEditScope } from '../tools/read-before-edit.js';
+import { appendWorkspaceOutlineOnce } from './workspace-outline.js';
 import type {
   ChatFunction,
   HarnessConfig,
@@ -516,6 +517,8 @@ export class Harness {
         workspaceRoot = lockedWorkspaceRoot;
       }
     }
+
+    await appendWorkspaceOutlineOnce(messages, lockedWorkspaceRoot);
 
     clearReadBeforeEditScope(workspaceRoot, this.sessionId);
 

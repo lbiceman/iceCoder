@@ -16,6 +16,7 @@ import {
 
 describe('compaction-strategy', () => {
   it('truncateSessionNotesForCompact 超长笔记截断并标记（D）', () => {
+    expect(MAX_SESSION_NOTES_COMPACT_CHARS).toBe(12_000);
     const long = 'a'.repeat(MAX_SESSION_NOTES_COMPACT_CHARS + 500);
     const { text, truncated } = truncateSessionNotesForCompact(long);
     expect(truncated).toBe(true);

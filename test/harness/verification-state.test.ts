@@ -27,6 +27,7 @@ describe('verification-state', () => {
       continuationCount: 0,
       continuationScope: null,
       blockingSignature: null,
+      continuedFailureKey: null,
       lastResult: null,
       commandProgress: [],
     });
@@ -230,6 +231,7 @@ describe('verification-state', () => {
       continuationCount: 0,
       continuationScope: null,
       blockingSignature: null,
+      continuedFailureKey: null,
       lastResult: {
         status: 'failed',
         source: 'project',
@@ -528,5 +530,31 @@ describe('verification-state', () => {
 
     const restored = sanitizeVerificationRuntimeState(JSON.parse(JSON.stringify(state)));
     expect(tryConsumeVerificationContinuation(restored, 1, 'plan-b')).toBe(false);
+  });
+
+  it('refuses a second continuation of the same failure output and allows a different one', () => {
+    const state = createVerificationRuntimeState();
+
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', 'npm test\n1\nFAIL a')).toBe(true);
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', 'npm test\n1\nFAIL a')).toBe(false);
+    expect(state.continuationCount).toBe(1);
+
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', 'npm test\n1\nFAIL b')).toBe(true);
+    expect(state.continuationCount).toBe(2);
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', 'npm test\n1\nFAIL c')).toBe(false);
+  });
+
+  it('allows the same failure output again after the workspace changes', () => {
+    const state = createVerificationRuntimeState();
+    const taskState = new TaskState('edit');
+    const key = 'npm test\n1\nFAIL a';
+
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', key)).toBe(true);
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', key)).toBe(false);
+
+    taskState.recordCommandWorkspaceMutation(['src/a.ts']);
+    syncVerificationWorkspaceMutation(state, taskState);
+    expect(tryConsumeVerificationContinuation(state, 2, 'plan-a', key)).toBe(true);
+    expect(state.continuationCount).toBe(1);
   });
 });

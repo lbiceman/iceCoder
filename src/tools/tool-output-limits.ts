@@ -22,14 +22,15 @@ export function getMaxToolOutputChars(): number {
 }
 
 /**
- * 失败 run_command 写入 LLM 的字符预算（头尾保留，不是行数）。
+ * 失败 run_command 注入模型的头尾预算（字符）。
  *
- * 对齐 Claude Code ~30k 中段裁剪、Codex ~10k tokens、OpenCode bash 默认 50KB 尾部。
- * 3000 字符只够几十行，会裁掉测试/编译栈。至少 48k；用户把 ICE_MAX_TOOL_OUTPUT_CHARS
- * 调更高时跟随，上限 200k。
+ * 全文落盘。注入约 20% 头 + 80% 尾，栈留在尾部。
+ * 不要改回只留开头的几千字符。ICE_FAILED_COMMAND_INLINE_CHARS 可调，范围 4k–200k。
  */
+export const FAILED_RUN_COMMAND_INLINE_CHARS = 12_000;
+
 export function getFailedRunCommandInlineChars(): number {
-  return clamp(Math.max(getMaxToolOutputChars(), 48_000), 24_000, 200_000);
+  return clamp(intEnv('ICE_FAILED_COMMAND_INLINE_CHARS', FAILED_RUN_COMMAND_INLINE_CHARS), 4_000, 200_000);
 }
 
 function intEnv(name: string, fallback: number): number {

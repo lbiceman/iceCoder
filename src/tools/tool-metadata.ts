@@ -297,6 +297,14 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 10000,
     tags: ['shell'],
   },
+  diagnostics: {
+    name: 'diagnostics',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 8000,
+    tags: ['search'],
+  },
   undo_edit: {
     name: 'undo_edit',
     isConcurrencySafe: false,

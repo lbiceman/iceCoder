@@ -100,7 +100,7 @@ describe('resolveToolResultBudget', () => {
     });
     expect(failed.source).toBe('remaining');
     expect(failed.capTokens).toBe(2_000);
-    expect(failed.capChars).toBeGreaterThanOrEqual(48_000);
+    expect(failed.capChars).toBe(12_000);
   });
 
   it('keeps char caps for failed commands and default tools', () => {
@@ -109,7 +109,7 @@ describe('resolveToolResultBudget', () => {
       effectiveUsedTokens: 0, metadataMaxChars: 1_000,
     });
     expect(failed.source).toBe('chars');
-    expect(failed.capChars).toBeGreaterThanOrEqual(48_000);
+    expect(failed.capChars).toBe(12_000);
 
     const other = resolveToolResultBudget({
       toolName: 'custom', success: true, contextWindowTokens: WINDOW_128K,
@@ -338,5 +338,24 @@ describe('measureLiveToolResultSavings', () => {
       }),
     }]);
     expect(s.shapedSavedTokens).toBe(16_000);
+  });
+});
+
+describe('failed command head and tail', () => {
+  it('keeps the start and the stack, and points at the spilled file', () => {
+    const head = 'command: npm test\n';
+    const tail = '\nFAIL src/a.test.ts\nError: expected 1\n';
+    const output = head + 'x'.repeat(40_000) + tail;
+    const shaped = shapeToolResult({
+      toolName: 'run_command',
+      output,
+      budget: { cls: 'failed_command', capChars: 12_000, source: 'chars' },
+      spillPath: 'C:/spill/npm-test.log',
+    });
+    expect(shaped.view.startsWith('command: npm test')).toBe(true);
+    expect(shaped.view).toContain('FAIL src/a.test.ts');
+    expect(shaped.view).toContain('C:/spill/npm-test.log');
+    expect(shaped.view.length).toBeLessThan(20_000);
+    expect(shaped.meta.strategy).toBe('tail');
   });
 });

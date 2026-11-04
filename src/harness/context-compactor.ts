@@ -3,7 +3,7 @@
  *
  * 压缩触发（写死常量，见 compaction-constants.ts）：
  * - 硬压缩：effectiveUsed ≥ contextWindow × 0.88，或剩余 < 18K
- * - 微压缩：effectiveUsed ≥ contextWindow × 0.80（且未达硬压缩线）
+ * - 微压缩：effectiveUsed ≥ contextWindow × 0.60（且未达硬压缩线）
  * - effectiveUsed = max(本地 messages + tools schema 估算, 上一轮 API prompt_tokens)
  *
  * 两条压缩路径：
@@ -222,7 +222,7 @@ export function resolveCompactionReserve(outputReserveTokens?: number): number {
   return Math.max(COMPACTION_RESERVE_TOKENS, (outputReserveTokens ?? 0) + EPHEMERAL_RESERVE_TOKENS);
 }
 
-/** 微压缩线：窗口 × 0.8；给了输出上限时不晚于硬压缩线前 4% 窗口 */
+/** 微压缩线：窗口 × 0.60；给了输出上限时不晚于硬压缩线前 4% 窗口 */
 export function resolveMicroCompactionLine(ctxWindow: number, outputReserveTokens?: number): number {
   const byRatio = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
   if (outputReserveTokens === undefined) return byRatio;
@@ -492,7 +492,7 @@ export class ContextCompactor {
 
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在 80% 有效占用时触发，纯本地操作，零 LLM 成本。
+   * 微压缩在 60% 有效占用时触发，纯本地操作，零 LLM 成本。
    */
   needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     if (!this.canMicroCompact()) return false;
