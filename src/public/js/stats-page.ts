@@ -11,10 +11,10 @@ import { t } from './i18n.ts';
 export const StatsPage = (() => {
 
   const RANGE_KEYS = [
-    { key: 'day', label: '日', hint: '最近 24 小时', days: 1 },
-    { key: 'week', label: '当周', hint: '最近 7 天', days: 7 },
-    { key: 'month', label: '当月', hint: '最近 30 天', days: 30 },
-    { key: 'year', label: '当年', hint: '最近 365 天', days: 365 },
+    { key: 'day', labelKey: 'stats.day', days: 1 },
+    { key: 'week', labelKey: 'stats.week', days: 7 },
+    { key: 'month', labelKey: 'stats.month', days: 30 },
+    { key: 'year', labelKey: 'stats.year', days: 365 },
   ];
 
   const CHART_COLOR_VARS = ['--chart-1', '--chart-2', '--chart-3'];
@@ -30,12 +30,12 @@ export const StatsPage = (() => {
   ];
   /** 修改是改动的文件数，和卡片上的「修改」一致；Dream 是执行次数。 */
   const MEMORY_LINE_SPECS = [
-    { field: 'recall', label: '读取', scale: 'count' },
-    { field: 'extract', label: '写入', scale: 'count' },
-    { field: 'dreamModified', label: '修改', scale: 'count' },
+    { field: 'recall', labelKey: 'stats.read', scale: 'count' },
+    { field: 'extract', labelKey: 'stats.write', scale: 'count' },
+    { field: 'dreamModified', labelKey: 'stats.edit', scale: 'count' },
     { field: 'dream', label: 'Dream', scale: 'count', dashed: true, mem: 6 },
-    { field: 'recallMs', label: '读取耗时', scale: 'ms', unit: 'ms', dashed: true, mem: 2, avgOver: 'recall' },
-    { field: 'extractMs', label: '写入耗时', scale: 'ms', unit: 'ms', dashed: true, mem: 4, avgOver: 'extract' },
+    { field: 'recallMs', labelKey: 'stats.readTime', scale: 'ms', unit: 'ms', dashed: true, mem: 2, avgOver: 'recall' },
+    { field: 'extractMs', labelKey: 'stats.writeTime', scale: 'ms', unit: 'ms', dashed: true, mem: 4, avgOver: 'extract' },
     { field: 'recallLlm', label: 'LLM', scale: 'count', dashed: true, mem: 1 },
   ];
   const TOP_MODEL_COUNT = 3;
@@ -115,7 +115,7 @@ export const StatsPage = (() => {
         if (ctrl !== abortCtrl) return;
         const body = out.body;
         if (!out.ok || !body || !body.success) {
-          paintError((body && body.error) || '统计失败');
+          paintError((body && body.error) || t('stats.failed'));
           return;
         }
         summary = body;
@@ -125,7 +125,7 @@ export const StatsPage = (() => {
         clearTimeout(timer);
         if (ctrl !== abortCtrl) return;
         if (err && err.name === 'AbortError') return;
-        paintError(err && err.message ? err.message : '网络错误');
+        paintError(err && err.message ? err.message : t('stats.network'));
       });
   }
 
@@ -149,7 +149,7 @@ export const StatsPage = (() => {
   function paintError(message) {
     if (!mainEl) return;
     mainEl.innerHTML =
-      `<div class="stats-status" role="alert"><p>统计失败：${escapeHtml(message)}</p><button type="button" class="stats-retry">重试</button></div>`;
+      `<div class="stats-status" role="alert"><p>${escapeHtml(t('stats.failedDetail', { message }))}</p><button type="button" class="stats-retry">${t('common.retry')}</button></div>`;
     const retry = mainEl.querySelector('.stats-retry');
     if (retry) {
       retry.addEventListener('click', () => {
@@ -173,7 +173,7 @@ export const StatsPage = (() => {
     mainEl.innerHTML =
       '<section class="stats-card stats-card-main">' +
         '<div class="stats-card-head">' +
-          '<span class="stats-card-label">Token 消耗</span>' +
+          '<span class="stats-card-label">' + t('stats.tokens') + '</span>' +
           '<span class="stats-card-value" data-role="trend-total"></span>' +
         '</div>' +
         '<div class="stats-aux-metrics" data-role="trend-metrics"></div>' +
@@ -183,7 +183,7 @@ export const StatsPage = (() => {
       '<div class="stats-split stats-split-aux">' +
         '<section class="stats-card">' +
           '<div class="stats-card-head">' +
-            '<span class="stats-card-label">记忆</span>' +
+            '<span class="stats-card-label">' + t('stats.memory') + '</span>' +
             '<span class="stats-card-value" data-role="memory-store"></span>' +
           '</div>' +
           '<div class="stats-aux-metrics" data-role="memory-metrics"></div>' +
@@ -205,7 +205,7 @@ export const StatsPage = (() => {
       html +=
         '<button type="button" class="stats-range-btn" data-range="' + row.key + '"' +
           ' aria-pressed="' + (rangeKey === row.key ? 'true' : 'false') + '">' +
-          escapeHtml(row.label) +
+          escapeHtml(t(row.labelKey)) +
         '</button>';
     }
     return html;
@@ -304,15 +304,15 @@ export const StatsPage = (() => {
     const extract = log.extract || {};
     const dream = log.dream || {};
     const files = num(store.totalFiles);
-    if (storeEl) storeEl.textContent = files ? (`${formatTokenCount(files)} 条`) : '';
+    if (storeEl) storeEl.textContent = files ? t('stats.files', { n: files }) : '';
     if (!memorySummary) {
-      panel.innerHTML = '<p class="stats-muted">暂无记忆遥测。</p>';
+      panel.innerHTML = '<p class="stats-muted">' + t('stats.noTelemetry') + '</p>';
       return;
     }
     panel.innerHTML =
-        auxMetric('读取', formatTokenCount(num(recall.count)), `选中 ${formatTokenCount(num(recall.totalSelected))} 条`) +
-        auxMetric('写入', formatTokenCount(num(extract.totalMemories) || num(extract.count)), `提取 ${formatTokenCount(num(extract.count))} 次`) +
-        auxMetric('修改', formatTokenCount(num(dream.totalModified)), `Dream ${formatTokenCount(num(dream.count))} 次`);
+        auxMetric(t('stats.read'), formatTokenCount(num(recall.count)), t('stats.readSelected', { n: num(recall.totalSelected) })) +
+        auxMetric(t('stats.write'), formatTokenCount(num(extract.totalMemories) || num(extract.count)), t('stats.extract', { n: num(extract.count) })) +
+        auxMetric(t('stats.edit'), formatTokenCount(num(dream.totalModified)), t('stats.dream', { n: num(dream.count) }));
   }
 
   function paintAuxCharts() {
@@ -328,7 +328,7 @@ export const StatsPage = (() => {
     const rawBuckets = memorySummary && Array.isArray(memorySummary.series) ? memorySummary.series : [];
     const buckets = range.key === 'year' ? rollupMemoryByMonth(rawBuckets) : rawBuckets;
     if (!buckets.length) {
-      mount.innerHTML = '<p class="stats-muted">暂无读取 / 写入 / 修改趋势。</p>';
+      mount.innerHTML = '<p class="stats-muted">' + t('stats.noTrend') + '</p>';
       if (legendEl) legendEl.innerHTML = '';
       memoryChart = null;
       return;
@@ -342,7 +342,7 @@ export const StatsPage = (() => {
       series,
       stacked: false,
       filled: false,
-      emptyText: '该时间范围暂无记忆读写',
+      emptyText: t('stats.noMemory'),
       formatX: axis.formatX,
       formatTipTitle: axis.formatTipTitle,
     });
@@ -356,7 +356,7 @@ export const StatsPage = (() => {
       if (spec.hideZero && sumValues(values) <= 0) continue;
       series.push({
         key: spec.field,
-        label: spec.label,
+        label: spec.labelKey ? t(spec.labelKey) : spec.label,
         color: memoryLineColor(spec, kindColors, memColors),
         values,
         dashed: !!spec.dashed,
@@ -447,7 +447,7 @@ export const StatsPage = (() => {
       series,
       stacked: false,
       filled: false,
-      emptyText: '该时间范围暂无用量',
+      emptyText: t('stats.noUsage'),
       formatX: axis.formatX,
       formatTipTitle: axis.formatTipTitle,
     });
@@ -466,29 +466,29 @@ export const StatsPage = (() => {
     const memoryShare = total > 0 ? Math.max(0, 100 - chatShare - subShare) : 0;
     const turns = kinds.chat.turns + kinds.subAgent.turns + kinds.memory.turns;
     panel.innerHTML =
-      auxMetric('会话', formatTokenCount(chat), `${chatShare}%`) +
-      auxMetric('子 Agent', formatTokenCount(subAgent), `${subShare}%`) +
-      auxMetric('记忆', formatTokenCount(memory), `${memoryShare}%`) +
-      auxMetric('请求次数', formatTokenCount(turns), '次');
+      auxMetric(t('stats.session'), formatTokenCount(chat), `${chatShare}%`) +
+      auxMetric(t('stats.subAgent'), formatTokenCount(subAgent), `${subShare}%`) +
+      auxMetric(t('stats.memory'), formatTokenCount(memory), `${memoryShare}%`) +
+      auxMetric(t('stats.requests'), formatTokenCount(turns), t('stats.times'));
   }
 
   function buildTokenSeries(buckets, colors) {
     return [
       {
         key: 'chat',
-        label: '会话',
+        label: t('stats.session'),
         color: colors[0],
         values: buckets.map((b) => Number(kindFromBucket(b, 'chat').totalTokens) || 0),
       },
       {
         key: 'subAgent',
-        label: '子 Agent',
+        label: t('stats.subAgent'),
         color: colors[2] || colors[0],
         values: buckets.map((b) => Number(kindFromBucket(b, 'subAgent').totalTokens) || 0),
       },
       {
         key: 'memory',
-        label: '记忆',
+        label: t('stats.memory'),
         color: colors[1] || colors[0],
         values: buckets.map((b) => Number(kindFromBucket(b, 'memory').totalTokens) || 0),
       },
@@ -562,13 +562,13 @@ export const StatsPage = (() => {
     const uid = `${opts.id}-${chartSeq}`;
 
     if (!n) {
-      mount.innerHTML = '<p class="stats-muted">暂无时间序列。</p>';
+      mount.innerHTML = '<p class="stats-muted">' + t('stats.noSeries') + '</p>';
       return null;
     }
 
     const stacked = !!opts.stacked;
     const filled = opts.filled !== false;
-    const emptyText = opts.emptyText || '该时间范围暂无用量';
+    const emptyText = opts.emptyText || t('stats.noUsage');
     if (stacked && series.length > 1) {
       series = series.slice().sort((a, b) =>  sumValues(a.values) - sumValues(b.values));
     }
@@ -714,7 +714,7 @@ export const StatsPage = (() => {
       if (!shown) {
         rows =
           '<div class="stats-tooltip-row">' +
-            '<span class="stats-tooltip-name">合计</span>' +
+            '<span class="stats-tooltip-name">' + t('stats.total') + '</span>' +
             '<span class="stats-tooltip-value">0</span>' +
           '</div>';
       }
@@ -902,7 +902,7 @@ export const StatsPage = (() => {
       if (ms >= 10000) {
         const sec = ms / 1000;
         const text = sec >= 100 ? String(Math.round(sec)) : String(Math.round(sec * 10) / 10);
-        return text + ' 秒';
+        return t('stats.seconds', { n: text });
       }
       return formatTokenCount(ms) + ' ms';
     }
@@ -1030,19 +1030,19 @@ export const StatsPage = (() => {
   function formatMonthTip(key) {
     const matched = /^(\d{4})-(\d{2})/.exec(key || '');
     if (!matched) return key;
-    return matched[1] + '年' + Number(matched[2]) + '月';
+    return t('stats.yearMonth', { year: matched[1], month: Number(matched[2]) });
   }
 
   function formatHourTip(key) {
     const d = parseStamp(key);
     if (!d) return key;
-    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + pad2(d.getHours()) + ':00';
+    return t('stats.hourTip', { month: d.getMonth() + 1, day: d.getDate(), hour: pad2(d.getHours()) });
   }
 
   function formatDayTip(key) {
     const d = parseStamp(key);
     if (!d) return key;
-    return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    return t('stats.dayTip', { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() });
   }
 
   function pad2(n) {

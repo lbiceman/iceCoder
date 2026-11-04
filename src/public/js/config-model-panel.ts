@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 配置页 — 模型配置面板（左列表 + 右详情）。
  */
@@ -84,13 +85,19 @@ export const ModelConfigPanel = (() => {
   }
 
   function providerDisplayName(prov) {
-    if (!prov) return '新提供者';
+    if (!prov) return t('model.newProvider');
     if (window.ModelNames && typeof window.ModelNames.providerDisplayLabel === 'function') {
       const label = window.ModelNames.providerDisplayLabel(prov);
-      return label === '未设置模型' ? '未设置模型' : label;
+      if (!label || label === '未设置模型') return t('model.unset');
+      return label;
     }
     const name = (prov.modelName || '').trim();
-    return name || '未设置模型';
+    return name || t('model.unset');
+  }
+
+  function defaultDotHtml() {
+    const label = escapeAttr(t('model.defaultDot'));
+    return '<span class="config-status-dot dot-green" title="' + label + '" aria-label="' + label + '"></span>';
   }
 
   function parseModelNames(modelName) {
@@ -101,7 +108,7 @@ export const ModelConfigPanel = (() => {
   }
 
   function providerSubtitle(prov) {
-    if (!prov || !prov.apiUrl) return '未设置 API 地址';
+    if (!prov || !prov.apiUrl) return t('model.noUrl');
     try {
       return new URL(prov.apiUrl).host;
     } catch (_e) {
@@ -139,7 +146,7 @@ export const ModelConfigPanel = (() => {
       }
       saveConfig(data, (err) => {
         if (err) {
-          Notification.error(`默认模型未能保存: ${err.message}`);
+          Notification.error(t('model.defaultSaveFailed', { message: err.message }));
           return;
         }
         loadConfig((_err, loaded) => {
@@ -187,7 +194,7 @@ export const ModelConfigPanel = (() => {
       .then((res) => { return res.json().then((body) =>  ({ ok: res.ok, body })); })
       .then((result) => {
         if (!result.ok || result.body.error) {
-          callback(new Error(result.body.error || '保存失败'));
+          callback(new Error(result.body.error || t('common.saveFailed')));
         } else {
           callback(null, result.body);
         }
@@ -214,22 +221,22 @@ export const ModelConfigPanel = (() => {
     const errors = {};
     const keySource = original || prov;
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
-      errors.apiUrl = '请填写 API 地址';
+      errors.apiUrl = t('model.urlRequired');
     }
     // 密钥来自环境变量时允许留空
     if (hasEnvApiKey(keySource)) {
       // 不校验 apiKey
     } else if (!prov.apiKey || prov.apiKey.trim() === '') {
-      errors.apiKey = '请填写 API 密钥';
+      errors.apiKey = t('model.keyRequired');
     } else if (/your-api-key/i.test(prov.apiKey)) {
-      errors.apiKey = '请填写有效的 API 密钥';
+      errors.apiKey = t('model.keyInvalid');
     }
     if (parseModelNames(prov.modelName).length === 0) {
-      errors.modelName = '请填写模型名称';
+      errors.modelName = t('model.nameRequired');
     }
     const apiMode = normalizeApiModeInput(prov.apiMode);
     if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses' && apiMode !== 'anthropic_messages') {
-      errors.apiMode = 'apiMode 仅支持 chat_completions、responses 或 anthropic_messages';
+      errors.apiMode = t('model.apiModeInvalid');
     }
     if (original && original._headersParseError) {
       errors.headers = original._headersParseError;
@@ -255,11 +262,11 @@ export const ModelConfigPanel = (() => {
       if (!line || line.charAt(0) === '#') continue;
       const colon = line.indexOf(':');
       if (colon <= 0) {
-        return { error: '每行格式为 Header-Name: value' };
+        return { error: t('model.headerFormat') };
       }
       const name = line.slice(0, colon).trim();
       const value = line.slice(colon + 1).trim();
-      if (!name) return { error: '请求头名称不能为空' };
+      if (!name) return { error: t('model.headerNameRequired') };
       out[name] = value;
     }
     return { headers: Object.keys(out).length ? out : undefined };
@@ -277,7 +284,7 @@ export const ModelConfigPanel = (() => {
       const token = parts[i].trim().toLowerCase();
       if (!token) continue;
       if (!REASONING_EFFORT_TOKEN_RE.test(token)) {
-        return { error: `推理强度含非法档位：${parts[i].trim()}` };
+        return { error: t('model.effortInvalid', { value: parts[i].trim() }) };
       }
       if (seen[token]) continue;
       seen[token] = true;
@@ -391,7 +398,7 @@ export const ModelConfigPanel = (() => {
         btn.innerHTML =
           '<div class="config-list-item-head">' +
             '<span class="config-list-item-name">' + escapeHtml(providerDisplayName(prov)) + '</span>' +
-            (isDefaultItem ? '<span class="config-badge is-default">默认</span>' : '') +
+            (isDefaultItem ? defaultDotHtml() : '') +
           '</div>' +
           '<div class="config-list-item-sub">' + escapeHtml(providerSubtitle(prov)) + '</div>';
         btn.addEventListener('click', (e) => {
@@ -423,74 +430,74 @@ export const ModelConfigPanel = (() => {
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
           '<h2 class="config-detail-title">' + escapeHtml(displayName) + '</h2>' +
-          (isDefault ? '<span class="config-badge is-default">默认</span>' : '') +
+          (isDefault ? defaultDotHtml() : '') +
         '</div>' +
         '<div class="config-detail-actions">' +
-          '<button type="button" class="skills-btn skills-btn-danger" id="model-btn-delete">删除</button>' +
+          '<button type="button" class="skills-btn skills-btn-danger" id="model-btn-delete">' + t('common.delete') + '</button>' +
         '</div>' +
       '</div>' +
       '<div class="form-grid model-detail-form">' +
         '<div class="form-group full-width">' +
-          '<label for="model-apiUrl-' + index + '">API 地址</label>' +
+          '<label for="model-apiUrl-' + index + '">' + t('model.apiUrl') + '</label>' +
           '<input type="url" id="model-apiUrl-' + index + '" data-field="apiUrl" placeholder="https://api.openai.com/v1" value="' + escapeAttr(prov.apiUrl || '') + '">' +
           '<span class="error-msg" data-error="apiUrl"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-apiKey-' + index + '">API 密钥</label>' +
-          '<input type="password" id="model-apiKey-' + index + '" data-field="apiKey" placeholder="' + (hasEnvApiKey(prov) ? '已从环境变量读取，可留空' : 'sk-...') + '" value="' + escapeAttr(prov.apiKey || '') + '">' +
+          '<label for="model-apiKey-' + index + '">' + t('model.apiKey') + '</label>' +
+          '<input type="password" id="model-apiKey-' + index + '" data-field="apiKey" placeholder="' + (hasEnvApiKey(prov) ? t('model.keyFromEnv') : 'sk-...') + '" value="' + escapeAttr(prov.apiKey || '') + '">' +
           (hasEnvApiKey(prov)
-            ? `<span class="field-hint">已从环境变量 <code>${escapeHtml(prov.apiKeyEnvVar || '')}</code> 读取，留空即使用该变量；填写将改用此处的密钥。</span>`
+            ? '<span class="field-hint">' + t('model.keyEnvHint', { name: escapeHtml(prov.apiKeyEnvVar || '') }) + '</span>'
             : '') +
           '<span class="error-msg" data-error="apiKey"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-modelName-' + index + '">模型名称</label>' +
-          '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o 或 mimo2.5-pro,mimo-2.5" value="' + escapeAttr(prov.modelName || '') + '">' +
-          '<span class="field-hint">多个模型用英文逗号分隔，聊天时可分别选择</span>' +
+          '<label for="model-modelName-' + index + '">' + t('model.name') + '</label>' +
+          '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="' + t('model.namePlaceholder') + '" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<span class="field-hint">' + t('model.nameHint') + '</span>' +
           '<span class="error-msg" data-error="modelName"></span>' +
         '</div>' +
         '<div class="form-group full-width">' +
-          '<label for="model-reasoningEffort-' + index + '">推理强度</label>' +
+          '<label for="model-reasoningEffort-' + index + '">' + t('model.effort') + '</label>' +
           '<input type="text" id="model-reasoningEffort-' + index + '" data-field="reasoningEffort" placeholder="low,high,max" value="' + escapeAttr(prov.reasoningEffort || '') + '">' +
-          '<span class="field-hint">英文逗号分隔，例如 <code>low,high,max</code>。选中值作为推理强度发送（OpenAI 兼容为 <code>reasoning_effort</code>，Anthropic 为 <code>thinking</code>）；留空则不发送。</span>' +
+          '<span class="field-hint">' + t('model.effortHint') + '</span>' +
           '<span class="error-msg" data-error="reasoningEffort"></span>' +
         '</div>' +
         '<div class="form-group full-width">' +
-          '<label for="model-apiMode-' + index + '">API 模式（apiMode）</label>' +
+          '<label for="model-apiMode-' + index + '">' + t('model.apiMode') + '</label>' +
           '<input type="text" id="model-apiMode-' + index + '" data-field="apiMode" placeholder="chat_completions" value="' + escapeAttr(resolveApiMode(prov) === 'chat_completions' ? '' : resolveApiMode(prov)) + '">' +
-          '<span class="field-hint">默认 <code>chat_completions</code>（OpenAI 兼容）；Responses 端点填 <code>responses</code>；Anthropic 原生协议填 <code>anthropic_messages</code>（<code>api.anthropic.com</code> 会自动识别）</span>' +
+          '<span class="field-hint">' + t('model.apiModeHint') + '</span>' +
           '<span class="error-msg" data-error="apiMode"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-temperature-' + index + '">温度</label>' +
+          '<label for="model-temperature-' + index + '">' + t('model.temperature') + '</label>' +
           '<div class="slider-group">' +
             '<input type="range" id="model-temperature-' + index + '" data-field="temperature" min="0" max="2" step="0.1" value="' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '">' +
             '<span class="slider-value" data-value="temperature">' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-maxContextTokens-' + index + '">上下文上限（Token）</label>' +
-          '<input type="number" id="model-maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
+          '<label for="model-maxContextTokens-' + index + '">' + t('model.context') + '</label>' +
+          '<input type="number" id="model-maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="' + t('model.contextPlaceholder') + '" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
         '</div>' +
         '<div class="form-group full-width">' +
-          '<label for="model-headers-' + index + '">额外请求头（headers）</label>' +
+          '<label for="model-headers-' + index + '">' + t('model.headers') + '</label>' +
           '<textarea id="model-headers-' + index + '" data-field="headers" rows="3" placeholder="x-opencode-session: {{sessionId}}">' +
             escapeHtml(formatProviderHeaders(prov.headers)) +
           '</textarea>' +
-          '<span class="field-hint">每行一条 <code>Header: value</code>。字面量原样发送；动态值仅支持 <code>{{sessionId}}</code>、<code>{{providerId}}</code>、<code>{{model}}</code>。</span>' +
+          '<span class="field-hint">' + t('model.headersHint') + '</span>' +
           '<span class="error-msg" data-error="headers"></span>' +
         '</div>' +
       '</div>' +
       '<div class="config-detail-toolbar">' +
-        '<label class="config-default-switch" title="设为默认模型">' +
+        '<label class="config-default-switch" title="' + t('model.setDefault') + '">' +
           '<input type="checkbox" data-action="set-default" ' + (isDefault ? 'checked disabled' : '') + '>' +
           '<span class="config-default-switch-track" aria-hidden="true"></span>' +
           '<span class="config-default-switch-text">' +
-            '<span class="config-default-switch-label">默认模型</span>' +
-            '<span class="config-default-switch-hint">聊天时优先使用</span>' +
+            '<span class="config-default-switch-label">' + t('model.defaultModel') + '</span>' +
+            '<span class="config-default-switch-hint">' + t('model.prefer') + '</span>' +
           '</span>' +
         '</label>' +
-        '<button type="button" class="skills-btn skills-btn-primary" id="model-btn-save">保存配置</button>' +
+        '<button type="button" class="skills-btn skills-btn-primary" id="model-btn-save">' + t('model.save') + '</button>' +
       '</div>'
     );
   }
@@ -534,7 +541,7 @@ export const ModelConfigPanel = (() => {
     }
 
     if (!providers.length) {
-      detailEl.innerHTML = '<div class="config-detail-placeholder">点击左侧「+ 添加」创建模型提供者。</div>';
+      detailEl.innerHTML = '<div class="config-detail-placeholder">' + t('model.addHint') + '</div>';
       return;
     }
 
@@ -635,11 +642,11 @@ export const ModelConfigPanel = (() => {
     const deleteId = target.id;
     const deleteName = providerDisplayName(target);
     window.Modal.confirm({
-      title: '移除提供者',
-      message: `确定要移除「${deleteName}」吗？`,
+      title: t('model.removeTitle'),
+      message: t('model.removeBody', { name: deleteName }),
       type: 'danger',
-      confirmText: '移除',
-      cancelText: '取消',
+      confirmText: t('model.remove'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     }).then((confirmed) => {
       if (!confirmed) return;
@@ -653,7 +660,7 @@ export const ModelConfigPanel = (() => {
       const data = buildProviderPayload(providers);
       for (let i = 0; i < data.length; i++) {
         if (Object.keys(validateProvider(data[i], providers[i])).length > 0) {
-          Notification.error('无法删除：其余提供者配置不完整，请先完善或删除');
+          Notification.error(t('model.removeBlocked'));
           reloadProvidersFromServer();
           return;
         }
@@ -663,11 +670,11 @@ export const ModelConfigPanel = (() => {
 
       saveConfig(data, (err, result) => {
         if (err) {
-          Notification.error(`删除失败：${err.message}`);
+          Notification.error(t('model.deleteFailed', { message: err.message }));
           reloadProvidersFromServer();
           return;
         }
-        Notification.success(`「${deleteName}」已移除`);
+        Notification.success(t('model.removed', { name: deleteName }));
         if (result && result.setupComplete && window.AppRouter && window.AppRouter.clearSetupMode) {
           window.AppRouter.clearSetupMode();
         }
@@ -695,16 +702,16 @@ export const ModelConfigPanel = (() => {
 
     for (let i = 0; i < data.length; i++) {
       if (i !== selectedIndex && Object.keys(validateProvider(data[i], providers[i])).length > 0) {
-        Notification.error('提供者 #' + (i + 1) + ' 配置不完整，请先完善或删除');
+        Notification.error(t('model.incomplete', { n: i + 1 }));
         return;
       }
     }
 
     saveConfig(data, (err, result) => {
       if (err) {
-        Notification.error(`保存失败：${err.message}`);
+        Notification.error(t('common.saveFailed') + '：' + err.message);
       } else {
-        Notification.success('配置已保存');
+        Notification.success(t('model.saved'));
         if (result && result.setupComplete && window.AppRouter && window.AppRouter.clearSetupMode) {
           window.AppRouter.clearSetupMode();
         }
@@ -754,16 +761,16 @@ export const ModelConfigPanel = (() => {
       '<div class="config-panel-inner">' +
         (options.showSetupBanner ? (
           '<div class="setup-banner" id="setup-banner" hidden>' +
-            '<strong>首次使用</strong>：请填写 AI 服务商提供的 API 地址、密钥和模型名称，保存后即可开始聊天。' +
+            t('model.firstRun') +
           '</div>'
         ) : '') +
         '<div class="config-split">' +
           '<aside class="config-list-panel">' +
             '<div class="config-list-panel-head">' +
-              '<span class="config-list-panel-title">模型提供者</span>' +
-              '<button type="button" class="chat-sidebar-new-btn" id="model-btn-add" title="添加提供者">' +
+              '<span class="config-list-panel-title">' + t('model.providers') + '</span>' +
+              '<button type="button" class="chat-sidebar-new-btn" id="model-btn-add" title="' + t('model.addProvider') + '">' +
                 '<span class="chat-sidebar-new-btn-icon" aria-hidden="true">+</span>' +
-                '<span class="chat-sidebar-new-btn-label">添加</span>' +
+                '<span class="chat-sidebar-new-btn-label">' + t('common.add') + '</span>' +
               '</button>' +
             '</div>' +
             '<div class="config-list" id="model-provider-list"></div>' +
@@ -776,7 +783,7 @@ export const ModelConfigPanel = (() => {
 
     loadConfig((err, loaded, meta) => {
       if (err) {
-        Notification.error('加载配置失败');
+        Notification.error(t('model.loadFailed'));
         providers = [];
       } else {
         providers = loaded.map((p) => { p._masked = true; return p; });

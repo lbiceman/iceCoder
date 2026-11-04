@@ -330,15 +330,15 @@ export const MemoryPage = (() => {
 
     const title = file.name || file.filename;
     const focusLabel = {
-      name: '名称',
-      type: '类型',
-      level: '存储层级',
-      tag: '标签',
-      body: '正文',
-      filename: '文件名',
-      memoryLevel: '记忆层级',
-      evidenceStrength: '证据强度',
-    }[focusKey] || '详情';
+      name: t('memory.name'),
+      type: t('memory.type'),
+      level: t('memory.tier'),
+      tag: t('memory.tags'),
+      body: t('memory.bodyShort'),
+      filename: t('memory.filename'),
+      memoryLevel: t('memory.level'),
+      evidenceStrength: t('memory.evidence'),
+    }[focusKey] || t('memory.detail');
 
     const preview = file.contentPreview || '';
     const shortBody = shortenText(preview, PREVIEW_LEN);
@@ -364,31 +364,31 @@ export const MemoryPage = (() => {
       '<div class="memory-popover-focus">' +
       escapeHtml(focusLabel) +
       '</div>' +
-      '<div class="memory-popover-created">创建时间 · ' +
-      escapeHtml(formatZhMemoryIso(file.createdAt || file.modifiedAt)) +
+      '<div class="memory-popover-created">' +
+      escapeHtml(t('memory.created', { time: formatZhMemoryIso(file.createdAt || file.modifiedAt) })) +
       '</div>' +
       '<div class="memory-popover-title">' +
       escapeHtml(title) +
       '</div>' +
       '<div class="memory-pop-dl-grid">' +
-      kv('文件名', 'filename', file.filename) +
-      kv('名称', 'name', file.name || '—') +
-      kv('类型', 'type', file.type || '—') +
-      kv('存储', 'level', file.level || '—') +
-      kv('记忆层级', 'memoryLevel', file.memoryLevel || '—') +
-      kv('证据', 'evidenceStrength', file.evidenceStrength || '—') +
+      kv(t('memory.filename'), 'filename', file.filename) +
+      kv(t('memory.name'), 'name', file.name || '—') +
+      kv(t('memory.type'), 'type', file.type || '—') +
+      kv(t('memory.store'), 'level', file.level || '—') +
+      kv(t('memory.level'), 'memoryLevel', file.memoryLevel || '—') +
+      kv(t('memory.evidenceShort'), 'evidenceStrength', file.evidenceStrength || '—') +
       '<div class="memory-pop-dl-pair">' +
-      '<dt>描述</dt>' +
+      '<dt>' + t('memory.description') + '</dt>' +
       '<dd class="memory-pop-desc-dd">' +
       escapeHtml(file.description || '—') +
       '</dd></div>' +
       '<div class="memory-pop-dl-pair">' +
-      '<dt>标签</dt>' +
+      '<dt>' + t('memory.tags') + '</dt>' +
       '<dd data-k="tag" class="memory-pop-tags memory-pop-k">' +
       tagsInline +
       '</dd></div>' +
       '</div>' +
-      '<div class="memory-popover-body-label">记忆正文</div>' +
+      '<div class="memory-popover-body-label">' + t('memory.body') + '</div>' +
       '<div class="memory-popover-body memory-pop-body-short" data-full="0">' +
       escapeHtml(shortBody) +
       (preview.length > PREVIEW_LEN ? '' : '') +
@@ -396,11 +396,11 @@ export const MemoryPage = (() => {
       '<div class="memory-popover-actions">' +
       '<div class="memory-popover-actions-left">' +
       (preview.length > PREVIEW_LEN
-        ? '<button type="button" class="memory-popover-more">更多</button>'
+        ? '<button type="button" class="memory-popover-more">' + t('memory.more') + '</button>'
         : '') +
-      '<button type="button" class="memory-popover-close">关闭</button>' +
+      '<button type="button" class="memory-popover-close">' + t('common.close') + '</button>' +
       '</div>' +
-      '<button type="button" class="memory-popover-delete">删除</button>' +
+      '<button type="button" class="memory-popover-delete">' + t('common.delete') + '</button>' +
       '</div>' +
       '<div class="memory-popover-body memory-pop-body-full hidden"></div>';
 
@@ -432,7 +432,7 @@ export const MemoryPage = (() => {
         if (bodyFull.textContent && bodyFull.classList.contains('hidden') === false) {
           bodyFull.classList.add('hidden');
           bodyShort.classList.remove('hidden');
-          moreBtn.textContent = '更多';
+          moreBtn.textContent = t('memory.more');
           requestAnimationFrame(() => {
             layoutMemoryPopoverInViewport(wrap, anchor);
           });
@@ -441,34 +441,34 @@ export const MemoryPage = (() => {
         if (bodyFull.dataset.loaded === '1') {
           bodyShort.classList.add('hidden');
           bodyFull.classList.remove('hidden');
-          moreBtn.textContent = '收起';
+          moreBtn.textContent = t('common.collapse');
           requestAnimationFrame(() => {
             layoutMemoryPopoverInViewport(wrap, anchor);
           });
           return;
         }
         moreBtn.dataset.loading = '1';
-        moreBtn.textContent = '加载中…';
+        moreBtn.textContent = t('common.loading');
         fetch(`/api/memory/files/${encodeURIComponent(file.filename)}`)
           .then((r) =>  r.json())
           .then((data) => {
             moreBtn.dataset.loading = '0';
             if (!data.success) {
-              moreBtn.textContent = '加载失败';
+              moreBtn.textContent = t('common.loadFailed');
               return;
             }
             bodyFull.textContent = data.content || '';
             bodyFull.dataset.loaded = '1';
             bodyShort.classList.add('hidden');
             bodyFull.classList.remove('hidden');
-            moreBtn.textContent = '收起';
+            moreBtn.textContent = t('common.collapse');
             requestAnimationFrame(() => {
               layoutMemoryPopoverInViewport(wrap, anchor);
             });
           })
           .catch(() => {
             moreBtn.dataset.loading = '0';
-            moreBtn.textContent = '重试';
+            moreBtn.textContent = t('common.retry');
           });
       });
     }
@@ -494,7 +494,7 @@ export const MemoryPage = (() => {
             .then((res) => {
               deleteBtn.disabled = false;
               if (!res.ok || !res.json.success) {
-                Notification.error(res.json.error || res.json.message || '删除失败');
+                Notification.error(res.json.error || res.json.message || t('common.deleteFailed'));
                 return;
               }
               closePopover();
@@ -502,7 +502,7 @@ export const MemoryPage = (() => {
             })
             .catch(() => {
               deleteBtn.disabled = false;
-              Notification.error('删除请求失败');
+              Notification.error(t('memory.deleteRequestFailed'));
             });
         });
       });
@@ -941,7 +941,7 @@ export const MemoryPage = (() => {
 
       const bl = document.createElement('span');
       bl.className = 'memory-chip memory-chip-store';
-      bl.textContent = file.level === 'user' ? '用户' : '项目';
+      bl.textContent = file.level === 'user' ? t('memory.user') : t('memory.project');
 
       chips.appendChild(bl);
 
@@ -1017,7 +1017,7 @@ export const MemoryPage = (() => {
     root.className = 'memory-root memory-root-mobile';
     const listEl = document.createElement('div');
     listEl.className = 'memory-mobile-list';
-    listEl.innerHTML = '<div class="memory-loading">载入中…</div>';
+    listEl.innerHTML = '<div class="memory-loading">' + t('common.loadingPage') + '</div>';
     root.appendChild(listEl);
     innerContainer.appendChild(root);
     listFetchAbort = new AbortController();
@@ -1026,7 +1026,7 @@ export const MemoryPage = (() => {
       .then((data) => {
         if (epochSnap !== memoryPageEpoch) return;
         if (!data.success || !data.files || !data.files.length) {
-          listEl.innerHTML = '<div class="memory-empty">暂无记忆文件。</div>';
+          listEl.innerHTML = '<div class="memory-empty">' + t('memory.empty') + '</div>';
           return;
         }
         allFiles = data.files;
@@ -1035,7 +1035,7 @@ export const MemoryPage = (() => {
       .catch((err) => {
         if (epochSnap !== memoryPageEpoch) return;
         if (err && err.name === 'AbortError') return;
-        listEl.innerHTML = '<div class="memory-empty" style="color:var(--danger)">载入失败。</div>';
+        listEl.innerHTML = '<div class="memory-empty" style="color:var(--danger)">' + t('memory.loadFailed') + '</div>';
       });
   }
 
@@ -1055,7 +1055,7 @@ export const MemoryPage = (() => {
           tagsHtml += '</div>';
         }
         card.innerHTML =
-          `<div class="memory-mobile-card-head"><span class="memory-mobile-card-name">${escapeHtml(file.name || file.filename)}</span></div><p class="memory-mobile-card-desc">${escapeHtml(file.description || '（无描述）')}</p>${tagsHtml}<div class="memory-mobile-card-meta">更新于 ${escapeHtml(formatZhMemoryIso(file.modifiedAt))}</div><div class="memory-mobile-card-actions"><button type="button" class="skills-btn skills-btn-danger" data-action="delete">删除记忆</button></div>`;
+          `<div class="memory-mobile-card-head"><span class="memory-mobile-card-name">${escapeHtml(file.name || file.filename)}</span></div><p class="memory-mobile-card-desc">${escapeHtml(file.description || t('memory.noDesc'))}</p>${tagsHtml}<div class="memory-mobile-card-meta">${escapeHtml(t('skills.updated', { time: formatZhMemoryIso(file.modifiedAt) }))}</div><div class="memory-mobile-card-actions"><button type="button" class="skills-btn skills-btn-danger" data-action="delete">${t('memory.deleteTitle')}</button></div>`;
         card.addEventListener('click', (e) => {
           if (e.target.closest('.skills-btn')) return;
           toggleMemoryExpand(card, file);
@@ -1082,26 +1082,26 @@ export const MemoryPage = (() => {
     card.classList.add('is-expanded');
     const detailDiv = document.createElement('div');
     detailDiv.className = 'memory-mobile-card-detail';
-    detailDiv.innerHTML = '<div class="skills-detail-loading">载入中…</div>';
+    detailDiv.innerHTML = '<div class="skills-detail-loading">' + t('common.loadingPage') + '</div>';
     card.appendChild(detailDiv);
     fetch(`/api/memory/files/${encodeURIComponent(file.filename)}`)
       .then((res) =>  res.json())
       .then((data) => {
-        if (!data.success) throw new Error(data.error || '加载失败');
+        if (!data.success) throw new Error(data.error || t('common.loadFailed'));
         detailDiv.innerHTML = `<pre class="memory-mobile-card-content">${escapeHtml(data.content || '')}</pre>`;
       })
       .catch((err) => {
-        detailDiv.innerHTML = `<div class="skills-detail-error">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+        detailDiv.innerHTML = `<div class="skills-detail-error">${escapeHtml(t('skills.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
       });
   }
 
   function confirmDeleteMemory(name) {
     return window.Modal.confirm({
-      title: '删除记忆',
-      message: `确定删除记忆「${name}」？删除后不可恢复。`,
+      title: t('memory.deleteTitle'),
+      message: t('memory.deleteBody', { name }),
       type: 'danger',
-      confirmText: '删除',
-      cancelText: '取消',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     });
   }
@@ -1112,10 +1112,10 @@ export const MemoryPage = (() => {
       fetch(`/api/memory/files/${encodeURIComponent(file.filename)}`, { method: 'DELETE' })
         .then((r) =>  r.json())
         .then((data) => {
-          if (!data.success) { Notification.error(data.error || '删除失败'); return; }
+          if (!data.success) { Notification.error(data.error || t('common.deleteFailed')); return; }
           card.remove();
         })
-        .catch(() => { Notification.error('删除请求失败'); });
+        .catch(() => { Notification.error(t('memory.deleteRequestFailed')); });
     };
     confirmDeleteMemory(name).then((ok) => { if (ok) doDelete(); });
   }
@@ -1153,13 +1153,13 @@ export const MemoryPage = (() => {
       '</p>' +
       '</div>' +
       '<div class="memory-header-actions">' +
-      '<span class="memory-count" id="memory-total-count" aria-live="polite">载入中…</span>' +
+      '<span class="memory-count" id="memory-total-count" aria-live="polite">' + t('common.loadingPage') + '</span>' +
       '<span class="memory-health-capsule" id="memory-health-capsule" aria-live="polite">' +
       '<span class="memory-health-dot"></span>' +
-      '<span class="memory-health-text">检查中…</span>' +
+      '<span class="memory-health-text">' + t('memory.checking') + '</span>' +
       '</span>' +
-      '<button type="button" class="memory-export-btn" id="memory-export-btn" title="打包下载全部记忆 Markdown">导出记忆</button>' +
-      '<button type="button" class="memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
+      '<button type="button" class="memory-export-btn" id="memory-export-btn" title="' + t('memory.exportTitle') + '">' + t('memory.export') + '</button>' +
+      '<button type="button" class="memory-consolidate-btn" id="memory-consolidate-btn">' + t('memory.consolidate') + '</button>' +
       '</div>' +
       (Tabs ? Tabs.html('memory') : '');
     if (Tabs) Tabs.bind(header);
@@ -1173,7 +1173,7 @@ export const MemoryPage = (() => {
         const btn = /** @type {HTMLButtonElement} */ (exportBtn);
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
-        btn.textContent = '导出中…';
+        btn.textContent = t('memory.exporting');
 
         fetch('/api/memory/stats')
           .then((res) => {
@@ -1181,10 +1181,10 @@ export const MemoryPage = (() => {
           })
           .then((out) => {
             if (!out.ok || !out.body.success) {
-              throw new Error((out.body && out.body.error) || '统计失败');
+              throw new Error((out.body && out.body.error) || t('memory.statsFailed'));
             }
             if (!out.body.total) {
-              Notification.warning('没有可导出的记忆文件。');
+              Notification.warning(t('memory.exportNone'));
               return null;
             }
             return fetch('/api/memory/export');
@@ -1193,7 +1193,7 @@ export const MemoryPage = (() => {
             if (!res) return;
             if (!res.ok) {
               return res.json().then((body) => {
-                throw new Error((body && body.error) || '导出失败');
+                throw new Error((body && body.error) || t('memory.exportFailed'));
               });
             }
             const countHdr = res.headers.get('X-Memory-File-Count');
@@ -1210,17 +1210,17 @@ export const MemoryPage = (() => {
               URL.revokeObjectURL(url);
               const n = countHdr ? parseInt(countHdr, 10) : NaN;
               if (!isNaN(n) && n > 0) {
-                Notification.success(`记忆已导出，共 ${n} 个文件。ZIP 内包含 memory-files/ 与 user-memory/ 目录。`);
+                Notification.success(t('memory.exported', { n }));
               }
             });
           })
           .catch((err) => {
-            Notification.error('记忆导出失败：' + ((err && err.message) || '未知错误'));
+            Notification.error(t('memory.exportFailedDetail', { message: (err && err.message) || t('common.unknownError') }));
           })
           .finally(() => {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
-            btn.textContent = '导出记忆';
+            btn.textContent = t('memory.export');
           });
       });
     }
@@ -1243,7 +1243,7 @@ export const MemoryPage = (() => {
         const btn = /** @type {HTMLButtonElement} */ (consolidateBtn);
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
-        btn.textContent = '提交中...';
+        btn.textContent = t('memory.submitting');
 
         fetch('/api/memory/dream', { method: 'POST' })
           .then((res) => {
@@ -1252,19 +1252,18 @@ export const MemoryPage = (() => {
           .then((out) => {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
-            btn.textContent = '手动整合';
+            btn.textContent = t('memory.consolidate');
 
             if (!out.ok || !out.body.success) {
-              const errMsg = (out.body && out.body.error) || '操作失败';
+              const errMsg = (out.body && out.body.error) || t('common.operationFailed');
               Notification.error(errMsg);
               return;
             }
-            const summary = out.body.summary || '操作完成';
+            const summary = out.body.summary || t('memory.done');
             const detail =
-              '修改 ' + (out.body.filesModified || 0) +
-              ' · 删除 ' + (out.body.filesDeleted || 0) +
-              (out.body.ruleFixed ? ' · 索引修复 ' + (out.body.ruleEntryCount || 0) + ' 条' : '') +
-              (out.body.filesEvicted ? ` · 归档 ${out.body.filesEvicted}` : '');
+              t('memory.changed', { modified: out.body.filesModified || 0, deleted: out.body.filesDeleted || 0 }) +
+              (out.body.ruleFixed ? t('memory.indexFixed', { n: out.body.ruleEntryCount || 0 }) : '') +
+              (out.body.filesEvicted ? t('memory.archived', { n: out.body.filesEvicted }) : '');
             Notification.success(summary + (detail.trim() ? `
 ${detail}` : ''));
 
@@ -1278,8 +1277,8 @@ ${detail}` : ''));
           .catch(() => {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
-            btn.textContent = '手动整合';
-            Notification.error('请求失败，请稍后重试。');
+            btn.textContent = t('memory.consolidate');
+            Notification.error(t('memory.retryLater'));
           });
       });
     }
@@ -1299,23 +1298,23 @@ ${detail}` : ''));
           if (!data.success || !data.health) {
             healthCapsuleEl.setAttribute('data-status', 'warn');
             const textEl = healthCapsuleEl.querySelector('.memory-health-text');
-            if (textEl) textEl.textContent = '无法获取';
+            if (textEl) textEl.textContent = t('memory.unavailable');
             return;
           }
 
           if (data.job && data.job.running) {
             healthCapsuleEl.setAttribute('data-status', 'warn');
             const busyEl = healthCapsuleEl.querySelector('.memory-health-text');
-            if (busyEl) busyEl.textContent = '后台整合中…';
+            if (busyEl) busyEl.textContent = t('memory.running');
             if (consolidateBtn) {
-              consolidateBtn.textContent = '后台整合中…';
+              consolidateBtn.textContent = t('memory.running');
               consolidateBtn.setAttribute('aria-busy', 'true');
             }
             return;
           }
 
           if (consolidateBtn) {
-            consolidateBtn.textContent = '手动整合';
+            consolidateBtn.textContent = t('memory.consolidate');
             consolidateBtn.removeAttribute('aria-busy');
           }
 
@@ -1324,12 +1323,12 @@ ${detail}` : ''));
           let label = '';
           if (h.dead > 3 || h.orphans > 10) {
             status = 'bad';
-            label = `死链 ${h.dead} · 孤儿 ${h.orphans}`;
+            label = t('memory.dead', { dead: h.dead, orphans: h.orphans });
           } else if (h.dead > 0 || h.orphans > 5) {
             status = 'warn';
-            label = `死链 ${h.dead} · 孤儿 ${h.orphans}`;
+            label = t('memory.dead', { dead: h.dead, orphans: h.orphans });
           } else {
-            label = `健康 (${h.indexed} 条索引, ${h.onDisk} 磁盘)`;
+            label = t('memory.health', { indexed: h.indexed, onDisk: h.onDisk });
           }
           healthCapsuleEl.setAttribute('data-status', status);
           const textEl = healthCapsuleEl.querySelector('.memory-health-text');
@@ -1340,7 +1339,7 @@ ${detail}` : ''));
           if (healthCapsuleEl) {
             healthCapsuleEl.setAttribute('data-status', 'warn');
             const textEl = healthCapsuleEl.querySelector('.memory-health-text');
-            if (textEl) textEl.textContent = '离线';
+            if (textEl) textEl.textContent = t('memory.offline');
           }
         });
     }
@@ -1354,7 +1353,7 @@ ${detail}` : ''));
     const graphArea = document.createElement('section');
     graphArea.className = 'memory-graph-area memory-graph-shell';
     graphArea.innerHTML =
-      '<div class="memory-page-busy" role="status" aria-busy="true"><span class="memory-page-busy-text">载入中…</span></div>' +
+      '<div class="memory-page-busy" role="status" aria-busy="true"><span class="memory-page-busy-text">' + t('common.loadingPage') + '</span></div>' +
       '<div class="memory-loading memory-loading-hidden" aria-live="polite"></div>' +
       '<div class="memory-graph-scroll memory-graph-viewport hidden">' +
       '<div class="memory-graph-stage">' +
@@ -1381,7 +1380,7 @@ ${detail}` : ''));
         const countEl = header.querySelector('#memory-total-count');
         if (countEl) {
           const totalN = typeof data.total === 'number' ? data.total : (data.files ? data.files.length : 0);
-          countEl.textContent = `共 ${totalN} 条记忆`;
+          countEl.textContent = t('memory.total', { n: totalN });
         }
 
         if (
@@ -1401,7 +1400,7 @@ ${detail}` : ''));
             return;
           loadingEl.classList.remove('hidden');
           loadingEl.innerHTML =
-            '📭 暂无记忆文件。对话产生的记忆会先写入 data/memory-files 或用户目录。';
+            t('memory.emptyLong');
           return;
         }
 
@@ -1441,7 +1440,7 @@ ${detail}` : ''));
         const countElErr = header.querySelector('#memory-total-count');
         if (countElErr) countElErr.textContent = '—';
         loadingEl.innerHTML =
-          '<span style="color:var(--danger)">载入失败。</span>';
+          '<span style="color:var(--danger)">' + t('memory.loadFailed') + '</span>';
       });
   }
 

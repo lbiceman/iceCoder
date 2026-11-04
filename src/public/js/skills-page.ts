@@ -52,7 +52,7 @@ export const SkillsPage = (() => {
   }
 
   function placeholderHtml() {
-    return '<div class="skills-detail-placeholder">选择左侧技能查看详情，或在输入框输入 <code>#</code> 快速选用。</div>';
+    return '<div class="skills-detail-placeholder">' + t('skills.placeholder') + '</div>';
   }
 
   function notifySkillsChanged() {
@@ -117,8 +117,8 @@ export const SkillsPage = (() => {
     return (
       `<textarea class="skills-detail-content skills-detail-editor">${escapeHtml(content || '')}</textarea>` +
       '<div class="skills-editor-foot">' +
-        '<button type="button" class="skills-btn" data-action="cancel-edit">取消</button>' +
-        '<button type="button" class="skills-btn skills-btn-primary" data-action="save-edit">保存</button>' +
+        '<button type="button" class="skills-btn" data-action="cancel-edit">' + t('common.cancel') + '</button>' +
+        '<button type="button" class="skills-btn skills-btn-primary" data-action="save-edit">' + t('common.save') + '</button>' +
       '</div>'
     );
   }
@@ -153,9 +153,9 @@ export const SkillsPage = (() => {
         '</div>' +
         `<p class="skills-detail-desc">${escapeHtml(meta.description || '')}</p>` +
         '<div class="skills-detail-actions">' +
-          '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">删除</button>' +
-          '<button type="button" class="skills-btn skills-btn-primary" data-action="use">使用</button>' +
-          `<button type="button" class="skills-btn${editing ? ' is-active' : ''}" data-action="edit">编辑</button>` +
+          '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">' + t('common.delete') + '</button>' +
+          '<button type="button" class="skills-btn skills-btn-primary" data-action="use">' + t('skills.use') + '</button>' +
+          `<button type="button" class="skills-btn${editing ? ' is-active' : ''}" data-action="edit">${t('common.edit')}</button>` +
         '</div>' +
       '</div>' +
       (editing
@@ -167,10 +167,10 @@ export const SkillsPage = (() => {
   function renderSkillList(listEl, countEl) {
     if (!listEl) return;
     listEl.innerHTML = '';
-    if (countEl) countEl.textContent = `${allSkills.length} 个技能`;
+    if (countEl) countEl.textContent = t('skills.count', { n: allSkills.length });
 
     if (!allSkills.length) {
-      listEl.innerHTML = '<div class="skills-empty">暂无技能。点击「新增」写一个简单技能。</div>';
+      listEl.innerHTML = '<div class="skills-empty">' + t('skills.empty') + '</div>';
       return;
     }
 
@@ -183,12 +183,12 @@ export const SkillsPage = (() => {
         const editing = editingFilename === sk.filename;
         card.innerHTML =
           `<div class="skills-card-head"><span class="skills-card-name">${escapeHtml(sk.name || sk.filename)}</span><span class="skills-card-file">#${escapeHtml(sk.filename)}</span></div>` +
-          `<p class="skills-card-desc">${escapeHtml(sk.description || '（无描述）')}</p>` +
-          `<div class="skills-card-meta">更新于 ${escapeHtml(formatZhIso(sk.modifiedAt))}</div>` +
+          `<p class="skills-card-desc">${escapeHtml(sk.description || t('skills.noDesc'))}</p>` +
+          `<div class="skills-card-meta">${escapeHtml(t('skills.updated', { time: formatZhIso(sk.modifiedAt) }))}</div>` +
           '<div class="skills-card-actions">' +
-            '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">删除技能</button>' +
-            '<button type="button" class="skills-btn skills-btn-primary" data-action="use">使用技能</button>' +
-            `<button type="button" class="skills-btn${editing ? ' is-active' : ''}" data-action="edit">编辑</button>` +
+            '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">' + t('skills.deleteSkill') + '</button>' +
+            '<button type="button" class="skills-btn skills-btn-primary" data-action="use">' + t('skills.useSkill') + '</button>' +
+            `<button type="button" class="skills-btn${editing ? ' is-active' : ''}" data-action="edit">${t('common.edit')}</button>` +
           '</div>';
 
         card.addEventListener('click', (e) => {
@@ -254,7 +254,7 @@ export const SkillsPage = (() => {
     card.classList.add('is-expanded');
     const detailDiv = document.createElement('div');
     detailDiv.className = 'skills-card-detail';
-    detailDiv.innerHTML = '<div class="skills-detail-loading">载入中…</div>';
+    detailDiv.innerHTML = '<div class="skills-detail-loading">' + t('common.loadingPage') + '</div>';
     card.appendChild(detailDiv);
     const cached = detailCache[sk.filename];
     if (cached) {
@@ -263,7 +263,7 @@ export const SkillsPage = (() => {
     fetch(`/api/skills/${encodeURIComponent(sk.filename)}`)
       .then((res) => res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载失败');
+        if (!body.success) throw new Error(body.error || t('common.loadFailed'));
         if (!card.classList.contains('is-expanded')) return;
         const pack = {
           filename: sk.filename,
@@ -279,18 +279,18 @@ export const SkillsPage = (() => {
       .catch((err) => {
         if (!card.classList.contains('is-expanded')) return;
         if (detailDiv.querySelector('.skills-detail-content, .skills-detail-editor')) return;
-        detailDiv.innerHTML = `<div class="skills-detail-error">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+        detailDiv.innerHTML = `<div class="skills-detail-error">${escapeHtml(t('skills.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
       });
   }
 
   function confirmDeleteSkill(sk) {
     const name = sk.name || sk.filename;
     window.Modal.confirm({
-      title: '删除技能',
-      message: `确定删除「${name}」？此操作不可撤销。`,
+      title: t('skills.deleteTitle'),
+      message: t('skills.deleteBody', { name }),
       type: 'danger',
-      confirmText: '删除',
-      cancelText: '取消',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     }).then((ok) => {
       if (ok) doDelete(sk.filename);
@@ -357,14 +357,14 @@ export const SkillsPage = (() => {
   function loadSkillDetail(filename) {
     const detailEl = containerEl && containerEl.querySelector('#skills-detail');
     if (!detailEl || creating) return;
-    detailEl.innerHTML = '<div class="skills-detail-loading">载入中…</div>';
+    detailEl.innerHTML = '<div class="skills-detail-loading">' + t('common.loadingPage') + '</div>';
 
     fetch(`/api/skills/${encodeURIComponent(filename)}`)
       .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
       .then((out) => {
         if (!containerEl || creating || selectedFilename !== filename) return;
         if (!out.ok || !out.body.success) {
-          throw new Error((out.body && out.body.error) || '读取失败');
+          throw new Error((out.body && out.body.error) || t('skills.readFailed'));
         }
         const pack = {
           filename,
@@ -377,7 +377,7 @@ export const SkillsPage = (() => {
       .catch((err) => {
         if (!containerEl || creating || selectedFilename !== filename) return;
         detailEl.innerHTML =
-          `<div class="skills-detail-error">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+          `<div class="skills-detail-error">${escapeHtml(t('skills.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
       });
   }
 
@@ -433,7 +433,7 @@ export const SkillsPage = (() => {
     if (!textarea) return;
     const content = textarea.value;
     if (!String(content).trim()) {
-      if (window.Notification) Notification.error('内容不能为空');
+      if (window.Notification) Notification.error(t('skills.emptyContent'));
       textarea.focus();
       return;
     }
@@ -446,7 +446,7 @@ export const SkillsPage = (() => {
       .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
       .then((out) => {
         if (!out.ok || !out.body.success) {
-          throw new Error((out.body && out.body.error) || '保存失败');
+          throw new Error((out.body && out.body.error) || t('common.saveFailed'));
         }
         editingFilename = null;
         selectedFilename = filename;
@@ -455,12 +455,12 @@ export const SkillsPage = (() => {
           detailCache[filename].content = out.body.content || content;
           if (out.body.meta) detailCache[filename].meta = out.body.meta;
         }
-        if (window.Notification) Notification.success('技能已保存');
+        if (window.Notification) Notification.success(t('skills.saved'));
         notifySkillsChanged();
         reloadSkills();
       })
       .catch((err) => {
-        if (window.Notification) Notification.error(err.message || '保存失败');
+        if (window.Notification) Notification.error(err.message || t('common.saveFailed'));
       })
       .finally(() => { busy = false; });
   }
@@ -468,29 +468,29 @@ export const SkillsPage = (() => {
   function createFormHtml() {
     return (
       '<div class="skills-detail-header">' +
-        '<h2 class="skills-detail-title">新增技能</h2>' +
-        '<p class="skills-detail-desc">填写文件夹、名称和内容。文件夹留空时，文件放在技能根目录。</p>' +
+        '<h2 class="skills-detail-title">' + t('skills.newTitle') + '</h2>' +
+        '<p class="skills-detail-desc">' + t('skills.newDesc') + '</p>' +
       '</div>' +
       '<div class="skills-create-note">' +
-        '<p>这里只创建<strong>简单技能</strong>（一个 Markdown 文件）。如果技能里要放很多脚本，请到聊天区使用「创建技能」，然后发送「创建」。</p>' +
-        '<button type="button" class="skills-btn" data-action="create-via-chat">去聊天创建</button>' +
+        '<p>' + t('skills.simpleOnly') + '</p>' +
+        '<button type="button" class="skills-btn" data-action="create-via-chat">' + t('skills.createInChat') + '</button>' +
       '</div>' +
       '<form class="skills-form" id="skills-create-form">' +
         '<label class="skills-field">' +
-          '<span class="skills-field-label">文件夹</span>' +
-          '<input class="skills-field-input" id="skills-new-folder" name="folder" type="text" maxlength="80" placeholder="例如 connectWeChat，留空则放在根目录" autocomplete="off" />' +
+          '<span class="skills-field-label">' + t('skills.folder') + '</span>' +
+          '<input class="skills-field-input" id="skills-new-folder" name="folder" type="text" maxlength="80" placeholder="' + t('skills.folderPh') + '" autocomplete="off" />' +
         '</label>' +
         '<label class="skills-field">' +
-          '<span class="skills-field-label">名称</span>' +
-          '<input class="skills-field-input" id="skills-new-name" name="name" type="text" maxlength="80" placeholder="例如 登录考试服务器" autocomplete="off" />' +
+          '<span class="skills-field-label">' + t('skills.name') + '</span>' +
+          '<input class="skills-field-input" id="skills-new-name" name="name" type="text" maxlength="80" placeholder="' + t('skills.namePh') + '" autocomplete="off" />' +
         '</label>' +
         '<label class="skills-field">' +
-          '<span class="skills-field-label">内容</span>' +
-          '<textarea class="skills-detail-content skills-detail-editor" id="skills-new-content" name="content" placeholder="写下这个技能要让 AI 怎么做，支持 Markdown。"></textarea>' +
+          '<span class="skills-field-label">' + t('skills.content') + '</span>' +
+          '<textarea class="skills-detail-content skills-detail-editor" id="skills-new-content" name="content" placeholder="' + t('skills.contentPh') + '"></textarea>' +
         '</label>' +
         '<div class="skills-editor-foot">' +
-          '<button type="button" class="skills-btn" data-action="cancel-create">取消</button>' +
-          '<button type="submit" class="skills-btn skills-btn-primary" data-action="save-create">保存</button>' +
+          '<button type="button" class="skills-btn" data-action="cancel-create">' + t('common.cancel') + '</button>' +
+          '<button type="submit" class="skills-btn skills-btn-primary" data-action="save-create">' + t('common.save') + '</button>' +
         '</div>' +
       '</form>'
     );
@@ -534,12 +534,12 @@ export const SkillsPage = (() => {
     const name = nameEl ? nameEl.value.trim() : '';
     const content = contentEl ? contentEl.value : '';
     if (!name) {
-      if (window.Notification) Notification.error('请填写名称');
+      if (window.Notification) Notification.error(t('skills.nameRequired'));
       if (nameEl) nameEl.focus();
       return;
     }
     if (!String(content).trim()) {
-      if (window.Notification) Notification.error('请填写内容');
+      if (window.Notification) Notification.error(t('skills.contentRequired'));
       if (contentEl) contentEl.focus();
       return;
     }
@@ -552,19 +552,19 @@ export const SkillsPage = (() => {
       .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
       .then((out) => {
         if (!out.ok || !out.body.success) {
-          throw new Error((out.body && out.body.error) || '创建失败');
+          throw new Error((out.body && out.body.error) || t('skills.createFailed'));
         }
         creating = false;
         editingFilename = null;
         selectedFilename = out.body.filename;
         if (isMobile()) reopenFilename = out.body.filename;
         syncRootMode();
-        if (window.Notification) Notification.success('技能已创建');
+        if (window.Notification) Notification.success(t('skills.created'));
         notifySkillsChanged();
         reloadSkills();
       })
       .catch((err) => {
-        if (window.Notification) Notification.error(err.message || '创建失败');
+        if (window.Notification) Notification.error(err.message || t('skills.createFailed'));
       })
       .finally(() => { busy = false; });
   }
@@ -574,9 +574,9 @@ export const SkillsPage = (() => {
       .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
       .then((out) => {
         if (!out.ok || !out.body.success) {
-          throw new Error((out.body && out.body.error) || '删除失败');
+          throw new Error((out.body && out.body.error) || t('common.deleteFailed'));
         }
-        if (window.Notification) Notification.success('技能已删除');
+        if (window.Notification) Notification.success(t('skills.deleted'));
         delete detailCache[filename];
         if (editingFilename === filename) editingFilename = null;
         if (selectedFilename === filename) selectedFilename = null;
@@ -584,7 +584,7 @@ export const SkillsPage = (() => {
         reloadSkills();
       })
       .catch((err) => {
-        if (window.Notification) Notification.error('删除失败：' + (err.message || '未知错误'));
+        if (window.Notification) Notification.error(t('skills.deleteFailed', { message: err.message || t('common.unknownError') }));
       });
   }
 
@@ -640,13 +640,13 @@ export const SkillsPage = (() => {
     if (listFetchAbort) listFetchAbort.abort();
     listFetchAbort = new AbortController();
 
-    if (countEl && !creating && !editingFilename) countEl.textContent = '载入中…';
+    if (countEl && !creating && !editingFilename) countEl.textContent = t('common.loadingPage');
     fetch('/api/skills', { signal: listFetchAbort.signal })
       .then((res) => res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载失败');
+        if (!body.success) throw new Error(body.error || t('common.loadFailed'));
         allSkills = body.skills || [];
-        if (countEl) countEl.textContent = `${allSkills.length} 个技能`;
+        if (countEl) countEl.textContent = t('skills.count', { n: allSkills.length });
         if (creating || editingFilename) return;
         renderSkillList(listEl, countEl);
         if (reopenFilename && isMobile()) {
@@ -666,10 +666,10 @@ export const SkillsPage = (() => {
       })
       .catch((err) => {
         if (err && err.name === 'AbortError') return;
-        if (countEl) countEl.textContent = '加载失败';
+        if (countEl) countEl.textContent = t('common.loadFailed');
         if (listEl && !creating && !editingFilename) {
           listEl.innerHTML =
-            `<div class="skills-empty">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+            `<div class="skills-empty">${escapeHtml(t('skills.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
         }
       });
   }
@@ -693,7 +693,7 @@ export const SkillsPage = (() => {
       '</div>' +
       '<div class="skills-header-actions">' +
         '<button type="button" class="skills-btn skills-btn-primary" data-action="create">' + t('skills.new') + '</button>' +
-        '<span class="skills-count" id="skills-total-count">载入中…</span>' +
+        '<span class="skills-count" id="skills-total-count">' + t('common.loadingPage') + '</span>' +
       '</div>' +
       (Tabs ? Tabs.html('skills') : '');
     if (Tabs) Tabs.bind(header);

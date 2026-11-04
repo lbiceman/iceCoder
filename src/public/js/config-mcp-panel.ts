@@ -89,13 +89,13 @@ export const McpConfigPanel = (() => {
 
   function statusLabel(status) {
     switch (status) {
-      case 'ready': return '运行中';
-      case 'error': return '连接失败';
-      case 'disabled': return '已停止';
-      case 'starting': return '启动中';
-      case 'stopped': return '离线';
-      case 'draft': return '未保存';
-      default: return status || '未知';
+      case 'ready': return t('mcp.running');
+      case 'error': return t('mcp.connectFailed');
+      case 'disabled': return t('mcp.stopped');
+      case 'starting': return t('mcp.starting');
+      case 'stopped': return t('mcp.offline');
+      case 'draft': return t('mcp.unsaved');
+      default: return status || t('mcp.unknown');
     }
   }
 
@@ -121,7 +121,7 @@ export const McpConfigPanel = (() => {
     fetch('/api/mcp')
       .then((res) =>  res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载失败');
+        if (!body.success) throw new Error(body.error || t('mcp.loadFailedShort'));
         callback(null, body);
       })
       .catch((err) => {
@@ -133,7 +133,7 @@ export const McpConfigPanel = (() => {
     fetch(`/api/mcp/servers/${encodeURIComponent(name)}/config`)
       .then((res) =>  res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载配置失败');
+        if (!body.success) throw new Error(body.error || t('mcp.loadConfigFailed'));
         callback(null, body.config);
       })
       .catch((err) => {
@@ -201,11 +201,11 @@ export const McpConfigPanel = (() => {
   function selectServer(name) {
     if (configDirty && name !== selectedName) {
       window.Modal.confirm({
-        title: '未保存的修改',
-        message: '当前配置尚未保存，切换将丢弃修改，是否继续？',
+        title: t('mcp.unsavedTitle'),
+        message: t('mcp.unsavedSwitch'),
         type: 'warning',
-        confirmText: '继续',
-        cancelText: '取消',
+        confirmText: t('mcp.continue'),
+        cancelText: t('common.cancel'),
       }).then((ok) => {
         if (!ok) return;
         configDirty = false;
@@ -223,7 +223,7 @@ export const McpConfigPanel = (() => {
 
     const list = getAllListItems();
     if (!list.length) {
-      listEl.innerHTML = '<div class="config-list-empty">暂无 MCP 服务器，点击「新增」添加。</div>';
+      listEl.innerHTML = '<div class="config-list-empty">' + t('mcp.empty') + '</div>';
       return;
     }
 
@@ -234,10 +234,10 @@ export const McpConfigPanel = (() => {
         btn.className = 'config-list-item' + (isListItemActive(srv.name) ? ' is-active' : '');
         const present = mcpStatusPresentation(srv);
         const toolText = srv.status === 'draft'
-          ? '未保存'
+          ? t('mcp.unsaved')
           : (srv.backendSession === 'detached'
-            ? '未挂上标签' + (srv.toolCount != null ? ` · ${srv.toolCount} 个工具` : '')
-            : (srv.toolCount != null ? `${srv.toolCount} 个工具` : '—'));
+            ? (srv.toolCount != null ? t('mcp.detachedTools', { n: srv.toolCount }) : t('mcp.detachedShort'))
+            : (srv.toolCount != null ? t('mcp.toolCount', { n: srv.toolCount }) : '—'));
         btn.innerHTML =
           `<div class="config-list-item-head"><span class="config-list-item-name">${escapeHtml(srv.name)}</span><span class="config-status-dot ${present.dot}" aria-hidden="true"></span></div><div class="config-list-item-sub">${escapeHtml(toolText)}</div>`;
         btn.addEventListener('click', (e) => {
@@ -270,29 +270,29 @@ export const McpConfigPanel = (() => {
     if (isRunningStatus(srv.status)) {
       return (
         '<div class="config-detail-actions">' +
-          '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-restart">重启</button>' +
-          '<button type="button" class="skills-btn skills-btn-danger" id="mcp-btn-stop">关闭</button>' +
+          '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-restart">' + t('mcp.restart') + '</button>' +
+          '<button type="button" class="skills-btn skills-btn-danger" id="mcp-btn-stop">' + t('mcp.stop') + '</button>' +
         '</div>'
       );
     }
 
     return (
       '<div class="config-detail-actions">' +
-        '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-start">启动</button>' +
+        '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-start">' + t('mcp.start') + '</button>' +
       '</div>'
     );
   }
 
   function parseApiResponse(res) {
     return res.text().then((text) => {
-      if (!text) return { success: res.ok, error: res.ok ? null : '空响应' };
+      if (!text) return { success: res.ok, error: res.ok ? null : t('mcp.emptyResponse') };
       try {
         return JSON.parse(text);
       } catch (_e) {
         if (res.status === 404) {
-          throw new Error('接口未就绪，请重启 API 服务（npm run dev）后重试');
+          throw new Error(t('mcp.apiNotReady'));
         }
-        throw new Error(`服务返回非 JSON 响应（HTTP ${res.status}）`);
+        throw new Error(t('mcp.nonJson', { status: res.status }));
       }
     });
   }
@@ -311,7 +311,7 @@ export const McpConfigPanel = (() => {
           reloadData();
         })
         .catch((err) => {
-          Notification.error(labels.fail + '：' + (err.message || '未知错误'));
+          Notification.error(t('mcp.actionFailed', { action: labels.fail, message: err.message || t('mcp.unknown') }));
         })
         .finally(() => {
           btn.disabled = false;
@@ -324,25 +324,25 @@ export const McpConfigPanel = (() => {
     if (srv.status === 'draft') return;
     if (isRunningStatus(srv.status)) {
       bindServerAction(detailEl, srv.name, '#mcp-btn-restart', 'restart', {
-        idle: '重启',
-        loading: '重启中…',
-        success: `${srv.name} 已重启`,
-        fail: '重启失败',
+        idle: t('mcp.restart'),
+        loading: t('mcp.restarting'),
+        success: t('mcp.restarted', { name: srv.name }),
+        fail: t('mcp.restartFailed'),
       });
       bindServerAction(detailEl, srv.name, '#mcp-btn-stop', 'stop', {
-        idle: '关闭',
-        loading: '关闭中…',
-        success: `${srv.name} 已关闭`,
-        fail: '关闭失败',
+        idle: t('mcp.stop'),
+        loading: t('mcp.stopping'),
+        success: t('mcp.stoppedDone', { name: srv.name }),
+        fail: t('mcp.stopFailed'),
       });
       return;
     }
 
     bindServerAction(detailEl, srv.name, '#mcp-btn-start', 'start', {
-      idle: '启动',
-      loading: '启动中…',
-      success: `${srv.name} 已启动`,
-      fail: '启动失败',
+      idle: t('mcp.start'),
+      loading: t('mcp.startingNow'),
+      success: t('mcp.started', { name: srv.name }),
+      fail: t('mcp.startFailed'),
     });
   }
 
@@ -361,31 +361,32 @@ export const McpConfigPanel = (() => {
         '<div class="mcp-tools-section mcp-collapsible' + expandedClass + '">' +
           '<button type="button" class="mcp-collapsible-toggle" id="mcp-tools-toggle" aria-expanded="' + (toolsExpanded ? 'true' : 'false') + '">' +
             '<span class="mcp-collapsible-icon" aria-hidden="true">' + toggleIcon + '</span>' +
-            '<span class="config-section-title mcp-collapsible-title">工具列表</span>' +
+            '<span class="config-section-title mcp-collapsible-title">' + t('mcp.tools') + '</span>' +
           '</button>' +
           '<div class="mcp-collapsible-body"' + bodyHidden + '>' +
-            '<p class="config-detail-placeholder">暂无可用工具</p>' +
+            '<p class="config-detail-placeholder">' + t('mcp.noTools') + '</p>' +
           '</div>' +
         '</div>'
       );
     }
 
     let toolRows = '';
-    for (let t = 0; t < tools.length; t++) {
+    const available = t('mcp.available');
+    for (let i = 0; i < tools.length; i++) {
       toolRows +=
-        `<tr><td><code>${escapeHtml(tools[t].name)}</code></td><td>${escapeHtml(tools[t].description || '—')}</td><td><span class="config-badge is-on">可用</span></td></tr>`;
+        `<tr><td><code>${escapeHtml(tools[i].name)}</code></td><td>${escapeHtml(tools[i].description || '—')}</td><td><span class="config-badge is-on">${available}</span></td></tr>`;
     }
 
     return (
       '<div class="mcp-tools-section mcp-collapsible' + expandedClass + '">' +
         '<button type="button" class="mcp-collapsible-toggle" id="mcp-tools-toggle" aria-expanded="' + (toolsExpanded ? 'true' : 'false') + '">' +
           '<span class="mcp-collapsible-icon" aria-hidden="true">' + toggleIcon + '</span>' +
-          '<span class="config-section-title mcp-collapsible-title">工具列表 (' + tools.length + ')</span>' +
+          '<span class="config-section-title mcp-collapsible-title">' + t('mcp.toolsCount', { n: tools.length }) + '</span>' +
         '</button>' +
         '<div class="mcp-collapsible-body"' + bodyHidden + '>' +
           '<div class="mcp-tools-table-wrap">' +
             '<table class="mcp-tools-table">' +
-              '<thead><tr><th>工具名称</th><th>描述</th><th>状态</th></tr></thead>' +
+              '<thead><tr><th>' + t('mcp.toolName') + '</th><th>' + t('mcp.description') + '</th><th>' + t('mcp.statusCol') + '</th></tr></thead>' +
               '<tbody>' + toolRows + '</tbody>' +
             '</table>' +
           '</div>' +
@@ -445,16 +446,16 @@ export const McpConfigPanel = (() => {
       const doDelete = function () {
         if (isDraft) {
           removeDraftServer(srv.name);
-          Notification.success('已移除未保存的服务器');
+          Notification.success(t('mcp.removedDraft'));
           return;
         }
 
         btn.disabled = true;
-        btn.textContent = '删除中…';
+        btn.textContent = t('mcp.deleting');
         fetch(`/api/mcp/servers/${encodeURIComponent(srv.name)}`, { method: 'DELETE' })
           .then((res) =>  parseApiResponse(res))
           .then((result) => {
-            if (!result.success) throw new Error(result.error || '删除失败');
+            if (!result.success) throw new Error(result.error || t('common.deleteFailed'));
             if (result.servers) {
               delete pendingDeleteNames[srv.name];
               servers = result.servers;
@@ -466,23 +467,23 @@ export const McpConfigPanel = (() => {
             } else {
               removeServerFromLocalState(srv.name);
             }
-            Notification.success(`${displayName} 已删除`);
+            Notification.success(t('mcp.deleted', { name: displayName }));
           })
           .catch((err) => {
-            Notification.error('删除失败：' + (err.message || '未知错误'));
+            Notification.error(t('mcp.deleteFailed', { message: err.message || t('mcp.unknown') }));
           })
           .finally(() => {
             btn.disabled = false;
-            btn.textContent = '删除';
+            btn.textContent = t('common.delete');
           });
       };
 
       window.Modal.confirm({
-        title: '删除 MCP 服务器',
-        message: `确定要删除「${displayName}」吗？此操作不可恢复。`,
+        title: t('mcp.deleteTitle'),
+        message: t('mcp.deleteBody', { name: displayName }),
         type: 'danger',
-        confirmText: '删除',
-        cancelText: '取消',
+        confirmText: t('common.delete'),
+        cancelText: t('common.cancel'),
         dangerConfirm: true,
       }).then((ok) => {
         if (ok) doDelete();
@@ -501,23 +502,23 @@ export const McpConfigPanel = (() => {
       let parsed;
 
       if (!serverName) {
-        if (errEl) errEl.textContent = '请填写服务器名称';
+        if (errEl) errEl.textContent = t('mcp.nameRequired');
         return;
       }
       if (!/^[a-zA-Z0-9._-]+$/.test(serverName)) {
-        if (errEl) errEl.textContent = '名称仅允许字母、数字、点、下划线和连字符';
+        if (errEl) errEl.textContent = t('mcp.nameInvalid');
         return;
       }
 
       try {
         parsed = JSON.parse(textarea.value);
       } catch (e) {
-        if (errEl) errEl.textContent = 'JSON 格式错误：' + (e.message || '无法解析');
+        if (errEl) errEl.textContent = t('mcp.jsonError', { message: e.message || t('mcp.jsonParse') });
         return;
       }
 
       btn.disabled = true;
-      btn.textContent = '保存中…';
+      btn.textContent = t('mcp.saving');
 
       const isDraft = isDraftName(srv.name);
       const url = isDraft
@@ -535,22 +536,22 @@ export const McpConfigPanel = (() => {
       })
         .then((res) =>  parseApiResponse(res))
         .then((result) => {
-          if (!result.success) throw new Error(result.error || '保存失败');
+          if (!result.success) throw new Error(result.error || t('common.saveFailed'));
           if (isDraft) {
             delete draftServers[srv.name];
           }
           selectedName = serverName;
           configDirty = false;
-          Notification.success(`${serverName} 配置已保存`);
+          Notification.success(t('mcp.saved', { name: serverName }));
           reloadData();
         })
         .catch((err) => {
-          if (errEl) errEl.textContent = err.message || '保存失败';
-          Notification.error('保存失败：' + (err.message || '未知错误'));
+          if (errEl) errEl.textContent = err.message || t('common.saveFailed');
+          Notification.error(t('mcp.saveFailed', { message: err.message || t('mcp.unknown') }));
         })
         .finally(() => {
           btn.disabled = false;
-          btn.textContent = '保存';
+          btn.textContent = t('common.save');
         });
     });
   }
@@ -572,7 +573,7 @@ export const McpConfigPanel = (() => {
     const cfg = srv.config || {};
     const cmdLine = [cfg.command || ''].concat(cfg.args || []).filter(Boolean).join(' ');
     const urlLine = cfg.url || '';
-    const launchLabel = urlLine ? '连接地址' : '启动命令';
+    const launchLabel = urlLine ? t('mcp.address') : t('mcp.command');
     const launchValue = urlLine || cmdLine;
     const isDraft = isDraftName(srv.name);
 
@@ -581,29 +582,29 @@ export const McpConfigPanel = (() => {
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
           (isDraft
-            ? `<input type="text" class="mcp-server-name-input" id="mcp-server-name" placeholder="服务器名称" value="${escapeAttr(srv.name)}">`
+            ? `<input type="text" class="mcp-server-name-input" id="mcp-server-name" placeholder="${t('mcp.serverName')}" value="${escapeAttr(srv.name)}">`
             : `<h2 class="config-detail-title">${escapeHtml(srv.name)}</h2>`) +
         '</div>' +
         renderActionButtons(srv) +
       '</div>' +
       '<div class="mcp-info-section">' +
-        '<h3 class="config-section-title">连接信息</h3>' +
+        '<h3 class="config-section-title">' + t('mcp.connection') + '</h3>' +
         '<dl class="mcp-info-grid">' +
           '<dt>' + launchLabel + '</dt><dd><code>' + escapeHtml(launchValue || '—') + '</code></dd>' +
-          '<dt>配置文件</dt><dd><code>' + escapeHtml(configPath || '.iceCoder/mcp.json') + '</code></dd>' +
-          '<dt>连接状态</dt><dd><span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label) + '</dd>' +
-          (srv.error ? `<dt>错误信息</dt><dd class="mcp-error-text">${escapeHtml(srv.error)}</dd>` : '') +
+          '<dt>' + t('mcp.configFile') + '</dt><dd><code>' + escapeHtml(configPath || '.iceCoder/mcp.json') + '</code></dd>' +
+          '<dt>' + t('mcp.status') + '</dt><dd><span class="config-status-dot ' + present.dot + '"></span> ' + escapeHtml(present.label) + '</dd>' +
+          (srv.error ? `<dt>${t('mcp.error')}</dt><dd class="mcp-error-text">${escapeHtml(srv.error)}</dd>` : '') +
         '</dl>' +
       '</div>' +
       renderToolsSection(srv) +
       '<div class="mcp-config-section">' +
-        '<h3 class="config-section-title">服务器配置 (JSON)</h3>' +
+        '<h3 class="config-section-title">' + t('mcp.json') + '</h3>' +
         '<textarea class="mcp-config-editor" id="mcp-config-editor" spellcheck="false" rows="12"></textarea>' +
         '<p class="mcp-config-error" id="mcp-config-error" role="alert"></p>' +
       '</div>' +
       '<div class="config-detail-toolbar mcp-config-toolbar">' +
-        '<button type="button" class="skills-btn skills-btn-danger" id="mcp-btn-delete">删除</button>' +
-        '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-save">保存</button>' +
+        '<button type="button" class="skills-btn skills-btn-danger" id="mcp-btn-delete">' + t('common.delete') + '</button>' +
+        '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-save">' + t('common.save') + '</button>' +
       '</div>'
     );
   }
@@ -628,7 +629,7 @@ export const McpConfigPanel = (() => {
     }
 
     loadingConfig = true;
-    setConfigTextarea(detailEl, '加载中…');
+    setConfigTextarea(detailEl, t('common.loading'));
     fetchServerConfig(srv.name, (err, fullConfig) => {
       loadingConfig = false;
       if (!container || selectedName !== srv.name) return;
@@ -637,7 +638,7 @@ export const McpConfigPanel = (() => {
       if (err) {
         setConfigTextarea(currentDetail, initialConfigText);
         const errEl = currentDetail.querySelector('#mcp-config-error');
-        if (errEl) errEl.textContent = err.message || '加载配置失败';
+        if (errEl) errEl.textContent = err.message || t('mcp.loadConfigFailed');
         return;
       }
       if (!configDirty || selectedName !== srv.name) {
@@ -660,7 +661,7 @@ export const McpConfigPanel = (() => {
     if (!list.length) {
       detailEl.innerHTML =
         '<div class="config-detail-placeholder">' +
-          '点击左侧「新增」添加 MCP 服务器，在下方编辑 JSON 配置后保存。' +
+          t('mcp.emptyDetail') +
         '</div>';
       return;
     }
@@ -689,11 +690,11 @@ export const McpConfigPanel = (() => {
   function handleAddServer() {
     if (configDirty) {
       window.Modal.confirm({
-        title: '未保存的修改',
-        message: '当前配置尚未保存，新增将丢弃修改，是否继续？',
+        title: t('mcp.unsavedTitle'),
+        message: t('mcp.unsavedAdd'),
         type: 'warning',
-        confirmText: '继续',
-        cancelText: '取消',
+        confirmText: t('mcp.continue'),
+        cancelText: t('common.cancel'),
       }).then((ok) => {
         if (!ok) return;
         configDirty = false;
@@ -712,10 +713,10 @@ export const McpConfigPanel = (() => {
         const listEl = container.querySelector('#mcp-server-list');
         const detailEl = container.querySelector('#mcp-detail');
         if (listEl) {
-          listEl.innerHTML = `<div class="config-list-empty">加载失败：${escapeHtml(err.message)}</div>`;
+          listEl.innerHTML = `<div class="config-list-empty">${escapeHtml(t('mcp.loadFailed', { message: err.message }))}</div>`;
         }
         if (detailEl && !configDirty) {
-          detailEl.innerHTML = `<div class="config-detail-placeholder">加载失败：${escapeHtml(err.message)}</div>`;
+          detailEl.innerHTML = `<div class="config-detail-placeholder">${escapeHtml(t('mcp.loadFailed', { message: err.message }))}</div>`;
         }
         return;
       }
@@ -774,10 +775,10 @@ export const McpConfigPanel = (() => {
         '<div class="config-split">' +
           '<aside class="config-list-panel">' +
             '<div class="config-list-panel-head">' +
-              '<span class="config-list-panel-title">MCP 服务器列表</span>' +
-              '<button type="button" class="chat-sidebar-new-btn" id="mcp-btn-add" title="新增 MCP 服务器">' +
+              '<span class="config-list-panel-title">' + t('mcp.list') + '</span>' +
+              '<button type="button" class="chat-sidebar-new-btn" id="mcp-btn-add" title="' + t('mcp.addServer') + '">' +
                 '<span class="chat-sidebar-new-btn-icon" aria-hidden="true">+</span>' +
-                '<span class="chat-sidebar-new-btn-label">添加</span>' +
+                '<span class="chat-sidebar-new-btn-label">' + t('common.add') + '</span>' +
               '</button>' +
             '</div>' +
             '<div class="config-list" id="mcp-server-list"></div>' +
