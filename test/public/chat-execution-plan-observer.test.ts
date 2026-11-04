@@ -958,7 +958,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
   });
 
   it('桌面宠物文案描述应用窗口最小化，不再改工作台侧边栏', () => {
-    expect(CONFIG_SOURCE).toMatch(/最小化应用窗口时桌面不再显示宠物/);
+    expect(CONFIG_SOURCE).toMatch(/t\('settings\.desktopPet\.hint'\)/);
     expect(CONFIG_SOURCE).not.toMatch(/最小化面板时不再显示宠物/);
     expect(PANEL_SOURCE).not.toMatch(/showDesktopPet|etl-restore-chip/);
   });

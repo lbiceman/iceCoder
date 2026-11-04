@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * SPA 路由和主应用逻辑
  * 处理设置页面和聊天页面之间的 hash 路由
@@ -117,7 +118,10 @@
   }
 
   const THEMES = ['dark', 'light', 'modern', 'fresh'];
-  const THEME_LABELS = { dark: '深色', light: '浅色', modern: '现代蓝', fresh: '暖阳' };
+
+  function themeLabel(id) {
+    return t('theme.' + id);
+  }
 
   function getStoredTheme(shell) {
     if (!shell) shell = currentShell || detectShellForTheme();
@@ -149,7 +153,7 @@
   function themeToggleTitle(theme) {
     const current = THEMES.indexOf(theme) === -1 ? getStoredTheme() : theme;
     const next = nextTheme(current);
-    return '当前：' + THEME_LABELS[current] + '，点击切换为' + THEME_LABELS[next];
+    return t('theme.cycle', { current: themeLabel(current), next: themeLabel(next) });
   }
 
   function getTheme() {

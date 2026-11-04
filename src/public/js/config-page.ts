@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t, getLocale, setLocale } from './i18n.ts';
 /**
  * 设置页面：Tab 切换「通用」「模型配置」与「MCP 配置」。
  */
@@ -32,26 +33,49 @@ export const SettingsPage = (() => {
     });
   }
 
+  function localeOptionsHtml() {
+    const current = getLocale();
+    const choices = [
+      { id: 'zh', label: t('locale.zh') },
+      { id: 'en', label: t('locale.en') },
+    ];
+    return choices.map((choice) => {
+      const on = current === choice.id;
+      return '<button type="button" class="settings-locale-option' + (on ? ' is-active' : '') + '" data-locale="' + choice.id + '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">' + choice.label + '</button>';
+    }).join('');
+  }
+
+  function bindLocaleOptions(parentEl) {
+    const options = parentEl.querySelectorAll('.settings-locale-option');
+    for (let i = 0; i < options.length; i++) {
+      options[i].addEventListener('click', () => {
+        const next = options[i].getAttribute('data-locale');
+        if (!next || next === getLocale()) return;
+        setLocale(next);
+      });
+    }
+  }
+
   function renderGeneralPanel(parentEl) {
     const shell = window.AppShell;
     const theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
     const dataDirectorySection =
       '<section class="settings-section settings-section-spaced" id="settings-data-directory-section">' +
-        '<h2 class="settings-section-title">数据目录</h2>' +
-        '<p class="settings-section-desc">iceCoder 的会话、缓存、技能和 MCP 配置默认保存在用户目录的 <code>.iceCoder</code> 文件夹中。可改到其他磁盘以释放系统盘空间。</p>' +
+        '<h2 class="settings-section-title">' + t('settings.data.title') + '</h2>' +
+        '<p class="settings-section-desc">' + t('settings.data.desc') + '</p>' +
         '<div class="settings-card" id="settings-data-directory-card">' +
           '<div class="settings-card-info">' +
-            '<div class="settings-card-title-row"><span class="settings-card-title">iceCoder 数据文件夹</span><span class="config-badge is-off" id="settings-data-directory-env-badge">检测中</span></div>' +
-            '<p class="settings-card-desc" id="settings-data-directory-desc">选择完整的数据文件夹路径；更改将在重启应用后生效。</p>' +
+            '<div class="settings-card-title-row"><span class="settings-card-title">' + t('settings.data.folder') + '</span><span class="config-badge is-off" id="settings-data-directory-env-badge">' + t('settings.data.checking') + '</span></div>' +
+            '<p class="settings-card-desc" id="settings-data-directory-desc">' + t('settings.data.pathHint') + '</p>' +
           '</div>' +
           '<div class="settings-data-directory-controls">' +
-            '<input class="settings-data-directory-input" id="settings-data-directory-input" type="text" spellcheck="false" aria-label="iceCoder 数据文件夹路径" />' +
-            '<button type="button" class="btn btn-secondary" id="settings-data-directory-browse">选择文件夹</button>' +
+            '<input class="settings-data-directory-input" id="settings-data-directory-input" type="text" spellcheck="false" aria-label="' + t('settings.data.pathLabel') + '" />' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-browse">' + t('settings.data.browse') + '</button>' +
           '</div>' +
           '<p class="settings-data-directory-note" id="settings-data-directory-note"></p>' +
           '<div class="settings-card-footer">' +
-            '<button type="button" class="btn btn-secondary" id="settings-data-directory-reset">恢复默认</button>' +
-            '<button type="button" class="btn btn-primary" id="settings-data-directory-save">保存位置</button>' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-reset">' + t('settings.data.reset') + '</button>' +
+            '<button type="button" class="btn btn-primary" id="settings-data-directory-save">' + t('settings.data.save') + '</button>' +
           '</div>' +
         '</div>' +
       '</section>';
@@ -74,11 +98,11 @@ export const SettingsPage = (() => {
       '</span>';
 
     const themeChoices = [
-      { id: 'dark', label: '深色', icon: 'moon' },
-      { id: 'light', label: '浅色', icon: 'sun' },
-      { id: 'modern', label: '现代蓝', icon: 'work' },
-      // 暖阳用 spark 而非 sun：浅色已占用 sun，重复图标会让人分不清两张卡
-      { id: 'fresh', label: '暖阳', icon: 'spark' },
+      { id: 'dark', label: t('theme.dark'), icon: 'moon' },
+      { id: 'light', label: t('theme.light'), icon: 'sun' },
+      { id: 'modern', label: t('theme.modern'), icon: 'work' },
+      // 森绿用 spark 而非 sun：浅色已占用 sun，重复图标会让人分不清两张卡
+      { id: 'fresh', label: t('theme.fresh'), icon: 'spark' },
     ];
     const themeOptionsHtml = themeChoices.map((choice) => {
       const on = theme === choice.id;
@@ -94,24 +118,31 @@ export const SettingsPage = (() => {
     parentEl.innerHTML =
       '<div class="settings-general">' +
         '<section class="settings-section">' +
-          '<h2 class="settings-section-title">外观</h2>' +
-          '<p class="settings-section-desc">选择界面主题，可随时在此切换</p>' +
-          '<div class="settings-theme-options" role="radiogroup" aria-label="界面主题">' +
+          '<h2 class="settings-section-title">' + t('locale.title') + '</h2>' +
+          '<p class="settings-section-desc">' + t('locale.desc') + '</p>' +
+          '<div class="settings-locale-options" role="radiogroup" aria-label="' + t('locale.group') + '">' +
+            localeOptionsHtml() +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced">' +
+          '<h2 class="settings-section-title">' + t('settings.appearance.title') + '</h2>' +
+          '<p class="settings-section-desc">' + t('settings.appearance.desc') + '</p>' +
+          '<div class="settings-theme-options" role="radiogroup" aria-label="' + t('theme.group') + '">' +
             themeOptionsHtml +
           '</div>' +
         '</section>' +
         dataDirectorySection +
         '<section class="settings-section settings-section-spaced" id="settings-sub-agents-section">' +
-          '<h2 class="settings-section-title">子 Agent</h2>' +
-          '<p class="settings-section-desc">关闭后不再把子 Agent 的说明和 task 工具发给模型，减少每次对话的 token</p>' +
+          '<h2 class="settings-section-title">' + t('settings.subagents.title') + '</h2>' +
+          '<p class="settings-section-desc">' + t('settings.subagents.desc') + '</p>' +
           '<div class="settings-card" id="settings-sub-agents-card" hidden>' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
-                '<span class="settings-card-title">启用子 Agent</span>' +
-                '<p class="settings-card-desc">开启后，默认模式可以派出子 Agent。关闭后提示词和工具都不下发，下一条消息生效</p>' +
+                '<span class="settings-card-title">' + t('settings.subagents.enable') + '</span>' +
+                '<p class="settings-card-desc">' + t('settings.subagents.hint') + '</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="启用子 Agent">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.subagents.enable') + '">' +
                   '<input type="checkbox" id="settings-sub-agents-input" checked />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
@@ -121,18 +152,18 @@ export const SettingsPage = (() => {
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-use-windows-section">' +
           '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">Windows 操作</h2>' +
-            '<span class="config-badge is-starting">实验性</span>' +
+            '<h2 class="settings-section-title">' + t('settings.windows.title') + '</h2>' +
+            '<span class="config-badge is-starting">' + t('settings.windows.badge') + '</span>' +
           '</div>' +
-          '<p class="settings-section-desc">打开后，才会把鼠标、键盘、截屏工具和它们的使用说明发给模型。关闭后这些内容不再注入。能做到哪一步，取决于模型能力</p>' +
+          '<p class="settings-section-desc">' + t('settings.windows.desc') + '</p>' +
           '<div class="settings-card" id="settings-use-windows-card" hidden>' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
-                '<span class="settings-card-title">启用 Windows 操作</span>' +
-                '<p class="settings-card-desc" id="settings-use-windows-desc">实验性功能。开启后，模型可以移动鼠标、点击、敲键盘，并截取主屏幕。定时任务不会注入这些工具。实际效果取决于模型能力，下一条消息生效</p>' +
+                '<span class="settings-card-title">' + t('settings.windows.enable') + '</span>' +
+                '<p class="settings-card-desc" id="settings-use-windows-desc">' + t('settings.windows.hint') + '</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="启用 Windows 操作">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.windows.enable') + '">' +
                   '<input type="checkbox" id="settings-use-windows-input" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
@@ -142,19 +173,19 @@ export const SettingsPage = (() => {
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
           '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">执行透明层</h2>' +
+            '<h2 class="settings-section-title">' + t('settings.workbench.title') + '</h2>' +
           '</div>' +
-          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
+          '<p class="settings-section-desc">' + t('settings.workbench.desc') + '</p>' +
           '<div class="settings-card" id="settings-etl-main-card">' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
                 '<div class="settings-card-title-row">' +
-                  '<span class="settings-card-title">显示执行透明层</span>' +
+                  '<span class="settings-card-title">' + t('settings.workbench.show') + '</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
+                '<p class="settings-card-desc">' + t('settings.workbench.showHint') + '</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.workbench.show') + '">' +
                   '<input type="checkbox" id="etl-show-panel" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
@@ -163,11 +194,11 @@ export const SettingsPage = (() => {
             '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
               '<div class="settings-etl-row">' +
                 '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
-                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
+                  '<span class="settings-etl-row-label">' + t('settings.workbench.expand') + '</span>' +
+                  '<span class="settings-etl-row-hint">' + t('settings.workbench.expandHint') + '</span>' +
                 '</div>' +
                 '<div class="settings-card-control">' +
-                  '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                  '<label class="config-default-switch settings-etl-switch" title="' + t('settings.workbench.expand') + '">' +
                     '<input type="checkbox" id="etl-panel-default-expanded" />' +
                     '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                   '</label>' +
@@ -175,11 +206,11 @@ export const SettingsPage = (() => {
               '</div>' +
               '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
                 '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
-                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
+                  '<span class="settings-etl-row-label">' + t('settings.workbench.idle') + '</span>' +
+                  '<span class="settings-etl-row-hint">' + t('settings.workbench.idleHint') + '</span>' +
                 '</div>' +
                 '<div class="settings-card-control">' +
-                  '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                  '<label class="config-default-switch settings-etl-switch" title="' + t('settings.workbench.idle') + '">' +
                     '<input type="checkbox" id="etl-panel-auto-collapse" />' +
                     '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                   '</label>' +
@@ -188,24 +219,12 @@ export const SettingsPage = (() => {
             '</div>' +
             '<div class="settings-etl-row settings-etl-desktop-pet" id="etl-show-desktop-pet-row">' +
               '<div class="settings-etl-row-info">' +
-                '<span class="settings-etl-row-label">桌面宠物</span>' +
-                '<span class="settings-etl-row-hint">关闭后，最小化应用窗口时桌面不再显示宠物；打开后，最小化时在桌面显示宠物</span>' +
+                '<span class="settings-etl-row-label">' + t('settings.desktopPet.label') + '</span>' +
+                '<span class="settings-etl-row-hint">' + t('settings.desktopPet.hint') + '</span>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-etl-switch" title="桌面宠物">' +
+                '<label class="config-default-switch settings-etl-switch" title="' + t('settings.desktopPet.label') + '">' +
                   '<input type="checkbox" id="etl-show-desktop-pet" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-            '</div>' +
-            '<div class="settings-etl-row settings-etl-screen-ping" id="settings-screen-ping-row" hidden>' +
-              '<div class="settings-etl-row-info">' +
-                '<span class="settings-etl-row-label">轮盘</span>' +
-                '<span class="settings-etl-row-hint" id="settings-screen-ping-hint">按住 Ctrl 拖动左键打开。左问画面，右截图，下记待办。</span>' +
-              '</div>' +
-              '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-etl-switch" title="轮盘">' +
-                  '<input type="checkbox" id="settings-screen-ping" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
               '</div>' +
@@ -214,17 +233,17 @@ export const SettingsPage = (() => {
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
           '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">任务通知</h2>' +
+            '<h2 class="settings-section-title">' + t('settings.notify.title') + '</h2>' +
           '</div>' +
-          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
+          '<p class="settings-section-desc">' + t('settings.notify.desc') + '</p>' +
           '<div class="settings-card" id="settings-task-notification-card">' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
-                '<span class="settings-card-title">任务完成消息通知</span>' +
-                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
+                '<span class="settings-card-title">' + t('settings.notify.label') + '</span>' +
+                '<p class="settings-card-desc">' + t('settings.notify.hint') + '</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.notify.label') + '">' +
                   '<input type="checkbox" id="settings-task-done-notification" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
@@ -234,22 +253,22 @@ export const SettingsPage = (() => {
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-security-section">' +
           '<div class="settings-section-head">' +
-            '<h2 class="settings-section-title">安全与执行</h2>' +
-            '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
+            '<h2 class="settings-section-title">' + t('settings.security.title') + '</h2>' +
+            '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">' + t('common.loading') + '</span>' +
           '</div>' +
-          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令的强制确认策略</p>' +
+          '<p class="settings-section-desc">' + t('settings.security.desc') + '</p>' +
           '<div class="settings-security-grid">' +
           '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
                 '<div class="settings-card-title-row">' +
-                  '<span class="settings-card-title">跳过权限确认</span>' +
-                  '<span class="config-badge is-error settings-risk-badge" id="settings-skip-risk-badge" hidden>高风险</span>' +
+                  '<span class="settings-card-title">' + t('settings.skip.label') + '</span>' +
+                  '<span class="config-badge is-error settings-risk-badge" id="settings-skip-risk-badge" hidden>' + t('settings.skip.risk') + '</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">开启后不再弹出确认，工具直接执行。灾难命令和宿主保护仍然拦截（新会话生效）</p>' +
+                '<p class="settings-card-desc">' + t('settings.skip.hint') + '</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-card-switch" title="跳过权限确认">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.skip.label') + '">' +
                   '<input type="checkbox" id="settings-skip-permission-input" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
@@ -260,33 +279,51 @@ export const SettingsPage = (() => {
             '<div class="settings-card-header">' +
               '<div class="settings-card-info">' +
                 '<div class="settings-card-title-row">' +
-                  '<span class="settings-card-title">Shell 强制确认规则</span>' +
-                  '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
+                  '<span class="settings-card-title">' + t('settings.rules.label') + '</span>' +
+                  '<span class="config-badge is-starting" id="settings-blacklist-count">' + t('settings.rules.count', { n: 0 }) + '</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。适用于普通聊天与 /shell 协作。</p>' +
+                '<p class="settings-card-desc">' + t('settings.rules.desc') + '</p>' +
                 '<div class="settings-shell-rules-panel">' +
                   '<ul class="settings-shell-rules-list">' +
-                    '<li>命中规则，或命令要写到锁定工作区以外 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
-                    '<li>开启「跳过权限确认」后，这两类确认都不再弹出</li>' +
-                    '<li>未命中规则、且没有写到工作区外的命令不受此列表约束</li>' +
+                    '<li>' + t('settings.rules.itemMatch') + '</li>' +
+                    '<li>' + t('settings.rules.itemSkip') + '</li>' +
+                    '<li>' + t('settings.rules.itemOther') + '</li>' +
                   '</ul>' +
                 '</div>' +
-                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后不再触发强制确认。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
+                '<p class="settings-card-desc settings-card-desc--footnote">' + t('settings.rules.footnote') + '</p>' +
               '</div>' +
             '</div>' +
             '<div class="settings-blacklist-editor">' +
               '<textarea class="settings-blacklist-textarea" id="settings-blacklist-textarea" spellcheck="false" placeholder="rm\\s+-rf&#10;git\\s+reset\\s+--hard"></textarea>' +
             '</div>' +
             '<div class="settings-card-footer">' +
-              '<button type="button" class="btn btn-secondary" id="settings-blacklist-reset">恢复默认</button>' +
-              '<button type="button" class="btn btn-primary" id="settings-blacklist-save">保存规则</button>' +
+              '<button type="button" class="btn btn-secondary" id="settings-blacklist-reset">' + t('settings.data.reset') + '</button>' +
+              '<button type="button" class="btn btn-primary" id="settings-blacklist-save">' + t('settings.rules.save') + '</button>' +
             '</div>' +
           '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-other-section" hidden>' +
+          '<h2 class="settings-section-title">' + t('settings.other.title') + '</h2>' +
+          '<div class="settings-card" id="settings-screen-ping-row">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">' + t('settings.wheel.label') + '</span>' +
+                '<p class="settings-card-desc" id="settings-screen-ping-hint">' + t('settings.wheel.hint') + '</p>' +
+              '</div>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="' + t('settings.wheel.label') + '">' +
+                  '<input type="checkbox" id="settings-screen-ping" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
           '</div>' +
         '</section>' +
       '</div>';
 
     if (window.AppIcon) window.AppIcon.hydrate(parentEl);
+    bindLocaleOptions(parentEl);
     bindThemeOptions(parentEl, shell);
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
@@ -362,11 +399,11 @@ export const SettingsPage = (() => {
         taskDoneNotification.disabled = true;
         window.EtlPrefs.set({ taskDoneNotification: next })
           .then((ok) => {
-            if (!ok) throw new Error('更新失败');
+            if (!ok) throw new Error(t('common.updateFailed'));
             syncTaskNotificationUi(parentEl);
             if (window.Notification) {
               window.Notification.success(
-                next ? '已开启任务完成通知' : '已关闭任务完成通知'
+                next ? t('settings.notify.on') : t('settings.notify.off')
               );
             }
           })
@@ -374,7 +411,7 @@ export const SettingsPage = (() => {
             taskDoneNotification.checked = !next;
             syncTaskNotificationUi(parentEl);
             if (window.Notification) {
-              window.Notification.error((err && err.message) || '更新失败');
+              window.Notification.error((err && err.message) || t('common.updateFailed'));
             }
           })
           .finally(() => { taskDoneNotification.disabled = false; });
@@ -406,11 +443,11 @@ export const SettingsPage = (() => {
         showPanelInput.disabled = true;
         window.EtlPrefs.set({ showTransparencyPanel: next })
           .then((ok) => {
-            if (!ok) throw new Error('更新失败');
+            if (!ok) throw new Error(t('common.updateFailed'));
             syncEtlSettingsUi(parentEl);
             if (window.Notification) {
               window.Notification.success(
-                next ? '已开启执行透明层' : '已关闭执行透明层'
+                next ? t('settings.workbench.on') : t('settings.workbench.off')
               );
             }
           })
@@ -418,7 +455,7 @@ export const SettingsPage = (() => {
             showPanelInput.checked = !next;
             syncEtlSettingsUi(parentEl);
             if (window.Notification) {
-              window.Notification.error((err && err.message) || '更新失败');
+              window.Notification.error((err && err.message) || t('common.updateFailed'));
             }
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });
@@ -433,7 +470,7 @@ export const SettingsPage = (() => {
         window.EtlPrefs.set({ panelDefaultExpanded: next })
           .catch(() => {
             panelDefaultExpanded.checked = !next;
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });
       });
@@ -447,7 +484,7 @@ export const SettingsPage = (() => {
         window.EtlPrefs.set({ panelAutoCollapse: next })
           .catch(() => {
             panelAutoCollapse.checked = !next;
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });
       });
@@ -461,7 +498,7 @@ export const SettingsPage = (() => {
         window.EtlPrefs.set({ showDesktopPet: next })
           .catch(() => {
             showDesktopPet.checked = !next;
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });
       });
@@ -493,20 +530,21 @@ export const SettingsPage = (() => {
   }
 
   function bindScreenPingSettings(parentEl) {
+    const section = parentEl.querySelector('#settings-other-section');
     const row = parentEl.querySelector('#settings-screen-ping-row');
     const input = parentEl.querySelector('#settings-screen-ping');
     const hint = parentEl.querySelector('#settings-screen-ping-hint');
     const desktop = window.iceDesktop;
-    if (!row || !input || !desktop || typeof desktop.getScreenPing !== 'function') return;
+    if (!section || !row || !input || !desktop || typeof desktop.getScreenPing !== 'function') return;
 
-    row.hidden = false;
+    section.hidden = false;
     const apply = (state) => {
       input.checked = !!state.enabled;
       input.disabled = !state.supported;
-      if (!state.supported && hint) hint.textContent = '目前只在 Windows 桌面版可用';
+      if (!state.supported && hint) hint.textContent = t('settings.wheel.windowsOnly');
     };
     desktop.getScreenPing().then(apply).catch(() => {
-      row.hidden = true;
+      section.hidden = true;
     });
     input.addEventListener('change', () => {
       const next = input.checked;
@@ -515,20 +553,20 @@ export const SettingsPage = (() => {
         .then((state) => {
           apply(state);
           if (window.Notification) {
-            window.Notification.success(state.enabled ? '已开启轮盘' : '已关闭轮盘');
+            window.Notification.success(state.enabled ? t('settings.wheel.on') : t('settings.wheel.off'));
           }
         })
         .catch(() => {
           input.checked = !next;
           input.disabled = false;
-          if (window.Notification) window.Notification.error('更新失败');
+          if (window.Notification) window.Notification.error(t('common.updateFailed'));
         });
     });
   }
 
   function bindDataDirectorySettings(parentEl) {
     const desktop = window.iceDesktop;
-    const migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。Electron 与 iceCoder start 共用此位置。';
+    const migrationTip = t('settings.data.migration');
 
     const input = parentEl.querySelector('#settings-data-directory-input');
     const browseBtn = parentEl.querySelector('#settings-data-directory-browse');
@@ -541,7 +579,7 @@ export const SettingsPage = (() => {
     const canPickFolder = desktop && typeof desktop.pickDataDirectory === 'function';
     if (!canPickFolder) {
       browseBtn.disabled = true;
-      browseBtn.title = '在系统浏览器中请手动填写绝对路径';
+      browseBtn.title = t('settings.data.browserPath');
     }
 
     function applyPayload(data) {
@@ -553,7 +591,7 @@ export const SettingsPage = (() => {
       resetBtn.disabled = !persistable;
       browseBtn.disabled = !persistable || !canPickFolder;
       if (badge) {
-        badge.textContent = persistable ? '可修改' : '开发模式';
+        badge.textContent = persistable ? t('settings.data.editable') : t('settings.data.dev');
         badge.classList.remove('is-off');
         badge.classList.toggle('is-ready', persistable);
         badge.classList.toggle('is-starting', !persistable);
@@ -561,7 +599,7 @@ export const SettingsPage = (() => {
     }
 
     function showError(err) {
-      const message = (err && err.message) || '操作失败';
+      const message = (err && err.message) || t('common.operationFailed');
       if (window.Notification) window.Notification.error(message);
     }
 
@@ -570,7 +608,7 @@ export const SettingsPage = (() => {
     fetch('/api/config/data-directory', { cache: 'no-store' })
       .then((res) =>  res.json())
       .then(applyPayload)
-      .catch(() => { showError({ message: '无法读取数据目录' }); });
+      .catch(() => { showError({ message: t('settings.data.readFailed') }); });
 
     browseBtn.addEventListener('click', () => {
       if (!canPickFolder) return;
@@ -578,13 +616,13 @@ export const SettingsPage = (() => {
         .then((dataDir) => {
           if (dataDir) input.value = dataDir;
         })
-        .catch(() => { showError({ message: '无法选择文件夹' }); });
+        .catch(() => { showError({ message: t('settings.data.pickFailed') }); });
     });
 
     saveBtn.addEventListener('click', () => {
       const dataDir = input.value.trim();
       if (!dataDir) {
-        showError({ message: '请选择数据文件夹' });
+        showError({ message: t('settings.data.required') });
         return;
       }
       saveBtn.disabled = true;
@@ -594,12 +632,12 @@ export const SettingsPage = (() => {
         body: JSON.stringify({ dataDir }),
       })
         .then((res) =>  res.json().then((data) => {
-            if (!res.ok) throw new Error(data && data.error || '保存失败');
+            if (!res.ok) throw new Error(data && data.error || t('common.saveFailed'));
             return data;
           }))
         .then((data) => {
           applyPayload(data);
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
+          if (window.Notification) window.Notification.success(t('settings.data.saved'));
         })
         .catch(showError)
         .finally(() => { saveBtn.disabled = false; });
@@ -613,12 +651,12 @@ export const SettingsPage = (() => {
         body: JSON.stringify({ dataDir: null }),
       })
         .then((res) =>  res.json().then((data) => {
-            if (!res.ok) throw new Error(data && data.error || '恢复失败');
+            if (!res.ok) throw new Error(data && data.error || t('settings.data.restoreFailed'));
             return data;
           }))
         .then((data) => {
           applyPayload(data);
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
+          if (window.Notification) window.Notification.success(t('settings.data.saved'));
         })
         .catch(showError)
         .finally(() => { resetBtn.disabled = false; });
@@ -656,7 +694,7 @@ export const SettingsPage = (() => {
     const countEl = parentEl.querySelector('#settings-blacklist-count');
     if (!countEl) return;
     const n = patterns ? patterns.length : 0;
-    countEl.textContent = `${n} 条规则`;
+    countEl.textContent = t('settings.rules.count', { n });
   }
 
   function syncSkipPermissionUi(parentEl, enabled) {
@@ -709,7 +747,7 @@ export const SettingsPage = (() => {
         const subAgentCard = parentEl.querySelector('#settings-sub-agents-card');
         const windowsCard = parentEl.querySelector('#settings-use-windows-card');
         if (loading) {
-          loading.textContent = '加载失败';
+          loading.textContent = t('settings.security.failed');
           loading.classList.add('is-error');
         }
         if (skipCard) skipCard.hidden = false;
@@ -717,7 +755,7 @@ export const SettingsPage = (() => {
         if (subAgentCard) subAgentCard.hidden = false;
         if (windowsCard) windowsCard.hidden = false;
         bindGeneralSecurityEvents(parentEl);
-        if (window.Notification) window.Notification.error('无法加载安全设置');
+        if (window.Notification) window.Notification.error(t('settings.security.loadFailed'));
       });
   }
 
@@ -731,7 +769,7 @@ export const SettingsPage = (() => {
       input.dataset.supported = supported ? '1' : '0';
     }
     if (desc && !supported) {
-      desc.textContent = '当前系统不是 Windows，不会向模型注入键鼠和截屏工具。';
+      desc.textContent = t('settings.windows.unsupported');
     }
   }
 
@@ -760,20 +798,20 @@ export const SettingsPage = (() => {
               if (window.Notification) {
                 window.Notification.success(
                   windowsInput.checked
-                    ? '已开启 Windows 操作（下一条消息生效）'
-                    : '已关闭 Windows 操作（下一条消息不再注入这些工具）'
+                    ? t('settings.windows.on')
+                    : t('settings.windows.off')
                 );
               }
             } else {
               windowsInput.checked = !next;
               if (window.Notification) {
-                window.Notification.error((result.body && result.body.error) || '更新失败');
+                window.Notification.error((result.body && result.body.error) || t('common.updateFailed'));
               }
             }
           })
           .catch(() => {
             windowsInput.checked = !next;
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => {
             windowsInput.disabled = windowsInput.dataset.supported === '0';
@@ -798,20 +836,20 @@ export const SettingsPage = (() => {
               if (window.Notification) {
                 window.Notification.success(
                   subAgentInput.checked
-                    ? '已开启子 Agent（下一条消息生效）'
-                    : '已关闭子 Agent（下一条消息生效）'
+                    ? t('settings.subagents.on')
+                    : t('settings.subagents.off')
                 );
               }
             } else {
               subAgentInput.checked = !next;
               if (window.Notification) {
-                window.Notification.error((result.body && result.body.error) || '更新失败');
+                window.Notification.error((result.body && result.body.error) || t('common.updateFailed'));
               }
             }
           })
           .catch(() => {
             subAgentInput.checked = !next;
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { subAgentInput.disabled = false; });
       });
@@ -834,22 +872,22 @@ export const SettingsPage = (() => {
               if (window.Notification) {
                 window.Notification.success(
                   result.body.skipPermissionChecks
-                    ? '已开启跳过权限确认（新会话生效）'
-                    : '已关闭跳过权限确认（新会话生效）'
+                    ? t('settings.skip.on')
+                    : t('settings.skip.off')
                 );
               }
             } else {
               skipInput.checked = !next;
               syncSkipPermissionUi(parentEl, skipInput.checked);
               if (window.Notification) {
-                window.Notification.error((result.body && result.body.error) || '更新失败');
+                window.Notification.error((result.body && result.body.error) || t('common.updateFailed'));
               }
             }
           })
           .catch(() => {
             skipInput.checked = !next;
             syncSkipPermissionUi(parentEl, skipInput.checked);
-            if (window.Notification) window.Notification.error('更新失败');
+            if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { skipInput.disabled = false; });
       });
@@ -880,13 +918,13 @@ export const SettingsPage = (() => {
               textarea.value = saved.join('\n');
               textarea.dataset.savedValue = textarea.value;
               updateBlacklistCount(parentEl, saved);
-              if (window.Notification) window.Notification.success('Shell 强制确认规则已保存');
+              if (window.Notification) window.Notification.success(t('settings.rules.saved'));
             } else if (window.Notification) {
-              window.Notification.error((result.body && result.body.error) || '保存失败');
+              window.Notification.error((result.body && result.body.error) || t('common.saveFailed'));
             }
           })
           .catch(() => {
-            if (window.Notification) window.Notification.error('保存失败');
+            if (window.Notification) window.Notification.error(t('common.saveFailed'));
           })
           .finally(() => { saveBtn.disabled = false; });
       });
@@ -904,10 +942,10 @@ export const SettingsPage = (() => {
               textarea.value = defaults.join('\n');
               updateBlacklistCount(parentEl, defaults);
             }
-            if (window.Notification) window.Notification.info('已填入默认规则，点击「保存规则」生效');
+            if (window.Notification) window.Notification.info(t('settings.rules.filled'));
           })
           .catch(() => {
-            if (window.Notification) window.Notification.error('无法加载默认规则');
+            if (window.Notification) window.Notification.error(t('settings.rules.defaultsFailed'));
           })
           .finally(() => { resetBtn.disabled = false; });
       });
@@ -939,15 +977,15 @@ export const SettingsPage = (() => {
       '<div class="config-center settings-center">' +
         '<header class="config-center-header">' +
           '<div class="config-center-header-text">' +
-            '<h1 class="config-center-title">设置</h1>' +
-            '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
-            '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）</p>' +
+            '<h1 class="config-center-title">' + t('settings.title') + '</h1>' +
+            '<p class="config-center-subtitle">' + t('settings.subtitle') + '</p>' +
+            '<p class="config-center-format-hint">' + t('settings.apiHint') + '</p>' +
           '</div>' +
         '</header>' +
-        '<nav class="config-tabs" role="tablist" aria-label="设置类型">' +
-          '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">通用</button>' +
-          '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">模型配置</button>' +
-          '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">MCP 配置</button>' +
+        '<nav class="config-tabs" role="tablist" aria-label="' + t('settings.tabs') + '">' +
+          '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">' + t('settings.tab.general') + '</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">' + t('settings.tab.models') + '</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">' + t('settings.tab.mcp') + '</button>' +
         '</nav>' +
         '<div class="config-tab-panels">' +
           '<div class="config-tab-panel' + (activeTab === 'general' ? ' is-active' : '') + '" data-panel="general" role="tabpanel" id="config-tab-general"' + (activeTab === 'general' ? '' : ' hidden') + '></div>' +

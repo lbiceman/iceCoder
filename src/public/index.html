@@ -16,6 +16,8 @@
         const stored = localStorage.getItem(key);
         const theme = ['light', 'dark', 'modern', 'fresh'].indexOf(stored) !== -1 ? stored : (mobile ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme', theme);
+        const loc = localStorage.getItem('ice-locale');
+        document.documentElement.lang = loc === 'en' ? 'en' : 'zh-CN';
       } catch (e) { /* ignore */ }
     })();
   </script>

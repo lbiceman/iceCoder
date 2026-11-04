@@ -40,7 +40,7 @@ describe('多会话并发切换 · 前端源码约定', () => {
   it('桌面侧栏保留工作入口，任务/知识库/统计/设置页会话可回到聊天', () => {
     const sidebar = read(publicJs('chat-session-sidebar.ts'));
     expect(sidebar).toContain('data-page="chat"');
-    expect(sidebar).toMatch(/chat-sidebar-nav-btn-label">工作</);
+    expect(sidebar).toMatch(/chat-sidebar-nav-btn-label">\$\{t\('nav\.work'\)\}</);
     expect(sidebar).toContain('data-page="tasks"');
     expect(sidebar).toContain('data-page="knowledge"');
     expect(sidebar).toContain('data-page="stats"');

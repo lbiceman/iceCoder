@@ -445,23 +445,23 @@ select:focus-visible,
 }
 
 .chat-welcome-inner {
-  width: min(880px, 100%);
+  width: min(720px, 100%);
 }
 
 .chat-welcome-title {
   color: var(--text-primary);
-  font-size: clamp(24px, 2.6vw, 30px);
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.025em;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
 }
 
 .chat-welcome-card,
 .chat-welcome-tip,
 .welcome-action-card {
   border-color: var(--border-subtle);
-  background: var(--surface-panel);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  box-shadow: none;
   transition:
     transform var(--transition),
     box-shadow var(--transition),
@@ -480,9 +480,9 @@ select:focus-visible,
     background var(--transition);
 }
 
-.chat-welcome-stat:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
+.chat-welcome-stat:hover,
+.chat-welcome-tip:hover {
+  background: color-mix(in srgb, var(--surface-raised) 65%, transparent);
 }
 
 /* ===== Settings and secondary pages ===== */

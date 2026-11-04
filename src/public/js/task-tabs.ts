@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 「任务」页签：定时、待办是两个路由（#/tasks、#/todos；移动端 mTasks、mTodos）。
  * 侧栏和底栏的「任务」打开上次停留的页签。第一次仍是定时。
@@ -10,8 +11,8 @@ export const TaskTabs = (() => {
 
   const STORAGE_KEY = 'ice-task-tab';
   const TABS = [
-    { id: 'scheduled', label: '定时' },
-    { id: 'todos', label: '待办' },
+    { id: 'scheduled', key: 'nav.scheduled' },
+    { id: 'todos', key: 'nav.todos' },
   ];
 
   const HASH = { scheduled: '#/tasks', todos: '#/todos' };
@@ -53,10 +54,10 @@ export const TaskTabs = (() => {
 
   function html(active, extraClass) {
     return (
-      `<div class="knowledge-tabs task-tabs${extraClass ? ` ${extraClass}` : ''}" role="tablist" aria-label="任务">` +
-      TABS.map((t) => {
-        const on = t.id === active;
-        return `<button type="button" class="knowledge-tab${on ? ' is-active' : ''}" role="tab" data-task-tab="${t.id}" aria-selected="${on}">${t.label}</button>`;
+      `<div class="knowledge-tabs task-tabs${extraClass ? ` ${extraClass}` : ''}" role="tablist" aria-label="${t('nav.tasks')}">` +
+      TABS.map((tab) => {
+        const on = tab.id === active;
+        return `<button type="button" class="knowledge-tab${on ? ' is-active' : ''}" role="tab" data-task-tab="${tab.id}" aria-selected="${on}">${t(tab.key)}</button>`;
       }).join('') +
       '</div>'
     );

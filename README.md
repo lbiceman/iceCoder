@@ -8,7 +8,7 @@
 
 ### Desktop
 
-Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings**. Under Work, sessions split into **regular** and **task** groups.
+Left nav: **Work / Tasks / Knowledge / Stats**. Footer: avatar, name, and **Settings**. Sessions are one time-sorted list, pins on top; task sessions carry a small chip.
 
 **Work / chat** — transcript in the center, **iceCoder Workbench** on the right, `#` / `@` composer at the bottom with model and reasoning pickers. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, and changed files.
 
@@ -26,7 +26,7 @@ Left nav: **Work / Tasks / Knowledge / Stats**. Footer: **Settings**. Under Work
 
 ![Desktop — stats (light theme)](./docs/assets/desktop-stats-light.png)
 
-**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP. General includes four themes (dark / light / modern / fresh), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
+**Settings** — `#/settings` (`#/config` is the same page). Tabs: General, Models, MCP. General includes four themes (dark / light / modern / forest), data directory, sub-agent toggle, workbench visibility, desktop pet, task-done notification, and mandatory shell-confirm rules.
 
 ### Mobile H5
 

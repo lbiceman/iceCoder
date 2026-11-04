@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 知识库 ·「规则」页签：用户级全局规则（对所有工作区生效、每次对话都会携带的自定义提示词）。
  */
@@ -85,8 +86,8 @@ export const RulesPage = (() => {
     const pct = Math.min(100, Math.round((chars / max) * 100));
     return (
       `<div class="rules-stats${over ? ' is-over' : ''}">` +
-        `<span>已启用 <strong>${contents.length}</strong> 条，合计 <strong>${chars}</strong> / ${max} 字</span>` +
-        `<span>预计每轮输入增加约 <strong>${tokens}</strong> tokens</span>` +
+        `<span>${t('rules.enabledSummary', { count: contents.length, chars, max })}</span>` +
+        `<span>${t('rules.tokenSummary', { tokens })}</span>` +
       '</div>' +
       `<div class="rules-meter${over ? ' is-over' : ''}" aria-hidden="true"><div class="rules-meter-fill" style="width:${pct}%"></div></div>`
     );
@@ -100,12 +101,12 @@ export const RulesPage = (() => {
   function editorHtml(initial) {
     return (
       '<div class="rules-editor">' +
-        `<textarea class="rules-editor-input" rows="4" maxlength="${editorMaxChars()}" placeholder="例如：始终使用简体中文回复；修改代码后先运行相关测试。">${escapeHtml(initial)}</textarea>` +
+        `<textarea class="rules-editor-input" rows="4" maxlength="${editorMaxChars()}" placeholder="${t('rules.placeholder')}">${escapeHtml(initial)}</textarea>` +
         '<div class="rules-editor-foot">' +
           '<span class="rules-editor-count"></span>' +
           '<div class="rules-editor-actions">' +
-            '<button type="button" class="skills-btn" data-action="cancel">取消</button>' +
-            '<button type="button" class="skills-btn skills-btn-primary" data-action="save">保存</button>' +
+            '<button type="button" class="skills-btn" data-action="cancel">' + t('common.cancel') + '</button>' +
+            '<button type="button" class="skills-btn skills-btn-primary" data-action="save">' + t('common.save') + '</button>' +
           '</div>' +
         '</div>' +
       '</div>'
@@ -122,7 +123,7 @@ export const RulesPage = (() => {
       const contents = contentsWithDraft(input.value);
       const overTotal = totalChars(contents) > limits.maxEnabledTotalChars;
       const remaining = Math.max(0, editorMaxChars() - text.length);
-      countEl.textContent = `本条 ${text.length} 字 · 约 ${estimateTokens(text)} tokens · 还可写 ${remaining} 字`;
+      countEl.textContent = t('rules.draftCount', { chars: text.length, tokens: estimateTokens(text), remaining });
       countEl.classList.toggle('is-over', overTotal);
       saveBtn.disabled = busy || !text || overTotal;
       updateStats(contents);
@@ -308,8 +309,8 @@ export const RulesPage = (() => {
     header.className = 'skills-header knowledge-header';
     header.innerHTML =
       '<div class="skills-header-text">' +
-        '<h1 class="skills-title">知识库</h1>' +
-        '<p class="skills-hint">规则是你的个人提示词，对所有工作区生效。</p>' +
+        '<h1 class="skills-title">' + t('nav.knowledge') + '</h1>' +
+        '<p class="skills-hint">' + t('rules.hint') + '</p>' +
       '</div>' +
       (Tabs ? Tabs.html('rules') : '');
     if (Tabs) Tabs.bind(header);
@@ -318,16 +319,13 @@ export const RulesPage = (() => {
     main.className = 'rules-main';
     main.innerHTML =
       '<section class="rules-notice">' +
-        '<p class="rules-notice-text">启用的规则<strong>每次对话都会携带</strong>：新对话开始时注入上下文，之后随该对话的每一轮请求一起发给模型，' +
-        '因此会持续占用输入 token（中文约 1 字 ≈ 1 token，英文约 4 个字母 ≈ 1 token）。修改后在新开的对话中生效。</p>' +
-        '<p class="rules-notice-text"><strong>规则写得越多、越长，AI 越容易记混、漏掉，甚至不按规则来。</strong>' +
-        '建议只写真正每次都需要的要求，一条只说一件事，说得具体直接；不常用的规则可以先停用。' +
-        '参考：启用的规则<strong>最好不超过 10 条</strong>，<strong>每条最好在 200 字以内</strong>（仅为建议，不做限制）。</p>' +
+        '<p class="rules-notice-text">' + t('rules.notice1') + '</p>' +
+        '<p class="rules-notice-text">' + t('rules.notice2') + '</p>' +
         `<div id="rules-stats">${statsHtml([])}</div>` +
       '</section>' +
       '<div class="rules-toolbar">' +
-        '<span class="skills-count" id="rules-count">载入中…</span>' +
-        '<button type="button" class="skills-btn skills-btn-primary" id="rules-add-btn">新增规则</button>' +
+        '<span class="skills-count" id="rules-count">' + t('common.loadingPage') + '</span>' +
+        '<button type="button" class="skills-btn skills-btn-primary" id="rules-add-btn">' + t('rules.add') + '</button>' +
       '</div>' +
       '<div class="rules-list" id="rules-list"></div>';
 

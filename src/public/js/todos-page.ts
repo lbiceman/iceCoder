@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 待办页（#/todos、移动端 mTodos）：短列表、勾选、补记一条。记下时可以附一张图。
  */
@@ -66,7 +67,7 @@ export const TodosPage = (() => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.success === false) {
-      throw new Error((data && data.error) || '请求失败');
+      throw new Error((data && data.error) || t('common.requestFailed'));
     }
     return data;
   }
@@ -91,10 +92,10 @@ export const TodosPage = (() => {
     const text = todo.text ? `<p class="todo-item-text">${escapeHtml(todo.text)}</p>` : '';
     const shot = todo.image
       ? `<button type="button" class="todo-shot" data-todo-preview="${escapeHtml(todo.id)}" data-todo-url="${escapeHtml(todo.image.url)}">` +
-          `<img src="${escapeHtml(todo.image.url)}" alt="待办截图">` +
+          `<img src="${escapeHtml(todo.image.url)}" alt="${t('todos.shot')}">` +
         '</button>'
       : '';
-    const label = todo.text || '截图待办';
+    const label = todo.text || t('todos.shotTodo');
     return (
       `<li class="todo-item${done ? ' is-done' : ''}" data-todo-id="${escapeHtml(todo.id)}">` +
         `<label class="todo-check">` +
@@ -102,7 +103,7 @@ export const TodosPage = (() => {
         '</label>' +
         `<div class="todo-item-main">${text}${shot}</div>` +
         `<time class="todo-item-time">${escapeHtml(formatTime(todo.createdAt))}</time>` +
-        `<button type="button" class="skills-btn todo-item-delete" data-todo-delete="${escapeHtml(todo.id)}">删除</button>` +
+        `<button type="button" class="skills-btn todo-item-delete" data-todo-delete="${escapeHtml(todo.id)}">${t('todos.remove')}</button>` +
       '</li>'
     );
   }
@@ -124,13 +125,13 @@ export const TodosPage = (() => {
       if (todos[i].doneAt == null) open.push(todos[i]);
       else done.push(todos[i]);
     }
-    if (count) count.textContent = `${open.length} 条未完成`;
+    if (count) count.textContent = t('todos.openCount', { n: open.length });
     if (!open.length && !done.length) {
-      list.innerHTML = '<div class="skills-empty">还没有待办。</div>';
+      list.innerHTML = '<div class="skills-empty">' + t('todos.empty') + '</div>';
       return;
     }
     const showOpenTitle = open.length > 0 && done.length > 0;
-    list.innerHTML = groupHtml(showOpenTitle ? '未完成' : '', open) + groupHtml(done.length ? '已完成' : '', done);
+    list.innerHTML = groupHtml(showOpenTitle ? t('todos.openGroup') : '', open) + groupHtml(done.length ? t('todos.doneGroup') : '', done);
   }
 
   async function load() {
@@ -142,7 +143,7 @@ export const TodosPage = (() => {
       paint(data.todos || []);
     } catch (err) {
       if (gen !== loadGen || !rootEl) return;
-      setError(err.message || '待办加载失败');
+      setError(err.message || t('todos.loadFailed'));
     }
   }
 
@@ -179,13 +180,13 @@ export const TodosPage = (() => {
         let width = img.naturalWidth;
         let height = img.naturalHeight;
         if (!width || !height) {
-          reject(new Error('这张图打不开'));
+          reject(new Error(t('todos.imageFail')));
           return;
         }
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          reject(new Error('这张图打不开'));
+          reject(new Error(t('todos.imageFail')));
           return;
         }
         let dataUrl = '';
@@ -208,7 +209,7 @@ export const TodosPage = (() => {
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
-        reject(new Error('这张图打不开'));
+        reject(new Error(t('todos.imageFail')));
       };
       img.src = url;
     });
@@ -222,7 +223,7 @@ export const TodosPage = (() => {
     try {
       showPendingImage(await fileToPng(file));
     } catch (err) {
-      setError(err.message || '这张图打不开');
+      setError(err.message || t('todos.imageFail'));
     }
   }
 
@@ -241,7 +242,7 @@ export const TodosPage = (() => {
       clearPendingImage();
       await load();
     } catch (err) {
-      setError(err.message || '没有记上');
+      setError(err.message || t('todos.notSaved'));
     } finally {
       saving = false;
     }
@@ -252,7 +253,7 @@ export const TodosPage = (() => {
       await api('POST', `/api/todos/${encodeURIComponent(id)}/done`, { done });
       await load();
     } catch (err) {
-      setError(err.message || '没有改成');
+      setError(err.message || t('todos.notUpdated'));
       await load();
     }
   }
@@ -263,7 +264,7 @@ export const TodosPage = (() => {
       closeLightbox();
       await load();
     } catch (err) {
-      setError(err.message || '没有删掉');
+      setError(err.message || t('todos.notDeleted'));
     }
   }
 
@@ -334,8 +335,8 @@ export const TodosPage = (() => {
       '<div class="tasks-root">' +
         '<header class="tasks-header">' +
           '<div class="tasks-header-text">' +
-            '<h1 class="tasks-title">任务</h1>' +
-            '<p class="tasks-hint">记一条，做完勾掉。桌面端按住 Ctrl 往下拖开轮盘，可以在原地记下，也能框一张图。</p>' +
+            '<h1 class="tasks-title">' + t('nav.tasks') + '</h1>' +
+            '<p class="tasks-hint">' + t('todos.hint') + '</p>' +
           '</div>' +
           tabs +
         '</header>' +
@@ -343,24 +344,24 @@ export const TodosPage = (() => {
           '<div class="todo-root">' +
             '<div class="todo-toolbar">' +
               '<form class="todo-compose">' +
-                '<input type="text" maxlength="500" placeholder="记一条，回车保存" aria-label="待办内容" autocomplete="off">' +
-                '<button type="button" class="btn-icon btn-icon-ghost" data-todo-pick title="附一张图" aria-label="附一张图">' + plus + '</button>' +
-                '<button type="submit" class="skills-btn skills-btn-primary">记下</button>' +
-                '<input type="file" class="todo-file" accept="image/*" hidden aria-label="选择图片">' +
+                '<input type="text" maxlength="500" placeholder="' + t('todos.placeholder') + '" aria-label="' + t('todos.content') + '" autocomplete="off">' +
+                '<button type="button" class="btn-icon btn-icon-ghost" data-todo-pick title="' + t('todos.attach') + '" aria-label="' + t('todos.attach') + '">' + plus + '</button>' +
+                '<button type="submit" class="skills-btn skills-btn-primary">' + t('todos.save') + '</button>' +
+                '<input type="file" class="todo-file" accept="image/*" hidden aria-label="' + t('todos.pickImage') + '">' +
               '</form>' +
-              '<span class="todo-count">0 条未完成</span>' +
+              '<span class="todo-count">' + t('todos.openCount', { n: 0 }) + '</span>' +
             '</div>' +
             '<div class="todo-compose-shot pending-image-item" hidden>' +
-              '<img class="pending-image-thumb" alt="待附上的图">' +
-              '<button type="button" class="pending-image-remove" data-todo-clear-shot title="移除图片" aria-label="移除图片">×</button>' +
+              '<img class="pending-image-thumb" alt="' + t('todos.pendingShot') + '">' +
+              '<button type="button" class="pending-image-remove" data-todo-clear-shot title="' + t('tasks.removeImage') + '" aria-label="' + t('tasks.removeImage') + '">×</button>' +
             '</div>' +
             '<p class="todo-error" hidden></p>' +
-            '<div class="todo-list-host"><div class="skills-empty">载入中…</div></div>' +
+            '<div class="todo-list-host"><div class="skills-empty">' + t('common.loadingPage') + '</div></div>' +
           '</div>' +
         '</section>' +
         '<div class="todo-lightbox" hidden>' +
-          '<button type="button" class="todo-lightbox-hit" data-todo-close aria-label="关闭截图"></button>' +
-          '<img alt="待办截图">' +
+          '<button type="button" class="todo-lightbox-hit" data-todo-close aria-label="' + t('todos.closeShot') + '"></button>' +
+          '<img alt="' + t('todos.shot') + '">' +
         '</div>' +
       '</div>';
     rootEl = parentEl.querySelector('.tasks-root');

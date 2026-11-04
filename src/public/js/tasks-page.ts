@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 任务页（#/tasks、移动端 mTasks）：页头页签 + 定时任务面板（ScheduledTasksPage）。
  */
@@ -15,8 +16,8 @@ export const TasksPage = (() => {
       '<div class="tasks-root">' +
         '<header class="tasks-header">' +
           '<div class="tasks-header-text">' +
-            '<h1 class="tasks-title">任务</h1>' +
-            '<p class="tasks-hint">定时任务按间隔把提示词连同引用的技能、图片和文件发送到各自的专属会话。</p>' +
+            '<h1 class="tasks-title">' + t('nav.tasks') + '</h1>' +
+            '<p class="tasks-hint">' + t('tasks.hint') + '</p>' +
           '</div>' +
           tabs +
         '</header>' +
@@ -26,7 +27,7 @@ export const TasksPage = (() => {
     if (window.TaskTabs) window.TaskTabs.bind(header);
     const body = parentEl.querySelector('.tasks-body');
     if (window.ScheduledTasksPage) window.ScheduledTasksPage.render(body);
-    else body.innerHTML = '<div class="skills-empty">任务模块加载失败</div>';
+    else body.innerHTML = '<div class="skills-empty">' + t('page.tasksModuleFailed') + '</div>';
   }
 
   function destroy() {

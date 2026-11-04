@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 「知识库」页签：技能、记忆、规则是三个独立路由（#/skills、#/memory、#/rules；移动端 mSkills、mMemory、mRules），
  * 由这里统一渲染页签、记住上次所在页签，并提供侧栏 / 底栏入口的跳转目标。
@@ -10,9 +11,9 @@ export const KnowledgeTabs = (() => {
 
   const STORAGE_KEY = 'ice-knowledge-tab';
   const TABS = [
-    { id: 'skills', label: '技能' },
-    { id: 'memory', label: '记忆' },
-    { id: 'rules', label: '规则' },
+    { id: 'skills', key: 'nav.skills' },
+    { id: 'memory', key: 'nav.memory' },
+    { id: 'rules', key: 'nav.rules' },
   ];
 
   const MOBILE_PAGES = { skills: 'mSkills', memory: 'mMemory', rules: 'mRules' };
@@ -53,10 +54,10 @@ export const KnowledgeTabs = (() => {
 
   function html(active, extraClass) {
     return (
-      `<div class="knowledge-tabs${extraClass ? ` ${extraClass}` : ''}" role="tablist" aria-label="知识库">` +
-      TABS.map((t) => {
-        const on = t.id === active;
-        return `<button type="button" class="knowledge-tab${on ? ' is-active' : ''}" role="tab" data-knowledge-tab="${t.id}" aria-selected="${on}">${t.label}</button>`;
+      `<div class="knowledge-tabs${extraClass ? ` ${extraClass}` : ''}" role="tablist" aria-label="${t('nav.knowledge')}">` +
+      TABS.map((tab) => {
+        const on = tab.id === active;
+        return `<button type="button" class="knowledge-tab${on ? ' is-active' : ''}" role="tab" data-knowledge-tab="${tab.id}" aria-selected="${on}">${t(tab.key)}</button>`;
       }).join('') +
       '</div>'
     );

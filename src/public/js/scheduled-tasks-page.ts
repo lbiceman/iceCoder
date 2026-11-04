@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t, intlLocale, getLocale } from './i18n.ts';
 /**
  * 定时任务面板（嵌在「任务」页 TasksPage 中）：
  * 列表、新建/编辑、启停、立即执行、删除、打开任务专属会话。
@@ -8,14 +9,26 @@
 
 export const ScheduledTasksPage = (() => {
 
-  const UNIT_LABELS = { second: '秒', minute: '分钟', hour: '小时', day: '天' };
   const UNITS = ['second', 'minute', 'hour', 'day'];
-  const SCHEDULE_KINDS = [['interval', '按间隔'], ['daily', '每天'], ['weekly', '每周'], ['monthly', '每月']];
-  const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const SCHEDULE_KIND_KEYS = { interval: 'tasks.interval', daily: 'tasks.daily', weekly: 'tasks.weekly', monthly: 'tasks.monthly' };
+  const WEEKDAY_KEYS = ['tasks.sun', 'tasks.mon', 'tasks.tue', 'tasks.wed', 'tasks.thu', 'tasks.fri', 'tasks.sat'];
   /** 表单里周一在前。 */
   const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
-  const STATUS_LABELS = { idle: '未执行', queued: '执行中', success: '成功', error: '失败' };
-  const NO_SESSION_HINT = '该任务还没有会话，执行时会自动创建';
+  const STATUS_KEYS = { idle: 'tasks.neverRun', queued: 'tasks.running', success: 'tasks.success', error: 'tasks.failure' };
+
+  const UNIT_KEYS = { second: 'tasks.seconds', minute: 'tasks.minutes', hour: 'tasks.hours', day: 'tasks.days' };
+
+  function weekdayLabel(day) {
+    return t(WEEKDAY_KEYS[day] || 'tasks.sun');
+  }
+
+  function unitLabel(unit) {
+    return t(UNIT_KEYS[unit] || 'tasks.hours');
+  }
+
+  function joinList(parts) {
+    return parts.filter(Boolean).join(getLocale() === 'en' ? ', ' : '、');
+  }
   const POLL_MS = 5000;
 
   let containerEl = null;
@@ -34,7 +47,7 @@ export const ScheduledTasksPage = (() => {
     if (!ms) return '—';
     const d = new Date(ms);
     if (isNaN(d.getTime())) return '—';
-    return d.toLocaleString('zh-CN', {
+    return d.toLocaleString(intlLocale(), {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -48,28 +61,33 @@ export const ScheduledTasksPage = (() => {
   }
 
   function monthDaysLabel(days) {
-    return days.map((d) => `${d} 日`).join('、');
+    return joinList((days || []).map((d) => t('tasks.dayOfMonth', { n: d })));
   }
 
   function formatSchedule(task) {
+    const time = task.timeOfDay;
     if (task.scheduleKind === 'monthly') {
       const days = monthDaysLabel(task.monthDays || []);
-      return task.once ? `下一个 ${days} ${task.timeOfDay} 执行一次` : `每月 ${days} ${task.timeOfDay}`;
+      return task.once
+        ? t('tasks.nextMonthlyOnce', { days, time })
+        : t('tasks.monthlyAt', { days, time });
     }
     if (isClockKind(task.scheduleKind)) {
       const days = task.scheduleKind === 'daily'
-        ? '天'
-        : (task.weekdays || []).map((d) => WEEKDAY_LABELS[d]).join('、');
-      if (task.once) return `下一个${task.scheduleKind === 'daily' ? '' : days} ${task.timeOfDay} 执行一次`;
-      return `每${days} ${task.timeOfDay}`;
+        ? t('tasks.dayWord')
+        : joinList((task.weekdays || []).map(weekdayLabel));
+      if (task.once) {
+        return t('tasks.nextClockOnce', { days: task.scheduleKind === 'daily' ? '' : days, time });
+      }
+      return t('tasks.everyClock', { days, time });
     }
-    const span = `${task.intervalValue} ${UNIT_LABELS[task.intervalUnit] || task.intervalUnit}`;
-    return task.once ? `${span}后执行一次` : `每 ${span}`;
+    const span = t('tasks.span', { n: task.intervalValue, unit: task.intervalUnit });
+    return task.once ? t('tasks.afterSpan', { span }) : t('tasks.everySpan', { span });
   }
 
   function scheduleLabel(task) {
-    if (task.once) return '执行';
-    return isClockKind(task.scheduleKind) ? '计划' : '间隔';
+    if (task.once) return t('tasks.runWord');
+    return isClockKind(task.scheduleKind) ? t('tasks.planWord') : t('tasks.gapWord');
   }
 
   async function api(method, url, body) {
@@ -81,13 +99,13 @@ export const ScheduledTasksPage = (() => {
     let data = null;
     try { data = await res.json(); } catch (_e) { /* 非 JSON 响应 */ }
     if (!res.ok || !data || !data.success) {
-      throw new Error((data && data.error) || `请求失败（${res.status}）`);
+      throw new Error((data && data.error) || t('tasks.requestFailed', { status: res.status }));
     }
     return data;
   }
 
   function notifyError(prefix, err) {
-    if (window.Notification) Notification.error(`${prefix}：${(err && err.message) || '未知错误'}`);
+    if (window.Notification) Notification.error(t('tasks.prefixedError', { prefix, message: (err && err.message) || t('common.unknownError') }));
   }
 
   function renderTaskCard(task) {
@@ -95,7 +113,7 @@ export const ScheduledTasksPage = (() => {
     const imageCount = (task.images || []).length;
     const skills = (task.skillFilenames || [])
       .map((f) => `<span class="sched-chip">#${escapeHtml(f)}</span>`)
-      .concat(imageCount ? [`<span class="sched-chip is-attachment">图片 ×${imageCount}</span>`] : [])
+      .concat(imageCount ? [`<span class="sched-chip is-attachment">${t('tasks.images', { n: imageCount })}</span>`] : [])
       .concat((task.files || []).map((f) =>
         `<span class="sched-chip is-attachment" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>`))
       .join('');
@@ -104,28 +122,28 @@ export const ScheduledTasksPage = (() => {
       `<article class="sched-card${task.enabled ? '' : ' is-disabled'}" data-task-id="${escapeHtml(task.id)}">` +
         '<div class="sched-card-head">' +
           `<span class="sched-card-name">${escapeHtml(task.name)}</span>` +
-          (task.once ? '<span class="sched-badge is-once">一次性</span>' : '') +
-          `<span class="sched-status sched-status-${escapeHtml(status)}">${escapeHtml(STATUS_LABELS[status] || status)}</span>` +
-          `<span class="sched-badge${task.enabled ? ' is-on' : ''}">${task.enabled ? '已启用' : '已停用'}</span>` +
+          (task.once ? '<span class="sched-badge is-once">' + t('tasks.once') + '</span>' : '') +
+          `<span class="sched-status sched-status-${escapeHtml(status)}">${escapeHtml(t(STATUS_KEYS[status] || '') || status)}</span>` +
+          `<span class="sched-badge${task.enabled ? ' is-on' : ''}">${task.enabled ? t('tasks.enabled') : t('common.off')}</span>` +
         '</div>' +
         `<p class="sched-card-prompt">${escapeHtml(task.prompt)}</p>` +
         (skills ? `<div class="sched-chips">${skills}</div>` : '') +
         '<dl class="sched-meta">' +
           `<div><dt>${scheduleLabel(task)}</dt><dd>${escapeHtml(formatSchedule(task))}</dd></div>` +
-          `<div><dt>下次执行</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}</dd></div>` +
-          `<div><dt>上次执行</dt><dd>${escapeHtml(formatTime(task.lastRunAt))}</dd></div>` +
+          `<div><dt>${t('tasks.next')}</dt><dd>${task.enabled ? escapeHtml(formatTime(task.nextRunAt)) : '—'}</dd></div>` +
+          `<div><dt>${t('tasks.last')}</dt><dd>${escapeHtml(formatTime(task.lastRunAt))}</dd></div>` +
         '</dl>' +
         (status === 'error' && task.lastError
           ? `<div class="sched-error">${escapeHtml(task.lastError)}</div>`
           : '') +
         '<div class="sched-actions">' +
-          `<button type="button" class="skills-btn skills-btn-primary" data-action="run"${busy ? ' disabled' : ''}>立即执行</button>` +
-          `<button type="button" class="skills-btn" data-action="toggle"${busy ? ' disabled' : ''}>${task.enabled ? '停用' : '启用'}</button>` +
-          '<button type="button" class="skills-btn" data-action="edit">编辑</button>' +
+          `<button type="button" class="skills-btn skills-btn-primary" data-action="run"${busy ? ' disabled' : ''}>${t('tasks.runNow')}</button>` +
+          `<button type="button" class="skills-btn" data-action="toggle"${busy ? ' disabled' : ''}>${task.enabled ? t('tasks.disable') : t('tasks.enable')}</button>` +
+          '<button type="button" class="skills-btn" data-action="edit">' + t('common.edit') + '</button>' +
           (task.sessionId
-            ? '<button type="button" class="skills-btn" data-action="open-session">打开会话</button>'
-            : `<button type="button" class="skills-btn" data-action="open-session" disabled title="${NO_SESSION_HINT}">打开会话</button>`) +
-          `<button type="button" class="skills-btn skills-btn-danger" data-action="delete"${busy ? ' disabled' : ''}>删除</button>` +
+            ? '<button type="button" class="skills-btn" data-action="open-session">' + t('tasks.openSession') + '</button>'
+            : `<button type="button" class="skills-btn" data-action="open-session" disabled title="${escapeHtml(t('tasks.noSession'))}">${t('tasks.openSession')}</button>`) +
+          `<button type="button" class="skills-btn skills-btn-danger" data-action="delete"${busy ? ' disabled' : ''}>${t('common.delete')}</button>` +
         '</div>' +
       '</article>'
     );
@@ -137,12 +155,12 @@ export const ScheduledTasksPage = (() => {
     const countEl = containerEl.querySelector('.sched-count');
     if (countEl) {
       const enabled = tasks.filter((t) => t.enabled).length;
-      countEl.textContent = `${tasks.length} 个任务 · ${enabled} 个启用`;
+      countEl.textContent = t('tasks.count', { total: tasks.length, enabled });
     }
     if (!listEl) return;
     if (!tasks.length) {
       listEl.innerHTML =
-        '<div class="skills-empty">暂无定时任务。点击「新建任务」，设定提示词与执行计划（按间隔，或每天 / 每周 / 每月的固定时刻）。</div>';
+        '<div class="skills-empty">' + t('tasks.empty') + '</div>';
       return;
     }
     listEl.innerHTML = tasks.map(renderTaskCard).join('');
@@ -155,7 +173,7 @@ export const ScheduledTasksPage = (() => {
     return fetch('/api/scheduled-tasks', { signal: fetchAbort.signal })
       .then((res) => res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载失败');
+        if (!body.success) throw new Error(body.error || t('common.loadFailed'));
         tasks = body.tasks || [];
         renderList();
       })
@@ -163,7 +181,7 @@ export const ScheduledTasksPage = (() => {
         if (err && err.name === 'AbortError') return;
         const listEl = containerEl && containerEl.querySelector('.sched-list');
         if (listEl) {
-          listEl.innerHTML = `<div class="skills-empty">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+          listEl.innerHTML = `<div class="skills-empty">${escapeHtml(t('skills.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
         }
       });
   }
@@ -191,9 +209,9 @@ export const ScheduledTasksPage = (() => {
       try {
         const data = await api('POST', `/api/scheduled-tasks/${encodeURIComponent(task.id)}/run`);
         replaceTask(data.task);
-        if (window.Notification) Notification.success(`已触发「${task.name}」`);
+        if (window.Notification) Notification.success(t('tasks.triggered', { name: task.name }));
       } catch (err) {
-        notifyError('执行失败', err);
+        notifyError(t('tasks.runFailed'), err);
         await reload();
       }
     });
@@ -207,18 +225,18 @@ export const ScheduledTasksPage = (() => {
         });
         replaceTask(data.task);
       } catch (err) {
-        notifyError('切换失败', err);
+        notifyError(t('tasks.toggleFailed'), err);
       }
     });
   }
 
   function deleteTask(task) {
     window.Modal.confirm({
-      title: '删除定时任务',
-      message: `确定删除「${task.name}」？任务的历史会话会保留在会话列表中。`,
+      title: t('tasks.deleteTitle'),
+      message: t('tasks.deleteBody', { name: task.name }),
       type: 'danger',
-      confirmText: '删除',
-      cancelText: '取消',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     }).then((ok) => {
       if (!ok) return;
@@ -226,9 +244,9 @@ export const ScheduledTasksPage = (() => {
         try {
           await api('DELETE', `/api/scheduled-tasks/${encodeURIComponent(task.id)}`);
           tasks = tasks.filter((t) => t.id !== task.id);
-          if (window.Notification) Notification.success('任务已删除');
+          if (window.Notification) Notification.success(t('tasks.deleted'));
         } catch (err) {
-          notifyError('删除失败', err);
+          notifyError(t('common.deleteFailed'), err);
         }
       });
     });
@@ -243,12 +261,12 @@ export const ScheduledTasksPage = (() => {
       const data = await api('POST', `/api/scheduled-tasks/${encodeURIComponent(task.id)}/session`);
       replaceTask(data.task);
       if (!data.sessionReady) {
-        if (window.Notification) Notification.info(NO_SESSION_HINT);
+        if (window.Notification) Notification.info(t('tasks.noSession'));
         return;
       }
       sessionId = data.task.sessionId;
     } catch (err) {
-      notifyError('打开会话失败', err);
+      notifyError(t('tasks.openFailed'), err);
       return;
     }
     const go = () => {
@@ -291,21 +309,24 @@ export const ScheduledTasksPage = (() => {
     return fetch('/api/chat/upload', { method: 'POST', body: formData })
       .then((res) => res.json())
       .then((data) => {
-        if (!data || data.error || !data.fileId) throw new Error((data && data.error) || '上传失败');
+        if (!data || data.error || !data.fileId) throw new Error((data && data.error) || t('tasks.uploadFailed'));
         return data;
       });
   }
 
   /** 与后端行为对应：chat-ws-confirm 无人值守自动通过、SCHEDULED_TASK_SESSION_MAX_BYTES 会话轮换。 */
-  const UNATTENDED_NOTICE_HTML =
-    '<div class="sched-notice" role="note">' +
-      '<strong>请注意</strong>' +
-      '<ul>' +
-        '<li>定时执行无人值守：所有工具确认（包括删除文件、高危命令）都会<b>自动通过</b>，请只给任务写你放心让它自动执行的提示词。</li>' +
-        '<li>任务会话记录超过 20 MB 时，下次执行前会自动新建一个会话继续执行（新会话不带旧对话历史）；旧会话保留不删除，可在会话列表中自行清理。</li>' +
-        '<li>专属会话只在执行时创建：新建任务不会产生会话，首次执行时才创建；删除专属会话也不影响任务本身，仍按计划执行，下次执行时会自动新建一个会话。</li>' +
-      '</ul>' +
-    '</div>';
+  function unattendedNoticeHtml() {
+    return (
+      '<div class="sched-notice" role="note">' +
+        '<strong>' + t('tasks.caution') + '</strong>' +
+        '<ul>' +
+          '<li>' + t('tasks.caution1') + '</li>' +
+          '<li>' + t('tasks.caution2') + '</li>' +
+          '<li>' + t('tasks.caution3') + '</li>' +
+        '</ul>' +
+      '</div>'
+    );
+  }
 
   /** 光标前的 @ 或 #（与主输入框的技能触发一致）打开技能下拉。 */
   const SKILL_TRIGGER_RE = /[@#]([^\s@#]*)$/;
@@ -332,9 +353,9 @@ export const ScheduledTasksPage = (() => {
     function renderSkills() {
       chipBar.innerHTML = selectedSkills.map((fn, i) => {
         const missing = !known.has(fn);
-        return `<span class="skill-chip${missing ? ' is-missing' : ''}" data-index="${i}"${missing ? ' title="技能已不存在，执行时跳过"' : ''}>` +
+        return `<span class="skill-chip${missing ? ' is-missing' : ''}" data-index="${i}"${missing ? ' title="' + escapeHtml(t('tasks.missingSkill')) + '"' : ''}>` +
           `<span class="skill-chip-label">#${escapeHtml(fn)}</span>` +
-          `<button type="button" class="skill-chip-remove" aria-label="移除技能 ${escapeHtml(fn)}">×</button>` +
+          `<button type="button" class="skill-chip-remove" aria-label="${escapeHtml(t('tasks.removeSkill', { name: fn }))}">×</button>` +
         '</span>';
       }).join('');
       chipBar.classList.toggle('hidden', !selectedSkills.length);
@@ -343,19 +364,19 @@ export const ScheduledTasksPage = (() => {
     function renderImages() {
       imageBar.innerHTML = images.map((img, i) =>
         `<div class="pending-image-item${img.status === 'failed' || img.status === 'missing' ? ' is-failed' : ''}${img.status === 'uploading' ? ' is-uploading' : ''}" data-index="${i}"` +
-          `${img.status === 'missing' ? ' title="图片文件已不存在，执行时不会发送，请移除后重新上传"' : ''}>` +
-          `<img class="pending-image-thumb" src="${escapeHtml(img.preview)}" alt="任务图片">` +
-          `<button type="button" class="pending-image-remove" title="移除图片">×</button>` +
+          `${img.status === 'missing' ? ' title="' + escapeHtml(t('tasks.missingImage')) + '"' : ''}>` +
+          `<img class="pending-image-thumb" src="${escapeHtml(img.preview)}" alt="${escapeHtml(t('tasks.taskImage'))}">` +
+          `<button type="button" class="pending-image-remove" title="${escapeHtml(t('tasks.removeImage'))}">×</button>` +
         '</div>').join('');
       imageBar.classList.toggle('hidden', !images.length);
     }
 
     function renderFiles() {
       fileBar.innerHTML = files.map((f, i) => {
-        const suffix = f.status === 'uploading' ? '（上传中…）' : f.status === 'failed' ? '（上传失败）' : ` (${formatSize(f.size)})`;
+        const suffix = f.status === 'uploading' ? t('tasks.uploading') : f.status === 'failed' ? t('tasks.uploadError') : ` (${formatSize(f.size)})`;
         return `<div class="pending-file-item" data-index="${i}">` +
           `<span class="pending-file-name${f.status === 'failed' ? ' pending-file-failed' : ''}" title="${escapeHtml(f.name)}">${escapeHtml(f.name + suffix)}</span>` +
-          '<button type="button" class="pending-file-remove" title="移除文件">×</button>' +
+          '<button type="button" class="pending-file-remove" title="' + escapeHtml(t('tasks.removeFile')) + '">×</button>' +
         '</div>';
       }).join('');
       fileBar.classList.toggle('hidden', !files.length);
@@ -543,8 +564,8 @@ export const ScheduledTasksPage = (() => {
     return {
       validate() {
         const all = images.concat(files);
-        if (all.some((a) => a.status === 'uploading')) return '附件还在上传，请稍候';
-        if (all.some((a) => a.status === 'failed')) return '有附件上传失败，请移除后重试';
+        if (all.some((a) => a.status === 'uploading')) return t('tasks.waitUpload');
+        if (all.some((a) => a.status === 'failed')) return t('tasks.uploadRetry');
         return null;
       },
       getPayload() {
@@ -561,37 +582,26 @@ export const ScheduledTasksPage = (() => {
     };
   }
 
-  const MODE_TEXT = {
-    repeat: {
-      label: '执行间隔',
-      hint: '新建、修改间隔或重新启用后，满一个间隔首次执行；只改其他内容不影响下次执行时间。服务停机期间错过的执行会直接跳过。',
-    },
-    once: {
-      label: '执行时间',
-      hint: '新建、修改时长或重新启用后，等满设定时长执行一次，执行后自动停用；只改其他内容不影响执行时间。服务停机错过执行时间会直接停用。',
-    },
-  };
-
-  const CLOCK_MODE_TEXT = {
-    repeat: {
-      label: '执行时刻',
-      hint: '按运行 iceCoder 的这台机器的本地时间执行；新建、修改计划或重新启用后，从下一个匹配时刻开始。服务停机期间错过的执行会直接跳过。',
-    },
-    once: {
-      label: '执行时刻',
-      hint: '在下一个匹配时刻执行一次，执行后自动停用；只改其他内容不影响计划。服务停机错过执行时间会直接停用。',
-    },
-  };
-
-  const MONTH_END_HINT = '当月没有所选日期时（如 2 月的 30、31 日）在当月最后一天执行。';
+  function scheduleFieldText(clock, once) {
+    if (clock) {
+      return {
+        label: t('tasks.clockTitle'),
+        hint: once ? t('tasks.clockOnceHint') : t('tasks.clockHint'),
+      };
+    }
+    return {
+      label: once ? t('tasks.durationTitle') : t('tasks.intervalTitle'),
+      hint: once ? t('tasks.durationHint') : t('tasks.intervalHint'),
+    };
+  }
 
   function applyScheduleUi(form) {
     const once = form.elements.mode.value === 'once';
     const kind = form.elements.scheduleKind.value;
     const clock = isClockKind(kind);
-    const text = (clock ? CLOCK_MODE_TEXT : MODE_TEXT)[once ? 'once' : 'repeat'];
+    const text = scheduleFieldText(clock, once);
     form.querySelector('.sched-interval-label').textContent = text.label;
-    form.querySelector('.sched-interval-hint').textContent = kind === 'monthly' ? `${text.hint}${MONTH_END_HINT}` : text.hint;
+    form.querySelector('.sched-interval-hint').textContent = kind === 'monthly' ? `${text.hint} ${t('tasks.monthEndHint')}` : text.hint;
     form.querySelector('.sched-interval-every').hidden = clock;
     form.querySelector('.sched-clock').hidden = !clock;
     form.querySelector('.sched-weekday-select').hidden = kind !== 'weekly';
@@ -606,7 +616,7 @@ export const ScheduledTasksPage = (() => {
     const monthDays = (task && task.monthDays && task.monthDays.length) ? task.monthDays : [1];
     // AI 可以建多天的每周 / 每月任务；下拉只能单选，多天组合单独列一项，保存时不丢。
     const multiDay = weekdays.length > 1
-      ? [{ value: weekdays.join(','), label: weekdays.map((d) => WEEKDAY_LABELS[d]).join('、') }]
+      ? [{ value: weekdays.join(','), label: joinList(weekdays.map(weekdayLabel)) }]
       : [];
     const multiMonthDay = monthDays.length > 1
       ? [{ value: monthDays.join(','), label: monthDaysLabel(monthDays) }]
@@ -619,15 +629,15 @@ export const ScheduledTasksPage = (() => {
       minute: { value: minute, options: range(60) },
       intervalUnit: {
         value: (task && task.intervalUnit) || 'hour',
-        options: UNITS.map((u) => ({ value: u, label: UNIT_LABELS[u] })),
+        options: UNITS.map((u) => ({ value: u, label: unitLabel(u) })),
       },
       weekdays: {
         value: weekdays.join(','),
-        options: multiDay.concat(WEEKDAY_ORDER.map((d) => ({ value: String(d), label: WEEKDAY_LABELS[d] }))),
+        options: multiDay.concat(WEEKDAY_ORDER.map((d) => ({ value: String(d), label: weekdayLabel(d) }))),
       },
       monthDays: {
         value: monthDays.join(','),
-        options: multiMonthDay.concat(Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: `${i + 1} 日` }))),
+        options: multiMonthDay.concat(Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: t('tasks.dayOfMonth', { n: i + 1 }) }))),
       },
     };
   }
@@ -685,62 +695,62 @@ export const ScheduledTasksPage = (() => {
     const once = !!(task && task.once);
     const kind = (task && task.scheduleKind) || 'interval';
     const selects = scheduleSelects(task);
-    const kindOptions = SCHEDULE_KINDS
-      .map(([value, label]) =>
-        `<label class="sched-mode-option"><input type="radio" name="scheduleKind" value="${value}"${value === kind ? ' checked' : ''}><span>${label}</span></label>`)
+    const kindOptions = ['interval', 'daily', 'weekly', 'monthly']
+      .map((value) =>
+        `<label class="sched-mode-option"><input type="radio" name="scheduleKind" value="${value}"${value === kind ? ' checked' : ''}><span>${t(SCHEDULE_KIND_KEYS[value])}</span></label>`)
       .join('');
     const plusIcon = window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+';
     return (
       '<form class="sched-form" novalidate>' +
-        '<label class="sched-field"><span class="sched-label">任务名称</span>' +
-          `<input class="sched-input" name="name" maxlength="80" required value="${escapeHtml((task && task.name) || '')}" placeholder="例如：每日检查依赖更新"></label>` +
-        '<div class="sched-field"><span class="sched-label">提示词</span>' +
+        '<label class="sched-field"><span class="sched-label">' + t('tasks.name') + '</span>' +
+          `<input class="sched-input" name="name" maxlength="80" required value="${escapeHtml((task && task.name) || '')}" placeholder="${escapeHtml(t('tasks.namePh'))}"></label>` +
+        '<div class="sched-field"><span class="sched-label">' + t('tasks.prompt') + '</span>' +
           '<div class="sched-composer">' +
             '<div class="pending-images-preview sched-composer-images hidden"></div>' +
             '<div class="file-upload-status sched-composer-files hidden"></div>' +
-            '<div class="skill-chips-bar sched-composer-skills hidden" role="listbox" aria-label="已选技能"></div>' +
-            `<textarea class="sched-composer-input" name="prompt" rows="5" required placeholder="到点后发送给 Agent 的内容（输入 @ 选用技能，可粘贴或拖入图片、文件）">${escapeHtml((task && task.prompt) || '')}</textarea>` +
+            '<div class="skill-chips-bar sched-composer-skills hidden" role="listbox" aria-label="' + escapeHtml(t('tasks.pickedSkills')) + '"></div>' +
+            `<textarea class="sched-composer-input" name="prompt" rows="5" required placeholder="${escapeHtml(t('tasks.promptPh'))}">${escapeHtml((task && task.prompt) || '')}</textarea>` +
             '<div class="sched-composer-toolbar">' +
               '<div class="composer-file-btn">' +
-                '<input type="file" class="composer-file-input sched-composer-file-input" multiple title="添加图片或文件" aria-label="添加图片或文件">' +
+                '<input type="file" class="composer-file-input sched-composer-file-input" multiple title="' + escapeHtml(t('tasks.attach')) + '" aria-label="' + escapeHtml(t('tasks.attach')) + '">' +
                 `<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">${plusIcon}</span>` +
               '</div>' +
-              '<span class="sched-hint">添加图片或文件</span>' +
+              '<span class="sched-hint">' + t('tasks.attach') + '</span>' +
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="sched-field"><span class="sched-label">执行方式</span>' +
-          '<div class="sched-mode" role="radiogroup" aria-label="执行方式">' +
-            `<label class="sched-mode-option"><input type="radio" name="mode" value="repeat"${once ? '' : ' checked'}><span>重复执行</span></label>` +
-            `<label class="sched-mode-option"><input type="radio" name="mode" value="once"${once ? ' checked' : ''}><span>一次性</span></label>` +
+        '<div class="sched-field"><span class="sched-label">' + t('tasks.mode') + '</span>' +
+          '<div class="sched-mode" role="radiogroup" aria-label="' + escapeHtml(t('tasks.mode')) + '">' +
+            `<label class="sched-mode-option"><input type="radio" name="mode" value="repeat"${once ? '' : ' checked'}><span>${t('tasks.repeat')}</span></label>` +
+            `<label class="sched-mode-option"><input type="radio" name="mode" value="once"${once ? ' checked' : ''}><span>${t('tasks.onceMode')}</span></label>` +
           '</div>' +
         '</div>' +
-        '<div class="sched-field"><span class="sched-label">执行计划</span>' +
-          `<div class="sched-mode" role="radiogroup" aria-label="执行计划">${kindOptions}</div>` +
+        '<div class="sched-field"><span class="sched-label">' + t('tasks.schedule') + '</span>' +
+          `<div class="sched-mode" role="radiogroup" aria-label="${escapeHtml(t('tasks.schedule'))}">${kindOptions}</div>` +
         '</div>' +
         '<div class="sched-field"><span class="sched-label sched-interval-label"></span>' +
           '<div class="sched-interval sched-interval-every">' +
-            '<span class="sched-interval-prefix">每</span>' +
+            '<span class="sched-interval-prefix">' + t('tasks.every') + '</span>' +
             `<input class="sched-input sched-interval-value" name="intervalValue" type="number" min="1" step="1" value="${escapeHtml((task && task.intervalValue) || 1)}">` +
-            selectHtml('intervalUnit', selects.intervalUnit, 'sched-interval-unit', '间隔单位') +
-            '<span class="sched-interval-suffix">后执行</span>' +
+            selectHtml('intervalUnit', selects.intervalUnit, 'sched-interval-unit', t('tasks.unitAria')) +
+            '<span class="sched-interval-suffix">' + t('tasks.thenRun') + '</span>' +
           '</div>' +
           '<div class="sched-interval sched-clock">' +
-            selectHtml('weekdays', selects.weekdays, 'sched-weekday-select', '星期') +
-            selectHtml('monthDays', selects.monthDays, 'sched-monthday-select', '日期') +
-            selectHtml('hour', selects.hour, 'sched-time-select', '时') +
+            selectHtml('weekdays', selects.weekdays, 'sched-weekday-select', t('tasks.weekday')) +
+            selectHtml('monthDays', selects.monthDays, 'sched-monthday-select', t('tasks.monthday')) +
+            selectHtml('hour', selects.hour, 'sched-time-select', t('tasks.hour')) +
             '<span>:</span>' +
-            selectHtml('minute', selects.minute, 'sched-time-select', '分') +
-            '<span class="sched-hint">24 点请选 00:00</span>' +
+            selectHtml('minute', selects.minute, 'sched-time-select', t('tasks.minute')) +
+            '<span class="sched-hint">' + t('tasks.midnightHint') + '</span>' +
           '</div>' +
           '<span class="sched-hint sched-interval-hint"></span>' +
         '</div>' +
         (task ? '' :
-          '<label class="sched-check"><input type="checkbox" name="enabled" checked><span>创建后立即启用</span></label>') +
+          '<label class="sched-check"><input type="checkbox" name="enabled" checked><span>' + t('tasks.enableOnCreate') + '</span></label>') +
         '<div class="sched-form-error" hidden></div>' +
         '<div class="sched-form-actions">' +
-          '<button type="button" class="skills-btn" data-form-action="cancel">取消</button>' +
-          `<button type="submit" class="skills-btn skills-btn-primary">${task ? '保存' : '创建'}</button>` +
+          '<button type="button" class="skills-btn" data-form-action="cancel">' + t('common.cancel') + '</button>' +
+          `<button type="submit" class="skills-btn skills-btn-primary">${task ? t('common.save') : t('common.create')}</button>` +
         '</div>' +
       '</form>'
     );
@@ -750,8 +760,8 @@ export const ScheduledTasksPage = (() => {
     const name = form.elements.name.value.trim();
     const prompt = form.elements.prompt.value.trim();
     const scheduleKind = form.elements.scheduleKind.value;
-    if (!name) return { error: '请填写任务名称' };
-    if (!prompt) return { error: '请填写提示词' };
+    if (!name) return { error: t('tasks.nameRequired') };
+    if (!prompt) return { error: t('tasks.promptRequired') };
     const schedule = { scheduleKind };
     if (isClockKind(scheduleKind)) {
       schedule.timeOfDay = `${form.elements.hour.value}:${form.elements.minute.value}`;
@@ -764,7 +774,7 @@ export const ScheduledTasksPage = (() => {
     } else {
       schedule.intervalValue = Number(form.elements.intervalValue.value);
       schedule.intervalUnit = form.elements.intervalUnit.value;
-      if (!Number.isInteger(schedule.intervalValue) || schedule.intervalValue <= 0) return { error: '执行间隔必须是正整数' };
+      if (!Number.isInteger(schedule.intervalValue) || schedule.intervalValue <= 0) return { error: t('tasks.intervalInvalid') };
     }
     const attachError = composer.validate();
     if (attachError) return { error: attachError };
@@ -777,8 +787,8 @@ export const ScheduledTasksPage = (() => {
   async function openForm(task) {
     const skills = await fetchSkillOptions();
     const panel = window.Modal.panel({
-      title: task ? '编辑定时任务' : '新建定时任务',
-      description: '到点后把提示词连同引用的技能、图片和文件发送到该任务的专属会话。',
+      title: task ? t('tasks.editTitle') : t('tasks.newTitle'),
+      description: t('tasks.formLead'),
       bodyHtml: buildFormHtml(task),
     });
     if (window.AppIcon && typeof window.AppIcon.hydrate === 'function') window.AppIcon.hydrate(panel.body);
@@ -815,9 +825,9 @@ export const ScheduledTasksPage = (() => {
           : await api('POST', '/api/scheduled-tasks', payload);
         replaceTask(data.task);
         panel.close();
-        if (window.Notification) Notification.success(task ? '任务已保存' : '任务已创建');
+        if (window.Notification) Notification.success(task ? t('tasks.saved') : t('tasks.created'));
       } catch (err) {
-        errorEl.textContent = err.message || '保存失败';
+        errorEl.textContent = err.message || t('common.saveFailed');
         errorEl.hidden = false;
       } finally {
         submitBtn.disabled = false;
@@ -859,10 +869,10 @@ export const ScheduledTasksPage = (() => {
     parentEl.innerHTML =
       '<div class="sched-root">' +
         '<div class="sched-toolbar">' +
-          '<span class="sched-count skills-count">载入中…</span>' +
-          '<button type="button" class="skills-btn skills-btn-primary" data-sched-create>新建任务</button>' +
+          '<span class="sched-count skills-count">' + t('common.loadingPage') + '</span>' +
+          '<button type="button" class="skills-btn skills-btn-primary" data-sched-create>' + t('tasks.new') + '</button>' +
         '</div>' +
-        UNATTENDED_NOTICE_HTML +
+        unattendedNoticeHtml() +
         '<div class="sched-list"></div>' +
       '</div>';
     parentEl.querySelector('[data-sched-create]').addEventListener('click', () => openForm(null));

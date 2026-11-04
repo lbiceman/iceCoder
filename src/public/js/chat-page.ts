@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 聊天页面主模块（重构后）
  * 职责：DOM 渲染、事件绑定、模块协调
@@ -843,8 +844,8 @@ export const ChatPage = (() => {
   let elShellCollabIndicator = null;
   let elShellModeChipBar = null;
   let elPlanModeChipBar = null;
-  const DEFAULT_COMPOSER_PLACEHOLDER = '输入消息… (输入 # 选用技能，@ 引用文件)';
-  const PLAN_MODE_COMPOSER_PLACEHOLDER = '规划模式：描述任务，完善文档（不能改代码）…';
+  function defaultComposerPlaceholder() { return t('chat.placeholder'); }
+  function planComposerPlaceholder() { return t('chat.planPlaceholder'); }
 
   function getShellCollabStore() {
     return window.ChatSessionStore || null;
@@ -881,7 +882,7 @@ export const ChatPage = (() => {
       elPlanModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
     }
     if (elInput) {
-      elInput.placeholder = active ? PLAN_MODE_COMPOSER_PLACEHOLDER : DEFAULT_COMPOSER_PLACEHOLDER;
+      elInput.placeholder = active ? planComposerPlaceholder() : defaultComposerPlaceholder();
     }
   }
 
@@ -2445,14 +2446,14 @@ export const ChatPage = (() => {
     container.innerHTML =
       '<div class="chat-page">' +
         '<div class="chat-main">' +
-        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="规划模式">' +
+        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="' + t('chat.planMode') + '">' +
           '<span class="plan-mode-chip">' +
             '<span class="plan-mode-chip-label">Plan</span>' +
-            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>' +
+            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="' + t('chat.exitPlan') + '" aria-label="' + t('chat.exitPlan') + '">×</button>' +
           '</span>' +
         '</div>' +
-        '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="Shell 协作模式">' +
-          '<span class="shell-mode-chip" title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话">' +
+        '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="' + t('session.shellMode') + '">' +
+          '<span class="shell-mode-chip" title="' + t('chat.shellTitle') + '">' +
             '<span class="shell-mode-chip-label">Shell</span>' +
           '</span>' +
         '</div>' +
@@ -2460,10 +2461,10 @@ export const ChatPage = (() => {
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
           '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
-          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '，拖动移动；双击展开执行透明层" title="' +
-          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '：拖动移动；双击展开执行透明层"></canvas>' +
+          t('chat.petCanvas', { name: window.SESSION_PET_DISPLAY_NAME || t('pet.name') }) +
+          '" title="' +
+          t('chat.petTitle', { name: window.SESSION_PET_DISPLAY_NAME || t('pet.name') }) +
+          '"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
@@ -2474,47 +2475,47 @@ export const ChatPage = (() => {
           '<div class="chat-composer">' +
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
-                '<div id="skill-chips-bar" class="skill-chips-bar hidden" role="listbox" aria-label="已选技能"></div>' +
-                '<div id="file-ref-chips-bar" class="file-ref-chips-bar hidden" role="listbox" aria-label="已引用文件"></div>' +
-                '<textarea id="chat-input" rows="2" placeholder="输入消息… (输入 # 选用技能，@ 引用文件)"></textarea>' +
+                '<div id="skill-chips-bar" class="skill-chips-bar hidden" role="listbox" aria-label="' + t('chat.skillsPicked') + '"></div>' +
+                '<div id="file-ref-chips-bar" class="file-ref-chips-bar hidden" role="listbox" aria-label="' + t('chat.filesPicked') + '"></div>' +
+                '<textarea id="chat-input" rows="2" placeholder="' + t('chat.placeholder') + '"></textarea>' +
               '</div>' +
             '</div>' +
             '<div class="composer-toolbar">' +
               '<div class="composer-toolbar-start">' +
                 '<div class="composer-file-btn" id="btn-file">' +
-                  '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="上传文件" aria-label="上传文件">' +
+                  '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="' + t('chat.upload') + '" aria-label="' + t('chat.upload') + '">' +
                   '<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">' +
                     (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+') +
                   '</span>' +
                 '</div>' +
-                '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
-                  '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                '<button class="chip chip-select" id="chip-model" type="button" aria-label="' + t('chat.pickModel') + '" aria-haspopup="menu" aria-expanded="false">' +
+                  '<span class="chip-label" id="chip-model-label">' + t('common.loading') + '</span>' +
                   (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
                 '</button>' +
                 '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
-                  ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
+                  ' aria-label="' + t('chat.reasoning') + '" aria-valuemin="0" aria-valuemax="0"' +
                   ' aria-valuenow="0" tabindex="0">' +
                   '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
                   '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
                 '</div>' +
                 '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
-                + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
-                + 'aria-label="Shell 协作模式">'
+                + 'title="' + t('chat.shellTitle') + '" '
+                + 'aria-label="' + t('session.shellMode') + '">'
                 + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
-                + '<span class="shell-collab-label">Shell协作</span>'
+                + '<span class="shell-collab-label">' + t('chat.shellChip') + '</span>'
                 + '</span>' +
               '</div>' +
               '<div class="composer-toolbar-end">' +
                 '<div class="composer-workspace" id="composer-workspace">' +
-                  '<span class="composer-workspace-label">工作区</span>' +
+                  '<span class="composer-workspace-label">' + t('chat.workspace') + '</span>' +
                   '<span class="composer-workspace-text"></span>' +
                 '</div>' +
                 '<div class="cmd-palette-anchor">' +
-                  '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                  '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="' + t('chat.commands') + '" aria-label="' + t('chat.commands') + '">' +
                     (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
                   '</button>' +
                 '</div>' +
-                '<button class="btn-send" id="btn-send" type="button" title="发送" aria-label="Send">' +
+                '<button class="btn-send" id="btn-send" type="button" title="' + t('chat.send') + '" aria-label="' + t('chat.send') + '">' +
                   (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +

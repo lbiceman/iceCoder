@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../i18n.ts';
 /**
  * 移动端 H5 Shell：底栏导航、顶栏、会话抽屉挂载点。
  * 仅负责导航 chrome，不承载业务逻辑。
@@ -23,10 +24,10 @@ export const MobileShell = (() => {
 
   /** mKnowledge 是虚拟入口：点击打开上次的知识库页签（mSkills / mMemory / mRules） */
   const NAV_ITEMS = [
-    { page: 'work', label: '工作', path: '/m/chat', icon: 'work' },
-    { page: 'mTasks', label: '任务', path: '/m/tasks', icon: 'tasks' },
-    { page: 'mKnowledge', label: '知识库', path: '/m/skills', icon: 'knowledge' },
-    { page: 'mConfig', label: '设置', path: '/m/config', icon: 'settings' },
+    { page: 'work', labelKey: 'nav.work', path: '/m/chat', icon: 'work' },
+    { page: 'mTasks', labelKey: 'nav.tasks', path: '/m/tasks', icon: 'tasks' },
+    { page: 'mKnowledge', labelKey: 'nav.knowledge', path: '/m/skills', icon: 'knowledge' },
+    { page: 'mConfig', labelKey: 'nav.settings', path: '/m/config', icon: 'settings' },
   ];
 
   function navPageFor(page) {
@@ -38,7 +39,7 @@ export const MobileShell = (() => {
 
   function themeBtnHtml() {
     return (
-      `<button type="button" class="mobile-top-bar-theme-btn" data-current-theme="light" aria-label="切换主题">${ic('moon', 20, 'mobile-top-bar-theme-icon-dark')}${ic('sun', 20, 'mobile-top-bar-theme-icon-light')}</button>`
+      `<button type="button" class="mobile-top-bar-theme-btn" data-current-theme="light" aria-label="${t('theme.switch')}">${ic('moon', 20, 'mobile-top-bar-theme-icon-dark')}${ic('sun', 20, 'mobile-top-bar-theme-icon-light')}</button>`
     );
   }
 
@@ -63,7 +64,7 @@ export const MobileShell = (() => {
         '<div class="mobile-session-drawer-panel"></div>' +
       '</aside>' +
       '<main class="mobile-main"></main>' +
-      '<nav class="mobile-bottom-nav" role="tablist" aria-label="主导航"></nav>';
+      `<nav class="mobile-bottom-nav" role="tablist" aria-label="${t('nav.primary')}"></nav>`;
 
     app.appendChild(shellEl);
 
@@ -91,7 +92,7 @@ export const MobileShell = (() => {
   function buildBottomNav() {
     if (!bottomNavEl) return;
     bottomNavEl.innerHTML = NAV_ITEMS.map((item) => (
-      `<button type="button" class="mobile-bottom-nav-btn" data-page="${item.page}" data-path="${item.path}" role="tab" aria-selected="false"><span class="mobile-bottom-nav-icon" aria-hidden="true">${ic(item.icon)}</span><span class="mobile-bottom-nav-label">${item.label}</span></button>`
+      `<button type="button" class="mobile-bottom-nav-btn" data-page="${item.page}" data-path="${item.path}" role="tab" aria-selected="false"><span class="mobile-bottom-nav-icon" aria-hidden="true">${ic(item.icon)}</span><span class="mobile-bottom-nav-label">${t(item.labelKey)}</span></button>`
     )).join('');
     if (window.AppIcon) window.AppIcon.hydrate(bottomNavEl);
   }
@@ -199,7 +200,7 @@ export const MobileShell = (() => {
     btn.setAttribute('data-current-theme', theme);
     const title = (window.AppShell && typeof window.AppShell.themeToggleTitle === 'function')
       ? window.AppShell.themeToggleTitle(theme)
-      : '切换主题';
+      : t('theme.switch');
     btn.title = title;
     btn.setAttribute('aria-label', title);
   }
@@ -239,7 +240,7 @@ export const MobileShell = (() => {
 
     if (mode === 'work') {
       left.innerHTML =
-        `<button type="button" class="mobile-top-bar-menu-btn" aria-label="打开会话列表" aria-expanded="false">${ic('menu', 22)}</button>`;
+        `<button type="button" class="mobile-top-bar-menu-btn" aria-label="${t('session.openList')}" aria-expanded="false">${ic('menu', 22)}</button>`;
       center.innerHTML =
         `<span class="mobile-top-bar-brand-icon ice-brand-logo" aria-hidden="true"></span><span class="mobile-top-bar-brand">IceCoder</span>${getConnectionDot()}`;
       right.innerHTML = themeBtnHtml();
@@ -250,11 +251,11 @@ export const MobileShell = (() => {
       bindWorkSwipe();
     } else if (mode === 'workChat') {
       left.innerHTML =
-        `<button type="button" class="mobile-top-bar-back-btn" aria-label="返回">${ic('back', 22)}</button>`;
-      const title = opts.title || '会话';
+        `<button type="button" class="mobile-top-bar-back-btn" aria-label="${t('common.back')}">${ic('back', 22)}</button>`;
+      const title = opts.title || t('nav.sessions');
       center.innerHTML = `<span class="mobile-top-bar-title">${escapeHtml(title)}</span>`;
       right.innerHTML =
-        `<button type="button" class="mobile-top-bar-more-btn" aria-label="更多">${ic('more-dots', 20)}</button>${themeBtnHtml()}`;
+        `<button type="button" class="mobile-top-bar-more-btn" aria-label="${t('common.more')}">${ic('more-dots', 20)}</button>${themeBtnHtml()}`;
       const backBtn = left.querySelector('.mobile-top-bar-back-btn');
       if (backBtn) {
         backBtn.addEventListener('click', () => {
@@ -267,7 +268,7 @@ export const MobileShell = (() => {
       const Tabs = window.KnowledgeTabs;
       center.innerHTML = Tabs
         ? `${Tabs.html(mode, 'is-segmented')}${getConnectionDot()}`
-        : `<span class="mobile-top-bar-title">知识库</span>${getConnectionDot()}`;
+        : `<span class="mobile-top-bar-title">${t('nav.knowledge')}</span>${getConnectionDot()}`;
       if (Tabs) Tabs.bind(center.querySelector('.knowledge-tabs'));
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'tasks' || mode === 'todos') {
@@ -275,11 +276,11 @@ export const MobileShell = (() => {
       const active = mode === 'todos' ? 'todos' : 'scheduled';
       center.innerHTML = Tabs
         ? `${Tabs.html(active, 'is-segmented')}${getConnectionDot()}`
-        : `<span class="mobile-top-bar-title">任务</span>${getConnectionDot()}`;
+        : `<span class="mobile-top-bar-title">${t('nav.tasks')}</span>${getConnectionDot()}`;
       if (Tabs) Tabs.bind(center.querySelector('.knowledge-tabs'));
       right.innerHTML = themeBtnHtml();
     } else if (mode === 'config') {
-      center.innerHTML = `<span class="mobile-top-bar-title">设置</span>${getConnectionDot()}`;
+      center.innerHTML = `<span class="mobile-top-bar-title">${t('nav.settings')}</span>${getConnectionDot()}`;
       right.innerHTML = themeBtnHtml();
     }
 
@@ -359,7 +360,7 @@ export const MobileShell = (() => {
   function updateChatTitle(title) {
     if (currentTopMode !== 'workChat' || !topBarEl) return;
     const el = topBarEl.querySelector('.mobile-top-bar-title');
-    if (el) el.textContent = title || '会话';
+    if (el) el.textContent = title || t('nav.sessions');
   }
 
   function syncConnectionState(state) {

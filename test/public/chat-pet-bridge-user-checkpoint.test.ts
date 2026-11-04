@@ -12,7 +12,7 @@ describe('chat-pet-bridge user_checkpoint', () => {
     expect(src).toMatch(/sr === 'user_checkpoint'/);
     expect(src).toMatch(/setState\('user_checkpoint'\)/);
     expect(src).toMatch(/userCheckpointNoticeActive/);
-    expect(src).toMatch(/已暂停，需要你介入啦/);
+    expect(src).toMatch(/t\('pet\.checkpointBubble'\)/);
     expect(src).not.toMatch(/监管/);
     expect(src).toMatch(/if \(userCheckpointNoticeActive && step\.type !== 'final'\) return/);
     expect(src).toMatch(/if \(userCheckpointNoticeActive\) return/);
