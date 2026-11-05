@@ -61,6 +61,14 @@ let cachedGitExecutable: string | undefined;
  */
 export function resolveGitExecutable(): string {
   if (cachedGitExecutable) return cachedGitExecutable;
+
+  // 允许覆盖：git 装在非标准目录（如 D:\\tools\\git）时靠它指定
+  const override = process.env.ICE_GIT_EXECUTABLE?.trim();
+  if (override) {
+    cachedGitExecutable = override;
+    return cachedGitExecutable;
+  }
+
   if (process.platform !== 'win32') {
     cachedGitExecutable = 'git';
     return cachedGitExecutable;

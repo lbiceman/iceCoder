@@ -55,6 +55,8 @@ export const StatsPage = (() => {
   let resizeTimer = null;
   let lastChartW = -1;
   let lastChartH = -1;
+  /** 辅助数据（记忆遥测）请求在飞行中：此时不要用旧数据重绘，否则骨架会被覆盖成上一范围的图。 */
+  let auxLoading = false;
 
   function destroy() {
     if (abortCtrl) {
@@ -266,11 +268,13 @@ export const StatsPage = (() => {
       .then((body) => {
         if (ctrl !== auxAbort) return;
         memorySummary = body;
+        auxLoading = false;
         paintAux();
       });
   }
 
   function paintAuxLoading() {
+    auxLoading = true;
     const memoryEl = mainEl && mainEl.querySelector('[data-role="memory-metrics"]');
     if (memoryEl) memoryEl.innerHTML = skelMetrics();
     paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="memory"]'));
@@ -316,7 +320,7 @@ export const StatsPage = (() => {
   }
 
   function paintAuxCharts() {
-    if (!mainEl) return;
+    if (!mainEl || auxLoading) return;
     paintMemoryChart(currentRange(), chartColors());
   }
 

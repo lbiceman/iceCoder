@@ -79,10 +79,11 @@ function findLineBlockFuzzy(content: string, search: string): ReplaceRange | nul
     }
     if (!ok) continue;
 
+    // 必须用当前行号换算偏移：indexOf 会命中前面的相同块，静默改错位置
     const matchedBlock = contentLines.slice(i, i + searchLines.length).join('\n');
-    const startNorm = contentNorm.indexOf(matchedBlock);
-    if (startNorm === -1) continue;
-
+    const startNorm = contentLines
+      .slice(0, i)
+      .reduce((sum, line) => sum + line.length + 1, 0);
     const endNorm = startNorm + matchedBlock.length;
     const start = mapNormOffsetToOriginal(content, startNorm);
     const end = mapNormOffsetToOriginal(content, endNorm);
@@ -131,6 +132,16 @@ export interface ApplyNonRegexReplaceResult {
   fuzzy: boolean;
 }
 
+/** 文件主体是 CRLF 时，把 replace 里的 \n 一并转成 \r\n，避免写出混合换行。 */
+function adaptLineEndings(replace: string, content: string): string {
+  const crlf = (content.match(/\r\n/g) || []).length;
+  const lf = (content.match(/\n/g) || []).length - crlf;
+  if (crlf > lf && !replace.includes('\r\n')) {
+    return replace.replace(/\n/g, '\r\n');
+  }
+  return replace;
+}
+
 /**
  * 非正则查找替换：精确 → 模糊；支持 replaceAll。
  */
@@ -142,7 +153,9 @@ export function applyNonRegexReplace(
 ): ApplyNonRegexReplaceResult {
   if (replaceAll && content.includes(search)) {
     const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const next = content.replace(new RegExp(escaped, 'g'), replace);
+    const adapted = adaptLineEndings(replace, content);
+    // 用函数替换，避免 replace 里的 $& / $' 被当成替换模式展开
+    const next = content.replace(new RegExp(escaped, 'g'), () => adapted);
     return { content: next, changed: next !== content, fuzzy: false };
   }
 
@@ -151,6 +164,7 @@ export function applyNonRegexReplace(
     let changed = false;
     let fuzzy = false;
     let scanFrom = 0;
+    const adapted = adaptLineEndings(replace, content);
     const maxPasses = 10_000;
     for (let pass = 0; pass < maxPasses; pass++) {
       const slice = out.slice(scanFrom);
@@ -159,10 +173,10 @@ export function applyNonRegexReplace(
       const absStart = scanFrom + range.start;
       const absEnd = scanFrom + range.end;
       fuzzy = fuzzy || range.matched !== search;
-      out = out.slice(0, absStart) + replace + out.slice(absEnd);
+      out = out.slice(0, absStart) + adapted + out.slice(absEnd);
       changed = true;
       // replace 常以 search 为前缀；不前进会在同一位置反复匹配导致挂死
-      scanFrom = absStart + replace.length;
+      scanFrom = absStart + adapted.length;
     }
     return { content: out, changed, fuzzy };
   }
@@ -171,6 +185,6 @@ export function applyNonRegexReplace(
   if (!range) {
     return { content, changed: false, fuzzy: false };
   }
-  const next = content.slice(0, range.start) + replace + content.slice(range.end);
+  const next = content.slice(0, range.start) + adaptLineEndings(replace, content) + content.slice(range.end);
   return { content: next, changed: true, fuzzy: range.matched !== search };
 }

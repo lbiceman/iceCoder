@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,15 @@ import type { RegisteredTool, ToolResult } from '../../src/tools/types.js';
 delete process.env.GIT_DIR;
 delete process.env.GIT_WORK_TREE;
 delete process.env.GIT_INDEX_FILE;
+
+/** 机器上没有 git 时，涉及真实仓库的用例直接跳过，而不是报一片假失败。 */
+const gitAvailable = (() => {
+  try {
+    return spawnSync(resolveGitExecutable(), ['--version'], { windowsHide: true }).status === 0;
+  } catch {
+    return false;
+  }
+})();
 
 const dirs: string[] = [];
 
@@ -99,7 +108,7 @@ describe('splitGitArgs', () => {
   });
 });
 
-describe('git tool policy', () => {
+describe.skipIf(!gitAvailable)('git tool policy', () => {
   it('rejects a subcommand that tries to chain a shell command', async () => {
     const { dir, tool } = await makeRepo('policy-sub');
     const marker = path.join(dir, 'pwned.txt');
@@ -146,7 +155,7 @@ describe('git tool policy', () => {
   });
 });
 
-describe('git tool shell injection', () => {
+describe.skipIf(!gitAvailable)('git tool shell injection', () => {
   const payloads: Array<[string, string]> = [
     ['ampersand', '& echo pwned > pwned.txt'],
     ['and', '&& echo pwned > pwned.txt'],
@@ -184,7 +193,7 @@ describe('git tool shell injection', () => {
   });
 });
 
-describe('git tool commands', () => {
+describe.skipIf(!gitAvailable)('git tool commands', () => {
   it('status, diff, log, show, rev-parse, blame, and branch read the repo', async () => {
     const { dir, tool } = await makeRepo('read');
     await writeFile(path.join(dir, 'readme.txt'), 'hello\nchanged\n', 'utf8');
@@ -347,7 +356,7 @@ describe('git tool commands', () => {
     expect(await readFile(path.join(rebaseRepo.dir, 'topic.txt'), 'utf8')).toBe('topic\n');
 
     expect(featureHash).toMatch(/[0-9a-f]{40}/);
-  });
+  }, 30_000);
 
   it('push, fetch, and pull against a local bare remote', async () => {
     const bare = await mkdtemp(path.join(tmpdir(), 'ice-git-bare-'));

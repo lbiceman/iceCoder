@@ -5,7 +5,7 @@
  * 导致 spawn("cmd.exe") 报 ENOENT。此处补全系统目录并用绝对路径解析 shell。
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,6 +25,46 @@ export function standardWindowsUserToolDirs(): string[] {
     path.join(programFilesX86, 'Git', 'cmd'),
     path.join(localAppData, 'Programs', 'Git', 'cmd'),
   ];
+}
+
+/**
+ * Node/npm 所在目录。
+ *
+ * 桌面端以 electron.exe 充当 Node 运行时，宿主 PATH 往往不含真实的 node 目录，
+ * 导致 run_command 里 `npm` / `npx` 报「不是内部或外部命令」。
+ * 这里补上 Node 侧目录：优先当前运行时所在目录，再退常见安装位置与 nvm。
+ */
+let cachedNodeDirs: string[] | undefined;
+
+export function standardWindowsNodeDirs(): string[] {
+  if (cachedNodeDirs) return cachedNodeDirs;
+
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+  const appData = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
+  const dirs: string[] = [path.dirname(process.execPath)];
+
+  dirs.push(
+    path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs'),
+    path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'nodejs'),
+    path.join(localAppData, 'Programs', 'nodejs'),
+    path.join(appData, 'npm'),
+  );
+
+  const nvmHome = process.env.NVM_HOME?.trim();
+  if (nvmHome) {
+    try {
+      for (const entry of readdirSync(nvmHome)) {
+        if (entry.startsWith('v')) dirs.push(path.join(nvmHome, entry));
+      }
+    } catch {
+      // nvm 目录不可读时忽略
+    }
+  }
+  const nvmSymlink = process.env.NVM_SYMLINK?.trim();
+  if (nvmSymlink) dirs.push(nvmSymlink);
+
+  cachedNodeDirs = dirs;
+  return cachedNodeDirs;
 }
 
 /** Windows 上 spawn 子命令时常用的系统目录（不含用户 Node/git 等）。 */
@@ -47,6 +87,7 @@ export function augmentPathForShellSpawn(basePath: string | undefined): string {
 
   const merged = [
     ...standardWindowsPathDirs(),
+    ...standardWindowsNodeDirs(),
     ...standardWindowsUserToolDirs(),
     ...current.split(PATH_SEP),
   ].map((p) => p.trim()).filter(Boolean);
@@ -79,6 +120,21 @@ export function resolveShellExecutable(): string {
 }
 
 /**
+ * 只接受真实文件。
+ *
+ * existsSync 对目录也返回 true，而 Windows 路径大小写不敏感：
+ * `System32\WindowsPowerShell` 目录会被裸名 `powershell` 命中，
+ * 结果 spawn 一个目录 → ENOENT，进程树清理静默失效。
+ */
+function isExecutableFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 解析 Windows 系统工具绝对路径（taskkill / powershell / where / reg 等）。
  * 在 augmentPathForShellSpawn 后的 PATH 中查找，再回退 System32。
  */
@@ -95,7 +151,7 @@ export function resolveWindowsSystemExecutable(baseName: string): string {
     if (!trimmed) continue;
     for (const name of names) {
       const candidate = path.join(trimmed, name);
-      if (existsSync(candidate)) return candidate;
+      if (isExecutableFile(candidate)) return candidate;
     }
   }
 
@@ -103,7 +159,7 @@ export function resolveWindowsSystemExecutable(baseName: string): string {
   for (const sub of ['System32', path.join('System32', 'WindowsPowerShell', 'v1.0'), 'SysWOW64']) {
     for (const name of names) {
       const candidate = path.join(root, sub, name);
-      if (existsSync(candidate)) return candidate;
+      if (isExecutableFile(candidate)) return candidate;
     }
   }
 
