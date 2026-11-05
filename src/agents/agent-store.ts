@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+import { applyRuntimeDataEnvDefaults, REPO_DATA_DIR, resolvePackagedDataDir } from '../cli/paths.js';
 import {
   AgentWriteError,
   isAgentProfile,
@@ -149,15 +149,35 @@ How to work:
 
 If the user asks you to implement, refactor, run commands, or commit: refuse, explain the restriction, and point them to the document plus leaving this agent.`;
 
-/** 首次没有 plan.json 时写入。用户删掉之后不再补回。 */
-export async function ensureDefaultPlanAgent(dir = getAgentsDir()): Promise<void> {
-  await fs.mkdir(dir, { recursive: true });
-  const file = fileFor(dir, PLAN_AGENT_ID);
-  try {
-    await fs.access(file);
-    return;
-  } catch {
-    /* 不存在才写入 */
+const BUNDLED_PLAN_FILE = 'agents/plan.json';
+
+async function readBundledPlanFile(): Promise<string | null> {
+  const candidates = [
+    resolvePackagedDataDir(BUNDLED_PLAN_FILE),
+    path.join(REPO_DATA_DIR, BUNDLED_PLAN_FILE),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await fs.readFile(candidate, 'utf-8');
+    } catch {
+      /* 换下一个候选 */
+    }
+  }
+  return null;
+}
+
+/** 包内 plan.json 可用时原样复制。文件缺失或内容不合法时，用内置定义补上。 */
+async function defaultPlanAgentText(): Promise<string> {
+  const bundled = await readBundledPlanFile();
+  if (bundled) {
+    try {
+      const parsed: unknown = JSON.parse(bundled);
+      if (isAgentProfile(parsed) && parsed.id === PLAN_AGENT_ID) {
+        return bundled.endsWith('\n') ? bundled : `${bundled}\n`;
+      }
+    } catch {
+      /* 落到内置定义 */
+    }
   }
   const now = new Date().toISOString();
   const profile: AgentProfile = {
@@ -169,7 +189,20 @@ export async function ensureDefaultPlanAgent(dir = getAgentsDir()): Promise<void
     createdAt: now,
     updatedAt: now,
   };
-  await writeProfile(dir, profile);
+  return `${JSON.stringify(profile, null, 2)}\n`;
+}
+
+/** 首次没有 plan.json 时从包内模板写入。用户删掉之后不再补回。 */
+export async function ensureDefaultPlanAgent(dir = getAgentsDir()): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  const file = fileFor(dir, PLAN_AGENT_ID);
+  try {
+    await fs.access(file);
+    return;
+  } catch {
+    /* 不存在才写入 */
+  }
+  await fs.writeFile(file, await defaultPlanAgentText(), 'utf-8');
 }
 
 export async function deleteAgent(id: string, dir = getAgentsDir()): Promise<void> {

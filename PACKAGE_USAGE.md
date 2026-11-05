@@ -38,7 +38,9 @@ CI 环境默认不自增（避免流水线改脏版本）；本地可用 `ICE_BU
 | 路径 | 说明 |
 |------|------|
 | `dist/` | 编译后的 Node 入口、CLI、Harness、Web 服务 |
+| `data/agents/plan.json` | 默认 Plan Agent |
 | `data/config.example.json` | API 配置模板 |
+| `data/skills/创建Agent.md` | 创建 Agent 的技能 |
 | `data/skills/创建技能.md` | 技能创建指引 |
 | `data/system-prompt.md` | 系统提示词模板 |
 | `package.json` | 依赖与 `bin` |

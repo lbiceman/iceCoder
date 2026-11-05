@@ -10,7 +10,7 @@ import {
   parseAgentDraft,
   AgentWriteError,
 } from '../../src/agents/agent-profile.js';
-import { createAgent, deleteAgent, listAgents, updateAgent } from '../../src/agents/agent-store.js';
+import { createAgent, deleteAgent, ensureDefaultPlanAgent, listAgents, updateAgent } from '../../src/agents/agent-store.js';
 import {
   loadAgentModeForSession,
   resetAgentModeStoreForTests,
@@ -160,5 +160,22 @@ describe('agent store and session mode', () => {
 
     await deleteAgent('fix', agentsDir);
     expect(await listAgents(agentsDir)).toEqual([]);
+  });
+
+  it('缺少 plan.json 时从包内模板写入，已有文件不覆盖', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-plan-agent-'));
+    const agentsDir = path.join(dir, 'agents');
+    await ensureDefaultPlanAgent(agentsDir);
+    const target = path.join(agentsDir, 'plan.json');
+    const raw = await fs.readFile(target, 'utf-8');
+    const profile = JSON.parse(raw) as { id: string; tools: string[]; prompt: string };
+    expect(profile.id).toBe('plan');
+    expect(profile.tools).toContain('read_file');
+    expect(profile.tools).not.toContain('run_command');
+    expect(profile.prompt).toContain('planning mode');
+
+    await fs.writeFile(target, 'custom\n', 'utf-8');
+    await ensureDefaultPlanAgent(agentsDir);
+    expect(await fs.readFile(target, 'utf-8')).toBe('custom\n');
   });
 });

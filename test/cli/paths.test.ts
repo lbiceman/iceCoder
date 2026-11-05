@@ -101,7 +101,7 @@ describe('getMcpCacheDir', () => {
 });
 
 describe('ensureDefaultSkillFiles', () => {
-  it('从包内示例写入 dataDir/skills/创建技能.md', async () => {
+  it('从包内示例写入默认技能', async () => {
     const bundled = resolvePackagedDataExamplePath('skills/创建技能.md');
     expect(bundled).toContain(`${path.sep}skills${path.sep}`);
 
@@ -109,10 +109,12 @@ describe('ensureDefaultSkillFiles', () => {
     try {
       const skillsDir = path.join(tmp, 'skills');
       await ensureDefaultSkillFiles(skillsDir);
-      const target = path.join(skillsDir, '创建技能.md');
-      const raw = await readFile(target, 'utf-8');
-      expect(raw).toContain('name: 创建技能');
-      expect(raw).toContain('ICE_SKILLS_DIR');
+      const createSkill = await readFile(path.join(skillsDir, '创建技能.md'), 'utf-8');
+      expect(createSkill).toContain('name: 创建技能');
+      expect(createSkill).toContain('ICE_SKILLS_DIR');
+      const createAgent = await readFile(path.join(skillsDir, '创建Agent.md'), 'utf-8');
+      expect(createAgent).toContain('name: 创建Agent');
+      expect(createAgent).toContain('ICE_AGENTS_DIR');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -123,11 +125,13 @@ describe('ensureDefaultSkillFiles', () => {
     try {
       const skillsDir = path.join(tmp, 'skills');
       const target = path.join(skillsDir, '创建技能.md');
+      const agentSkill = path.join(skillsDir, '创建Agent.md');
       await mkdir(skillsDir, { recursive: true });
       await writeFile(target, 'custom\n', 'utf-8');
+      await writeFile(agentSkill, 'custom-agent\n', 'utf-8');
       await ensureDefaultSkillFiles(skillsDir);
-      const raw = await readFile(target, 'utf-8');
-      expect(raw).toBe('custom\n');
+      expect(await readFile(target, 'utf-8')).toBe('custom\n');
+      expect(await readFile(agentSkill, 'utf-8')).toBe('custom-agent\n');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
