@@ -114,6 +114,9 @@ export function applyRuntimeDataEnvDefaults(): void {
   if (!process.env.ICE_SKILLS_DIR?.trim()) {
     process.env.ICE_SKILLS_DIR = path.join(dataDir, 'skills');
   }
+  if (!process.env.ICE_AGENTS_DIR?.trim()) {
+    process.env.ICE_AGENTS_DIR = path.join(dataDir, 'agents');
+  }
   if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
     process.env.ICE_MCP_CONFIG_PATH = path.join(
       usesUserDataRoot() ? dataDir : LOCAL_ICECODER_DIR,
@@ -204,6 +207,7 @@ export interface DataPaths {
   outputDir: string;
   userMemoryDir: string;
   skillsDir: string;
+  agentsDir: string;
   mcpConfigPath: string;
 }
 
@@ -237,6 +241,7 @@ export async function resolveDataPaths(): Promise<DataPaths> {
     outputDir: path.resolve(process.env.ICE_OUTPUT_DIR!),
     userMemoryDir: path.resolve(process.env.ICE_USER_MEMORY_DIR!),
     skillsDir: path.resolve(process.env.ICE_SKILLS_DIR!),
+    agentsDir: path.resolve(process.env.ICE_AGENTS_DIR!),
     mcpConfigPath: resolveMcpConfigPath(),
   };
 }
@@ -378,6 +383,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
   await fs.mkdir(paths.userMemoryDir, { recursive: true });
   await fs.mkdir(paths.skillsDir, { recursive: true });
+  await fs.mkdir(paths.agentsDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
   await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
   await fs.mkdir(getMcpCacheDir(), { recursive: true });
@@ -395,6 +401,8 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
 
   await fs.mkdir(path.join(paths.dataDir, 'runtime'), { recursive: true });
   await ensureDefaultSkillFiles(paths.skillsDir);
+  const { ensureDefaultPlanAgent } = await import('../agents/agent-store.js');
+  await ensureDefaultPlanAgent(paths.agentsDir);
 
   return isFirstRun;
 }

@@ -2640,37 +2640,4 @@ export const agentEvalCases: AgentEvalCase[] = [
     maxRounds: 6,
     timeoutMs: 60_000,
   },
-  {
-    id: 'diagnostics-tsc-path-line',
-    category: 'model-led',
-    prompt: 'Report the TypeScript diagnostic location. Do not edit files.',
-    files: {
-      'tsconfig.json': `${JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          noEmit: true,
-          target: 'ES2022',
-          module: 'ESNext',
-          moduleResolution: 'Bundler',
-        },
-        include: ['src'],
-      })}\n`,
-      'src/add.ts': 'export const broken: number = "no";\n',
-    },
-    verifyCommands: [],
-    expected: {
-      requiresTool: true,
-      allowFileChanges: false,
-      finalContains: 'src/add.ts:1:',
-    },
-    assertions: [
-      { path: 'src/add.ts', unchanged: true },
-    ],
-    scriptedTurns: [
-      { type: 'tool', name: 'diagnostics', arguments: {} },
-      { type: 'final-from-tool', contains: 'src/add.ts:1:' },
-    ],
-    maxRounds: 4,
-    timeoutMs: 60_000,
-  },
 ];

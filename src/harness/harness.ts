@@ -120,7 +120,6 @@ export class Harness {
   private onConfirm?: HarnessConfig['onConfirm'];
   private onShellMandatoryConfirm?: HarnessConfig['onShellMandatoryConfirm'];
   private shellCollabActive: boolean;
-  private planModeActive: boolean;
   private skipCompletionGate: boolean;
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
@@ -173,7 +172,6 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.onShellMandatoryConfirm = config.onShellMandatoryConfirm;
     this.shellCollabActive = config.shellCollabActive === true;
-    this.planModeActive = config.planModeActive === true;
     this.skipCompletionGate = config.skipCompletionGate === true;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
@@ -225,7 +223,6 @@ export class Harness {
       onConfirm: this.onConfirm,
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
-      planModeActive: this.planModeActive,
       skipCompletionGate: this.skipCompletionGate,
       ephemeralSystemContext: this.contextAssembler.buildEphemeralSystemContextMessage(),
       workspaceRoot: this.workspaceRoot,

@@ -419,6 +419,7 @@ export const ScheduledTasksPage = (() => {
       if (!dd) return;
       const items = dd.querySelectorAll('.cmd-item');
       for (let i = 0; i < items.length; i++) items[i].classList.toggle('active', i === activeIndex);
+      if (window.ChatDropdown.revealActiveItem) window.ChatDropdown.revealActiveItem();
     }
 
     function parseTrigger() {
@@ -474,9 +475,15 @@ export const ScheduledTasksPage = (() => {
       if (dropdownOpen) {
         const count = Math.max(filtered.length, 1);
         let handled = true;
-        if (e.key === 'ArrowDown') { activeIndex = (activeIndex + 1) % count; highlight(); }
-        else if (e.key === 'ArrowUp') { activeIndex = (activeIndex - 1 + count) % count; highlight(); }
-        else if (e.key === 'Enter' || e.key === 'Tab') applySkill(activeIndex);
+        if (e.key === 'ArrowDown') {
+          if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
+          activeIndex = (activeIndex + 1) % count;
+          highlight();
+        } else if (e.key === 'ArrowUp') {
+          if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
+          activeIndex = (activeIndex - 1 + count) % count;
+          highlight();
+        } else if (e.key === 'Enter' || e.key === 'Tab') applySkill(activeIndex);
         else if (e.key === 'Escape') closeDropdown();
         else handled = false;
         if (handled) {

@@ -66,6 +66,7 @@ import { createTokenUsageRouter } from '../../web/routes/token-usage.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import { createMemoryDreamRouter } from '../../web/routes/memory-dream.js';
+import { createAgentsRouter } from '../../web/routes/agents.js';
 import { createSkillsRouter } from '../../web/routes/skills.js';
 import { createUserRulesRouter } from '../../web/routes/user-rules.js';
 import { createMcpStatusRouter } from '../../web/routes/mcp-status.js';
@@ -158,6 +159,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/token-usage', router: createTokenUsageRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/agents', router: createAgentsRouter() },
       { path: '/api/user-rules', router: createUserRulesRouter() },
       { path: '/api/todos', router: createTodosRouter(todoStore) },
       { path: '/api/scheduled-tasks', router: createScheduledTasksRouter({

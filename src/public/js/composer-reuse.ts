@@ -161,6 +161,7 @@ export function buildComposerReusePayload(msg: {
   if (msg.alsoNote) text = prefixCommand(text, '/also');
   else if (msg.shellCommand) text = prefixCommand(text, msg.shellCommand);
   else if (msg.planCommand) text = prefixCommand(text, msg.planCommand);
+  else if (msg.agentCommand) text = prefixCommand(text, msg.agentCommand);
   else if (msg.openCommand) text = prefixCommand(text, msg.openCommand);
 
   return { text, skills, fileRefs, images, uploadedFiles };

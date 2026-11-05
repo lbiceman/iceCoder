@@ -1,5 +1,5 @@
 /**
- * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /plan /next /open）。
+ * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /next /open，以及用户 Agent 命令）。
  */
 
 import path from 'path';
@@ -9,7 +9,6 @@ import {
   parseNextCommand,
   parseAlsoCommand,
   parseShellCommand,
-  parsePlanCommand,
   PENDING_NOTE_USAGE_MESSAGE,
   queueAlsoNote,
   clearPendingNotesForSession,
@@ -33,7 +32,7 @@ import {
 } from '../harness/conversation-delete.js';
 import { canAcceptRuntimeRestore } from './session-runtime-busy.js';
 import { resolveShellCollabActive } from '../session/shell-collab-store.js';
-import { resolvePlanModeActive } from '../session/plan-mode-store.js';
+import { loadAgentModeForSession, getAgentModeState } from '../session/agent-mode-store.js';
 import {
   stopAllShellWorkForSession,
   stopForegroundShellWorkForSession,
@@ -63,11 +62,12 @@ import {
 } from './chat-ws-persist.js';
 import { handleShellCollabRoute, queueShellCollabTransition, waitForShellCollabTransition } from './chat-ws-shell.js';
 import {
-  handlePlanModeRoute,
-  handlePlanModeExit,
-  queuePlanModeTransition,
-  waitForPlanModeTransition,
-} from './chat-ws-plan.js';
+  handleAgentModeRoute,
+  handleAgentModeExit,
+  matchAgentCommand,
+  queueAgentModeTransition,
+  waitForAgentModeTransition,
+} from './chat-ws-agent.js';
 import {
   clearRunningTurn,
   getRunningTurn,
@@ -163,14 +163,14 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         return;
       }
 
-      if (msg.type === 'plan_mode_exit') {
+      if (msg.type === 'agent_mode_exit') {
         const sid = getSubscribedSessionId(ws);
         if (!sid) {
           sendJSON(ws, { type: 'error', message: '未订阅会话' });
           return;
         }
-        await queuePlanModeTransition(sid, async () => {
-          await handlePlanModeExit(ws, sid, { persistUserMessage: false });
+        await queueAgentModeTransition(sid, async () => {
+          await handleAgentModeExit(ws, sid, { persistUserMessage: false });
         });
         return;
       }
@@ -375,17 +375,19 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           const newRunningTurn = snapshotRunningTurn(targetId);
           const workspace = await resolveSessionWorkspacePayload(targetId);
           const bgTasks = await buildBgTasksForSession(targetId);
-          const [shellCollabActive, planModeActive] = await Promise.all([
-            resolveShellCollabActive(targetId, SESSIONS_DIR),
-            resolvePlanModeActive(targetId, SESSIONS_DIR),
-          ]);
+          const shellCollabActive = await resolveShellCollabActive(targetId, SESSIONS_DIR);
+          await loadAgentModeForSession(targetId, SESSIONS_DIR);
+          const agentState = getAgentModeState(targetId);
+          const agentMode = agentState?.active
+            ? { id: agentState.agentId, name: agentState.name }
+            : null;
           const runtimeExtras = await buildConnectedPayloadExtras(targetId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
             sessionId: targetId,
             shellCollabActive,
-            planModeActive,
+            agentMode,
             ...workspace,
             ...runtimeExtras,
             ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
@@ -499,40 +501,46 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           return;
         }
 
-        const planCmd = parsePlanCommand(content);
-        if (planCmd.matched && planCmd.action) {
-          const planMessageId = messageId ?? randomUUID();
-          let planRouteOk = false;
-          await queuePlanModeTransition(runSid, async () => {
-            planRouteOk = await handlePlanModeRoute(
+        const agentCmd = await matchAgentCommand(content);
+        if (agentCmd.matched && agentCmd.action) {
+          const agentMessageId = messageId ?? randomUUID();
+          let agentRouteOk = false;
+          await queueAgentModeTransition(runSid, async () => {
+            agentRouteOk = await handleAgentModeRoute(
               ws,
               runSid,
-              planCmd.action!,
+              agentCmd.action!,
+              agentCmd.agentId,
               content,
-              planMessageId,
-              planCmd.prompt,
+              agentMessageId,
+              agentCmd.prompt,
               referencePaths,
               skills,
               images,
             );
           });
-          if (planRouteOk && planCmd.action === 'enter' && planCmd.prompt.trim()) {
+          const continueAgentPrompt = agentRouteOk
+            && agentCmd.action === 'enter'
+            && agentCmd.prompt.trim().length > 0;
+          if (continueAgentPrompt) {
             const taskInput = await buildEnqueueInput(
               runSid,
-              planCmd.prompt,
+              agentCmd.prompt,
               images,
               referencePaths,
-              planMessageId,
+              agentMessageId,
               'implicit',
               skills,
               reasoningEffort,
             );
             await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
+          } else if (!isSessionProcessing(runSid)) {
+            broadcastToSession(runSid, { type: 'status', status: 'idle' });
           }
           return;
         }
         await waitForShellCollabTransition(runSid);
-        await waitForPlanModeTransition(runSid);
+        await waitForAgentModeTransition(runSid);
 
         if (isOpenLegacyCommand(content)) {
           if (isSessionProcessing(runSid)) {

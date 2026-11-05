@@ -49,7 +49,7 @@ import { buildCheckpointChangedFiles, type CheckpointChangedFile } from '../sess
 import { openWorkspaceChangedFile } from '../open-workspace-file.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
-import { buildPlanModeActiveIndex } from '../../session/plan-mode-store.js';
+import { buildAgentModeIndex } from '../../session/agent-mode-store.js';
 import {
   isValidAgentId,
   listAgentMetas,
@@ -339,10 +339,10 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
     const sessionIds = index.map((s) => s.id);
-    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId, scheduledTasks] = await Promise.all([
+    const [{ defaultWorkDir, workspaces }, shellCollabActive, agentMode, activeSessionId, scheduledTasks] = await Promise.all([
       buildWorkspaceIndex(sessionIds),
       buildShellCollabActiveIndex(sessionIds, SESSIONS_DIR),
-      buildPlanModeActiveIndex(sessionIds, SESSIONS_DIR),
+      buildAgentModeIndex(sessionIds, SESSIONS_DIR),
       bootstrapActiveSessionIdFromIndex(),
       buildScheduledTaskIndex(index, deps.listScheduledTasks),
     ]);
@@ -354,7 +354,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
       defaultWorkDir,
       workspaces,
       shellCollabActive,
-      planModeActive,
+      agentMode,
       scheduledTasks,
       activeSessionId,
       sessionRunStates: sessionListLiveSync ? sessionListLiveSync.getRunStates() : [],

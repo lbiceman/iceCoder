@@ -23,8 +23,8 @@ export const ChatSessionStore = (() => {
   let workspacesBySession = {};
   /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
   let shellCollabActiveBySession = {};
-  /** sessionId → 规划模式是否 active */
-  let planModeActiveBySession = {};
+  /** sessionId → { id, name } 当前用户 Agent */
+  let agentModeBySession = {};
   /** sessionId → 定时任务会话状态 { taskId, state: current|history|deleted, enabled?, nextRunAt?, lastStatus? } */
   let scheduledTasksBySession = {};
   let runPhaseBySession = {};
@@ -60,10 +60,10 @@ export const ChatSessionStore = (() => {
         ? data.shellCollabActive
         : {};
     }
-    if (Object.prototype.hasOwnProperty.call(data, 'planModeActive')
-        && data.planModeActive && typeof data.planModeActive === 'object'
-        && !Array.isArray(data.planModeActive)) {
-      planModeActiveBySession = data.planModeActive;
+    if (Object.prototype.hasOwnProperty.call(data, 'agentMode')
+        && data.agentMode && typeof data.agentMode === 'object'
+        && !Array.isArray(data.agentMode)) {
+      agentModeBySession = data.agentMode;
     }
     scheduledTasksBySession = (data.scheduledTasks && typeof data.scheduledTasks === 'object'
       && !Array.isArray(data.scheduledTasks)) ? data.scheduledTasks : {};
@@ -139,20 +139,21 @@ export const ChatSessionStore = (() => {
     emit();
   }
 
-  function getPlanModeActive(sessionId) {
-    return planModeActiveBySession[sessionId] === true;
+  function getAgentMode(sessionId) {
+    const row = agentModeBySession[sessionId];
+    return row && row.id ? row : null;
   }
 
-  function setPlanModeActive(sessionId, active) {
+  function setAgentMode(sessionId, agent) {
     if (!sessionId) return;
-    if (active) planModeActiveBySession[sessionId] = true;
-    else delete planModeActiveBySession[sessionId];
+    if (agent && agent.id) agentModeBySession[sessionId] = { id: agent.id, name: agent.name || agent.id };
+    else delete agentModeBySession[sessionId];
     emit();
   }
 
-  function applyPlanModeActiveMap(map) {
+  function applyAgentModeMap(map) {
     if (!map || typeof map !== 'object') return;
-    planModeActiveBySession = map;
+    agentModeBySession = map;
     emit();
   }
 
@@ -491,8 +492,8 @@ export const ChatSessionStore = (() => {
       if (typeof data.shellCollabActive === 'boolean') {
         setShellCollabActive(activeSessionId, data.shellCollabActive);
       }
-      if (typeof data.planModeActive === 'boolean') {
-        setPlanModeActive(activeSessionId, data.planModeActive);
+      if (Object.prototype.hasOwnProperty.call(data, 'agentMode')) {
+        setAgentMode(activeSessionId, data.agentMode);
       }
     }
 
@@ -568,8 +569,8 @@ export const ChatSessionStore = (() => {
           if (shellCollabActiveBySession[sessionId]) {
             delete shellCollabActiveBySession[sessionId];
           }
-          if (planModeActiveBySession[sessionId]) {
-            delete planModeActiveBySession[sessionId];
+          if (agentModeBySession[sessionId]) {
+            delete agentModeBySession[sessionId];
           }
           if (runPhaseBySession[sessionId]) delete runPhaseBySession[sessionId];
           if (composerDrafts[sessionId]) delete composerDrafts[sessionId];
@@ -655,9 +656,9 @@ export const ChatSessionStore = (() => {
     getShellCollabActive,
     setShellCollabActive,
     applyShellCollabActiveMap,
-    getPlanModeActive,
-    setPlanModeActive,
-    applyPlanModeActiveMap,
+    getAgentMode,
+    setAgentMode,
+    applyAgentModeMap,
     applySessionRunState,
     applySessionRunStates,
     getRunPhase,

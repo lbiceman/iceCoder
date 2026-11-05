@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { isDestructiveToolCall, resolveToolPermission } from '../../src/harness/harness-permission-runtime.js';
 import { isToolExcludedForAllAgents } from '../../src/harness/agents/agent-types.js';
 import { createToolUsageSection } from '../../src/prompts/sections.js';
-import { filterPlanModeToolDefinitions } from '../../src/session/plan-mode-tool-policy.js';
 import {
   buildAvailableDocToolsContext,
   looksLikeScheduleIntent,
@@ -33,11 +32,6 @@ describe('scheduled_task policy', () => {
 
   it('is never handed to sub-agents', () => {
     expect(isToolExcludedForAllAgents('scheduled_task')).toBe(true);
-  });
-
-  it('is not offered in plan mode', () => {
-    const defs = [{ name: 'scheduled_task' }, { name: 'read_file' }] as ToolDefinition[];
-    expect(filterPlanModeToolDefinitions(defs).map((d) => d.name)).toEqual(['read_file']);
   });
 
   it('adds nothing to the system prompt (guidance lives in the tool description)', () => {

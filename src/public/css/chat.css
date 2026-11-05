@@ -1558,6 +1558,72 @@
 .shell-collab-label {
   white-space: nowrap;
 }
+
+/* 规划模式：与 Shell 协作芯片同一槽位，跟在推理强度后面 */
+.plan-mode-indicator {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 4px 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--chip-plan-border);
+  background: var(--chip-plan-bg);
+  color: var(--chip-plan-fg);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  user-select: none;
+}
+
+.plan-mode-indicator.hidden {
+  display: none;
+}
+
+.agent-mode-indicator {
+  border-color: var(--chip-agent-border);
+  background: var(--chip-agent-bg);
+  color: var(--chip-agent-fg);
+}
+
+.agent-mode-indicator .plan-mode-indicator-remove:hover,
+.agent-mode-indicator .plan-mode-indicator-remove:focus-visible {
+  background: color-mix(in srgb, var(--chip-agent-fg) 18%, transparent);
+}
+
+.plan-mode-indicator-label {
+  white-space: nowrap;
+}
+
+.plan-mode-indicator-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.plan-mode-indicator-remove:hover,
+.plan-mode-indicator-remove:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--chip-plan-fg) 18%, transparent);
+  outline: none;
+}
 .toolbar-divider {
   width: 1px;
   height: 16px;
@@ -1830,6 +1896,13 @@
 .cmd-dropdown:not(:has(.cmd-item:hover)) .cmd-item.active {
   background: var(--accent-light);
 }
+/* 键盘选择时指针可能停在列表上，仍要标出当前项，避免悬停盖住选中项。 */
+.cmd-dropdown.is-keyboard-nav .cmd-item.active {
+  background: var(--accent-light);
+}
+.cmd-dropdown.is-keyboard-nav .cmd-item:hover:not(.active) {
+  background: transparent;
+}
 .cmd-name {
   font-weight: 600;
   font-size: 13px;
@@ -2063,7 +2136,7 @@
 .cmd-dropdown.is-model-menu .cmd-item.active .cmd-name {
   color: var(--accent);
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator {
+.cmd-dropdown .cmd-item.is-separator {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2075,27 +2148,29 @@
   cursor: default;
   background: transparent;
   border: none;
+  border-radius: 0;
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator:first-child {
+.cmd-dropdown .cmd-item.is-separator:first-child {
   margin-top: 0;
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator .cmd-separator-line {
+.cmd-dropdown .cmd-item.is-separator .cmd-separator-line {
   flex: 1;
   height: 1px;
   background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator .cmd-separator-label {
+.cmd-dropdown .cmd-item.is-separator .cmd-separator-label {
   flex: 0 0 auto;
   max-width: 42%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+  font-weight: 400;
   line-height: 1;
   color: var(--text-muted, #98a2b3);
   letter-spacing: 0.02em;
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain {
+.cmd-dropdown .cmd-item.is-separator.is-separator-plain {
   display: block;
   height: 1px;
   min-height: 1px;
@@ -2103,11 +2178,11 @@
   margin: 4px 10px;
   background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator:hover,
-.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain:hover {
+.cmd-dropdown .cmd-item.is-separator:hover,
+.cmd-dropdown .cmd-item.is-separator.is-separator-plain:hover {
   background: transparent;
 }
-.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain:hover {
+.cmd-dropdown .cmd-item.is-separator.is-separator-plain:hover {
   background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
 }
 .btn-cmd-plus {

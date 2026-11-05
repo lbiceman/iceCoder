@@ -73,7 +73,6 @@ const EXPLORE_ALLOWED_TOOLS = new Set([
   'web_search',
   'fetch_url',
   'env_info',
-  'diagnostics',
 ]);
 
 const MCP_READ_VERB_RE = /(?:^|_)(?:get|list|read|search|query|find|fetch|describe|show|view|lookup|inspect|analy[sz]e|snapshot|screenshot|logs?|status)(?:_|$)/i;

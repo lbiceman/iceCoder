@@ -843,9 +843,8 @@ export const ChatPage = (() => {
 
   let elShellCollabIndicator = null;
   let elShellModeChipBar = null;
-  let elPlanModeChipBar = null;
+  let elAgentModeIndicator = null;
   function defaultComposerPlaceholder() { return t('chat.placeholder'); }
-  function planComposerPlaceholder() { return t('chat.planPlaceholder'); }
 
   function getShellCollabStore() {
     return window.ChatSessionStore || null;
@@ -855,12 +854,6 @@ export const ChatPage = (() => {
     const Store = getShellCollabStore();
     const sid = Session.getActiveId ? Session.getActiveId() : 'default';
     return !!(Store && Store.getShellCollabActive && Store.getShellCollabActive(sid));
-  }
-
-  function isActiveSessionPlanMode() {
-    const Store = getShellCollabStore();
-    const sid = Session.getActiveId ? Session.getActiveId() : 'default';
-    return !!(Store && Store.getPlanModeActive && Store.getPlanModeActive(sid));
   }
 
   function syncShellCollabIndicator() {
@@ -875,15 +868,35 @@ export const ChatPage = (() => {
     }
   }
 
-  function syncPlanModeChip() {
-    const active = isActiveSessionPlanMode();
-    if (elPlanModeChipBar) {
-      elPlanModeChipBar.classList.toggle('hidden', !active);
-      elPlanModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+  function activeSessionAgent() {
+    const Store = getShellCollabStore();
+    const sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (!Store || typeof Store.getAgentMode !== 'function') return null;
+    return Store.getAgentMode(sid);
+  }
+
+  function syncComposerPlaceholder() {
+    if (!elInput) return;
+    const agent = activeSessionAgent();
+    if (agent && agent.name) elInput.placeholder = t('chat.agentPlaceholder', { name: agent.name });
+    else elInput.placeholder = defaultComposerPlaceholder();
+  }
+
+  function syncAgentModeChip() {
+    const agent = activeSessionAgent();
+    const active = !!(agent && agent.id);
+    if (elAgentModeIndicator) {
+      elAgentModeIndicator.classList.toggle('hidden', !active);
+      elAgentModeIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+      const label = elAgentModeIndicator.querySelector('.agent-mode-indicator-label');
+      const name = agent && agent.name ? agent.name : '';
+      if (label) label.textContent = name;
+      if (active) {
+        elAgentModeIndicator.title = name;
+        elAgentModeIndicator.setAttribute('aria-label', name);
+      }
     }
-    if (elInput) {
-      elInput.placeholder = active ? planComposerPlaceholder() : defaultComposerPlaceholder();
-    }
+    syncComposerPlaceholder();
   }
 
   function notifyShellCollabState(data) {
@@ -900,16 +913,16 @@ export const ChatPage = (() => {
     }
   }
 
-  function notifyPlanModeState(data) {
+  function notifyAgentModeState(data) {
     const Store = getShellCollabStore();
-    if (!Store) return;
-    if (data && data.planModeActiveBySession && Store.applyPlanModeActiveMap) {
-      Store.applyPlanModeActiveMap(data.planModeActiveBySession);
-    } else if (data && typeof data.planModeActive === 'boolean' && Store.setPlanModeActive) {
-      const planSid = data.sessionId || data.activeSessionId;
-      if (planSid) Store.setPlanModeActive(planSid, data.planModeActive);
+    if (!Store || typeof Store.setAgentMode !== 'function') return;
+    if (data && data.agentModeBySession && typeof Store.applyAgentModeMap === 'function') {
+      Store.applyAgentModeMap(data.agentModeBySession);
+    } else if (data && data.sessionId) {
+      const agent = data.agentModeActive === false ? null : (data.agent || data.agentMode || null);
+      Store.setAgentMode(data.sessionId, agent && agent.id ? agent : null);
     }
-    syncPlanModeChip();
+    syncAgentModeChip();
   }
 
   // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
@@ -1138,7 +1151,7 @@ export const ChatPage = (() => {
     }
     if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
-    syncPlanModeChip();
+    syncAgentModeChip();
     syncComposerWorkspace();
   }
 
@@ -1590,6 +1603,17 @@ export const ChatPage = (() => {
     };
     if (cmd === '/shell' || cmd.indexOf('/shell') === 0) msg.shellCommand = '/shell';
     else if (cmd === '/plan' || cmd.indexOf('/plan') === 0) msg.planCommand = '/plan';
+    else if (cmd.charAt(0) === '/' && window.ChatCommands && typeof window.ChatCommands.getAgentCommands === 'function') {
+      const token = cmd.slice(1).split(/\s+/)[0];
+      const known = window.ChatCommands.getAgentCommands();
+      for (let ai = 0; ai < known.length; ai++) {
+        if (known[ai] && known[ai].name === token) {
+          const rest = cmd.slice(1).split(/\s+/).slice(1).join(' ');
+          msg.agentCommand = rest === 'exit' ? '/' + token + ' exit' : '/' + token;
+          break;
+        }
+      }
+    }
     else if (cmd === '/open' || cmd.indexOf('/open') === 0) msg.openCommand = '/open';
     return msg;
   }
@@ -2237,7 +2261,7 @@ export const ChatPage = (() => {
       announceTunnelReadyFromPayload,
       applyHarnessRestoreUi,
       notifyShellCollabState,
-      notifyPlanModeState,
+      notifyAgentModeState,
       needsInitialHistoryPaint,
       syncMessages,
       applyRemoteUserMessage,
@@ -2294,7 +2318,7 @@ export const ChatPage = (() => {
       getElMessages() { return elMessages; },
       appendAlsoNoteBubble,
       notifyShellCollabState,
-      notifyPlanModeState,
+      notifyAgentModeState,
       syncWelcomeState,
     };
   }
@@ -2446,12 +2470,6 @@ export const ChatPage = (() => {
     container.innerHTML =
       '<div class="chat-page">' +
         '<div class="chat-main">' +
-        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="' + t('chat.planMode') + '">' +
-          '<span class="plan-mode-chip">' +
-            '<span class="plan-mode-chip-label">Plan</span>' +
-            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="' + t('chat.exitPlan') + '" aria-label="' + t('chat.exitPlan') + '">×</button>' +
-          '</span>' +
-        '</div>' +
         '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="' + t('session.shellMode') + '">' +
           '<span class="shell-mode-chip" title="' + t('chat.shellTitle') + '">' +
             '<span class="shell-mode-chip-label">Shell</span>' +
@@ -2506,6 +2524,10 @@ export const ChatPage = (() => {
                 + '</span>' +
               '</div>' +
               '<div class="composer-toolbar-end">' +
+                '<span class="plan-mode-indicator agent-mode-indicator hidden" id="agent-mode-indicator" role="status">' +
+                  '<span class="plan-mode-indicator-label agent-mode-indicator-label"></span>' +
+                  '<button type="button" class="plan-mode-indicator-remove" id="btn-agent-mode-exit" title="' + t('chat.exitAgent') + '" aria-label="' + t('chat.exitAgent') + '">×</button>' +
+                '</span>' +
                 '<div class="composer-workspace" id="composer-workspace">' +
                   '<span class="composer-workspace-label">' + t('chat.workspace') + '</span>' +
                   '<span class="composer-workspace-text"></span>' +
@@ -2541,13 +2563,23 @@ export const ChatPage = (() => {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
     elShellModeChipBar = container.querySelector('#shell-mode-chip-bar');
-    elPlanModeChipBar = container.querySelector('#plan-mode-chip-bar');
-    const elPlanModeExitBtn = container.querySelector('#btn-plan-mode-exit');
-    if (elPlanModeExitBtn) {
-      elPlanModeExitBtn.addEventListener('click', () => {
-        if (WS && typeof WS.send === 'function') WS.send({ type: 'plan_mode_exit' });
+    elAgentModeIndicator = container.querySelector('#agent-mode-indicator');
+    const agentExit = container.querySelector('#btn-agent-mode-exit');
+    if (agentExit) {
+      agentExit.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (WS && typeof WS.send === 'function') WS.send({ type: 'agent_mode_exit' });
       });
     }
+    if (window.ChatCommands && typeof window.ChatCommands.refreshAgents === 'function') {
+      window.ChatCommands.refreshAgents();
+    }
+    window.addEventListener('ice-agents-changed', () => {
+      if (window.ChatCommands && typeof window.ChatCommands.refreshAgents === 'function') {
+        window.ChatCommands.refreshAgents();
+      }
+    });
     mainInputWrapper = container.querySelector('.input-wrapper');
     bindComposerInteractions();
     mounted = true;
@@ -2754,7 +2786,7 @@ export const ChatPage = (() => {
     }
 
     syncShellCollabIndicator();
-    syncPlanModeChip();
+    syncAgentModeChip();
     syncComposerWorkspace();
     if (window.ChatSessionStore && typeof window.ChatSessionStore.onChange === 'function') {
       window.ChatSessionStore.onChange(syncComposerWorkspace);

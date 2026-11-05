@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { t } from './i18n.ts';
 /**
- * 「知识库」页签：技能、记忆、规则是三个独立路由（#/skills、#/memory、#/rules；移动端 mSkills、mMemory、mRules），
+ * 「知识库」页签：代理、技能、记忆、规则（#/agents、#/skills、#/memory、#/rules；移动端 mAgents、mSkills、mMemory、mRules），
  * 由这里统一渲染页签、记住上次所在页签，并提供侧栏 / 底栏入口的跳转目标。
  */
 
@@ -11,15 +11,16 @@ export const KnowledgeTabs = (() => {
 
   const STORAGE_KEY = 'ice-knowledge-tab';
   const TABS = [
+    { id: 'agents', key: 'nav.agents' },
     { id: 'skills', key: 'nav.skills' },
     { id: 'memory', key: 'nav.memory' },
     { id: 'rules', key: 'nav.rules' },
   ];
 
-  const MOBILE_PAGES = { skills: 'mSkills', memory: 'mMemory', rules: 'mRules' };
+  const MOBILE_PAGES = { agents: 'mAgents', skills: 'mSkills', memory: 'mMemory', rules: 'mRules' };
 
   function isTab(id) {
-    return id === 'skills' || id === 'memory' || id === 'rules';
+    return id === 'agents' || id === 'skills' || id === 'memory' || id === 'rules';
   }
 
   function lastTab() {

@@ -30,7 +30,6 @@ import { createPatchTool } from './builtin/patch-tool.js';
 import { createImageReadTool } from './builtin/image-read-tool.js';
 import { createNotebookReadTool } from './builtin/notebook-read-tool.js';
 import { createEnvInfoTool } from './builtin/env-info-tool.js';
-import { createDiagnosticsTool } from './builtin/diagnostics-tool.js';
 import { createUndoEditTool } from './builtin/undo-edit-tool.js';
 import { createWindowsDesktopTools } from './windows/windows-desktop-tools.js';
 import type { FileParser } from '../parser/file-parser.js';
@@ -141,9 +140,6 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
 
   // 注册环境信息工具
   registry.register(createEnvInfoTool());
-
-  // 项目诊断（tsc / eslint），只读
-  registry.register(createDiagnosticsTool(workDir));
 
   // 注册撤销编辑工具
   registry.register(createUndoEditTool());

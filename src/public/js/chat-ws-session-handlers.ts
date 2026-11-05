@@ -93,6 +93,7 @@ export const ChatWsSessionHandlers = (() => {
       if (window.ChatShellDock) window.ChatShellDock.scheduleResync();
       ctx.notifyShellCollabState(data || {});
       if (typeof ctx.notifyPlanModeState === 'function') ctx.notifyPlanModeState(data || {});
+      if (typeof ctx.notifyAgentModeState === 'function') ctx.notifyAgentModeState(data || {});
       if (paintedFromSessionSync) return;
       const rt = data && data.runningTurn;
       if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 命令面板：`+` 按钮打开 ~ 本地命令；输入 `/` 在输入区上方打开独立 slash 命令面板。
  */
@@ -13,40 +14,40 @@ export const ChatCommands = (() => {
   const SLASH_COMMAND_GROUPS = [
     {
       key: 'followup',
-      label: '跟进',
+      labelKey: 'cmd.followup',
       commands: [
-        { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
-        { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+        { name: 'also', descKey: 'cmd.also', prefix: '/' },
+        { name: 'next', descKey: 'cmd.next', prefix: '/' }
       ]
     },
     {
       key: 'mode',
-      label: '模式',
+      labelKey: 'cmd.mode',
       commands: [
-        { name: 'plan', description: '进入规划模式；可在同一条消息中继续写任务', prefix: '/' },
-        { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' }
+        { name: 'shell', descKey: 'cmd.shell', prefix: '/' }
       ]
     },
     {
       key: 'browse',
-      label: '浏览',
+      labelKey: 'cmd.browse',
       commands: [
-        { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
+        { name: 'open', descKey: 'cmd.open', prefix: '/' }
       ]
     }
   ];
 
   const TILDE_PC_COMMANDS = [
-    { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
-    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'scan', descKey: 'cmd.scan', prefix: '~' },
+    { name: 'tokens', descKey: 'cmd.tokens', prefix: '~' },
+    { name: 'telemetry', descKey: 'cmd.telemetry', prefix: '~' }
   ];
 
   const TILDE_REMOTE_COMMANDS = [
-    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'tokens', descKey: 'cmd.tokens', prefix: '~' },
+    { name: 'telemetry', descKey: 'cmd.telemetry', prefix: '~' }
   ];
 
+  let agentCommands = [];
   let cmdSelectedIndex = 0;
   let cmdFiltered = [];
   let cmdActivePrefix = '';
@@ -70,28 +71,69 @@ export const ChatCommands = (() => {
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
   function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
 
+  function slashGroups() {
+    const groups = SLASH_COMMAND_GROUPS.slice();
+    if (agentCommands.length) {
+      groups.push({ key: 'agents', labelKey: 'nav.agents', commands: agentCommands });
+    }
+    return groups;
+  }
+
   function getSlashCommands() {
+    const groups = slashGroups();
     const list = [];
-    for (let i = 0; i < SLASH_COMMAND_GROUPS.length; i++) {
-      const cmds = SLASH_COMMAND_GROUPS[i].commands;
+    for (let i = 0; i < groups.length; i++) {
+      const cmds = groups[i].commands;
       for (let j = 0; j < cmds.length; j++) list.push(cmds[j]);
     }
     return list;
+  }
+
+  function setAgentCommands(list) {
+    const next = [];
+    const rows = Array.isArray(list) ? list : [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row.id) continue;
+      next.push({
+        name: String(row.id),
+        description: row.description || row.name || String(row.id),
+        prefix: '/',
+        agent: true,
+      });
+    }
+    agentCommands = next;
+  }
+
+  function refreshAgents() {
+    fetch('/api/agents')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.success && Array.isArray(data.agents)) setAgentCommands(data.agents);
+      })
+      .catch(() => {});
+  }
+
+  /** 内置命令的说明随语言切换；代理项的 description 是用户自己写的，保持原样。 */
+  function presentCommand(cmd) {
+    if (!cmd || !cmd.descKey) return cmd;
+    return Object.assign({}, cmd, { description: t(cmd.descKey) });
   }
 
   function buildSlashDropdownItems(filtered) {
     const byName = {};
     for (let i = 0; i < filtered.length; i++) byName[filtered[i].name] = filtered[i];
     const items = [];
-    for (let g = 0; g < SLASH_COMMAND_GROUPS.length; g++) {
-      const group = SLASH_COMMAND_GROUPS[g];
+    const groups = slashGroups();
+    for (let g = 0; g < groups.length; g++) {
+      const group = groups[g];
       const cmds = [];
       for (let j = 0; j < group.commands.length; j++) {
         const cmd = byName[group.commands[j].name];
-        if (cmd) cmds.push(cmd);
+        if (cmd) cmds.push(presentCommand(cmd));
       }
       if (!cmds.length) continue;
-      items.push({ type: 'separator', label: group.label });
+      items.push({ type: 'separator', label: group.labelKey ? t(group.labelKey) : (group.label || '') });
       for (let k = 0; k < cmds.length; k++) items.push(cmds[k]);
     }
     return items;
@@ -112,6 +154,7 @@ export const ChatCommands = (() => {
     for (let j = 0; j < items.length; j++) {
       items[j].classList.toggle('active', j === cmdSelectedIndex);
     }
+    if (window.ChatDropdown.revealActiveItem) window.ChatDropdown.revealActiveItem();
   }
 
   function isOpen() {
@@ -200,7 +243,7 @@ export const ChatCommands = (() => {
     const anchorRect = anchor.getBoundingClientRect();
     const activePrefix = cmdActivePrefix;
     const filteredItems = cmdFiltered.slice();
-    const displayItems = isSlash ? buildSlashDropdownItems(filteredItems) : filteredItems;
+    const displayItems = isSlash ? buildSlashDropdownItems(filteredItems) : filteredItems.map(presentCommand);
     window.ChatDropdown.open({
       anchor,
       items: displayItems,
@@ -243,7 +286,7 @@ export const ChatCommands = (() => {
       applyTargetFn(value);
     } else if (targetInput) {
       let slashValue = value;
-      if (cmd.name === 'shell' || cmd.name === 'plan') slashValue = `${slashValue} `;
+      if (cmd.name === 'shell' || cmd.agent) slashValue = `${slashValue} `;
       if (!replaceSlashTriggerInTextarea(targetInput, slashValue)) {
         targetInput.value = slashValue;
         dispatchInput(targetInput);
@@ -258,12 +301,14 @@ export const ChatCommands = (() => {
     activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       cmdSelectedIndex = (cmdSelectedIndex + 1) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFiltered.length) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
@@ -609,6 +654,9 @@ export const ChatCommands = (() => {
 
   return {
     init,
+    setAgentCommands,
+    refreshAgents,
+    getAgentCommands() { return agentCommands.slice(); },
     setAnchor,
     setInputAnchor,
     setRemoteMode,

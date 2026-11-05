@@ -84,7 +84,6 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
     request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
   ) => Promise<boolean>;
   shellCollabActive?: boolean;
-  planModeActive?: boolean;
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
   sessionId?: string;

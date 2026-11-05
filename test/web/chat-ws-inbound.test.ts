@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { WebSocket } from 'ws';
 import { createInboundMessageHandler } from '../../src/web/chat-ws-inbound.js';
 import { subscribeWsToSession, clearBroadcastState, getSubscribedSessionId, addChatClient } from '../../src/web/chat-ws-broadcast.js';
@@ -20,6 +22,8 @@ import {
 } from '../../src/web/chat-ws-running-turn.js';
 import { createToolConfirmHandler, handleConfirmReply } from '../../src/web/chat-ws-confirm.js';
 import { PENDING_NOTE_USAGE_MESSAGE } from '../../src/session/pending-note.js';
+import { resetAgentModeStoreForTests } from '../../src/session/agent-mode-store.js';
+import { ensureDefaultPlanAgent } from '../../src/agents/agent-store.js';
 import { getTaskQueueManager } from '../../src/session/task-queue.js';
 import {
   enqueueAndMaybeKickoff,
@@ -74,6 +78,8 @@ afterEach(async () => {
     setSessionRunPhase(sid, 'idle');
     await fs.unlink(getSessionFile(sid)).catch(() => {});
     await fs.unlink(getSessionFile(sid).replace(/\.json$/, '.structured.json')).catch(() => {});
+    await fs.unlink(getSessionFile(sid).replace(/\.json$/, '.agent-mode.json')).catch(() => {});
+    resetAgentModeStoreForTests();
     await getTaskQueueManager(getSessionsDir()).clearSession(sid).catch(() => {});
   }
 });
@@ -107,6 +113,41 @@ describe('chat-ws-inbound', () => {
     await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '   ' })));
     expect(ws.sent).toEqual([]);
     expect(enqueueAndMaybeKickoff).not.toHaveBeenCalled();
+  });
+
+  it('只发 /plan 不启动回合，并收回 Stop 状态', async () => {
+    const agentsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-plan-agent-'));
+    process.env.ICE_AGENTS_DIR = agentsDir;
+    await ensureDefaultPlanAgent(agentsDir);
+    const ws = fakeWs();
+    subscribeWsToSession(ws, uniqueSid('inbound-plan'));
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '/plan' })));
+    expect(enqueueAndMaybeKickoff).not.toHaveBeenCalled();
+    expect(ws.sent.some((row) => (row as { type?: string }).type === 'agent_mode_entered')).toBe(true);
+    expect(ws.sent.some((row) => {
+      const msg = row as { type?: string; status?: string };
+      return msg.type === 'status' && msg.status === 'idle';
+    })).toBe(true);
+    delete process.env.ICE_AGENTS_DIR;
+    await fs.rm(agentsDir, { recursive: true, force: true });
+  });
+
+  it('/plan 带提示词仍进入回合，不提前发 idle', async () => {
+    const agentsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-plan-agent-'));
+    process.env.ICE_AGENTS_DIR = agentsDir;
+    await ensureDefaultPlanAgent(agentsDir);
+    const ws = fakeWs();
+    subscribeWsToSession(ws, uniqueSid('inbound-plan-prompt'));
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '/plan 写一份方案' })));
+    expect(enqueueAndMaybeKickoff).toHaveBeenCalledTimes(1);
+    expect(ws.sent.some((row) => {
+      const msg = row as { type?: string; status?: string };
+      return msg.type === 'status' && msg.status === 'idle';
+    })).toBe(false);
+    delete process.env.ICE_AGENTS_DIR;
+    await fs.rm(agentsDir, { recursive: true, force: true });
   });
 
   it('/next 无正文返回用法', async () => {

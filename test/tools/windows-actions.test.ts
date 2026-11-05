@@ -5,7 +5,6 @@ import path from 'node:path';
 import { isToolExcludedForAllAgents } from '../../src/harness/agents/agent-types.js';
 import { resolveToolPermission } from '../../src/harness/harness-permission-runtime.js';
 import { createToolUsageSection } from '../../src/prompts/sections.js';
-import { filterPlanModeToolDefinitions } from '../../src/session/plan-mode-tool-policy.js';
 import {
   readUseWindowsFromMainConfig,
   resolveUseWindows,
@@ -24,8 +23,6 @@ import {
   WINDOWS_DESKTOP_TOOL_NAMES,
 } from '../../src/tools/windows/windows-actions.js';
 import { filterHits, offsetHits } from '../../src/tools/windows/windows-locate.js';
-import type { ToolDefinition } from '../../src/llm/types.js';
-
 const tools = WINDOWS_DESKTOP_TOOL_NAMES.map((name) => ({ name, description: name, parameters: {} }));
 
 describe('useWindows offering', () => {
@@ -74,18 +71,7 @@ describe('useWindows offering', () => {
     expect(withTools.content).toContain('Do not write OCR');
   });
 
-  it('keeps desktop tools away from plan mode, sub-agents, and unattended runs', () => {
-    const defs = WINDOWS_DESKTOP_TOOL_NAMES.map((name): ToolDefinition => ({
-      name,
-      description: name,
-      parameters: {},
-    }));
-    expect(filterPlanModeToolDefinitions([...defs, {
-      name: 'read_file',
-      description: 'read',
-      parameters: {},
-    }]).map((tool) => tool.name)).toEqual(['read_file']);
-
+  it('keeps desktop tools away from sub-agents and unattended runs', () => {
     for (const name of WINDOWS_DESKTOP_TOOL_NAMES) {
       expect(isToolExcludedForAllAgents(name)).toBe(true);
     }

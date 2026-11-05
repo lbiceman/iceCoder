@@ -57,6 +57,7 @@ export const ChatSkills = (() => {
     for (let j = 0; j < items.length; j++) {
       items[j].classList.toggle('active', j === skillSelectedIndex);
     }
+    if (window.ChatDropdown.revealActiveItem) window.ChatDropdown.revealActiveItem();
   }
 
   function isOpen() {
@@ -378,12 +379,14 @@ export const ChatSkills = (() => {
     activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       skillSelectedIndex = (skillSelectedIndex + 1) % Math.max(skillFiltered.length, 1);
       updateActiveItem();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       skillSelectedIndex = (skillSelectedIndex - 1 + skillFiltered.length) % Math.max(skillFiltered.length, 1);
       updateActiveItem();
       return true;

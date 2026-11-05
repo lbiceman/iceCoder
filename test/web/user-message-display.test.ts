@@ -51,15 +51,8 @@ describe('buildUserMessageDisplayFields', () => {
     expect(result.content).toBe('【目录浏览】若用户只给出文件名');
   });
 
-  it('splits /plan with prompt body', () => {
+  it('leaves /plan text in the message body for the agent command parser', () => {
     const result = buildUserMessageDisplayFields('/plan\n完善登录页方案');
-    expect(result.planCommand).toBe('/plan');
-    expect(result.content).toBe('完善登录页方案');
-  });
-
-  it('does not treat a mid-message /plan mention as a plan command', () => {
-    const result = buildUserMessageDisplayFields('请实现登录\n/plan 先写方案再改代码');
-    expect(result.planCommand).toBeUndefined();
-    expect(result.content).toBe('请实现登录\n/plan 先写方案再改代码');
+    expect(result.content).toBe('/plan\n完善登录页方案');
   });
 });

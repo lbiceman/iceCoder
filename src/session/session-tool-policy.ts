@@ -21,13 +21,10 @@ import { ToolExecutor } from '../tools/tool-executor.js';
 import { ToolRegistry } from '../tools/tool-registry.js';
 import { ToolValidator, createDefaultValidationRules } from '../tools/tool-validator.js';
 import { getShellCollabState, loadForSession } from './shell-collab-store.js';
-import { getPlanModeState, loadPlanModeForSession } from './plan-mode-store.js';
-import { filterPlanModeToolDefinitions } from './plan-mode-tool-policy.js';
 
 export interface ResolvedSessionHarnessToolContext extends ResolvedWorkspaceToolContext {
   shellCollabActive: boolean;
-  planModeActive: boolean;
-  /** 默认模式向主 Agent 暴露 `task`（子 Agent）；Shell 协作与规划模式不暴露 */
+  /** 默认模式向主 Agent 暴露 `task`（子 Agent）；Shell 协作不暴露 */
   enableAgentTask: boolean;
   mcpRuntimeContext: Record<string, string>;
 }
@@ -36,27 +33,18 @@ export async function resolveSessionHarnessToolContext(
   params: ResolveWorkspaceToolContextParams,
 ): Promise<ResolvedSessionHarnessToolContext> {
   await loadForSession(params.sessionId, params.sessionDir);
-  await loadPlanModeForSession(params.sessionId, params.sessionDir);
   const shellCollabActive = getShellCollabState(params.sessionId)?.active === true;
-  const planModeActive = !shellCollabActive && getPlanModeState(params.sessionId)?.active === true;
 
   if (!shellCollabActive) {
     const wsCtx = await resolveWorkspaceToolContext(params);
-    const toolDefs = planModeActive
-      ? filterPlanModeToolDefinitions(wsCtx.toolDefs)
-      : wsCtx.toolDefs;
     return {
       ...wsCtx,
-      toolDefs,
       shellCollabActive: false,
-      planModeActive,
-      enableAgentTask: !planModeActive,
-      mcpRuntimeContext: planModeActive
-        ? {}
-        : buildMcpRuntimeContext(
-            params.mcpManager,
-            toolDefs.map((tool) => tool.name),
-          ),
+      enableAgentTask: true,
+      mcpRuntimeContext: buildMcpRuntimeContext(
+        params.mcpManager,
+        wsCtx.toolDefs.map((tool) => tool.name),
+      ),
     };
   }
 
@@ -96,7 +84,6 @@ export async function resolveSessionHarnessToolContext(
     toolRegistry,
     toolDefs,
     shellCollabActive: true,
-    planModeActive: false,
     enableAgentTask: false,
     mcpRuntimeContext: {},
   };

@@ -22,6 +22,8 @@
  *   ChatDropdown.close();
  *   ChatDropdown.isOpen();
  *   ChatDropdown.toggle(opts);     // 切换：已开则关，未开则开
+ *   ChatDropdown.revealActiveItem();    // 把 .active 滚进可视区域（键盘上下选择）
+ *   ChatDropdown.suspendPointerHover(); // 键盘改选中项后忽略悬停，直到鼠标真正移动
  *
  * 单例浮层：同一时刻只能开一个；open 第二个会先关掉前一个。
  */
@@ -49,6 +51,8 @@ export const ChatDropdown = (() => {
     onHighlight: null,
   };
   let outsideBound = false;
+  /** 键盘改选中项时为 false，避免列表滚动把指针下的条目当成新的悬停选中。 */
+  let acceptPointerHover = true;
 
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -68,6 +72,18 @@ export const ChatDropdown = (() => {
     c.setAttribute('aria-label', '下拉选项');
     // 阻止浮层内 mousedown 触发 outside-click
     c.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+    c.addEventListener('mousemove', (e) => {
+      if (acceptPointerHover) return;
+      setKeyboardNav(false);
+      const item = e.target && e.target.closest ? e.target.closest('.cmd-item') : null;
+      if (!item || !c.contains(item) || item.classList.contains('is-separator')) return;
+      const idx = parseInt(item.getAttribute('data-index'), 10);
+      if (isNaN(idx)) return;
+      setHighlightedIndex(idx);
+      if (typeof current.onHighlight === 'function') {
+        try { current.onHighlight(current.items[idx], idx); } catch (_e) { /* ignore */ }
+      }
+    });
     c.addEventListener('click', (e) => {
       const item = e.target.closest('.cmd-item');
       if (!item || item.classList.contains('is-separator')) return;
@@ -146,6 +162,7 @@ export const ChatDropdown = (() => {
     const items = elContainer.querySelectorAll('.cmd-item:not(.is-separator)');
     for (let i = 0; i < items.length; i++) {
       items[i].addEventListener('mouseenter', function () {
+        if (!acceptPointerHover) return;
         const idx = parseInt(this.getAttribute('data-index'), 10);
         if (isNaN(idx)) return;
         setHighlightedIndex(idx);
@@ -229,11 +246,22 @@ export const ChatDropdown = (() => {
       if (e.key === 'Escape') { e.preventDefault(); close(); }
     });
     window.addEventListener('resize', () => { if (isOpen) position(); });
-    window.addEventListener('scroll', () => { if (isOpen) position(); }, true);
+    window.addEventListener('scroll', (e) => {
+      if (!isOpen) return;
+      // 列表自身滚动只是为了露出选中项，不要据此重算浮层位置。
+      if (elContainer && (e.target === elContainer || elContainer.contains(e.target))) return;
+      position();
+    }, true);
+  }
+
+  function setKeyboardNav(on) {
+    acceptPointerHover = !on;
+    if (elContainer) elContainer.classList.toggle('is-keyboard-nav', !!on);
   }
 
   function close() {
     if (!isOpen) return;
+    setKeyboardNav(false);
     if (elContainer) {
       elContainer.classList.add('hidden');
       elContainer.classList.remove('is-model-menu');
@@ -270,6 +298,7 @@ export const ChatDropdown = (() => {
     current.variant = opts.variant || 'default';
     current.markAnchorActive = opts.markAnchorActive !== false;
     current.onHighlight = typeof opts.onHighlight === 'function' ? opts.onHighlight : null;
+    setKeyboardNav(false);
     ensureContainer();
     bindOutside();
     elContainer.classList.remove('is-model-menu');
@@ -293,6 +322,39 @@ export const ChatDropdown = (() => {
     if (active) elContainer.scrollTop = active.offsetTop - (elContainer.clientHeight - active.offsetHeight) / 2;
   }
 
+  /**
+   * 键盘上下移动选中项后，把该项滚进可视区域。
+   * 紧挨着的分组标题能一并放下时一起露出，避免只看到命令名、看不到分组。
+   */
+  function revealActiveItem() {
+    if (!elContainer) return;
+    const active = elContainer.querySelector('.cmd-item.active');
+    if (!active || active.classList.contains('is-separator')) return;
+
+    let topEl = active;
+    const prev = active.previousElementSibling;
+    if (prev && prev.classList.contains('is-separator')) {
+      const blockHeight = active.offsetTop + active.offsetHeight - prev.offsetTop;
+      if (blockHeight <= elContainer.clientHeight - 8) topEl = prev;
+    }
+
+    const cRect = elContainer.getBoundingClientRect();
+    const style = window.getComputedStyle(elContainer);
+    const borderTop = parseFloat(style.borderTopWidth) || 0;
+    const borderBottom = parseFloat(style.borderBottomWidth) || 0;
+    const padTop = parseFloat(style.paddingTop) || 0;
+    const padBottom = parseFloat(style.paddingBottom) || 0;
+    const viewTop = cRect.top + borderTop;
+    const viewBottom = cRect.bottom - borderBottom;
+    const topRect = topEl.getBoundingClientRect();
+    const bottomRect = active.getBoundingClientRect();
+    if (topRect.top < viewTop + padTop) {
+      elContainer.scrollTop -= (viewTop + padTop) - topRect.top;
+    } else if (bottomRect.bottom > viewBottom - padBottom) {
+      elContainer.scrollTop += bottomRect.bottom - (viewBottom - padBottom);
+    }
+  }
+
   function toggle(opts) {
     if (isOpen) close();
     else open(opts);
@@ -304,6 +366,8 @@ export const ChatDropdown = (() => {
     toggle,
     isOpen() { return isOpen; },
     getContainer() { return elContainer; },
+    revealActiveItem,
+    suspendPointerHover() { setKeyboardNav(true); },
   };
 })();
 

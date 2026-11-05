@@ -2907,6 +2907,11 @@ export const ChatUI = (() => {
       if (planRow) el.appendChild(planRow);
     }
 
+    if (displayMsg.role === 'user' && displayMsg.agentCommand) {
+      const agentRow = createMsgSlashCommandChip(displayMsg.agentCommand, 'Agent');
+      if (agentRow) el.appendChild(agentRow);
+    }
+
     if (displayMsg.role === 'user' && displayMsg.openCommand) {
       const openRow = createMsgSlashCommandChip(displayMsg.openCommand, '目录浏览');
       if (openRow) el.appendChild(openRow);
