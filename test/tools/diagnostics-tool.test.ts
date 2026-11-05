@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,11 @@ describe('diagnostics tool', () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain('src/add.ts:1:');
     expect(result.output).toContain('TS2322');
+  });
+
+  it('does not statically import typescript, so a packaged server can boot without it', async () => {
+    const source = await readFile(new URL('../../src/tools/builtin/diagnostics-tool.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/^import (?!type\b).*['"]typescript['"]/m);
   });
 
   it('says when the workspace has no project diagnostics', async () => {

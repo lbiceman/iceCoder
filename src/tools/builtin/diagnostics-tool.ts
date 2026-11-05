@@ -5,11 +5,32 @@
 
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import ts from 'typescript';
-
+import type * as TsTypes from 'typescript';
 import type { RegisteredTool } from '../types.js';
+
+type TypeScriptModule = typeof TsTypes;
+
+/**
+ * 安装包不带 typescript。启动时不能静态 import，否则服务端起不来。
+ * 先用工作区自己的 typescript，开发态再退回本仓库的 node_modules。
+ */
+function loadTypeScript(workDir: string): TypeScriptModule | null {
+  const attempts = [
+    path.join(workDir, 'package.json'),
+    import.meta.url,
+  ];
+  for (const from of attempts) {
+    try {
+      return createRequire(from)('typescript') as TypeScriptModule;
+    } catch {
+      // 这个位置没有 typescript，试下一个
+    }
+  }
+  return null;
+}
 
 const MAX_FINDINGS = 40;
 const MAX_CHARS = 8_000;
@@ -24,7 +45,11 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-function formatTscDiagnostics(workDir: string, diagnostics: readonly ts.Diagnostic[]): string {
+function formatTscDiagnostics(
+  ts: TypeScriptModule,
+  workDir: string,
+  diagnostics: readonly TsTypes.Diagnostic[],
+): string {
   const lines: string[] = [];
   for (const diagnostic of diagnostics) {
     if (lines.length >= MAX_FINDINGS) break;
@@ -43,11 +68,19 @@ function formatTscDiagnostics(workDir: string, diagnostics: readonly ts.Diagnost
 }
 
 async function runTsc(workDir: string, target: string): Promise<string | null> {
+  const ts = loadTypeScript(workDir);
+  if (!ts) {
+    const localConfig = path.join(workDir, 'tsconfig.json');
+    if (await exists(localConfig)) {
+      return 'tsconfig.json found, but typescript is not installed. Install it in the workspace, or read the file directly.';
+    }
+    return null;
+  }
   const configPath = ts.findConfigFile(workDir, ts.sys.fileExists, 'tsconfig.json');
   if (!configPath) return null;
   const read = ts.readConfigFile(configPath, ts.sys.readFile);
   if (read.error) {
-    return formatTscDiagnostics(workDir, [read.error]);
+    return formatTscDiagnostics(ts, workDir, [read.error]);
   }
   const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(configPath));
   const program = ts.createProgram({
@@ -65,7 +98,7 @@ async function runTsc(workDir: string, target: string): Promise<string | null> {
     if (filtered.length > 0) diagnostics = filtered;
   }
   if (diagnostics.length === 0) return 'tsc: no diagnostics';
-  return formatTscDiagnostics(workDir, diagnostics);
+  return formatTscDiagnostics(ts, workDir, diagnostics);
 }
 
 async function eslintConfigPath(workDir: string): Promise<string | null> {

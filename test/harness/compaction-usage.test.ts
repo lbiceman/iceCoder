@@ -114,7 +114,7 @@ describe('ContextCompactor 双轨占用判定', () => {
     expect(resolveCompactionReserve(undefined)).toBe(COMPACTION_RESERVE_TOKENS);
     expect(resolveCompactionReserve(16_384)).toBe(16_384 + EPHEMERAL_RESERVE_TOKENS);
     expect(resolveMicroCompactionLine(CONTEXT_WINDOW, 16_384)).toBe(Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO));
-    expect(MICRO_COMPACTION_RATIO).toBe(0.6);
+    expect(MICRO_COMPACTION_RATIO).toBe(0.75);
     expect(resolveMicroCompactionLine(CONTEXT_WINDOW)).toBe(Math.floor(CONTEXT_WINDOW * MICRO_COMPACTION_RATIO));
   });
 

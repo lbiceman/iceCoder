@@ -15,11 +15,11 @@ describe('规划模式走 / 面板', () => {
     const commands = readPublic('js/chat-commands.ts');
     const page = readPublic('js/chat-page.ts');
     const main = readPublic('js/main.ts');
-    const welcome = readPublic('js/chat-welcome.ts');
+    const i18n = readPublic('js/i18n.ts');
 
     expect(commands).toContain("name: 'plan'");
     expect(commands).toContain("cmd.name === 'shell' || cmd.name === 'plan'");
-    expect(welcome).toContain('/plan');
+    expect(i18n).toContain('/plan');
 
     expect(page).not.toContain('chip-agent-mode');
     expect(page).not.toContain('ChatAgentModePicker');
