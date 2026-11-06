@@ -141,6 +141,13 @@
   background: transparent;
   border-left-color: var(--border-light);
 }
+.agent-card__activity .tool-action .tool-name,
+.agent-card__activity .tool-action .tool-detail {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
 .agent-card__recent,
 .agent-card__older {
   display: flex;

@@ -38,6 +38,8 @@ describe('diff-viewer edit_file output', () => {
     expect(files.length).toBe(1);
     expect(files[0].changes.length).toBe(2);
     expect(files[0].changes[0]).toMatchObject({ type: 'del', lineNum: 290, content: '<!-- 这是一行测试文字 -->' });
+    expect((DV as { countDiffLineStats: (t: string) => { add: number; del: number } | null }).countDiffLineStats(wrapped))
+      .toEqual({ add: 1, del: 1 });
     expect(files[0].changes[1]).toMatchObject({ type: 'add', lineNum: 290, content: '我是iceCoder，模型：mimo-2.5-pro' });
   });
 
@@ -77,5 +79,14 @@ describe('diff-viewer edit_file output', () => {
     expect(items[50].omitted).toBe(20);
     expect(items[0].change).toMatchObject({ content: 'line0' });
     expect(items[100].change).toMatchObject({ content: 'line119' });
+  });
+
+  it('counts added and deleted lines across files', () => {
+    const DV = loadDiffViewer() as { countDiffLineStats: (t: string) => { add: number; del: number } | null };
+    const created = `File written: tmp/a.mjs\n\n--- /dev/null\n+++ b/tmp/a.mjs\n@@ -0,0 +1,3 @@\n+one\n+two\n+three`;
+    expect(DV.countDiffLineStats(created)).toEqual({ add: 3, del: 0 });
+    const multi = `--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/y.ts b/y.ts\n--- a/y.ts\n+++ b/y.ts\n@@ -1,2 +1 @@\n keep\n-gone\n`;
+    expect(DV.countDiffLineStats(multi)).toEqual({ add: 1, del: 2 });
+    expect(DV.countDiffLineStats('command finished')).toBeNull();
   });
 });

@@ -702,7 +702,10 @@ export const ChatUI = (() => {
     const toolName = row ? row.getAttribute('data-tool') : '';
     if (!toolName || !isDiffCapableToolName(toolName)) return;
     const ds = resolveDiffSourceForHistoryBlock(block, group);
-    if (ds) block._diffSource = ds;
+    if (ds) {
+      block._diffSource = ds;
+      applyToolDiffStat(block, ds);
+    }
     bindDiffToggleRow(block, toolName, true);
   }
 
@@ -1142,6 +1145,7 @@ export const ChatUI = (() => {
   /** 挂载 diff 内容但默认隐藏 */
   function mountHiddenDiffInBlock(block, diffSource) {
     if (!block || !diffSource) return false;
+    applyToolDiffStat(block, diffSource);
     const diffEl = renderDiffElementFromSource(diffSource);
     if (!diffEl) return false;
 
@@ -1339,6 +1343,7 @@ export const ChatUI = (() => {
       if (!toolName || !isDiffCapableToolName(toolName)) continue;
       if (isNodeInHistoryRegion(block)) {
         block._diffSource = diffSource;
+        applyToolDiffStat(block, diffSource);
         bindDiffToggleRow(block, toolName, true);
       } else if (mountHiddenDiffInBlock(block, diffSource)) {
         bindDiffToggleRow(block, toolName, false);
@@ -1537,6 +1542,51 @@ export const ChatUI = (() => {
     if (done) done(false);
   }
 
+  const FILE_CHANGE_STAT_TOOLS = {
+    write_file: true,
+    edit_file: true,
+    append_file: true,
+    patch_file: true,
+    batch_edit_file: true,
+    run_command: true,
+  };
+
+  /** 路径后面的 +N / -M。只在这次调用真的改了行时出现。 */
+  function applyToolDiffStat(block, diffSource) {
+    if (!block || !block.querySelector) return;
+    const row = block.querySelector('.tool-action');
+    if (!row) return;
+    const existing = row.querySelector('.tool-diff-stat');
+    const failed = !!row.querySelector('.tool-icon.error');
+    const toolName = row.getAttribute('data-tool') || '';
+    const stats = !failed
+      && FILE_CHANGE_STAT_TOOLS[toolName]
+      && window.DiffViewer
+      && typeof window.DiffViewer.countDiffLineStats === 'function'
+      ? window.DiffViewer.countDiffLineStats(diffSource)
+      : null;
+    if (!stats) {
+      if (existing) existing.remove();
+      return;
+    }
+    const stat = existing || document.createElement('span');
+    stat.className = 'tool-diff-stat';
+    stat.textContent = '';
+    const title = [];
+    if (stats.add > 0) title.push('新增 ' + stats.add + ' 行');
+    if (stats.del > 0) title.push('删除 ' + stats.del + ' 行');
+    stat.title = title.join('，');
+    const add = document.createElement('span');
+    add.className = 'tool-diff-add';
+    add.textContent = stats.add > 0 ? '+' + stats.add : '';
+    stat.appendChild(add);
+    const del = document.createElement('span');
+    del.className = 'tool-diff-del';
+    del.textContent = stats.del > 0 ? '-' + stats.del : '';
+    stat.appendChild(del);
+    if (!existing) row.appendChild(stat);
+  }
+
   function createToolRowBlock(toolName, detail, status, toolCallId, diffSource, forHistory) {
     const block = document.createElement('div');
     block.className = 'tool-action-row-block';
@@ -1546,6 +1596,7 @@ export const ChatUI = (() => {
     block.appendChild(row);
 
     if (diffSource) {
+      applyToolDiffStat(block, diffSource);
       if (forHistory) {
         block._diffSource = diffSource;
       } else {
@@ -2004,6 +2055,7 @@ export const ChatUI = (() => {
       iconEl.className = `tool-icon ${status}`;
       iconEl.textContent = iconTextForStatus(status);
     }
+    if (block) applyToolDiffStat(block, block._diffSource || null);
     if (block && toolOutput && isToolIoToggleName(toolName)
         && block.getAttribute('data-has-diff') !== '1') {
       const prev = block._ioText || '';
@@ -2027,6 +2079,8 @@ export const ChatUI = (() => {
               iconEl.className = `tool-icon ${status}`;
               iconEl.textContent = iconTextForStatus(status);
             }
+            const statBlock = rows[r].closest('.tool-action-row-block');
+            if (statBlock) applyToolDiffStat(statBlock, statBlock._diffSource || null);
             notifyContentLayoutChange();
             return;
           }
@@ -2040,6 +2094,7 @@ export const ChatUI = (() => {
             iconEl3.className = `tool-icon ${status}`;
             iconEl3.textContent = iconTextForStatus(status);
           }
+          applyToolDiffStat(node, node._diffSource || null);
           notifyContentLayoutChange();
           return;
         }
@@ -2050,6 +2105,8 @@ export const ChatUI = (() => {
           iconEl2.className = `tool-icon ${status}`;
           iconEl2.textContent = iconTextForStatus(status);
         }
+        const statBlock2 = node.closest('.tool-action-row-block');
+        if (statBlock2) applyToolDiffStat(statBlock2, statBlock2._diffSource || null);
         notifyContentLayoutChange();
         return;
       }

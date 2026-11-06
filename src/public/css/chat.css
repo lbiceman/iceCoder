@@ -2366,7 +2366,8 @@
   color: var(--text-muted);
   border-left: 2px solid var(--border-color);
   margin-left: 4px;
-  max-width: 78%;
+  width: max-content;
+  max-width: 100%;
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -2398,6 +2399,11 @@
 .tool-action .tool-icon.warn { color: var(--warning); }
 .tool-action .tool-icon.background { color: var(--accent); }
 .tool-action .tool-name {
+  flex: 0 0 7.8em;
+  width: 7.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -2428,11 +2434,35 @@
   }
 }
 .tool-action .tool-detail {
+  flex: 0 0 200px;
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.tool-action .tool-diff-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.tool-action .tool-diff-add,
+.tool-action .tool-diff-del {
+  flex: 0 0 1.8em;
+  width: 1.8em;
+  text-align: right;
+}
+
+.tool-action .tool-diff-add { color: var(--success); }
+.tool-action .tool-diff-del { color: var(--danger); }
 
 .tool-action .tool-name.tool-diff-toggle {
   cursor: pointer;

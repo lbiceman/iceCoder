@@ -365,6 +365,24 @@ export const DiffViewer = (() => {
     return { add, del };
   }
 
+  /** 统计 unified diff 的新增 / 删除行。无变更行时返回 null。 */
+  function countDiffLineStats(text) {
+    const diffText = extractUnifiedDiff(typeof text === 'string' ? text : '');
+    if (!diffText) return null;
+    const files = parseChangesOnly(diffText);
+    let add = 0;
+    let del = 0;
+    for (let i = 0; i < files.length; i++) {
+      const changes = files[i].changes || [];
+      for (let c = 0; c < changes.length; c++) {
+        if (changes[c].type === 'add') add++;
+        else if (changes[c].type === 'del') del++;
+      }
+    }
+    if (add === 0 && del === 0) return null;
+    return { add, del };
+  }
+
   return {
     extractUnifiedDiff,
     looksLikeUnifiedDiffText,
@@ -375,6 +393,7 @@ export const DiffViewer = (() => {
     render,
     renderFromText,
     countChanges,
+    countDiffLineStats,
   };
 })();
 
