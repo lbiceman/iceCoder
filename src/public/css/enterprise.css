@@ -265,16 +265,10 @@ select:focus-visible,
 
 .message.assistant,
 .message.agent {
-  border-color: var(--msg-agent-border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
   background: var(--msg-agent-bg);
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--transition);
-}
-
-.message.assistant:hover,
-.message.agent:hover {
-  border-color: var(--border-color);
+  box-shadow: none;
 }
 
 .message .msg-label {

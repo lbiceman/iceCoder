@@ -836,7 +836,7 @@
   border: 1px solid var(--msg-agent-border);
   color: var(--text-primary);
   border-bottom-left-radius: 4px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .message .msg-label-row {
@@ -1025,44 +1025,50 @@
 .message.agent .msg-content--md {
   white-space: normal;
   word-break: break-word;
+  font-size: 14px;
+  line-height: 1.7;
 }
-.msg-content--md > * + * {
-  margin-top: 0.7em;
-}
-.msg-content--md p,
-.msg-content--md ul,
-.msg-content--md ol,
-.msg-content--md blockquote,
-.msg-content--md pre,
-.msg-content--md h1,
-.msg-content--md h2,
-.msg-content--md h3,
-.msg-content--md h4,
-.msg-content--md h5,
-.msg-content--md h6 {
+.msg-content--md > :where(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) {
   margin: 0;
 }
+.msg-content--md > * + * {
+  margin-top: 0.85em;
+}
+.msg-content--md > * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.25em;
+}
+.msg-content--md > :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.4em;
+}
 .msg-content--md h1,
 .msg-content--md h2,
 .msg-content--md h3,
 .msg-content--md h4,
 .msg-content--md h5,
 .msg-content--md h6 {
-  font-weight: 650;
-  line-height: 1.35;
+  font-weight: 600;
+  line-height: 1.4;
 }
-.msg-content--md h1 { font-size: 1.15em; }
-.msg-content--md h2 { font-size: 1.08em; }
+.msg-content--md h1 { font-size: 1.12em; }
+.msg-content--md h2 { font-size: 1.06em; }
 .msg-content--md h3,
 .msg-content--md h4,
 .msg-content--md h5,
 .msg-content--md h6 { font-size: 1em; }
+.msg-content--md strong,
+.msg-content--md b {
+  font-weight: 600;
+}
 .msg-content--md ul,
 .msg-content--md ol {
-  padding-left: 1.3em;
+  padding-left: 1.45em;
 }
 .msg-content--md li + li {
-  margin-top: 0.2em;
+  margin-top: 0.35em;
+}
+.msg-content--md li > ul,
+.msg-content--md li > ol {
+  margin-top: 0.4em;
 }
 .msg-content--md li.md-task {
   list-style: none;
@@ -1102,7 +1108,7 @@
   background: var(--surface-panel, var(--bg-secondary));
   font-family: var(--font-mono);
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 .msg-content--md pre.md-code code {
   padding: 0;
@@ -1145,7 +1151,7 @@
   border-collapse: collapse;
   table-layout: auto;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 .msg-content--md table.md-table th,
 .msg-content--md table.md-table td {
