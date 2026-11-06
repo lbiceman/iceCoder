@@ -77,8 +77,6 @@ export interface IceEtlPrefs {
   taskDoneNotification: boolean;
   /** 面板空闲（无执行活动）时自动收起为宠物形态 */
   panelAutoCollapse: boolean;
-  /** 最小化 Electron 窗口时是否在桌面显示悬浮宠物。关闭后窗口正常最小化，桌面不再露出宠物 */
-  showDesktopPet: boolean;
 }
 
 /** `data/config.json` 顶层结构 */

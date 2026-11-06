@@ -25,7 +25,6 @@ describe('企业级 UI 主题体系', () => {
       '--interactive-hover',
       '--interactive-active',
       '--focus-ring',
-      '--content-max-width',
       '--font-mono',
     ];
 

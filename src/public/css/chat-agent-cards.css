@@ -134,19 +134,13 @@
 
 .agent-card__activity .tool-action-row-block { margin-bottom: 0; }
 .agent-card__activity .tool-action {
+  grid-template-columns: 14px 7.2em minmax(0, 14em) 5.2em;
+  width: 100%;
   max-width: 100%;
-  margin-left: 0;
-  padding: 1px 0 1px 8px;
+  margin: 0;
+  padding: 2px 8px;
   font-size: 11px;
   background: transparent;
-  border-left-color: var(--border-light);
-}
-.agent-card__activity .tool-action .tool-name,
-.agent-card__activity .tool-action .tool-detail {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-  max-width: none;
 }
 .agent-card__recent,
 .agent-card__older {

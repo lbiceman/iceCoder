@@ -21,6 +21,16 @@
       } catch (e) { /* ignore */ }
     })();
   </script>
+  <script>
+    (() => {
+      const api = window.iceDesktop;
+      if (!api || typeof api.windowMinimize !== 'function') return;
+      document.documentElement.classList.add('ice-window-chrome');
+      if (api.windowControls === false) {
+        document.documentElement.classList.add('ice-window-native-controls');
+      }
+    })();
+  </script>
   <title>iceCoder · 本地 AI 助手</title>
   <meta name="description" content="iceCoder — 本地优先的 AI 编程 Agent：多会话、技能、记忆与执行透明层。">
   <link rel="icon" href="/icons/favicon.svg?v=20260915r2" type="image/svg+xml">

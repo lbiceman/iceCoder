@@ -29,21 +29,8 @@ export const HEALTHCHECK_TIMEOUT_MS = 1500;
 /** health check 总超时（ms） */
 export const HEALTHCHECK_MAX_WAIT_MS = 30_000;
 
-/** IPC 通道常量（preload / renderer / floating 共享）。 */
+/** IPC 通道常量（preload / renderer 共享）。 */
 export const IPC = {
-  // 主窗 ↔ Main
-  PET_GET_MODE: 'pet:get-mode',
-  PET_STATE_PUSH: 'pet:state-push',
-  PET_SET_EMBEDDED: 'pet:set-embedded',
-  PET_REQUEST_SHOW_MAIN: 'pet:request-show-main',
-  PET_REQUEST_FOCUS_MAIN: 'pet:request-focus-main',
-  PET_DRAG_MOVE: 'pet:drag-move',
-  PET_DRAG_END: 'pet:drag-end',
-  /** 悬浮窗透明区点击穿透（true=穿透，false=可点冰豆） */
-  PET_SET_MOUSE_PASSTHROUGH: 'pet:set-mouse-passthrough',
-  /** 渲染层同步「桌面宠物」开关。关闭后最小化主窗不再浮出冰豆。 */
-  PET_SET_DESKTOP_ENABLED: 'pet:set-desktop-enabled',
-
   // 工作区
   WORKSPACE_PICK: 'workspace:pick',
   WORKSPACE_GET: 'workspace:get',
@@ -58,6 +45,14 @@ export const IPC = {
   APP_OPEN_DATA_DIR: 'app:open-data-dir',
   APP_QUIT: 'app:quit',
   APP_DEVTOOLS: 'app:devtools',
+  /** 自绘标题栏：最小化 / 最大化切换 / 关闭。 */
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_TOGGLE_MAXIMIZE: 'window:toggle-maximize',
+  WINDOW_CLOSE: 'window:close',
+  /** 渲染进程拉取当前是否最大化、是否聚焦。 */
+  WINDOW_CHROME_STATE: 'window:chrome-state',
+  WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
+  WINDOW_FOCUS_CHANGED: 'window:focus-changed',
 
   /** 渲染层请求系统通知（任务完成提醒）。 */
   TASK_DONE_NOTIFY: 'task:done-notify',
@@ -87,9 +82,6 @@ export const IPC = {
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];
-
-/** 进程模式。 */
-export type PetDisplayMode = 'embedded' | 'floating' | 'hidden';
 
 /** 是否处于打包后（app.isPackaged）。 */
 export function isPackaged(): boolean {

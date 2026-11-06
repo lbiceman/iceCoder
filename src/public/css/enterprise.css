@@ -306,11 +306,16 @@ select:focus-visible,
   font-family: var(--font-mono);
 }
 
-.tool-trace-group,
-.tool-action,
 .tool-result {
   border-color: var(--border-subtle);
   background: var(--surface-panel);
+}
+
+.tool-trace-group,
+.tool-trace-group .tool-action {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tool-trace-group {
@@ -335,7 +340,7 @@ select:focus-visible,
 }
 
 .chat-composer-stack {
-  width: min(100%, var(--content-max-width));
+  width: 100%;
   margin: 0 auto;
 }
 

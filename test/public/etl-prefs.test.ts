@@ -82,7 +82,6 @@ describe('etl-prefs', () => {
       sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
-      showDesktopPet: true,
     });
   });
 
@@ -121,7 +120,6 @@ describe('etl-prefs', () => {
       sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
-      showDesktopPet: true,
     });
   });
 

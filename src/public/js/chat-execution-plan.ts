@@ -712,13 +712,17 @@ export const ChatExecutionPlan = (() => {
     }, 80);
   }
 
-  /** #top-nav 底缘（不存在则 0） */
+  /** #top-nav 或窗口顶栏的底缘（都不存在则 0） */
   function navBottom() {
     let top = 0;
     try {
       const nav = document.getElementById('top-nav');
       if (nav && nav.getBoundingClientRect) {
         top = Math.max(0, nav.getBoundingClientRect().bottom);
+      }
+      const caption = document.querySelector('.window-caption');
+      if (caption && caption.getBoundingClientRect) {
+        top = Math.max(top, caption.getBoundingClientRect().bottom);
       }
     } catch (_e) { /* ignore */ }
     return top;

@@ -282,11 +282,13 @@
 .chat-vhistory-slot .message:is(.assistant, .agent) {
   align-self: flex-start;
 }
+.chat-vhistory-slot .message:has(.tool-action),
 .chat-vhistory-slot .tool-trace-group,
 .chat-vhistory-slot .turn-activity,
 .chat-vhistory-slot .agent-delegation {
   align-self: flex-start;
-  max-width: 92%;
+  width: max-content;
+  max-width: min(520px, 100%);
 }
 .chat-tail-root {
   display: flex;
@@ -837,6 +839,12 @@
   color: var(--text-primary);
   border-bottom-left-radius: 4px;
   box-shadow: none;
+}
+
+.message:has(.tool-action) {
+  align-self: flex-start;
+  width: auto;
+  max-width: min(720px, 100%);
 }
 
 .message .msg-label-row {
@@ -2227,11 +2235,6 @@
 .session-pet-indicator.active {
   display: flex;
 }
-.session-pet-indicator.session-pet-indicator--desktop-hidden {
-  visibility: hidden !important;
-  pointer-events: none !important;
-  opacity: 0 !important;
-}
 .pet-bubble {
   position: absolute;
   left: 50%;
@@ -2362,20 +2365,23 @@
   }
 }
 
-/* 工具调用条目（聊天记录中） */
+/* 工具调用条目（聊天记录中）：四列共用一条轨道，图标 / 工具名 / 路径 / 增删 */
 .tool-action {
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px 8em minmax(12em, 20em) 6em;
   align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
+  column-gap: 8px;
+  padding: 3px 8px;
   font-size: 12px;
   color: var(--text-muted);
-  border-left: 2px solid var(--border-color);
-  margin-left: 4px;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
   width: max-content;
   max-width: 100%;
-  overflow: hidden;
-  flex-shrink: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  background: transparent;
 }
 .tool-action .tool-icon {
   flex-shrink: 0;
@@ -2405,8 +2411,7 @@
 .tool-action .tool-icon.warn { color: var(--warning); }
 .tool-action .tool-icon.background { color: var(--accent); }
 .tool-action .tool-name {
-  flex: 0 0 7.8em;
-  width: 7.8em;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2440,10 +2445,7 @@
   }
 }
 .tool-action .tool-detail {
-  flex: 0 0 200px;
-  width: 200px;
-  min-width: 200px;
-  max-width: 200px;
+  min-width: 0;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2451,20 +2453,22 @@
 }
 
 .tool-action .tool-diff-stat {
+  grid-column: 4;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
+  justify-content: flex-end;
+  width: 100%;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .tool-action .tool-diff-add,
 .tool-action .tool-diff-del {
-  flex: 0 0 1.8em;
-  width: 1.8em;
+  flex: 0 0 3.2em;
+  width: 3.2em;
   text-align: right;
+  white-space: nowrap;
 }
 
 .tool-action .tool-diff-add { color: var(--success); }
@@ -2537,20 +2541,33 @@
 .tool-trace-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 4px 0 6px 0;
-  max-width: 92%;
+  align-items: stretch;
+  gap: 0;
+  align-self: flex-start;
+  width: max-content;
+  max-width: min(520px, 100%);
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
   flex-shrink: 0;
 }
-.tool-trace-visible {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.tool-trace-group .tool-action-row-block {
+  width: 100%;
+  margin: 0;
 }
+.tool-trace-visible,
 .tool-trace-collapsed {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  gap: 0;
 }
 .tool-trace-toggle {
   align-self: flex-start;
@@ -3728,7 +3745,7 @@ body.pane-resizing * {
 /* ── 楼梯导航：右侧独立 gutter，不遮挡用户消息 ── */
 .chat-staircase-nav {
   position: absolute;
-  right: 22px;
+  right: 18px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 11;
@@ -3748,13 +3765,10 @@ body.pane-resizing * {
   align-items: flex-end;
   gap: 5px;
   padding: 6px 2px;
+  cursor: pointer;
   max-height: calc(100vh - 320px);
   overflow: hidden;
   pointer-events: auto;
-}
-.chat-staircase-lines.is-hidden {
-  visibility: hidden;
-  pointer-events: none;
 }
 
 .chat-staircase-line {

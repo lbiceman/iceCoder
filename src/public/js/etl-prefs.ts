@@ -16,7 +16,6 @@ export const EtlPrefs = (() => {
     sidebarWidth: 256,
     taskDoneNotification: false,
     panelAutoCollapse: false,
-    showDesktopPet: true,
   };
 
   let cached = null;
@@ -124,9 +123,6 @@ export const EtlPrefs = (() => {
     }
     if (typeof raw.panelAutoCollapse === 'boolean') {
       out.panelAutoCollapse = raw.panelAutoCollapse;
-    }
-    if (typeof raw.showDesktopPet === 'boolean') {
-      out.showDesktopPet = raw.showDesktopPet;
     }
     out.panelWidth = clampWidth(raw.panelWidth, DEFAULTS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
     out.sidebarWidth = clampWidth(raw.sidebarWidth, DEFAULTS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);

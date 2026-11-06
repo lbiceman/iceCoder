@@ -173,18 +173,16 @@ export const ChatStaircaseNav = (() => {
   }
 
   function openPopover() {
-    if (!elPopover || !elLines) return;
+    if (!elPopover) return;
     isPopoverOpen = true;
     elPopover.classList.remove('hidden');
-    elLines.classList.add('is-hidden');
     elNav.classList.add('is-expanded');
   }
 
   function closePopover() {
-    if (!elPopover || !elLines) return;
+    if (!elPopover) return;
     isPopoverOpen = false;
     elPopover.classList.add('hidden');
-    elLines.classList.remove('is-hidden');
     elNav.classList.remove('is-expanded');
   }
 

@@ -53,6 +53,8 @@ import { t } from './i18n.ts';
     const main = document.createElement('div');
     main.className = 'app-main';
     app.appendChild(shell);
+    const caption = app.querySelector('.window-caption');
+    if (caption) app.insertBefore(caption, shell);
     shell.appendChild(main);
     main.appendChild(pageContainer);
     return shell;
