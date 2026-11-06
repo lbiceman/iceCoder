@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * ChatPage 的 WS 恢复/确认事件处理（从 chat-page.js 拆分，2026-08-11）。
  * 职责：confirm / confirm_resolved / confirm_timeout / harness_state / checkpoint_message_ids /
@@ -70,7 +71,7 @@ export const ChatWsRestoreHandlers = (() => {
     function agentSourcePrefix(data) {
       const src = data && data.agentSource;
       if (!src || !src.description) return '';
-      return `子 Agent『${src.description}』请求执行：`;
+      return t('confirm.agentAsks', { name: src.description });
     }
 
     function onConfirm(data) {
@@ -88,7 +89,7 @@ export const ChatWsRestoreHandlers = (() => {
       const sessionPet = ctx.getSessionPet();
       if (sessionPet) {
         sessionPet.setState('error');
-        sessionPet.setBubbleText('请在弹窗中确认危险操作');
+        sessionPet.setBubbleText(t('confirm.danger'));
       }
       activeConfirmId = data.confirmId || null;
       activeConfirmResolved = false;
@@ -100,32 +101,33 @@ export const ChatWsRestoreHandlers = (() => {
       if (isShellMandatory && shellInfo) {
         const lines = [
           'Session: ' + (shellInfo.sessionId || ''),
-          '命令: ' + (shellInfo.command || ''),
-          '命中规则: ' + (shellInfo.matchedPattern || ''),
-          '风险类别: ' + (shellInfo.category || ''),
-          '影响: ' + (shellInfo.impact || ''),
+          t('confirm.command') + (shellInfo.command || ''),
+          t('confirm.rule') + (shellInfo.matchedPattern || ''),
+          t('confirm.category') + (shellInfo.category || ''),
+          t('confirm.impact') + (shellInfo.impact || ''),
           '',
-          '此确认不会被「自动执行」设置跳过。',
+          t('confirm.notSkipped'),
         ];
+        const prefix = agentSourcePrefix(data);
         modalOpts = {
-          title: agentSourcePrefix(data) ? `${agentSourcePrefix(data)}Shell 敏感命令` : 'Shell 敏感命令确认',
+          title: prefix ? t('confirm.shellTitle', { prefix }) : t('confirm.shell'),
           message: lines.join('\n'),
           type: 'danger',
           dangerConfirm: true,
-          confirmText: '确认执行',
-          cancelText: '取消',
+          confirmText: t('confirm.run'),
+          cancelText: t('common.cancel'),
           defaultFocus: 'cancel',
         };
       } else {
         const argsText = data.args ? JSON.stringify(data.args) : '';
+        const prefix = agentSourcePrefix(data);
         modalOpts = {
-          title: agentSourcePrefix(data) ? `${agentSourcePrefix(data)}${data.toolName}` : '危险操作确认',
-          message: `工具: ${data.toolName}
-参数: ${argsText}`,
+          title: prefix ? `${prefix}${data.toolName}` : t('confirm.dangerTitle'),
+          message: t('confirm.tool', { name: data.toolName, args: argsText }),
           type: 'danger',
           dangerConfirm: true,
-          confirmText: '允许',
-          cancelText: '拒绝',
+          confirmText: t('confirm.allow'),
+          cancelText: t('confirm.deny'),
         };
       }
 
@@ -143,8 +145,13 @@ export const ChatWsRestoreHandlers = (() => {
         }
         WS.sendConfirmReply(ok, confirmId);
         activeConfirmId = null;
-        const who = agentSourcePrefix(data) ? `子 Agent『${data.agentSource.description}』的 ` : '';
-        const confirmMsg = { role: 'agent', content: ok ? `[ok] 用户已确认: ${who}${data.toolName}` : `[denied] 用户已拒绝: ${who}${data.toolName}` };
+        const who = agentSourcePrefix(data) ? t('confirm.agentOf', { name: data.agentSource.description }) : '';
+        const confirmMsg = {
+          role: 'agent',
+          content: ok
+            ? t('confirm.allowed', { who, tool: data.toolName })
+            : t('confirm.denied', { who, tool: data.toolName }),
+        };
         Session.appendMessage(confirmMsg);
         UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
         Session.saveMessages();
@@ -228,7 +235,7 @@ export const ChatWsRestoreHandlers = (() => {
     function onRestoreFailed(data) {
       set('runtimeRestoreInFlight', false);
       ctx.notifySnapshotRestoreAvailability();
-      const msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
+      const msg = (data && data.error) ? data.error : t('confirm.rollbackFailed');
       ctx.notifyUser(msg, 'error', { duration: 5000 });
       ctx.refreshSnapshotTimelinePanel();
     }
@@ -247,11 +254,11 @@ export const ChatWsRestoreHandlers = (() => {
     }
 
     function onDeleteMessageFailed(data) {
-      const msg = (data && data.error) ? data.error : '删除消息失败。';
+      const msg = (data && data.error) ? data.error : t('confirm.deleteFailed');
       if (data && data.code === 'DELETE_MESSAGE_NOT_FOUND') {
         ctx.pullServerChatSnapshotAuthoritative((synced) => {
           if (synced) {
-            ctx.notifyUser('该消息已不在服务端记录中，界面已同步。', 'info', { duration: 4000 });
+            ctx.notifyUser(t('confirm.missingMessage'), 'info', { duration: 4000 });
             return;
           }
           ctx.notifyUser(msg, 'error', { duration: 5000 });

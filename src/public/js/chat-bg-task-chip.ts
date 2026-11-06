@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 后台任务 ephemeral chip 渲染（Phase 4b UI 通路）。
  *
@@ -94,8 +95,8 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'bg-status-stop-btn';
-      btn.setAttribute('aria-label', '终止后台任务');
-      btn.title = '终止';
+      btn.setAttribute('aria-label', t('bg.stop'));
+      btn.title = t('bg.stopShort');
       btn.textContent = '\u00d7';
       if (el.classList.contains('is-stopping')) btn.disabled = true;
       btn.addEventListener('click', (ev) => {

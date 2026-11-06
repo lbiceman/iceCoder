@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端聊天详情页：子 Tab + 复用 ChatPage Core。
  */
@@ -31,17 +32,17 @@ export const MobileChatPage = (() => {
       parentEl.innerHTML =
         '<div class="mobile-chat-page">' +
           '<div class="mobile-chat-subtabs" role="tablist">' +
-            '<button type="button" class="mobile-chat-subtab is-active" data-tab="chat" role="tab" aria-selected="true">对话</button>' +
-            '<button type="button" class="mobile-chat-subtab" data-tab="files" role="tab" aria-selected="false">文件</button>' +
-            '<button type="button" class="mobile-chat-subtab" data-tab="skills" role="tab" aria-selected="false">技能</button>' +
+            `<button type="button" class="mobile-chat-subtab is-active" data-tab="chat" role="tab" aria-selected="true">${t('nav.chat')}</button>` +
+            `<button type="button" class="mobile-chat-subtab" data-tab="files" role="tab" aria-selected="false">${t('nav.files')}</button>` +
+            `<button type="button" class="mobile-chat-subtab" data-tab="skills" role="tab" aria-selected="false">${t('nav.skills')}</button>` +
           '</div>' +
           '<div class="mobile-chat-body">' +
             '<div class="mobile-chat-core" id="mobile-chat-core"></div>' +
             '<div class="mobile-chat-panel mobile-chat-panel-files hidden" data-panel="files">' +
-              '<p class="mobile-chat-panel-placeholder">文件面板（V1 占位）</p>' +
+              `<p class="mobile-chat-panel-placeholder">${t('page.filesPlaceholder')}</p>` +
             '</div>' +
             '<div class="mobile-chat-panel mobile-chat-panel-skills hidden" data-panel="skills">' +
-              '<p class="mobile-chat-panel-placeholder">技能面板（V1 占位）</p>' +
+              `<p class="mobile-chat-panel-placeholder">${t('page.skillsPlaceholder')}</p>` +
             '</div>' +
           '</div>' +
         '</div>';
@@ -69,10 +70,10 @@ export const MobileChatPage = (() => {
   function updateTopBar(sessionId) {
     if (!window.MobileShell) return;
     const sessions = Store.getSessions();
-    let title = '会话';
+    let title = t('nav.sessions');
     for (let i = 0; i < sessions.length; i++) {
       if (sessions[i].id === sessionId) {
-        title = sessions[i].title || '未命名';
+        title = sessions[i].title || t('session.untitled');
         break;
       }
     }

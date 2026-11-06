@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端代理页：复用 AgentsPage。
  */
@@ -16,7 +17,7 @@ export const MobileAgentsPage = (() => {
       window.AgentsPage.render(parentEl);
       mounted = true;
     } else {
-      parentEl.innerHTML = '<div class="mobile-page-placeholder">代理页加载失败</div>';
+      parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('page.agentsFailed')}</div>`;
     }
   }
 

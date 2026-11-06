@@ -88,7 +88,7 @@ describe('放回输入框', () => {
     const main = readFileSync(path.join(root, 'js/main.ts'), 'utf-8');
     const svg = readFileSync(path.join(root, 'icons/reinput.svg'), 'utf-8');
     expect(ui).toContain("html('reinput'");
-    expect(ui).toContain('放回输入框');
+    expect(ui).toContain("t('chat.reuse')");
     expect(page).toContain('onReuse: handleMessageReuseAction');
     expect(page).toContain('userMsg.attachedFiles = attached');
     expect(main).toContain("import './composer-reuse.ts';");

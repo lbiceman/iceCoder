@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端技能页：wrapper 复用 SkillsPage render。
  */
@@ -21,7 +22,7 @@ export const MobileSkillsPage = (() => {
       if (window.SkillsPage && typeof window.SkillsPage.render === 'function') {
         window.SkillsPage.render(parentEl);
       } else {
-        parentEl.innerHTML = '<div class="mobile-page-placeholder">技能页加载失败</div>';
+        parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('page.skillsFailed')}</div>`;
       }
     } else if (window.SkillsPage && typeof window.SkillsPage.render === 'function') {
       window.SkillsPage.render(parentEl);

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../i18n.ts';
 /**
  * 移动端会话列表抽屉：复用 ChatSessionStore，UI 对齐桌面侧栏会话区。
  */
@@ -16,9 +17,9 @@ export const MobileSessionDrawer = (() => {
 
     panelEl.innerHTML =
       '<div class="mobile-drawer-header">' +
-        '<span class="mobile-drawer-title">会话</span>' +
-        '<button type="button" class="mobile-drawer-new-btn" aria-label="新建会话">' +
-          '<span aria-hidden="true">+</span> 新建会话' +
+        `<span class="mobile-drawer-title">${t('nav.sessions')}</span>` +
+        `<button type="button" class="mobile-drawer-new-btn" aria-label="${t('session.newChat')}">` +
+          `<span aria-hidden="true">+</span> ${t('session.newChat')}` +
         '</button>' +
       '</div>' +
       '<div class="mobile-drawer-list"></div>';
@@ -35,13 +36,13 @@ export const MobileSessionDrawer = (() => {
     const min = 60 * 1000;
     const hour = 60 * min;
     const day = 24 * hour;
-    if (diff < min) return '刚刚';
-    if (diff < hour) return `${Math.floor(diff / min)} 分钟前`;
-    if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
-    if (diff < day * 2) return '昨天';
-    if (diff < day * 7) return `${Math.floor(diff / day)}天前`;
+    if (diff < min) return t('time.justNow');
+    if (diff < hour) return t('time.minutesAgo', { n: Math.floor(diff / min) });
+    if (diff < day) return t('time.hoursAgo', { n: Math.floor(diff / hour) });
+    if (diff < day * 2) return t('time.yesterday');
+    if (diff < day * 7) return t('time.daysAgo', { n: Math.floor(diff / day) });
     const d = new Date(Number(ts));
-    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    return t('time.monthDay', { month: d.getMonth() + 1, day: d.getDate() });
   }
 
   function renderList() {
@@ -66,12 +67,12 @@ export const MobileSessionDrawer = (() => {
       if (runPhase === 'running' || runPhase === 'done' || runPhase === 'error') {
         item.setAttribute('data-run-phase', runPhase);
         item.classList.add('has-run-dot');
-        const label = runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败';
+        const label = runPhase === 'running' ? t('session.running') : runPhase === 'done' ? t('session.done') : t('session.runFailed');
         runDotHtml = `<span class="mobile-drawer-item-run-dot is-${runPhase}" aria-label="${label}"></span>`;
       }
 
       item.innerHTML =
-        `${runDotHtml}<span class="mobile-drawer-item-title">${escapeHtml(s.title || '未命名')}</span><span class="mobile-drawer-item-time">${formatRelativeTime(s.updatedAt)}</span>`;
+        `${runDotHtml}<span class="mobile-drawer-item-title">${escapeHtml(s.title || t('session.untitled'))}</span><span class="mobile-drawer-item-time">${formatRelativeTime(s.updatedAt)}</span>`;
 
       ((sid) => {
         item.addEventListener('click', () => {
@@ -92,7 +93,7 @@ export const MobileSessionDrawer = (() => {
   }
 
   function handleNewSession() {
-    Store.createSession('新会话', (session) => {
+    Store.createSession(t('session.new'), (session) => {
       if (!session) return;
       renderList();
       selectSession(session.id);

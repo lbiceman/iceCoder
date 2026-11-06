@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端配置页：wrapper 复用 ConfigPage render。
  */
@@ -21,7 +22,7 @@ export const MobileConfigPage = (() => {
       if (window.ConfigPage && typeof window.ConfigPage.render === 'function') {
         window.ConfigPage.render(parentEl);
       } else {
-        parentEl.innerHTML = '<div class="mobile-page-placeholder">设置页加载失败</div>';
+        parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('welcome.loadFailed')}</div>`;
       }
     }
   }

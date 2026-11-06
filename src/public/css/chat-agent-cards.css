@@ -197,12 +197,14 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
-  line-height: 1.55;
+  line-height: 1.6;
   max-height: 420px;
   overflow: auto;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border-radius: var(--radius-xs);
+  margin: 2px 0 6px;
+  padding: 12px 14px;
+  background: var(--surface-panel, var(--bg-primary));
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
 }
 .agent-card__error {
   color: var(--danger);
@@ -389,7 +391,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
-  line-height: 1.55;
+  line-height: 1.6;
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.agent-drawer__msg .agent-drawer__text {
+  background: var(--surface-panel, var(--bg-primary));
 }
 .agent-drawer__call { margin-top: 4px; }
 .agent-drawer__tool-output {

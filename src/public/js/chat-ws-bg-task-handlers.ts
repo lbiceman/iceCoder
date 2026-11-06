@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * ChatPage 的 WS 后台任务 + 协作事件处理（从 chat-page.js 拆分，2026-08-11）。
  * 职责：bg_task_update / bg_task_stop_result / task_queue_updated /
@@ -137,7 +138,7 @@ export const ChatWsBgTaskHandlers = (() => {
       for (let i = 0; i < ids.length; i++) {
         removeAlsoNoteFromUi(ids[i]);
       }
-      appendSystemAgentMessage((data && data.message) || '/also 未生效');
+      appendSystemAgentMessage((data && data.message) || t('chat.alsoFailed'));
     }
 
     WS.on('bg_task_update', onBgTaskUpdate);

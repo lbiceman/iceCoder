@@ -137,7 +137,7 @@ export const ChatSessionSidebar = (() => {
 
   function bindEvents() {
     sidebar.querySelector('.chat-sidebar-new-btn').addEventListener('click', () => {
-      Store.createSession('新会话', (session) => {
+      Store.createSession(t('session.new'), (session) => {
         if (session) {
           revealSession(session.id);
           selectSession(session.id);

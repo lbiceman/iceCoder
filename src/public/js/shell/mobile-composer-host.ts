@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../i18n.ts';
 /**
  * 移动端共享 Composer：复用 ChatPage 完整输入区（+ / 模型 / 命令 / @ / # / 附件）。
  * 通过 DOM  reparent 在工作首页与聊天详情间切换，不复制 Core 逻辑。
@@ -85,7 +86,7 @@ export const MobileComposerHost = (() => {
       return true;
     }
 
-    Store.createSession('新会话', (session) => {
+    Store.createSession(t('session.new'), (session) => {
       if (!session) {
         sessionStorage.removeItem('mobile-pending-send');
         return;

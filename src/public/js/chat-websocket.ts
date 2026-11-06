@@ -6,6 +6,7 @@
 
 /* exported ChatWebSocket */
 
+import { t } from './i18n.ts';
 import {
   enqueueOutboundMessage,
   flushOutboundMessages,
@@ -386,7 +387,7 @@ export const ChatWebSocket = (() => {
       case 'pong':
         break;
       case 'pulse':
-        emit('pulse', { hint: lastToolProgressHint || '处理中', sessionId: sid });
+        emit('pulse', { hint: lastToolProgressHint || t('chat.processing'), sessionId: sid });
         break;
       case 'bg_task_update':
         emit('bg_task_update', {
@@ -436,7 +437,7 @@ export const ChatWebSocket = (() => {
         emit('runtime_restored', data || {});
         break;
       case 'restore_failed':
-        emit('restore_failed', { error: data.error || '回滚失败。' });
+        emit('restore_failed', { error: data.error || t('confirm.rollbackFailedShort') });
         break;
       case 'message_deleted':
         if (Array.isArray(data.checkpointMessageIds)) {
@@ -446,7 +447,7 @@ export const ChatWebSocket = (() => {
         break;
       case 'delete_message_failed':
         emit('delete_message_failed', {
-          error: data.error || '删除失败。',
+          error: data.error || t('confirm.deleteFailedShort'),
           code: data.code || '',
         });
         break;
@@ -560,7 +561,8 @@ export const ChatWebSocket = (() => {
     try {
       if (document.documentElement.getAttribute('data-shell') === 'mobile') return 15000;
     } catch (_e) { /* ignore */ }
-    return 5000;
+    // 空闲兜底。实时更新走 WebSocket 推送，这里只补漏掉的会话快照。
+    return 30000;
   }
 
   function startSyncPolling() {

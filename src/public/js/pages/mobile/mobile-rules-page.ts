@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端规则页：wrapper 复用 RulesPage render。
  */
@@ -17,7 +18,7 @@ export const MobileRulesPage = (() => {
     if (window.RulesPage && typeof window.RulesPage.render === 'function') {
       window.RulesPage.render(parentEl);
     } else {
-      parentEl.innerHTML = '<div class="mobile-page-placeholder">规则页加载失败</div>';
+      parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('page.rulesFailed')}</div>`;
     }
   }
 

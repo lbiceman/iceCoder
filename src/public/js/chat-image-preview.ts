@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 聊天气泡 / 队列缩略图点击查看大图。
  */
@@ -47,18 +48,18 @@ export const ChatImagePreview = (() => {
     overlay.className = 'modal-overlay image-preview-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-label', '图片预览');
+    overlay.setAttribute('aria-label', t('chat.preview'));
 
     const img = document.createElement('img');
     img.className = 'image-preview-full';
     img.src = src;
-    img.alt = alt || '预览图片';
+    img.alt = alt || t('chat.previewAlt');
     overlay.appendChild(img);
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'image-preview-close';
-    closeBtn.setAttribute('aria-label', '关闭预览');
+    closeBtn.setAttribute('aria-label', t('chat.closePreview'));
     closeBtn.textContent = '×';
     overlay.appendChild(closeBtn);
 

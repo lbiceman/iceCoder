@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 输入框上方浮动任务队列卡片。
  */
@@ -41,7 +42,7 @@ export const ChatTaskQueue = (() => {
     let shown = 0;
     for (let i = 0; i < images.length && shown < 3; i++) {
       if (!isSafeImageSrc(images[i])) continue;
-      html += `<img class="chat-task-queue-thumb" src="${escapeHtml(images[i])}" alt="配图">`;
+      html += `<img class="chat-task-queue-thumb" src="${escapeHtml(images[i])}" alt="${escapeHtml(t('common.imageAlt'))}">`;
       shown += 1;
     }
     if (images.length > shown && shown > 0) {
@@ -80,20 +81,20 @@ export const ChatTaskQueue = (() => {
       return;
     }
     root.classList.remove('hidden');
-    let html = `<div class="chat-task-queue-header"><span class="chat-task-queue-title">消息队列</span><span class="chat-task-queue-count">${items.length}</span></div><div class="chat-task-queue-list">`;
+    let html = `<div class="chat-task-queue-header"><span class="chat-task-queue-title">${escapeHtml(t('chat.queue'))}</span><span class="chat-task-queue-count">${items.length}</span></div><div class="chat-task-queue-list">`;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       let label = summarize(item.text);
-      if (!label && item.images && item.images.length) label = '(图片)';
+      if (!label && item.images && item.images.length) label = t('common.image');
       html += '<div class="chat-task-queue-item" data-task-id="' + escapeHtml(item.id) + '">' +
         '<span class="chat-task-queue-index">' + (i + 1) + '</span>' +
         renderThumbs(item.images) +
         '<span class="chat-task-queue-text" title="' + escapeHtml(item.text || label) + '">' + escapeHtml(label) + '</span>' +
         '<span class="chat-task-queue-actions">' +
-        '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--edit" data-action="edit" title="编辑" aria-label="编辑">' +
+        '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--edit" data-action="edit" title="' + escapeHtml(t('common.edit')) + '" aria-label="' + escapeHtml(t('common.edit')) + '">' +
             editIconSvg() +
           '</button>' +
-          '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--delete" data-action="delete" title="删除" aria-label="删除">' +
+          '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--delete" data-action="delete" title="' + escapeHtml(t('common.delete')) + '" aria-label="' + escapeHtml(t('common.delete')) + '">' +
             deleteIconSvg() +
           '</button>' +
         '</span></div>';

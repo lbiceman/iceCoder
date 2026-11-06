@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 执行透明层（ETL）底部 — 当前会话运行中的后台 shell 任务。
  *
@@ -54,9 +55,9 @@
     dockEl = document.createElement('div');
     dockEl.className = 'etl-shell-dock hidden';
     dockEl.id = 'etl-shell-dock';
-    dockEl.setAttribute('aria-label', '后台 shell 任务');
+    dockEl.setAttribute('aria-label', t('etl.shellDock'));
     dockEl.innerHTML =
-      '<div class="etl-shell-dock-head">后台命令</div>' +
+      '<div class="etl-shell-dock-head">' + t('etl.shellHead') + '</div>' +
       '<ul class="etl-shell-list" id="etl-shell-list"></ul>';
     container.insertBefore(dockEl, container.querySelector('#etl-footer') || null);
     listEl = dockEl.querySelector('#etl-shell-list');
@@ -100,8 +101,8 @@
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'etl-shell-stop';
-    btn.setAttribute('aria-label', '终止后台命令');
-    btn.title = '终止';
+    btn.setAttribute('aria-label', t('etl.shellStop'));
+    btn.title = t('bg.stopShort');
     btn.textContent = '\u00d7';
     if (isStopping) btn.disabled = true;
     btn.addEventListener('click', (ev) => {

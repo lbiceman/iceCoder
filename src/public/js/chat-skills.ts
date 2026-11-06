@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 技能选择（# 触发）：选中技能显示在输入框上方 chip 栏，下方 textarea 仅输入提示词。
  */
@@ -192,7 +193,7 @@ export const ChatSkills = (() => {
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.className = 'skill-chip-remove';
-      removeBtn.setAttribute('aria-label', `移除技能 ${fn}`);
+      removeBtn.setAttribute('aria-label', t('chat.removeSkill', { name: fn }));
       removeBtn.textContent = '\u00D7';
       chip.appendChild(removeBtn);
 
@@ -440,7 +441,7 @@ export const ChatSkills = (() => {
     activeInputEl = inputEl || activeInputEl;
     chipBarEl = barEl || chipBarEl;
     if (inputEl) {
-      inputEl.setAttribute('placeholder', '输入消息… (输入 # 选用技能，@ 引用文件)');
+      inputEl.setAttribute('placeholder', t('chat.placeholder'));
       inputEl.addEventListener('focus', clearChipSelection);
     }
     if (chipBarEl) {

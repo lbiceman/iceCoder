@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * Diff Viewer — Git 风格：左侧文档行号 + 红删 / 绿增逐行展示
  */
@@ -210,7 +211,7 @@ export const DiffViewer = (() => {
   function createOmitRow(omittedCount) {
     const row = document.createElement('div');
     row.className = 'diff-change-omit';
-    row.textContent = `… 省略 ${omittedCount} 行 …`;
+    row.textContent = t('diff.omitted', { n: omittedCount });
     return row;
   }
 

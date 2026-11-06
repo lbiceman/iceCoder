@@ -23,11 +23,11 @@ export const ChatPetBridge = (() => {
   const TUNNEL_READY_NOTICE_MS = 5200;
   let userCheckpointNoticeActive = false;
   function userCheckpointBubble() { return t('pet.checkpointBubble'); }
-  const USER_CHECKPOINT_TURN = '已暂停 · 请接管';
+  function userCheckpointTurn() { return t('pet.turnPaused'); }
   let modelDoneNoticeActive = false;
   let modelDoneResetTimer = null;
   const MODEL_DONE_NOTICE_MS = 5200;
-  const MODEL_DONE_BUBBLE = '已完成';
+  function modelDoneBubble() { return t('pet.done'); }
   let lastUserPrompt = '';
   const USER_PROMPT_MAX_CHARS = 30;
   let turnHadToolCall = false;
@@ -87,11 +87,11 @@ export const ChatPetBridge = (() => {
     if (userCheckpointNoticeActive) {
       sessionPet.setState('user_checkpoint');
       sessionPet.setBubbleText(userCheckpointBubble());
-      sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
+      sessionPet.setTurnLabel(userCheckpointTurn());
       return;
     }
     const active = petUiSessionActive || lastWsProcessing || lastIsStreaming;
-    sessionPet.setTurnLabel(active && currentTurnCount ? `第 ${currentTurnCount} 轮` : '');
+    sessionPet.setTurnLabel(active && currentTurnCount ? t('pet.round', { n: currentTurnCount }) : '');
   }
 
   function clearModelDoneNotice() {
@@ -207,7 +207,7 @@ export const ChatPetBridge = (() => {
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('clap');
-    sessionPet.setBubbleText(MODEL_DONE_BUBBLE);
+    sessionPet.setBubbleText(modelDoneBubble());
     sessionPet.setTurnLabel('');
     modelDoneResetTimer = setTimeout(() => {
       modelDoneResetTimer = null;
@@ -231,7 +231,7 @@ export const ChatPetBridge = (() => {
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('running');
-    sessionPet.setBubbleText(withFile ? '解析文件中…' : '');
+    sessionPet.setBubbleText(withFile ? t('pet.parsing') : '');
     syncExecPlanFoot();
   }
 
@@ -276,7 +276,7 @@ export const ChatPetBridge = (() => {
     sessionPet.setVisible(true);
     sessionPet.setState('user_checkpoint');
     sessionPet.setBubbleText(userCheckpointBubble());
-    sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
+    sessionPet.setTurnLabel(userCheckpointTurn());
   }
 
   function updateStatusText(text, isStreaming, wsProcessing) {
@@ -328,16 +328,16 @@ export const ChatPetBridge = (() => {
               '';
             if (argHint) toolHint = (toolHint ? `${toolHint} · ` : '') + argHint;
           }
-          bubble(step.content || toolHint || '调用工具…');
+          bubble(step.content || toolHint || t('pet.calling'));
         }
         break;
       case 'tool_result':
         if (step.toolOutcome === 'policy_block') {
           sessionPet.setState('cancelling');
-          bubble(step.toolError || step.content || '策略拦截（未执行）');
+          bubble(step.toolError || step.content || t('pet.blocked'));
         } else if (step.toolSuccess === false) {
           sessionPet.setState('error');
-          bubble(step.toolError || step.content || '工具失败');
+          bubble(step.toolError || step.content || t('pet.toolFailed'));
         } else {
           recoverThinkingOrIdle();
           const okMsg = lastToolProgressHint || step.content;
@@ -346,11 +346,11 @@ export const ChatPetBridge = (() => {
         break;
       case 'tool_denied':
         sessionPet.setState('error');
-        bubble(step.content || '已拒绝工具');
+        bubble(step.content || t('pet.denied'));
         break;
       case 'tool_confirm':
         sessionPet.setState('tool_confirm');
-        bubble(step.content || '待确认');
+        bubble(step.content || t('pet.confirm'));
         break;
       case 'tool_progress':
         sessionPet.setState('tool_calling');
@@ -358,7 +358,7 @@ export const ChatPetBridge = (() => {
         break;
       case 'compaction':
         sessionPet.setState('restoring');
-        bubble(step.content || '整理上下文中…');
+        bubble(step.content || t('pet.compacting'));
         break;
       case 'final':
         {
@@ -366,19 +366,19 @@ export const ChatPetBridge = (() => {
           const cs = step.completionStatus;
           if (cs === 'failed') {
             sessionPet.setState('error');
-            bubble(step.content || '任务未能完成');
+            bubble(step.content || t('pet.notDone'));
           } else if (cs === 'paused') {
             sessionPet.setState('idle');
-            bubble(step.content || '任务已暂停');
+            bubble(step.content || t('pet.paused'));
           } else if (cs === 'completed_unverified') {
             sessionPet.setState('clap');
-            bubble('已完成，未做独立验证');
+            bubble(t('pet.doneUnverified'));
           } else if (sr === 'error') {
             sessionPet.setState('error');
-            bubble(step.content || '出错了');
+            bubble(step.content || t('pet.error'));
           } else if (sr === 'circuit_breaker') {
             sessionPet.setState('error');
-            bubble(step.content || '已熔断');
+            bubble(step.content || t('pet.circuit'));
           } else if (sr === 'user_abort') {
             recoverThinkingOrIdle();
             sessionPet.setBubbleText('');
@@ -411,11 +411,11 @@ export const ChatPetBridge = (() => {
         {
           const mk = step.memoryKind;
           const memDefaults = {
-            recall_hit: '记忆已并入',
-            recall_coarse_hit: '首轮记忆已并入',
-            recall_empty: '未找到可注入的相关记忆',
-            recall_skipped: '本轮未注入记忆',
-            session_hydrate: '已恢复会话状态',
+            recall_hit: t('pet.recall'),
+            recall_coarse_hit: t('pet.recallCoarse'),
+            recall_empty: t('pet.recallEmpty'),
+            recall_skipped: t('pet.recallSkipped'),
+            session_hydrate: t('pet.hydrated'),
           };
           if (mk === 'recall_hit' || mk === 'recall_coarse_hit'
             || (typeof step.memoryDetail === 'string' && step.memoryDetail.includes('记忆并入'))) {
@@ -438,14 +438,14 @@ export const ChatPetBridge = (() => {
           sessionPet.setState('planning');
           const planIntent = step.plan && step.plan.intent;
           const planIntros = {
-            edit: '拆成几步搞定',
-            debug: '先复现 → 修 → 验',
-            test: '跑测试 → 看失败 → 调',
-            refactor: '先看引用，再批改',
-            inspect: '读一下相关位置',
-            docs: '先看现状再写',
+            edit: t('pet.planEdit'),
+            debug: t('pet.planDebug'),
+            test: t('pet.planTest'),
+            refactor: t('pet.planRefactor'),
+            inspect: t('pet.planInspect'),
+            docs: t('pet.planDocs'),
           };
-          bubble(planIntros[planIntent] || '已生成执行计划');
+          bubble(planIntros[planIntent] || t('pet.planReady'));
         }
         break;
       case 'execution_plan_update':
@@ -459,7 +459,7 @@ export const ChatPetBridge = (() => {
             sessionPet.setState('tool_calling');
           } else if (typeof patch.progress === 'number' && patch.progress === 100) {
             sessionPet.setState('clap');
-            bubble('计划全部完成');
+            bubble(t('pet.planDone'));
             syncExecPlanFoot();
           } else if (sp && sp.status === 'done') {
             sessionPet.setState('idle');
@@ -497,13 +497,13 @@ export const ChatPetBridge = (() => {
     if (!ok) {
       sessionPet.setState('error');
       const err = payload && payload.errorMessage ? String(payload.errorMessage) : '';
-      bubble = err ? `MCP 失败：${err.slice(0, 22)}` : 'MCP 加载失败';
+      bubble = err ? t('pet.mcpFailed', { message: err.slice(0, 22) }) : t('pet.mcpLoadFailed');
     } else if (n > 0) {
       sessionPet.setState('clap');
-      bubble = `MCP 就绪 · ${n} 工具`;
+      bubble = t('pet.mcpReady', { n });
     } else {
       sessionPet.setState('idle');
-      bubble = 'MCP 就绪（无扩展工具）';
+      bubble = t('pet.mcpReadyEmpty');
     }
     sessionPet.setBubbleText(bubble);
     const wsProcessing = !!ctx.wsProcessing;
@@ -537,7 +537,7 @@ export const ChatPetBridge = (() => {
     } catch (_e) {
       hostHint = String(payload.url).slice(0, 26);
     }
-    sessionPet.setBubbleText(`隧道就绪 · ${hostHint}`);
+    sessionPet.setBubbleText(t('pet.tunnelReady', { host: hostHint }));
     const wsProcessing = !!ctx.wsProcessing;
     const isStreaming = !!ctx.isStreaming;
     tunnelReadyResetTimer = setTimeout(() => {
@@ -570,7 +570,7 @@ export const ChatPetBridge = (() => {
     }
     // 回合结束才推送，此时会话活跃标志往往已清空，仍应展示摘要气泡
     if (ctx.showBubble !== false) {
-      sessionPet.setBubbleText(first || '已更新记忆');
+      sessionPet.setBubbleText(first || t('pet.memoryUpdated'));
     }
     memoryNoticeResetTimer = setTimeout(() => {
       memoryNoticeResetTimer = null;

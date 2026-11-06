@@ -150,7 +150,7 @@ export const ChatPage = (() => {
     if (dot) {
       dot.classList.toggle('connected', connected);
       dot.classList.toggle('disconnected', !connected);
-      dot.title = connected ? '已连接' : '未连接';
+      dot.title = connected ? t('chat.connected') : t('chat.disconnected');
     }
   }
 
@@ -210,12 +210,12 @@ export const ChatPage = (() => {
       const el = document.getElementById('chip-model-label');
       if (!el) return false;
       if (!providers || !providers.length) {
-        el.textContent = '未配置';
+        el.textContent = t('chat.unconfigured');
         return true;
       }
       const def = providers.find((p) =>  p.isDefault) || providers[0];
       const label = def ? resolveActiveModelName(def) : '';
-      el.textContent = label || '未配置';
+      el.textContent = label || t('chat.unconfigured');
       return true;
     }
     if (apply()) return;
@@ -415,7 +415,7 @@ export const ChatPage = (() => {
     if (!body.startsWith('/also')) return false;
     const noteText = body.slice('/also'.length).trim();
     if (!noteText) {
-      const usageMsg = { role: 'agent', content: '用法: /also <补充说明>', statusTag: 'system' };
+      const usageMsg = { role: 'agent', content: t('chat.usageAlso'), statusTag: 'system' };
       Session.appendMessage(usageMsg);
       UI.appendMessageEl(usageMsg, Session.stripStatusTag);
       Session.saveMessages();
@@ -606,7 +606,7 @@ export const ChatPage = (() => {
 
     const outboundText = buildComposerTextWithBody(taskBody);
     if (nextStrip.usedPrefix && !taskBody && uploadedFiles.length === 0 && pendingImages.length === 0) {
-      const usageMsg = { role: 'agent', content: '用法: /next <任务描述>', statusTag: 'system' };
+      const usageMsg = { role: 'agent', content: t('chat.usageNext'), statusTag: 'system' };
       if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
         window.ChatSession.stampMessageTimestamps(usageMsg);
       }
@@ -753,7 +753,7 @@ export const ChatPage = (() => {
     }
     let sent = false;
     let optimisticId = null;
-    const queueLabel = msgText || (msgImages.length > 0 ? '(图片)' : taskBody) || '排队任务';
+    const queueLabel = msgText || (msgImages.length > 0 ? t('common.image') : taskBody) || t('chat.queueTask');
     if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.addOptimistic === 'function') {
       optimisticId = window.ChatTaskQueue.addOptimistic({ text: queueLabel, images: msgImages });
     }
@@ -775,7 +775,7 @@ export const ChatPage = (() => {
         window.ChatTaskQueue.removeById(optimisticId);
       }
       if (WS && typeof WS.connect === 'function') WS.connect(remoteToken);
-      notifyUser('未连接到服务，正在重连…请再发送一次', 'warning', { duration: 4000 });
+      notifyUser(t('chat.sendRetry'), 'warning', { duration: 4000 });
     } else if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       setTimeout(() => {
         window.ChatTaskQueue.refresh();
@@ -958,8 +958,8 @@ export const ChatPage = (() => {
     if (textEl) textEl.textContent = full;
     el.hidden = !full;
     if (full) {
-      el.title = `当前会话工作区\n${full}`;
-      el.setAttribute('aria-label', `当前工作区 ${full}`);
+      el.title = t('chat.workspaceTip', { path: full });
+      el.setAttribute('aria-label', t('chat.workspaceLabel', { path: full }));
     } else {
       el.removeAttribute('title');
       el.removeAttribute('aria-label');
@@ -1430,7 +1430,7 @@ export const ChatPage = (() => {
   function onWsPulse(data) {
     if (isForeignSessionEvent(data)) return;
     if (!sessionPet) return;
-    const hint = data && data.hint ? data.hint : '处理中';
+    const hint = data && data.hint ? data.hint : t('chat.processing');
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
   }
 
@@ -1488,33 +1488,33 @@ export const ChatPage = (() => {
   function dispatchDeleteMessage(messageId) {
     if (!messageId) return;
     if (!WS.isConnected || !WS.isConnected()) {
-      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      notifyUser(t('chat.disconnectedRetry'), 'warning', { duration: 4000 });
       WS.connect(remoteToken);
       return;
     }
     if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
-      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      notifyUser(t('chat.waitDelete'), 'warning', { duration: 4000 });
       return;
     }
     const sent = WS.sendDeleteUserMessage(messageId);
     if (sent === false) {
-      notifyUser('删除请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+      notifyUser(t('chat.deleteSendFailed'), 'error', { duration: 4000 });
     }
   }
 
   function dispatchRestoreRuntime(messageId) {
     if (!messageId) return;
     if (runtimeRestoreInFlight) {
-      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      notifyUser(t('chat.rollbackPending'), 'warning', { duration: 4000 });
       return;
     }
     if (!WS.isConnected || !WS.isConnected()) {
-      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      notifyUser(t('chat.disconnectedRetry'), 'warning', { duration: 4000 });
       WS.connect(remoteToken);
       return;
     }
     if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
-      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      notifyUser(t('chat.waitRollback'), 'warning', { duration: 4000 });
       return;
     }
     runtimeRestoreInFlight = true;
@@ -1523,17 +1523,17 @@ export const ChatPage = (() => {
     if (sent === false) {
       runtimeRestoreInFlight = false;
       notifySnapshotRestoreAvailability();
-      notifyUser('回滚请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+      notifyUser(t('chat.rollbackSendFailed'), 'error', { duration: 4000 });
     }
   }
 
   function showRestoreConfirmDialog(messageId) {
     Modal.confirm({
-      title: '确认回滚？',
-      message: '将工作区恢复到该消息发送前的状态。\n\n该条用户消息及之后的对话会从聊天和模型上下文中移除，仅保留回滚记录。',
+      title: t('chat.rollbackTitle'),
+      message: t('chat.rollbackBody'),
       type: 'warning',
-      confirmText: '回滚',
-      cancelText: '取消',
+      confirmText: t('chat.rollbackAction'),
+      cancelText: t('common.cancel'),
     }).then((ok) => {
       if (ok) dispatchRestoreRuntime(messageId);
     });
@@ -1541,11 +1541,11 @@ export const ChatPage = (() => {
 
   function showDeleteConfirmDialog(messageId) {
     Modal.confirm({
-      title: '确认删除？',
-      message: '删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。\n\n此操作不会回滚工作区文件修改。',
+      title: t('chat.deleteTitle'),
+      message: t('chat.deleteBody'),
       type: 'danger',
-      confirmText: '删除',
-      cancelText: '取消',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
       dangerConfirm: true,
     }).then((ok) => {
       if (ok) dispatchDeleteMessage(messageId);
@@ -1799,20 +1799,20 @@ export const ChatPage = (() => {
       if (fromDom) payload = reusePayloadFromMessage(fromDom);
     }
     if (!payloadHasContent(payload)) {
-      notifyUser('这条消息没有可放回输入框的内容。', 'info', { duration: 2500 });
+      notifyUser(t('chat.reuseEmpty'), 'info', { duration: 2500 });
       return;
     }
     applyComposerReusePayload(payload);
-    notifyUser('已放回输入框', 'success', { duration: 1800 });
+    notifyUser(t('chat.reused'), 'success', { duration: 1800 });
   }
 
   function handleMessageDeleteAction(messageId, btn) {
     if (btn && btn.disabled) {
-      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      notifyUser(t('chat.waitDelete'), 'warning', { duration: 4000 });
       return;
     }
     if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
-      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      notifyUser(t('chat.waitDelete'), 'warning', { duration: 4000 });
       return;
     }
     if (!messageId) return;
@@ -1839,22 +1839,22 @@ export const ChatPage = (() => {
 
   function handleMessageRestoreAction(messageId, btn) {
     if (runtimeRestoreInFlight) {
-      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      notifyUser(t('chat.rollbackPending'), 'warning', { duration: 4000 });
       return;
     }
     if (btn && btn.disabled) {
       const processing = !WS.canRestoreRuntime || !WS.canRestoreRuntime();
       notifyUser(
         processing
-          ? '运行中，请等待当前任务完成后再回滚。'
-          : '未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。',
+          ? t('chat.waitRollback')
+          : t('chat.noCheckpoint'),
         'warning',
         { duration: 4000 },
       );
       return;
     }
     if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
-      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      notifyUser(t('chat.waitRollback'), 'warning', { duration: 4000 });
       return;
     }
     if (!messageId) return;
@@ -1870,7 +1870,7 @@ export const ChatPage = (() => {
       && typeof window.ChatExecutionPlan.hasSnapshotCheckpoint === 'function'
       && window.ChatExecutionPlan.hasSnapshotCheckpoint(restoreId);
     if (!knownByChat && !knownBySnapshot) {
-      notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
+      notifyUser(t('chat.noCheckpoint'), 'warning', { duration: 5000 });
       return;
     }
     let hideRestore = UI && typeof UI.shouldHideRestoreAtCursor === 'function'
@@ -1880,7 +1880,7 @@ export const ChatPage = (() => {
       hideRestore = !!window.ChatExecutionPlan.isSnapshotRestoreHidden(restoreId);
     }
     if (hideRestore) {
-      notifyUser('已在该检查点，无需回滚。', 'info', { duration: 3000 });
+      notifyUser(t('chat.alreadyThere'), 'info', { duration: 3000 });
       return;
     }
     showRestoreConfirmDialog(restoreId);
@@ -2029,7 +2029,7 @@ export const ChatPage = (() => {
   }
 
   function getSyncMessagesGapMs() {
-    return isMobileShell() ? 12000 : 5000;
+    return isMobileShell() ? 12000 : 30000;
   }
 
   function syncMessages(force) {

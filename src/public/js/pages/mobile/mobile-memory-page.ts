@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端记忆页：wrapper 复用 MemoryPage render。
  */
@@ -21,7 +22,7 @@ export const MobileMemoryPage = (() => {
       if (window.MemoryPage && typeof window.MemoryPage.render === 'function') {
         window.MemoryPage.render(parentEl);
       } else {
-        parentEl.innerHTML = '<div class="mobile-page-placeholder">记忆页加载失败</div>';
+        parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('page.memoryFailed')}</div>`;
       }
     }
   }

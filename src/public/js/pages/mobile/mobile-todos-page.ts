@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from '../../i18n.ts';
 /**
  * 移动端待办页：wrapper 复用 TodosPage render。
  */
@@ -11,7 +12,7 @@ export const MobileTodosPage = (() => {
     parentEl.className = 'page-root page-root-mTodos mobile-page-root';
     if (window.MobileShell) window.MobileShell.setTopBarMode('todos');
     if (window.TodosPage) window.TodosPage.render(parentEl);
-    else parentEl.innerHTML = '<div class="mobile-page-placeholder">待办页加载失败</div>';
+    else parentEl.innerHTML = `<div class="mobile-page-placeholder">${t('page.todosFailed')}</div>`;
   }
 
   function destroy() {

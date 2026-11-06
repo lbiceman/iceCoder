@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 文件上传与图片处理模块
  * 负责：文件上传、图片粘贴/拖拽、预览、待发送管理
@@ -134,7 +135,7 @@ export const ChatFile = (() => {
         const removeBtn = document.createElement('button');
         removeBtn.className = 'pending-file-remove';
         removeBtn.textContent = '×';
-        removeBtn.title = '移除文件';
+        removeBtn.title = t('chat.removeFile');
         removeBtn.type = 'button';
         removeBtn.addEventListener('click', (e) => {
           e.preventDefault();
@@ -209,13 +210,13 @@ export const ChatFile = (() => {
         const img = document.createElement('img');
         img.src = pendingImages[idx].dataUrl;
         img.className = 'pending-image-thumb';
-        img.alt = '待发送图片';
+        img.alt = t('chat.pendingImage');
         wrapper.appendChild(img);
 
         const removeBtn = document.createElement('button');
         removeBtn.className = 'pending-image-remove';
         removeBtn.textContent = '×';
-        removeBtn.title = '移除图片';
+        removeBtn.title = t('chat.removeImage');
         removeBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();

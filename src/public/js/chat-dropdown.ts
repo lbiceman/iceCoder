@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 统一下拉浮层。
  * 取代之前 chat-commands 的 #cmd-dropdown 与 chat-model-picker 的 #model-palette。
@@ -69,7 +70,7 @@ export const ChatDropdown = (() => {
     c.className = 'cmd-dropdown hidden';
     c.id = 'chat-dropdown';
     c.setAttribute('role', 'menu');
-    c.setAttribute('aria-label', '下拉选项');
+    c.setAttribute('aria-label', t('chat.dropdown'));
     // 阻止浮层内 mousedown 触发 outside-click
     c.addEventListener('mousedown', (e) => { e.stopPropagation(); });
     c.addEventListener('mousemove', (e) => {
@@ -107,7 +108,7 @@ export const ChatDropdown = (() => {
   function render() {
     if (!elContainer) return;
     if (!current.items || !current.items.length) {
-      elContainer.innerHTML = '<div class="cmd-empty">暂无可选项</div>';
+      elContainer.innerHTML = `<div class="cmd-empty">${escapeHtml(t('chat.dropdownEmpty'))}</div>`;
       return;
     }
     let html = '';

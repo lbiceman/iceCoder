@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { t } from './i18n.ts';
+import { getLocale, t } from './i18n.ts';
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
@@ -46,6 +46,18 @@ export const ChatExecutionPlan = (() => {
     get docs() { return t('etl.intent.docs'); },
     get question() { return t('etl.intent.question'); },
   };
+
+  function listSep() {
+    return getLocale() === 'en' ? ', ' : '、';
+  }
+
+  function clauseSep() {
+    return getLocale() === 'en' ? '; ' : '；';
+  }
+
+  function isRunningPlaceholder(text) {
+    return text === '正在执行' || text === 'Working' || text === t('etl.runningNow');
+  }
 
   let currentPlan = null;
   let frozenPlanId = null;
@@ -413,7 +425,7 @@ export const ChatExecutionPlan = (() => {
 
   /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
   function workbenchHtml() {
-    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.checkpoints')}</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p></div><div class="etl-chapter-empty etl-empty">${t('etl.waiting')}</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="拖动调整检查点与执行流高度"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.flow')}</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">${t('etl.waiting')}</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
+    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.checkpoints')}</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">${t('etl.checkpointDesc')}</p></div><div class="etl-chapter-empty etl-empty">${t('etl.waiting')}</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">${t('etl.olderChapters')}</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="${t('etl.resizeSplit')}"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.flow')}</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">${t('etl.waiting')}</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">${t('etl.olderRounds')}</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">${t('etl.noPlan')}</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
   }
 
   function sharedBodyHtml() {
@@ -629,8 +641,8 @@ export const ChatExecutionPlan = (() => {
     mobileBarEl = document.createElement('button');
     mobileBarEl.type = 'button';
     mobileBarEl.className = 'etl-mbar';
-    mobileBarEl.setAttribute('aria-label', '展开执行透明层');
-    mobileBarEl.innerHTML = '<span class="etl-mbar-text">执行透明层 ▸</span>';
+    mobileBarEl.setAttribute('aria-label', t('etl.expand'));
+    mobileBarEl.innerHTML = `<span class="etl-mbar-text">${t('etl.barLabel', { arrow: '▸' })}</span>`;
     mobileBarEl.addEventListener('click', () => {
       if (minimized) expand();
       else minimize();
@@ -646,10 +658,10 @@ export const ChatExecutionPlan = (() => {
     mobileSheetEl.id = PANEL_ID;
     mobileSheetEl.className = 'etl-msheet';
     mobileSheetEl.setAttribute('role', 'complementary');
-    mobileSheetEl.setAttribute('aria-label', 'iceCoder工作台');
+    mobileSheetEl.setAttribute('aria-label', t('etl.workbench'));
     mobileSheetEl.setAttribute('aria-hidden', 'true');
     mobileSheetEl.innerHTML =
-      `<div class="etl-msheet-handle" aria-hidden="true"></div><header class="etl-header"><span class="etl-title">iceCoder工作台</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
+      `<div class="etl-msheet-handle" aria-hidden="true"></div><header class="etl-header"><span class="etl-title">${t('etl.workbench')}</span>${headerActionsHtml()}</header><div class="etl-main-scroll">${sharedBodyHtml()}</div><div class="etl-shell-dock-host" id="etl-shell-dock-host"></div><footer class="etl-footer" id="etl-footer"></footer>`;
 
     document.body.appendChild(mobileBackdropEl);
     document.body.appendChild(mobileSheetEl);
@@ -850,9 +862,9 @@ export const ChatExecutionPlan = (() => {
     if (currentPlan && currentPlan.steps && currentPlan.steps.length) {
       const total = currentPlan.steps.length;
       const done = countFinished(currentPlan.steps);
-      textEl.textContent = `执行 ${done}/${total} ${arrow}`;
+      textEl.textContent = t('etl.progress', { done, total, arrow });
     } else {
-      textEl.textContent = `执行透明层 ${arrow}`;
+      textEl.textContent = t('etl.barLabel', { arrow });
     }
   }
 
@@ -945,7 +957,7 @@ export const ChatExecutionPlan = (() => {
     head.className = 'etl-cs-head';
     const titleSpan = document.createElement('span');
     titleSpan.className = 'etl-cs-title';
-    titleSpan.textContent = `步骤 ${stepNo}/${total}：${title}`;
+    titleSpan.textContent = t('etl.stepTitle', { no: stepNo, total, title });
     const elapsed = document.createElement('span');
     elapsed.className = 'etl-cs-elapsed';
     elapsed.textContent = dur;
@@ -964,7 +976,7 @@ export const ChatExecutionPlan = (() => {
     const statusRow = document.createElement('div');
     statusRow.className = 'etl-cs-status status-' + (active ? active.status : 'pending');
     statusRow.textContent = complete
-      ? `✅ 已完成 · 用时 ${formatPlanTotalTime()}`
+      ? t('etl.doneTime', { time: formatPlanTotalTime() })
       : (icon ? `${icon} ` : '') + statusLabel;
     currentStepEl.appendChild(statusRow);
 
@@ -1006,14 +1018,14 @@ export const ChatExecutionPlan = (() => {
     if (step.suggestedTools && step.suggestedTools.length > 0) {
       const tools = document.createElement('div');
       tools.className = 'exec-plan-step-tools';
-      tools.textContent = `工具：${step.suggestedTools.join('、')}`;
+      tools.textContent = t('etl.suggestedTools', { list: step.suggestedTools.join(listSep()) });
       li.appendChild(tools);
     }
 
     if (step.evidence) {
       const ev = document.createElement('div');
       ev.className = 'exec-plan-step-evidence';
-      ev.textContent = `证据：${clamp40(step.evidence)}`;
+      ev.textContent = t('etl.evidence', { text: clamp40(step.evidence) });
       ev.title = step.evidence;
       li.appendChild(ev);
     }
@@ -1083,7 +1095,7 @@ export const ChatExecutionPlan = (() => {
         evEl.className = 'exec-plan-step-evidence';
         stepEl.appendChild(evEl);
       }
-      evEl.textContent = `证据：${clamp40(patch.evidence)}`;
+      evEl.textContent = t('etl.evidence', { text: clamp40(patch.evidence) });
       evEl.title = patch.evidence;
     }
     if (patch.error) {
@@ -1206,7 +1218,7 @@ export const ChatExecutionPlan = (() => {
     const fileEl = footerEl.querySelector('.etl-foot-files b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
     const tokenItem = footerEl.querySelector('.etl-foot-token');
-    if (tokenItem) safeSetTitle(tokenItem, tokenDetail && tokenDetail !== '—' ? (`上下文 ${tokenDetail}`) : '');
+    if (tokenItem) safeSetTitle(tokenItem, tokenDetail && tokenDetail !== '—' ? t('etl.contextDetail', { detail: tokenDetail }) : '');
     if (toolEl) toolEl.textContent = toolTxt;
     const fileCount = snapshotChangedFiles.length;
     if (fileEl) fileEl.textContent = String(fileCount);
@@ -1237,7 +1249,7 @@ export const ChatExecutionPlan = (() => {
     try {
       const countEl = hostEl.querySelector('#etl-chapter-node-count');
       const n = allChapterViews().length;
-      if (countEl) countEl.textContent = n ? (`${n} 个节点`) : '';
+      if (countEl) countEl.textContent = n ? t('etl.nodeCount', { n }) : '';
     } catch (e) {
       safeWarn('renderWorkbenchStatus', e);
     }
@@ -1326,20 +1338,20 @@ export const ChatExecutionPlan = (() => {
   function deriveLlmActivity() {
     // 最近一次 tool_call 尚未收到 tool_result：优先展示等待工具返回
     if (lastTool.pending && lastTool.toolName) {
-      return `正在等待工具返回（${lastTool.toolName}）…`;
+      return t('etl.waitTool', { name: lastTool.toolName });
     }
     const active = pickActiveStep(currentPlan);
     if (!active) return '';
     const running = active.status === 'running';
-    if (active.isVerification && running) return '正在验证结果…';
+    if (active.isVerification && running) return t('etl.verifying');
     const phase = active.phase || '';
-    if (phase === 'final') return '正在整理结论…';
+    if (phase === 'final') return t('etl.wrapping');
     if (running) {
-      if (phase === 'context') return '正在分析项目结构…';
-      if (phase === 'editing') return '正在生成修改方案…';
-      if (phase === 'intent') return '正在理解任务目标…';
-      if (active.requiresTool) return '正在调用工具…';
-      return '正在执行当前步骤…';
+      if (phase === 'context') return t('etl.analyzing');
+      if (phase === 'editing') return t('etl.drafting');
+      if (phase === 'intent') return t('etl.understanding');
+      if (active.requiresTool) return t('etl.calling');
+      return t('etl.executing');
     }
     return '';
   }
@@ -1364,7 +1376,7 @@ export const ChatExecutionPlan = (() => {
         llmActivityEl.textContent = '';
         label = document.createElement('div');
         label.className = 'etl-llm-label';
-        label.textContent = 'LLM 当前动作';
+        label.textContent = t('etl.llmAction');
         text = document.createElement('div');
         text.className = 'etl-llm-text';
         llmActivityEl.appendChild(label);
@@ -1461,73 +1473,74 @@ export const ChatExecutionPlan = (() => {
   }
 
   function targetHint(tool) {
-    const t = tool.target || tool.detail || '';
-    return t ? `「${clamp24(t)}」` : '';
+    const shown = tool.target || tool.detail || '';
+    return shown ? t('etl.targetHint', { text: clamp24(shown) }) : '';
   }
 
   function inferCommandIntent(tool) {
     const detail = tool.detail || tool.target || '';
-    if (!detail) return '执行命令验证或推进任务';
+    if (!detail) return t('etl.verifyCommand');
     const cmd = String(detail).trim();
     if (cmd.startsWith('check ')) {
-      return '检查后台任务' + (cmd.length > 6 ? ` ${clamp24(cmd.slice(6))}` : '');
+      return t('etl.checkBg') + (cmd.length > 6 ? ` ${clamp24(cmd.slice(6))}` : '');
     }
-    if (cmd.startsWith('stop ')) return '停止后台任务';
-    if (cmd === 'list background tasks') return '查看后台任务列表';
-    return `运行命令 ${clamp24(cmd)}`;
+    if (cmd.startsWith('stop ')) return t('etl.stopBg');
+    if (cmd === 'list background tasks') return t('etl.listBg');
+    return t('etl.runCommandDetail', { cmd: clamp24(cmd) });
   }
 
   function inferFsOperationIntent(tool) {
     const detail = String(tool.detail || tool.target || '').toLowerCase();
-    if (/\bdelete\b/.test(detail)) return `删除文件或目录${targetHint(tool)}`;
-    if (/\b(mkdir|create_dir)\b/.test(detail)) return `创建目录${targetHint(tool)}`;
-    if (/\b(move|rename)\b/.test(detail)) return `移动或重命名${targetHint(tool)}`;
-    if (/\bcopy\b/.test(detail)) return `复制文件${targetHint(tool)}`;
-    return `执行文件系统操作${targetHint(tool)}`;
+    const hint = targetHint(tool);
+    if (/\bdelete\b/.test(detail)) return t('etl.deletePath', { hint });
+    if (/\b(mkdir|create_dir)\b/.test(detail)) return t('etl.mkdir', { hint });
+    if (/\b(move|rename)\b/.test(detail)) return t('etl.move', { hint });
+    if (/\bcopy\b/.test(detail)) return t('etl.copy', { hint });
+    return t('etl.fsOp', { hint });
   }
 
   function inferMcpToolIntent(toolName) {
     if (!toolName.startsWith('mcp_')) return '';
     const parts = toolName.slice(4).split('_');
     if (parts.length >= 2) {
-      return '调用 MCP 工具 ' + parts[0] + '/' + parts.slice(1).join('_');
+      return t('etl.callMcp', { name: parts[0] + '/' + parts.slice(1).join('_') });
     }
-    return '调用 MCP 扩展工具';
+    return t('etl.callMcpExt');
   }
 
   function inferToolIntent(tool) {
     const name = tool.toolName || '';
     const target = displayTarget(tool);
     if (name === 'read_file' || name === 'open_file' || name === 'notebook_read' || name === 'file_info') {
-      return target ? `读取 ${target}` : '读取文件';
+      return target ? t('etl.readTarget', { target }) : t('etl.readFile');
     }
-    if (name === 'read_image' || name === 'image_read') return target ? `读取 ${target}` : '读取图片';
+    if (name === 'read_image' || name === 'image_read') return target ? t('etl.readTarget', { target }) : t('etl.readImage');
     if (name === 'parse_document' || name === 'parse_doc_legacy' || name === 'parse_pptx_deep' || name === 'parse_xmind_deep' || name === 'xmind_parse' || name === 'parse_xlsx_deep' || name === 'xlsx_parse') {
-      return target ? `解析 ${target}` : '解析文件';
+      return target ? t('etl.parseTarget', { target }) : t('etl.parseFile');
     }
-    if (name === 'diff_files') return target ? `对比 ${target}` : '对比文件';
-    if (name === 'browse_directory' || name === 'list_drives') return target ? `浏览 ${target}` : '浏览目录';
-    if (name === 'grep') return target ? `搜索 ${target}` : '搜索';
-    if (name === 'glob') return target ? `查找 ${target}` : '查找文件';
+    if (name === 'diff_files') return target ? t('etl.diffTarget', { target }) : t('etl.diffFile');
+    if (name === 'browse_directory' || name === 'list_drives') return target ? t('etl.browseTarget', { target }) : t('etl.browseDir');
+    if (name === 'grep') return target ? t('etl.searchTarget', { target }) : t('etl.search');
+    if (name === 'glob') return target ? t('etl.findTarget', { target }) : t('etl.findFiles');
     if (name === 'write_file' || name === 'create_file' || name === 'append_file') {
-      return target ? `写入 ${target}` : '写入文件';
+      return target ? t('etl.writeTarget', { target }) : t('etl.writeFile');
     }
     if (name === 'edit_file' || name === 'patch_file' || name === 'apply_patch' || name === 'batch_edit_file' || name === 'multi_edit') {
-      return target ? `修改 ${target}` : '修改文件';
+      return target ? t('etl.editTarget', { target }) : t('etl.editFile');
     }
     if (name === 'fs_operation') return inferFsOperationIntent(tool);
-    if (name === 'undo_edit') return '撤销编辑';
-    if (name === 'run_command') return target || '运行命令';
-    if (name === 'fetch_url' || name === 'web_search') return target ? `查询 ${target}` : '联网查询';
+    if (name === 'undo_edit') return t('etl.undo');
+    if (name === 'run_command') return target || t('etl.runCommand');
+    if (name === 'fetch_url' || name === 'web_search') return target ? t('etl.queryTarget', { target }) : t('etl.queryWeb');
     if (name === 'git') return target ? `git ${target}` : 'git';
-    if (name === 'task') return target ? `派出 ${target}` : '派出子 Agent';
-    if (name === 'env_info') return '查看环境';
+    if (name === 'task') return target ? t('etl.delegateTarget', { target }) : t('etl.delegate');
+    if (name === 'env_info') return t('etl.env');
     const mcpIntent = inferMcpToolIntent(name);
     if (mcpIntent) return target ? `${mcpIntent} ${target}` : mcpIntent;
-    if (CONTEXT_READ_TOOLS[name]) return target ? `读取 ${target}` : '读取文件';
-    if (CONTEXT_SEARCH_TOOLS[name]) return target ? `搜索 ${target}` : '搜索';
-    if (CONTEXT_WRITE_TOOLS[name]) return target ? `修改 ${target}` : '修改文件';
-    return target ? `${humanizeToolName(name)} ${target}` : (name ? humanizeToolName(name) : '调用工具');
+    if (CONTEXT_READ_TOOLS[name]) return target ? t('etl.readTarget', { target }) : t('etl.readFile');
+    if (CONTEXT_SEARCH_TOOLS[name]) return target ? t('etl.searchTarget', { target }) : t('etl.search');
+    if (CONTEXT_WRITE_TOOLS[name]) return target ? t('etl.editTarget', { target }) : t('etl.editFile');
+    return target ? `${humanizeToolName(name)} ${target}` : (name ? humanizeToolName(name) : t('etl.callTool'));
   }
 
   /** 工具行副标题：仅在 intent 未覆盖时展示路径/命令等细节。 */
@@ -1560,33 +1573,33 @@ export const ChatExecutionPlan = (() => {
     const parts = [];
     if (counts.write) {
       parts.push(counts.write === 1
-        ? inferToolIntent(findFirstToolBy(tools, (t) =>  CONTEXT_WRITE_TOOLS[t.toolName]))
-        : `修改 ${counts.write} 处文件落实改动`);
+        ? inferToolIntent(findFirstToolBy(tools, (tool) => CONTEXT_WRITE_TOOLS[tool.toolName]))
+        : t('etl.writes', { n: counts.write }));
     }
     if (counts.command) {
       parts.push(counts.command === 1
-        ? inferToolIntent(findFirstToolBy(tools, (t) =>  t.toolName === 'run_command'))
-        : `执行 ${counts.command} 条命令验证或推进任务`);
+        ? inferToolIntent(findFirstToolBy(tools, (tool) => tool.toolName === 'run_command'))
+        : t('etl.commands', { n: counts.command }));
     }
     if (counts.read) {
       parts.push(counts.read === 1
-        ? inferToolIntent(findFirstToolBy(tools, (t) =>  CONTEXT_READ_TOOLS[t.toolName]))
-        : `读取 ${counts.read} 个文件收集上下文`);
+        ? inferToolIntent(findFirstToolBy(tools, (tool) => CONTEXT_READ_TOOLS[tool.toolName]))
+        : t('etl.reads', { n: counts.read }));
     }
     if (counts.search) {
       parts.push(counts.search === 1
-        ? inferToolIntent(findFirstToolBy(tools, (t) =>  CONTEXT_SEARCH_TOOLS[t.toolName]))
-        : `搜索 ${counts.search} 次定位相关代码`);
+        ? inferToolIntent(findFirstToolBy(tools, (tool) => CONTEXT_SEARCH_TOOLS[tool.toolName]))
+        : t('etl.searches', { n: counts.search }));
     }
-    if (counts.other) parts.push('调用其他工具推进任务');
+    if (counts.other) parts.push(t('etl.otherTools'));
     return parts;
   }
 
   function deriveRoundToolIntents(tools) {
-    if (!tools.length) return ['规划下一步'];
-    const agentTasks = tools.filter((t) => t.toolName === 'task');
+    if (!tools.length) return [t('etl.planNext')];
+    const agentTasks = tools.filter((tool) => tool.toolName === 'task');
     if (agentTasks.length > 0) {
-      const rest = tools.filter((t) => t.toolName !== 'task');
+      const rest = tools.filter((tool) => tool.toolName !== 'task');
       const head = t('etl.delegateAgents', { n: agentTasks.length });
       return rest.length ? [head].concat(deriveRoundToolIntents(rest)) : [head];
     }
@@ -1600,7 +1613,7 @@ export const ChatExecutionPlan = (() => {
         intents.push(intent);
       }
     }
-    return intents.length ? intents : ['理解用户目标并规划下一步执行'];
+    return intents.length ? intents : [t('etl.understand')];
   }
 
   // ── 编年史：章节目录 ──
@@ -1614,13 +1627,11 @@ export const ChatExecutionPlan = (() => {
   }
 
   function chapterStatusLabel(status) {
-    const api = chronicleApi();
-    if (api && api.STATUS_LABELS && api.STATUS_LABELS[status]) return api.STATUS_LABELS[status];
-    if (status === 'running') return '进行中';
-    if (status === 'failed') return '失败';
-    if (status === 'paused') return '已暂停';
-    if (status === 'stopped') return '用户停止';
-    return '完成';
+    if (status === 'running') return t('etl.status.running');
+    if (status === 'failed') return t('etl.status.failed');
+    if (status === 'paused') return t('etl.status.paused');
+    if (status === 'stopped') return t('etl.status.stopped');
+    return t('etl.status.done');
   }
 
   function chapterRunPhase(status) {
@@ -1643,11 +1654,9 @@ export const ChatExecutionPlan = (() => {
   }
 
   function chapterMarkerLabel(key) {
-    const api = chronicleApi();
-    if (api && api.MARKER_LABELS && api.MARKER_LABELS[key]) return api.MARKER_LABELS[key];
-    if (key === 'compaction') return '本章发生过压缩';
-    if (key === 'circuit') return '熔断保护';
-    if (key === 'subagent') return '子代理';
+    if (key === 'compaction') return t('etl.marker.compaction');
+    if (key === 'circuit') return t('etl.marker.circuit');
+    if (key === 'subagent') return t('etl.marker.subagent');
     return '';
   }
 
@@ -1849,7 +1858,7 @@ export const ChatExecutionPlan = (() => {
       if (last && last.messageId) {
         adoptLiveChapterIdentity(last.messageId, last.preview);
         live.messageId = last.messageId;
-        if (last.preview && (!live.preview || live.preview === '正在执行')) {
+        if (last.preview && (!live.preview || isRunningPlaceholder(live.preview))) {
           live.preview = last.preview;
         }
         list[list.length - 1] = live;
@@ -1986,7 +1995,7 @@ export const ChatExecutionPlan = (() => {
     if (api && typeof api.fromLive === 'function') {
       const packed = api.fromLive({
         messageId: meta.messageId,
-        preview: meta.preview || '正在执行',
+        preview: meta.preview || t('etl.runningNow'),
         status: liveChapterStatus(),
         startedAt: meta.startedAt || turnStartedAt,
         endedAt: turnEndedAt,
@@ -1999,7 +2008,7 @@ export const ChatExecutionPlan = (() => {
     }
     return {
       messageId: meta.messageId,
-      preview: meta.preview || '正在执行',
+      preview: meta.preview || t('etl.runningNow'),
       status: liveChapterStatus(),
       roundCount: roundRecords.length,
       filesChangedCount: files,
@@ -2041,7 +2050,7 @@ export const ChatExecutionPlan = (() => {
       if (!ts && e.createdAt) ts = Date.parse(e.createdAt) || 0;
       out.push({
         messageId: e.messageId,
-        preview: e.preview || '（无消息摘要）',
+        preview: e.preview || t('etl.noPreview'),
         status: 'done',
         startTs: ts,
         rounds: [],
@@ -2144,7 +2153,7 @@ export const ChatExecutionPlan = (() => {
         resultTs: lastTool.pending ? Date.now() : rec && rec.resultTs,
       })}`;
     }
-    return (lastTool.pending ? '正在' : '') + label + elapsed;
+    return (lastTool.pending ? t('etl.pendingPrefix') : '') + label + elapsed;
   }
 
   function makeRoundToggle(expanded) {
@@ -2178,7 +2187,7 @@ export const ChatExecutionPlan = (() => {
     head.className = 'etl-round-head';
     const title = document.createElement('span');
     title.className = 'etl-round-title';
-    title.textContent = round.title || (`第 ${round.iteration} 轮`);
+    title.textContent = round.title || t('etl.roundTitle', { n: round.iteration });
     const time = document.createElement('span');
     time.className = 'etl-round-duration';
     const stamp = formatClockStamp(round.startTs);
@@ -2235,7 +2244,7 @@ export const ChatExecutionPlan = (() => {
     if (!tools.length && round.isFinal) {
       const complete = document.createElement('div');
       complete.className = 'etl-round-complete';
-      complete.textContent = '模型判断本章目标已达成';
+      complete.textContent = t('etl.goalMet');
       detail.appendChild(complete);
     }
     detail.appendChild(actions);
@@ -2257,7 +2266,7 @@ export const ChatExecutionPlan = (() => {
     row.className = `etl-round-action etl-round-tool status-${status}`;
     if (tool.toolCallId) {
       row.dataset.toolCallId = tool.toolCallId;
-      row.title = '定位到对话';
+      row.title = t('etl.jump');
     }
     const icon = document.createElement('span');
     icon.className = 'etl-round-action-icon';
@@ -2266,7 +2275,7 @@ export const ChatExecutionPlan = (() => {
     body.className = 'etl-round-action-body';
     const name = document.createElement('div');
     name.className = 'etl-round-action-name';
-    name.textContent = tool.intent || tool.toolName || '工具';
+    name.textContent = tool.intent || tool.toolName || t('etl.tool');
     body.appendChild(name);
     const previewText = tool.preview ? shortPath(tool.preview) : '';
     if (previewText && name.textContent.indexOf(previewText) < 0) {
@@ -2318,7 +2327,7 @@ export const ChatExecutionPlan = (() => {
     const timeEl = document.createElement('time');
     timeEl.className = 'etl-snapshot-time etl-chapter-clock';
     timeEl.textContent = chapterElapsedLabel(chapter);
-    timeEl.setAttribute('title', `本轮运行 ${timeEl.textContent}`);
+    timeEl.setAttribute('title', t('etl.roundTime', { time: timeEl.textContent }));
     const clockRow = document.createElement('div');
     clockRow.className = 'etl-chapter-clock-row';
     clockRow.appendChild(timeEl);
@@ -2328,7 +2337,7 @@ export const ChatExecutionPlan = (() => {
     titleRow.className = 'etl-chapter-title-row';
     const preview = document.createElement('div');
     preview.className = 'etl-snapshot-preview etl-chapter-title';
-    preview.textContent = chapter.preview || '（无消息摘要）';
+    preview.textContent = chapter.preview || t('etl.noPreview');
     safeSetTitle(preview, preview.textContent);
     titleRow.appendChild(preview);
     if (chapter.messageId && isSnapshotRestoreHidden(chapter.messageId)) {
@@ -2353,14 +2362,14 @@ export const ChatExecutionPlan = (() => {
     const hiddenCount = Math.max(0, allCount - visibleCount);
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = hiddenCount
-      ? (`加载更早的章节 ↑ (${hiddenCount})`)
-      : '加载更早的章节 ↑';
+      ? t('etl.olderChaptersCount', { n: hiddenCount })
+      : t('etl.olderChapters');
   }
 
   function updateFlowStepCount(n) {
     const el = hostEl && hostEl.querySelector('#etl-flow-step-count');
     if (!el) return;
-    el.textContent = n > 0 ? (`共 ${n} 个步骤`) : '';
+    el.textContent = n > 0 ? t('etl.stepCount', { n }) : '';
   }
 
   function renderChapterDirectory(options) {
@@ -2418,7 +2427,7 @@ export const ChatExecutionPlan = (() => {
     const clock = node.querySelector('.etl-chapter-clock');
     if (clock) {
       clock.textContent = chapterElapsedLabel(live);
-      clock.setAttribute('title', `本轮运行 ${clock.textContent}`);
+      clock.setAttribute('title', t('etl.roundTime', { time: clock.textContent }));
       clock.classList.remove('hidden');
     }
     renderWorkbenchStatus();
@@ -2575,7 +2584,7 @@ export const ChatExecutionPlan = (() => {
       if (api && typeof api.fromLive === 'function') {
         chapter = api.fromLive({
           messageId: liveChapterMeta.messageId,
-          preview: liveChapterMeta.preview || '（无消息摘要）',
+          preview: liveChapterMeta.preview || t('etl.noPreview'),
           status,
           startedAt: liveChapterMeta.startedAt || turnStartedAt,
           endedAt: typeof turnEndedAt === 'number' ? turnEndedAt : Date.now(),
@@ -2714,11 +2723,11 @@ export const ChatExecutionPlan = (() => {
   // ── 渲染：按模型轮次的执行流 ──
 
   const PHASE_LABELS = {
-    intent: '理解目标',
-    context: '收集上下文',
-    editing: '实施修改',
-    verification: '验证结果',
-    final: '整理结论',
+    get intent() { return t('etl.phase.intent'); },
+    get context() { return t('etl.phase.context'); },
+    get editing() { return t('etl.phase.editing'); },
+    get verification() { return t('etl.phase.verification'); },
+    get final() { return t('etl.phase.final'); },
   };
 
   function normalizeRoundIteration(iteration) {
@@ -2871,23 +2880,23 @@ export const ChatExecutionPlan = (() => {
   }
 
   const STOP_REASON_LABELS = {
-    model_done: '模型已完成本次任务',
-    stop_hook: '任务在收尾校验后完成',
-    max_output_tokens: '输出达到上限后结束',
-    completion_paused: '任务仍有未完成条件，已暂停',
-    completion_failed: '任务未能完成必要条件',
-    circuit_breaker: '触发熔断保护后结束',
-    error: '执行出现错误后结束',
+    get model_done() { return t('etl.modelDone'); },
+    get stop_hook() { return t('etl.stopHook'); },
+    get max_output_tokens() { return t('etl.maxTokens'); },
+    get completion_paused() { return t('etl.paused'); },
+    get completion_failed() { return t('etl.notDone'); },
+    get circuit_breaker() { return t('etl.circuitEnd'); },
+    get error() { return t('etl.errorEnd'); },
   };
 
   function roundCompletionText(record) {
     if (record.completionStatus === 'completed_unverified') {
-      return '✅ 模型已完成本次任务（未经独立验证）';
+      return t('etl.doneUnverified');
     }
     if (record.stopReason && STOP_REASON_LABELS[record.stopReason]) {
       return '✅ ' + STOP_REASON_LABELS[record.stopReason];
     }
-    return '✅ 已完成本次任务';
+    return t('etl.doneVerified');
   }
 
   function deriveRoundReason(record) {
@@ -2896,14 +2905,14 @@ export const ChatExecutionPlan = (() => {
       parts.push(clamp40(record.branchReasons[record.branchReasons.length - 1]));
     }
     if (previousRoundFailed(record)) {
-      parts.push('上一轮失败，改策略');
+      parts.push(t('etl.retryStrategy'));
     }
     if (record.activeTitle) {
       const step = clamp40(record.activeTitle);
       const title = deriveRoundTitle(record);
       if (step && step !== title && title.indexOf(step) < 0) parts.push(step);
     }
-    return parts.join('；');
+    return parts.join(clauseSep());
   }
 
   function estimateRemainingSeconds(plan) {
@@ -2938,9 +2947,9 @@ export const ChatExecutionPlan = (() => {
   }
 
   function roundStatusLabel(status) {
-    if (status === 'failed') return '失败';
-    if (status === 'done') return '完成';
-    return '进行中';
+    if (status === 'failed') return t('etl.status.failed');
+    if (status === 'done') return t('etl.status.done');
+    return t('etl.status.running');
   }
 
   function humanizeToolName(toolName) {
@@ -2954,36 +2963,36 @@ export const ChatExecutionPlan = (() => {
   }
 
   function deriveRoundTitle(record) {
-    if (record.isFinal) return '整理结论';
+    if (record.isFinal) return t('etl.phase.final');
     const tools = getRoundTools(record);
     if (!tools.length) {
-      return '规划下一步';
+      return t('etl.planNext');
     }
-    const commands = tools.filter((t) =>  t.toolName === 'run_command');
+    const commands = tools.filter((tool) => tool.toolName === 'run_command');
     if (commands.length === tools.length) {
-      return commands.length === 1 ? inferToolIntent(commands[0]) : `运行 ${commands.length} 条命令`;
+      return commands.length === 1 ? inferToolIntent(commands[0]) : t('etl.runMany', { n: commands.length });
     }
-    const reads = tools.filter((t) =>  CONTEXT_READ_TOOLS[t.toolName]);
+    const reads = tools.filter((tool) => CONTEXT_READ_TOOLS[tool.toolName]);
     if (reads.length === tools.length) {
-      return reads.length === 1 ? inferToolIntent(reads[0]) : `读取 ${reads.length} 个文件`;
+      return reads.length === 1 ? inferToolIntent(reads[0]) : t('etl.readMany', { n: reads.length });
     }
-    const writes = tools.filter((t) =>  CONTEXT_WRITE_TOOLS[t.toolName]);
+    const writes = tools.filter((tool) => CONTEXT_WRITE_TOOLS[tool.toolName]);
     if (writes.length && !reads.length && !commands.length) {
-      return writes.length === 1 ? inferToolIntent(writes[0]) : `修改 ${writes.length} 个文件`;
+      return writes.length === 1 ? inferToolIntent(writes[0]) : t('etl.editMany', { n: writes.length });
     }
-    const searches = tools.filter((t) =>  CONTEXT_SEARCH_TOOLS[t.toolName]);
+    const searches = tools.filter((tool) => CONTEXT_SEARCH_TOOLS[tool.toolName]);
     if (searches.length === tools.length) {
-      return searches.length === 1 ? inferToolIntent(searches[0]) : `搜索 ${searches.length} 次`;
+      return searches.length === 1 ? inferToolIntent(searches[0]) : t('etl.searchMany', { n: searches.length });
     }
-    if (writes.length) return writes.length === 1 ? inferToolIntent(writes[0]) : `修改 ${writes.length} 个文件`;
+    if (writes.length) return writes.length === 1 ? inferToolIntent(writes[0]) : t('etl.editMany', { n: writes.length });
     if (commands.length) return inferToolIntent(commands[0]);
-    if (reads.length >= 2) return `读取 ${reads.length} 个文件`;
+    if (reads.length >= 2) return t('etl.readMany', { n: reads.length });
     if (reads.length === 1) return inferToolIntent(reads[0]);
-    if (searches.length) return searches.length === 1 ? inferToolIntent(searches[0]) : `搜索 ${searches.length} 次`;
+    if (searches.length) return searches.length === 1 ? inferToolIntent(searches[0]) : t('etl.searchMany', { n: searches.length });
     if (tools.length === 1) return inferToolIntent(tools[0]);
     if (record.activeTitle) return clamp40(record.activeTitle);
     if (record.phase && PHASE_LABELS[record.phase]) return PHASE_LABELS[record.phase];
-    return `第 ${record.iteration} 轮执行`;
+    return t('etl.roundRun', { n: record.iteration });
   }
 
   function buildAllRoundPills(tools) {
@@ -3025,7 +3034,7 @@ export const ChatExecutionPlan = (() => {
     return [{
       label: `${label}...`,
       raw: firstTool.toolName + (path ? ` · ${path}` : ''),
-      title: `共 ${tools.length} 项`,
+      title: t('etl.toolCount', { n: tools.length }),
     }];
   }
 
@@ -3091,7 +3100,7 @@ export const ChatExecutionPlan = (() => {
         const toggle = node.querySelector('.etl-round-toggle');
         if (toggle) {
           toggle.textContent = expanded ? '▴' : '▾';
-          toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+          toggle.setAttribute('aria-label', expanded ? t('etl.collapseRound') : t('etl.expandRound'));
         }
         rebuildRoundPillsInNode(node, record);
       });
@@ -3140,7 +3149,7 @@ export const ChatExecutionPlan = (() => {
     row.className = `etl-round-action etl-round-tool status-${status}`;
     row.dataset.toolCallId = tool.toolCallId || '';
     if (ids && ids.length) row.dataset.toolIds = ids.join(',');
-    row.title = '定位到对话';
+    row.title = t('etl.jump');
     row.dataset.status = tool.status;
     if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
     if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
@@ -3200,7 +3209,7 @@ export const ChatExecutionPlan = (() => {
     if (!force && hiddenCount === cachedLoadMoreHidden) return;
     cachedLoadMoreHidden = hiddenCount;
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
-    loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ` (${hiddenCount})` : '');
+    loadMore.textContent = t('etl.olderRounds') + (hiddenCount ? ` (${hiddenCount})` : '');
   }
 
   /** 前缀缺口提示已废弃：编年史从会话数据回填，不再叫人去聊天区翻历史。 */
@@ -3395,7 +3404,7 @@ export const ChatExecutionPlan = (() => {
     const toggle = roundNode.querySelector('.etl-round-toggle');
     if (toggle) {
       toggle.textContent = expanded ? '▴' : '▾';
-      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+      toggle.setAttribute('aria-label', expanded ? t('etl.collapseRound') : t('etl.expandRound'));
     }
     if (expanded) {
       const pills = roundNode.querySelector('.etl-round-pills');
@@ -3498,7 +3507,7 @@ export const ChatExecutionPlan = (() => {
     const detail = roundNode.querySelector('.etl-round-detail');
     if (!detail || getRoundTools(record).length) return;
     const actionLabel = detail.querySelector('.etl-round-section-label');
-    if (actionLabel) actionLabel.textContent = '本轮结果';
+    if (actionLabel) actionLabel.textContent = t('etl.roundResult');
     if (!detail.querySelector('.etl-round-complete')) {
       rebuildRoundDetailBody(detail, record);
     } else {
@@ -3622,7 +3631,7 @@ export const ChatExecutionPlan = (() => {
     const labels = detail.querySelectorAll('.etl-round-section-label');
     let label = null;
     for (let i = 0; i < labels.length; i++) {
-      if (labels[i].textContent === '为什么这么做') {
+      if (labels[i].getAttribute('data-etl-section') === 'why' || labels[i].textContent === t('etl.why') || labels[i].textContent === '为什么这么做') {
         label = labels[i];
         break;
       }
@@ -3639,7 +3648,8 @@ export const ChatExecutionPlan = (() => {
     if (!label) {
       label = document.createElement('div');
       label.className = 'etl-round-section-label';
-      label.textContent = '为什么这么做';
+      label.setAttribute('data-etl-section', 'why');
+      label.textContent = t('etl.why');
       detail.appendChild(label);
     }
     if (!reasonEl) {
@@ -3654,7 +3664,7 @@ export const ChatExecutionPlan = (() => {
   function rebuildRoundDetailBody(detail, record) {
     const label = detail.querySelector('.etl-round-section-label');
     if (!label) return;
-    label.textContent = record.isFinal ? '本轮结果' : '做了什么';
+    label.textContent = record.isFinal ? t('etl.roundResult') : t('etl.what');
     while (label.nextSibling) detail.removeChild(label.nextSibling);
     const tools = getRoundTools(record);
     if (tools.length) {
@@ -3670,7 +3680,7 @@ export const ChatExecutionPlan = (() => {
     } else {
       const planning = document.createElement('div');
       planning.className = 'etl-round-reason';
-      planning.textContent = '规划下一步';
+      planning.textContent = t('etl.planNext');
       detail.appendChild(planning);
     }
     syncRoundReasonBlock(detail, record);
@@ -3684,7 +3694,7 @@ export const ChatExecutionPlan = (() => {
 
     const actionLabel = document.createElement('div');
     actionLabel.className = 'etl-round-section-label';
-    actionLabel.textContent = record.isFinal ? '本轮结果' : '做了什么';
+    actionLabel.textContent = record.isFinal ? t('etl.roundResult') : t('etl.what');
     detail.appendChild(actionLabel);
 
     if (tools.length) {
@@ -3700,7 +3710,7 @@ export const ChatExecutionPlan = (() => {
     } else {
       const planning = document.createElement('div');
       planning.className = 'etl-round-reason';
-      planning.textContent = '规划下一步';
+      planning.textContent = t('etl.planNext');
       detail.appendChild(planning);
     }
 
@@ -3922,7 +3932,7 @@ export const ChatExecutionPlan = (() => {
     taskOverviewEl.innerHTML = '';
     const label = document.createElement('div');
     label.className = 'etl-overview-label';
-    label.textContent = '当前目标';
+    label.textContent = t('etl.currentGoal');
     taskOverviewEl.appendChild(label);
 
     const head = document.createElement('div');
@@ -3955,8 +3965,9 @@ export const ChatExecutionPlan = (() => {
   }
 
   function formatGoalDisplay(goal, active) {
-    const raw = goal || (active && active.title) || '当前任务';
-    if (!raw || raw === '当前任务') return raw;
+    const fallback = t('etl.currentTask');
+    const raw = goal || (active && active.title) || fallback;
+    if (!raw || raw === fallback || raw === '当前任务' || raw === 'Current task') return fallback;
     const skillMatch = raw.match(/\[Active Skill:\s*([^\]]+)\]/);
     if (skillMatch) {
       return `[Active Skill: ${skillMatch[1].trim()}]`;
@@ -3998,11 +4009,11 @@ export const ChatExecutionPlan = (() => {
       if (fillEl) fillEl.style.width = `${Math.max(0, Math.min(100, pct))}%`;
       const progressMetaEl = taskOverviewEl.querySelector('#etl-overview-progress-meta');
       if (progressMetaEl) {
-        let progressText = total ? (`${done} / ${total} 步骤`) : (`${pct}% 进度`);
+        let progressText = total ? t('etl.stepProgress', { done, total }) : t('etl.pctProgress', { pct });
         if (remainSec !== null && !isPlanComplete(currentPlan)) {
-          progressText += ` · 预计 ${remainSec}s 完成`;
+          progressText += t('etl.eta', { n: remainSec });
         } else if (isPlanComplete(currentPlan)) {
-          progressText += ' · 已完成';
+          progressText += t('etl.progressDone');
         }
         progressMetaEl.textContent = progressText;
       }
@@ -4010,8 +4021,8 @@ export const ChatExecutionPlan = (() => {
       const intentEl = taskOverviewEl.querySelector('#etl-overview-intent');
       if (intentEl) {
         if (intent) {
-          const phase = active && active.phase ? (PHASE_LABELS[active.phase] || active.phase) : '已结束';
-          intentEl.textContent = `意图：${intent} · 阶段：${phase}`;
+          const phase = active && active.phase ? (PHASE_LABELS[active.phase] || active.phase) : t('etl.phaseEnded');
+          intentEl.textContent = t('etl.intentPhase', { intent, phase });
           intentEl.classList.remove('hidden');
         } else {
           intentEl.textContent = '';
@@ -4809,6 +4820,13 @@ export const ChatExecutionPlan = (() => {
     return idx >= 0 ? n.slice(idx + 1) : n;
   }
 
+  function snapshotFileOpLabel(op) {
+    if (op === '新建') return t('etl.fileOp.add');
+    if (op === '删除') return t('etl.fileOp.delete');
+    if (op === '移动') return t('etl.fileOp.move');
+    return t('etl.fileOp.edit');
+  }
+
   function snapshotFileBadgeClass(op) {
     if (op === '新建') return 'etl-snapshot-file-badge--add';
     if (op === '删除') return 'etl-snapshot-file-badge--del';
@@ -4844,13 +4862,13 @@ export const ChatExecutionPlan = (() => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: filePath }),
     }).then((res) => {
-      return res.json().then((body) =>  ({ ok: res.ok, body: body || {} })).catch(() =>  ({ ok: false, body: { error: '无法在文件夹中定位文件' } }));
+      return res.json().then((body) =>  ({ ok: res.ok, body: body || {} })).catch(() =>  ({ ok: false, body: { error: t('etl.locateFileFailed') } }));
     }).then((result) => {
       if (result.ok) return;
-      notifySnapshotFileOpen((result.body && result.body.error) || '无法在文件夹中定位文件', 'error');
+      notifySnapshotFileOpen((result.body && result.body.error) || t('etl.locateFileFailed'), 'error');
     }).catch((e) => {
       safeWarn('openSnapshotChangedFile', e);
-      notifySnapshotFileOpen('无法在文件夹中定位文件', 'error');
+      notifySnapshotFileOpen(t('etl.locateFileFailed'), 'error');
     }).then(() => {
       delete snapshotFileOpenInFlight[filePath];
       if (btn) btn.disabled = false;
@@ -4864,14 +4882,14 @@ export const ChatExecutionPlan = (() => {
 
     const badge = document.createElement('span');
     badge.className = `etl-snapshot-file-badge ${snapshotFileBadgeClass(file.op)}`;
-    badge.textContent = file.op || '修改';
+    badge.textContent = snapshotFileOpLabel(file.op);
 
     const nameEl = document.createElement('button');
     nameEl.type = 'button';
     nameEl.className = 'etl-snapshot-file-name';
     nameEl.textContent = snapshotFileName(file.path) || file.path;
-    nameEl.title = (file.path || '') + '\n打开所在文件夹并定位';
-    nameEl.setAttribute('aria-label', '在文件夹中定位 ' + (file.path || nameEl.textContent));
+    nameEl.title = (file.path || '') + '\n' + t('etl.locateFileTitle');
+    nameEl.setAttribute('aria-label', t('etl.locateFile', { path: file.path || nameEl.textContent }));
     nameEl.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -4961,12 +4979,12 @@ export const ChatExecutionPlan = (() => {
       const list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
       if (!list) return;
       const tools = collectSessionToolUsage().slice(0, 200);
-      if (titleEl) titleEl.textContent = tools.length ? (`会话工具 · ${tools.length}`) : '会话工具';
-      if (countEl) countEl.textContent = tools.length ? (`${tools.length} 个工具`) : '暂无工具';
+      if (titleEl) titleEl.textContent = tools.length ? t('etl.sessionToolsCount', { n: tools.length }) : t('etl.sessionTools');
+      if (countEl) countEl.textContent = tools.length ? t('etl.toolItems', { n: tools.length }) : t('etl.noTools');
       list.innerHTML = '';
       if (!tools.length) {
         if (emptyEl) {
-          emptyEl.textContent = '尚无工具调用';
+          emptyEl.textContent = t('etl.noToolCalls');
           emptyEl.classList.remove('hidden');
         }
         list.classList.add('hidden');
@@ -4992,7 +5010,7 @@ export const ChatExecutionPlan = (() => {
       const list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
       if (!list) return;
       const files = snapshotChangedFiles.slice(0, 200);
-      if (titleEl) titleEl.textContent = files.length ? (`变更文件 · ${files.length}`) : '变更文件';
+      if (titleEl) titleEl.textContent = files.length ? t('etl.changedFilesCount', { n: files.length }) : t('etl.changedFiles');
       if (countEl) countEl.textContent = files.length ? t('etl.filesCount', { n: files.length }) : t('etl.noFiles');
       if (emptyEl) emptyEl.textContent = t('etl.noChanges');
       list.innerHTML = '';
@@ -5128,8 +5146,8 @@ export const ChatExecutionPlan = (() => {
     btn.disabled = !hasCp || !can;
     btn.classList.toggle('etl-snapshot-restore-btn--ready', hasCp);
     const title = !hasCp
-      ? '未找到检查点，无法回滚'
-      : (can ? '回滚到此消息' : '运行中，请等待当前任务完成后再回滚');
+      ? t('etl.noCheckpointShort')
+      : (can ? t('chat.rollback') : t('etl.waitRollbackShort'));
     btn.title = title;
     btn.setAttribute('aria-label', title);
   }
