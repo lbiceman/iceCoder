@@ -53,6 +53,8 @@ export const IPC = {
   WINDOW_CHROME_STATE: 'window:chrome-state',
   WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
   WINDOW_FOCUS_CHANGED: 'window:focus-changed',
+  /** 渲染进程把顶栏颜色交给系统按钮覆盖层。 */
+  WINDOW_SET_TITLEBAR_OVERLAY: 'window:set-titlebar-overlay',
 
   /** 渲染层请求系统通知（任务完成提醒）。 */
   TASK_DONE_NOTIFY: 'task:done-notify',

@@ -3,7 +3,7 @@
  */
 import { clipboard, contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { IPC } from './constants';
-import { windowUsesCustomControls } from './window-chrome';
+import { windowChromeKind, windowUsesCustomControls } from './window-chrome';
 
 const api = {
   /** 屏幕问号轮盘。supported 为 false 时设置页只展示、不能开。 */
@@ -38,8 +38,13 @@ const api = {
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   openDevTools: () => ipcRenderer.send(IPC.APP_DEVTOOLS),
 
-  /** false 时用系统红绿灯（macOS），不画右上角三个按钮。 */
+  /** false：不在网页里画最小化 / 最大化 / 关闭。 */
   windowControls: windowUsesCustomControls(),
+  /** overlay：Windows / Linux 系统按钮。traffic-lights：macOS 红绿灯。 */
+  windowChrome: windowChromeKind(),
+  windowSetTitleBarOverlay: (colors: { color: string; symbolColor: string }) => {
+    ipcRenderer.send(IPC.WINDOW_SET_TITLEBAR_OVERLAY, colors);
+  },
   windowMinimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
   windowToggleMaximize: () => ipcRenderer.send(IPC.WINDOW_TOGGLE_MAXIMIZE),
   windowClose: () => ipcRenderer.send(IPC.WINDOW_CLOSE),

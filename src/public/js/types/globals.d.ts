@@ -9,6 +9,8 @@ interface IceDesktopApi {
   getScreenPing?: () => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
   setScreenPing?: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }) => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
   windowControls?: boolean;
+  windowChrome?: 'overlay' | 'traffic-lights';
+  windowSetTitleBarOverlay?: (colors: { color: string; symbolColor: string }) => void;
   windowMinimize?: () => void;
   windowToggleMaximize?: () => void;
   windowClose?: () => void;

@@ -17,11 +17,21 @@ export interface WindowCommandTarget {
   close(): void;
 }
 
+/** 与页面顶栏高度一致。Windows 系统按钮覆盖层用同一高度。 */
+export const WINDOW_CAPTION_HEIGHT = 30;
+
+export interface TitleBarOverlayOptions {
+  color: string;
+  symbolColor: string;
+  height: number;
+}
+
 export interface MainWindowChromeFields {
   frame: boolean;
   autoHideMenuBar: true;
   thickFrame?: boolean;
-  titleBarStyle?: 'hiddenInset';
+  titleBarStyle?: 'hidden' | 'hiddenInset';
+  titleBarOverlay?: TitleBarOverlayOptions;
   trafficLightPosition?: { x: number; y: number };
 }
 
@@ -34,12 +44,20 @@ const ICON_RESTORE =
 const ICON_CLOSE =
   '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.2 4.2l7.6 7.6M11.8 4.2L4.2 11.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
-/** macOS 用系统红绿灯；其余平台自绘右上角三个按钮。 */
-export function windowUsesCustomControls(platform: NodeJS.Platform = process.platform): boolean {
-  return platform !== 'darwin';
+/**
+ * 右上角三个按钮交给系统画，不在网页里画。
+ * macOS 是红绿灯；Windows / Linux 是标题栏按钮覆盖层，命中由系统算。
+ */
+export function windowChromeKind(platform: NodeJS.Platform = process.platform): 'overlay' | 'traffic-lights' {
+  return platform === 'darwin' ? 'traffic-lights' : 'overlay';
 }
 
-/** 与页面 `--window-caption-h: 30px` 对齐，红绿灯落在自绘顶栏里。 */
+/** 网页里不再自绘最小化 / 最大化 / 关闭。 */
+export function windowUsesCustomControls(_platform: NodeJS.Platform = process.platform): boolean {
+  return false;
+}
+
+/** macOS 红绿灯落在顶栏高度里；Windows / Linux 用系统按钮覆盖层。 */
 export function mainWindowChromeFields(platform: NodeJS.Platform = process.platform): MainWindowChromeFields {
   if (platform === 'darwin') {
     return {
@@ -53,6 +71,12 @@ export function mainWindowChromeFields(platform: NodeJS.Platform = process.platf
     frame: false,
     thickFrame: true,
     autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      height: WINDOW_CAPTION_HEIGHT,
+      color: '#0e0f12',
+      symbolColor: '#e6e8ee',
+    },
   };
 }
 
@@ -144,19 +168,6 @@ export function startupDocumentHtml(appName: string, options?: { controls?: bool
   if (typeof api.onWindowMaximized === 'function') {
     api.onWindowMaximized(function (on) { setMaximized(!!on); });
   }
-  var pendingRegion = false;
-  window.addEventListener('resize', function () {
-    if (pendingRegion || !cap) return;
-    pendingRegion = true;
-    cap.style.setProperty('-webkit-app-region', 'no-drag');
-    var buttons = cap.querySelector('.window-caption-controls');
-    if (buttons) buttons.style.setProperty('-webkit-app-region', 'drag');
-    window.requestAnimationFrame(function () {
-      cap.style.removeProperty('-webkit-app-region');
-      if (buttons) buttons.style.removeProperty('-webkit-app-region');
-      pendingRegion = false;
-    });
-  });
 })();
 </script>
 </body></html>`;

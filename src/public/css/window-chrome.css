@@ -43,6 +43,28 @@ html.ice-window-chrome.ice-window-native-controls .window-caption {
   padding-left: 78px;
 }
 
+/* Windows / Linux：系统按钮盖在右侧，拖拽区停在按钮左边。 */
+html.ice-window-chrome.ice-window-overlay .window-caption {
+  -webkit-app-region: no-drag;
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+}
+
+html.ice-window-chrome.ice-window-overlay .window-caption::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: env(titlebar-area-x, 0px);
+  width: env(titlebar-area-width, 100%);
+  -webkit-app-region: drag;
+}
+
+html.ice-window-chrome.ice-window-overlay .window-caption-title {
+  position: relative;
+  z-index: 1;
+}
+
 html.ice-window-chrome .window-caption-controls {
   display: flex;
   align-items: stretch;

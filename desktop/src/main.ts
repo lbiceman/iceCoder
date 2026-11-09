@@ -23,7 +23,7 @@ import { resolveTaskDoneNotification } from './task-done-notify';
 import { configureWindowsNotificationIdentity } from './win-notification-shortcut';
 import { createScreenPingController, type ScreenPingController } from './ping/controller';
 import { readScreenPingSettings, writeScreenPingSettings } from './ping/settings';
-import { applyWindowCommand, mainWindowChromeFields, startupDocumentHtml } from './window-chrome';
+import { applyWindowCommand, mainWindowChromeFields, startupDocumentHtml, WINDOW_CAPTION_HEIGHT } from './window-chrome';
 
 let mainWindow: BrowserWindow | null = null;
 let screenPing: ScreenPingController | null = null;
@@ -122,6 +122,24 @@ function registerWindowChromeIpc(): void {
       focused: win.isFocused(),
     };
   });
+  ipcMain.on(IPC.WINDOW_SET_TITLEBAR_OVERLAY, (e, payload: unknown) => {
+    const win = windowFromSender(e.sender);
+    if (!win) return;
+    const color = readOverlayHex(payload, 'color');
+    const symbolColor = readOverlayHex(payload, 'symbolColor');
+    if (!color || !symbolColor) return;
+    try {
+      win.setTitleBarOverlay({ color, symbolColor, height: WINDOW_CAPTION_HEIGHT });
+    } catch {
+      /* 这个窗口创建时没有系统按钮覆盖层 */
+    }
+  });
+}
+
+function readOverlayHex(payload: unknown, key: 'color' | 'symbolColor'): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = (payload as { color?: unknown; symbolColor?: unknown })[key];
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : null;
 }
 
 function createWindow(show: boolean): BrowserWindow {

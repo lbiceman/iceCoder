@@ -25,30 +25,22 @@ function label(key: string): string {
   return t(key, undefined);
 }
 
-/**
- * Chromium 会缓存 -webkit-app-region 的命中矩形。
- * 拖拽改变窗口宽度后，右上角 no-drag 按钮已经挪到新位置，
- * 缓存还停在旧坐标，点击落进标题栏的 drag 区域，于是变成拖窗口，hover 和 click 都到不了按钮。
- * 把区域翻掉再按样式恢复，让它按当前尺寸重算。
- */
-function bindDragRegionRefresh(caption: HTMLElement): void {
-  const controls = caption.querySelector('.window-caption-controls');
-  let pending = false;
-  window.addEventListener('resize', () => {
-    if (pending) return;
-    pending = true;
-    caption.style.setProperty('-webkit-app-region', 'no-drag');
-    if (controls instanceof HTMLElement) {
-      controls.style.setProperty('-webkit-app-region', 'drag');
-    }
-    window.requestAnimationFrame(() => {
-      caption.style.removeProperty('-webkit-app-region');
-      if (controls instanceof HTMLElement) {
-        controls.style.removeProperty('-webkit-app-region');
-      }
-      pending = false;
-    });
-  });
+function cssColorToHex(color: string): string | null {
+  const matched = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!matched) return /^#[0-9a-fA-F]{6}$/.test(color) ? color : null;
+  const channel = (value: string) => Number(value).toString(16).padStart(2, '0');
+  return `#${channel(matched[1])}${channel(matched[2])}${channel(matched[3])}`;
+}
+
+/** 系统按钮覆盖层的底色跟着顶栏走，避免主题一切就露出一条异色。 */
+function syncTitleBarOverlay(caption: HTMLElement): void {
+  const api = window.iceDesktop;
+  if (api?.windowChrome !== 'overlay' || typeof api.windowSetTitleBarOverlay !== 'function') return;
+  const style = getComputedStyle(caption);
+  const color = cssColorToHex(style.backgroundColor);
+  const symbolColor = cssColorToHex(style.color);
+  if (!color || !symbolColor) return;
+  api.windowSetTitleBarOverlay({ color, symbolColor });
 }
 
 export function mountWindowChrome(): void {
@@ -59,8 +51,13 @@ export function mountWindowChrome(): void {
   if (!app) return;
 
   document.documentElement.classList.add('ice-window-chrome');
-  const customControls = api.windowControls !== false;
-  document.documentElement.classList.toggle('ice-window-native-controls', !customControls);
+  const overlay = api.windowChrome === 'overlay';
+  const customControls = !overlay && api.windowControls !== false;
+  document.documentElement.classList.toggle('ice-window-overlay', overlay);
+  document.documentElement.classList.toggle(
+    'ice-window-native-controls',
+    api.windowChrome === 'traffic-lights' || (!overlay && !customControls),
+  );
 
   const controls = customControls
     ? `<div class="window-caption-controls">
@@ -96,11 +93,13 @@ export function mountWindowChrome(): void {
   caption.querySelector('[data-window-action="close"]')?.addEventListener('click', () => {
     api.windowClose?.();
   });
-  caption.addEventListener('dblclick', (event) => {
-    const target = event.target;
-    if (target instanceof Element && target.closest('.window-caption-controls')) return;
-    api.windowToggleMaximize?.();
-  });
+  if (!overlay) {
+    caption.addEventListener('dblclick', (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.window-caption-controls')) return;
+      api.windowToggleMaximize?.();
+    });
+  }
 
   if (typeof api.windowGetChromeState === 'function') {
     api.windowGetChromeState().then((state) => {
@@ -115,7 +114,13 @@ export function mountWindowChrome(): void {
   if (typeof api.onWindowFocus === 'function') {
     api.onWindowFocus((focused) => setFocused(!!focused));
   }
-  bindDragRegionRefresh(caption);
+  if (overlay) {
+    const publishOverlay = () => syncTitleBarOverlay(caption);
+    publishOverlay();
+    window.requestAnimationFrame(publishOverlay);
+    const themeObserver = new MutationObserver(publishOverlay);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
 }
 
 if (document.readyState === 'loading') {
