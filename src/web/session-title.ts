@@ -11,27 +11,21 @@ import {
   withSessionIndexLock,
   type SessionMeta,
 } from './session-index-store.js';
+import {
+  deriveSessionTitleFromPrompt,
+  isPlaceholderSessionTitle,
+  normalizeSessionTitleSource,
+} from './session-title-text.js';
 
 export type { SessionMeta };
+export {
+  SESSION_TITLE_MAX_LEN,
+  PLACEHOLDER_SESSION_TITLES,
+  deriveSessionTitleFromPrompt,
+  isPlaceholderSessionTitle,
+} from './session-title-text.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
-
-export const SESSION_TITLE_MAX_LEN = 20;
-
-/** 仍为占位标题、可被首条提示词覆盖 */
-export const PLACEHOLDER_SESSION_TITLES = new Set(['新会话', '默认会话', '未命名']);
-
-/** 将首条用户提示词截取为侧栏显示标题 */
-export function deriveSessionTitleFromPrompt(prompt: string): string {
-  const t = prompt.replace(/\s+/g, ' ').trim();
-  if (!t) return '未命名';
-  if (t.length <= SESSION_TITLE_MAX_LEN) return t;
-  return `${t.slice(0, SESSION_TITLE_MAX_LEN - 1)}…`;
-}
-
-export function isPlaceholderSessionTitle(title: string): boolean {
-  return PLACEHOLDER_SESSION_TITLES.has(title);
-}
 
 async function readFirstUserMessageContent(sessionId: string): Promise<string | null> {
   const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
@@ -46,18 +40,6 @@ async function readFirstUserMessageContent(sessionId: string): Promise<string | 
     }
   } catch { /* no file */ }
   return null;
-}
-
-async function countPersistedUserMessages(sessionId: string): Promise<number> {
-  const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
-  try {
-    const raw = await fs.readFile(file, 'utf-8');
-    const msgs = JSON.parse(raw) as { role?: string }[];
-    if (!Array.isArray(msgs)) return 0;
-    return msgs.filter((m) => m.role === 'user').length;
-  } catch {
-    return 0;
-  }
 }
 
 /**
@@ -84,7 +66,8 @@ export async function backfillPlaceholderSessionTitles(
 }
 
 /**
- * 首条用户消息持久化后：若标题仍为占位，则写入截取后的提示词。
+ * 标题仍是占位时，用本会话第一条有文字的用户消息生成标题。
+ * 只发图片、正文为空时不改标题；之后第一条文字才会替换。
  * @returns 新标题；未更新则 null
  */
 export async function applyFirstPromptSessionTitle(
@@ -96,13 +79,14 @@ export async function applyFirstPromptSessionTitle(
     const entry = index.find((s) => s.id === sessionId);
     if (!entry || !isPlaceholderSessionTitle(entry.title)) return null;
 
-    const userCount = await countPersistedUserMessages(sessionId);
-    if (userCount !== 1) return null;
+    const persisted = await readFirstUserMessageContent(sessionId);
+    const source = (persisted && persisted.trim()) ? persisted : prompt;
+    if (!normalizeSessionTitleSource(source)) return null;
 
-    const title = deriveSessionTitleFromPrompt(prompt);
+    const title = deriveSessionTitleFromPrompt(source);
+    if (!title || isPlaceholderSessionTitle(title)) return null;
     entry.title = title;
     entry.updatedAt = Date.now();
-    entry.messageCount = Math.max(entry.messageCount, userCount);
     await writeSessionIndex(index);
     return title;
   });

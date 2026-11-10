@@ -1844,31 +1844,59 @@
 .image-preview-overlay {
   cursor: zoom-out;
 }
+/* 自绘标题栏高 30px。蒙版从它下面开始，系统按钮就不会悬在暗色上。 */
+html.ice-window-chrome .image-preview-overlay {
+  top: 30px;
+  bottom: auto;
+  height: calc(100% - 30px);
+}
+.image-preview-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+  padding-top: 44px;
+}
 .image-preview-full {
-  max-width: min(96vw, 1600px);
-  max-height: 92vh;
+  display: block;
+  max-width: min(80vw, 1120px);
+  max-height: calc(100vh - 160px);
+  width: auto;
+  height: auto;
   object-fit: contain;
   border-radius: 10px;
   box-shadow: 0 18px 56px rgba(0, 0, 0, 0.5);
   cursor: default;
 }
+html.ice-window-chrome .image-preview-full {
+  max-height: calc(100vh - 190px);
+}
 .image-preview-close {
   position: absolute;
   top: 16px;
-  right: 16px;
-  width: 36px;
-  height: 36px;
+  right: -26px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(15, 16, 20, 0.62);
   color: #fff;
-  font-size: 22px;
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
-  padding-bottom: 5px;
+  padding: 0 0 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
-.image-preview-close:hover,
-.image-preview-close:focus-visible {
+.image-preview-close:hover {
+  outline: none;
   background: rgba(255, 255, 255, 0.28);
+}
+.image-preview-close:focus-visible {
+  outline: none;
 }
 
 /* ── Drag Over Indicator ── */

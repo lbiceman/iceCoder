@@ -679,14 +679,15 @@ export const ChatPage = (() => {
       didAppendUserMessage = true;
       Session.saveMessages();
       syncWelcomeState();
-      const titlePrompt = displayParts.join('\n') || composerBody || fullText || '';
-      if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
-        let userMsgCount = 0;
+      const titlePrompt = String(taskBody || '').replace(/\s+/g, ' ').trim();
+      if (titlePrompt && window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
+        let textCount = 0;
         const allMsgs = Session.getMessages();
         for (let ti = 0; ti < allMsgs.length; ti++) {
-          if (allMsgs[ti].role === 'user') userMsgCount++;
+          const msg = allMsgs[ti];
+          if (msg && msg.role === 'user' && String(msg.content || '').trim()) textCount++;
         }
-        if (userMsgCount === 1) {
+        if (textCount === 1) {
           window.ChatSessionStore.maybeAutoTitleFromPrompt(Session.getActiveId(), titlePrompt);
         }
       }

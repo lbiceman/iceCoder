@@ -50,18 +50,22 @@ export const ChatImagePreview = (() => {
     overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-label', t('chat.preview'));
 
+    const frame = document.createElement('div');
+    frame.className = 'image-preview-frame';
+
     const img = document.createElement('img');
     img.className = 'image-preview-full';
     img.src = src;
     img.alt = alt || t('chat.previewAlt');
-    overlay.appendChild(img);
+    frame.appendChild(img);
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'image-preview-close';
     closeBtn.setAttribute('aria-label', t('chat.closePreview'));
     closeBtn.textContent = '×';
-    overlay.appendChild(closeBtn);
+    frame.appendChild(closeBtn);
+    overlay.appendChild(frame);
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay || e.target === closeBtn) close();

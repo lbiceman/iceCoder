@@ -15,8 +15,16 @@ export const ChatSessionStore = (() => {
   let listeners = [];
   const STORAGE_KEY_PREFIX = 'ice-chat-messages:';
   const STORAGE_KEY_LAST_ACTIVE = 'ice-chat-last-active-session';
-  const TITLE_MAX_LEN = 20;
-  const PLACEHOLDER_TITLES = { '新会话': true, '默认会话': true, '未命名': true };
+  const TITLE_MAX_LEN = 50;
+  // 与 src/web/session-title-text.ts 的占位标题保持一致（中英文）
+  const PLACEHOLDER_TITLES = {
+    '新会话': true,
+    '默认会话': true,
+    '未命名': true,
+    'New chat': true,
+    'Default chat': true,
+    'Untitled': true,
+  };
   let defaultWorkDir = '';
   let localUser = '';
   /** sessionId → workspaceRoot */
@@ -33,7 +41,7 @@ export const ChatSessionStore = (() => {
 
   function deriveTitleFromPrompt(prompt) {
     const t = (prompt || '').replace(/\s+/g, ' ').trim();
-    if (!t) return '未命名';
+    if (!t) return '';
     if (t.length <= TITLE_MAX_LEN) return t;
     return `${t.slice(0, TITLE_MAX_LEN - 1)}…`;
   }
@@ -350,13 +358,14 @@ export const ChatSessionStore = (() => {
   }
 
   /**
-   * 首条用户消息时，将占位标题替换为提示词截取（与服务端一致，即时刷新侧栏）
+   * 第一条有文字的用户消息时，把占位标题换成这段文字（与服务端一致，即时刷新侧栏）
    */
   function maybeAutoTitleFromPrompt(sessionId, prompt) {
     const idx = sessions.findIndex((s) =>  s.id === sessionId);
     if (idx < 0) return;
     if (!PLACEHOLDER_TITLES[sessions[idx].title]) return;
     const title = deriveTitleFromPrompt(prompt);
+    if (!title || PLACEHOLDER_TITLES[title]) return;
     sessions[idx].title = title;
     emit();
     renameSession(sessionId, title);
