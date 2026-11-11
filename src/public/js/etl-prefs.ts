@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 执行透明层（ETL）前端偏好：从 config.json 读写、校验与变更广播。
  * 纯数据层，无 DOM 依赖。
@@ -15,7 +16,6 @@ export const EtlPrefs = (() => {
     sidebarWidth: 256,
     taskDoneNotification: false,
     panelAutoCollapse: false,
-    showDesktopPet: true,
   };
 
   let cached = null;
@@ -123,9 +123,6 @@ export const EtlPrefs = (() => {
     }
     if (typeof raw.panelAutoCollapse === 'boolean') {
       out.panelAutoCollapse = raw.panelAutoCollapse;
-    }
-    if (typeof raw.showDesktopPet === 'boolean') {
-      out.showDesktopPet = raw.showDesktopPet;
     }
     out.panelWidth = clampWidth(raw.panelWidth, DEFAULTS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
     out.sidebarWidth = clampWidth(raw.sidebarWidth, DEFAULTS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
@@ -237,7 +234,7 @@ export const EtlPrefs = (() => {
       })
       .then((result) => {
         if (!result.ok || !result.body || result.body.success !== true) {
-          const message = (result.body && result.body.error) || '更新失败';
+          const message = (result.body && result.body.error) || t('common.updateFailed');
           return Promise.reject(new Error(message));
         }
         cached = sanitize(result.body.iceEtlPrefs || next);

@@ -62,9 +62,31 @@ const FIXED_CHAT_PARAM_KEYS = [
   'frequency_penalty',
   'presence_penalty',
   'stream_options',
+  'prompt_cache_key',
   'chat_template_kwargs',
   'extra_body',
 ] as const;
+
+/** 未配置 baseURL 时 SDK 默认打到 api.openai.com。其它主机（DeepSeek、Azure 等）不送这个字段。 */
+export function isOfficialOpenAiEndpoint(baseURL: string | undefined): boolean {
+  const raw = baseURL?.trim();
+  if (!raw) return true;
+  try {
+    return new URL(raw).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
+/** 仅官方 OpenAI，且本次调用带了会话 id 时，用会话锚定前缀缓存路由。 */
+export function resolveOfficialOpenAiPromptCacheKey(
+  baseURL: string | undefined,
+  sessionId: string | undefined,
+): string | undefined {
+  if (!isOfficialOpenAiEndpoint(baseURL)) return undefined;
+  const id = typeof sessionId === 'string' ? sessionId.trim() : '';
+  return id || undefined;
+}
 
 /** 移除 undefined/null 并按固定 key 顺序整理请求体 */
 export function orderRequestParams(params: Record<string, unknown>): Record<string, unknown> {
@@ -137,6 +159,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   private readonly reasoningEffortLevels: string[];
   /** 配置了 {{sessionId}} 但调用方未传会话时的稳定兜底值 */
   private readonly fallbackSessionId: string;
+  /** 官方 api.openai.com 才发送 prompt_cache_key；兼容端点不传 */
+  private readonly baseURL: string | undefined;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
@@ -144,6 +168,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.requestHeaderTemplates = { ...(config.requestHeaders ?? {}) };
     this.reasoningEffortLevels = [...(config.reasoningEffortLevels ?? [])];
     this.fallbackSessionId = randomUUID();
+    this.baseURL = config.baseURL;
     this.model = config.model;
     // 视觉支持：显式配置 > 默认开启
     this.supportsVision = config.supportsVision ?? true;
@@ -181,6 +206,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
     reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
+    promptCacheKey?: string;
   } {
     return {
       providerName: this.name,
@@ -188,6 +214,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       defaultParams: this.defaultParams as Record<string, unknown>,
       supportsVision: this.supportsVision,
       reqOpts: this.buildRequestOptions(options, signal),
+      promptCacheKey: resolveOfficialOpenAiPromptCacheKey(this.baseURL, options.sessionId),
     };
   }
 
@@ -737,6 +764,9 @@ export class OpenAIAdapter implements ProviderAdapter {
     if (stream) {
       params.stream_options = { include_usage: true };
     }
+
+    const promptCacheKey = resolveOfficialOpenAiPromptCacheKey(this.baseURL, options.sessionId);
+    if (promptCacheKey) params.prompt_cache_key = promptCacheKey;
 
     // MiniMax：拆分思考链到 reasoning 字段，供 Web 思考块展示
     if (this.shouldUseReasoningSplit(model)) {

@@ -265,16 +265,10 @@ select:focus-visible,
 
 .message.assistant,
 .message.agent {
-  border-color: var(--msg-agent-border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
   background: var(--msg-agent-bg);
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--transition);
-}
-
-.message.assistant:hover,
-.message.agent:hover {
-  border-color: var(--border-color);
+  box-shadow: none;
 }
 
 .message .msg-label {
@@ -312,11 +306,16 @@ select:focus-visible,
   font-family: var(--font-mono);
 }
 
-.tool-trace-group,
-.tool-action,
 .tool-result {
   border-color: var(--border-subtle);
   background: var(--surface-panel);
+}
+
+.tool-trace-group,
+.tool-trace-group .tool-action {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .tool-trace-group {
@@ -341,7 +340,7 @@ select:focus-visible,
 }
 
 .chat-composer-stack {
-  width: min(100%, var(--content-max-width));
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -412,7 +411,6 @@ select:focus-visible,
 }
 
 .composer-toolbar .btn-send:hover:not(:disabled) {
-  transform: translateY(-1px);
   box-shadow: 0 4px 12px -4px var(--accent-glow);
 }
 
@@ -525,7 +523,7 @@ select:focus-visible,
 }
 
 .settings-general {
-  padding: 28px clamp(24px, 4vw, 52px) 44px;
+  padding: 16px clamp(22px, 3.6vw, 47px) 28px;
 }
 
 .settings-card,
@@ -623,7 +621,7 @@ select:focus-visible,
   }
 
   .settings-general {
-    padding: 20px 16px 28px;
+    padding: 14px 14px 22px;
   }
 }
 

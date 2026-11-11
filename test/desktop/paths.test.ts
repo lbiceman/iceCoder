@@ -9,8 +9,6 @@ import {
   writeWorkspace,
   readDataDirectory,
   writeDataDirectory,
-  readPetFloatingPosition,
-  writePetFloatingPosition,
   resolveDataDirectory,
   resolveServerCwd,
   isServerBundleReady,
@@ -62,17 +60,6 @@ describe('desktop paths（userData 持久化读写）', () => {
       'utf8',
     );
     expect(readDataDirectory()).toBeNull();
-  });
-
-  it('writePetFloatingPosition / readPetFloatingPosition 往返（含 w/h）', () => {
-    expect(readPetFloatingPosition()).toBeNull();
-    writePetFloatingPosition({ x: 120, y: 80, w: 312, h: 240 });
-    expect(readPetFloatingPosition()).toEqual({ x: 120, y: 80, w: 312, h: 240 });
-  });
-
-  it('readPetFloatingPosition 忽略缺 x/y 的坏数据', () => {
-    writeFileSync(path.join(tmp, 'pet-floating-position.json'), '{"x":"a"}', 'utf8');
-    expect(readPetFloatingPosition()).toBeNull();
   });
 
   it('resolveDataDirectory 未设置时回退 ~/.iceCoder', () => {

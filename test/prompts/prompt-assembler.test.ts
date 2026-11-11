@@ -9,7 +9,6 @@ import {
   createDoingTasksSection,
   createEvaluationModeSection,
   createLanguageSection,
-  createPlanModeSection,
   createShellCopilotSection,
   createSystemSection,
   createToolUsageSection,
@@ -32,7 +31,6 @@ describe('prompt assembly safeguards', () => {
     const sections = [
       ...getDefaultSections(['read_file', 'grep', 'run_command']),
       createEvaluationModeSection(),
-      createPlanModeSection(),
       createShellCopilotSection(),
       createLanguageSection('French'),
     ];
@@ -147,16 +145,14 @@ describe('prompt assembly safeguards', () => {
     expect(ids).not.toContain('shell_guide');
   });
 
-  it('无工具模式优先于 Shell 和 Plan overlay', () => {
+  it('无工具模式优先于 Shell overlay', () => {
     const base = new PromptAssembler().assemble({ toolNames: [] });
     const result = applyRuntimeModePrompt(base, {
       toolsDisabled: true,
       shellCollabActive: true,
-      planModeActive: true,
     });
     expect(result).toBe(base);
     expect(result.systemPrompt).not.toContain('Shell Copilot Mode');
-    expect(result.systemPrompt).not.toContain('Plan Mode');
   });
 
   it('自定义 system 不能覆盖评测模式约束', async () => {

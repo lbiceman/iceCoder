@@ -167,8 +167,6 @@ export interface HarnessConfig {
   ) => Promise<boolean>;
   /** 当前 session 处于 Shell 协作模式时为 true */
   shellCollabActive?: boolean;
-  /** 当前 session 处于规划模式时为 true（禁止改代码，只能写文档） */
-  planModeActive?: boolean;
   /** 记忆文件目录路径（用于文件记忆预取，向后兼容） */
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
@@ -186,7 +184,7 @@ export interface HarnessConfig {
   sessionId?: string;
   /**
    * 子 Agent 派发器。传入时向模型暴露 `task` 工具（仅 Web 默认模式注入）；
-   * 不传时不暴露 task，Shell 协作 / 规划模式 / CLI 行为不变。子 Harness 不传，禁止嵌套。
+   * 不传时不暴露 task，Shell 协作 / CLI 行为不变。子 Harness 不传，禁止嵌套。
    */
   agentSpawner?: import('./agents/agent-spawner.js').AgentSpawner;
   /**

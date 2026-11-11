@@ -12,10 +12,9 @@ import path from 'path';
 import '../cli/paths.js';
 import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import { isSafeSessionId } from './session-id-guard.js';
+import { deriveSessionTitleFromPrompt } from './session-title-text.js';
 
 export const DEFAULT_SESSION_ID = 'default';
-const TITLE_MAX_LEN = 20;
-const PLACEHOLDER_TITLES = new Set(['新会话', '默认会话', '未命名']);
 
 export interface SessionMeta {
   id: string;
@@ -71,17 +70,6 @@ export function sessionIdFromMessageFileName(name: string): string | null {
   return id;
 }
 
-function deriveTitleFromPrompt(prompt: string): string {
-  const t = prompt.replace(/\s+/g, ' ').trim();
-  if (!t) return '未命名';
-  if (t.length <= TITLE_MAX_LEN) return t;
-  return `${t.slice(0, TITLE_MAX_LEN - 1)}…`;
-}
-
-function isPlaceholderTitle(title: string): boolean {
-  return PLACEHOLDER_TITLES.has(title);
-}
-
 function firstUserPrompt(msgs: ChatMessageLike[]): string | null {
   for (const m of msgs) {
     if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
@@ -126,7 +114,7 @@ async function metaFromSessionFile(sessionId: string): Promise<SessionMeta | nul
   }
   const prompt = firstUserPrompt(msgs);
   const title = prompt
-    ? deriveTitleFromPrompt(prompt)
+    ? deriveSessionTitleFromPrompt(prompt)
     : (sessionId === DEFAULT_SESSION_ID ? '默认会话' : '新会话');
   return {
     id: sessionId,
@@ -219,7 +207,7 @@ async function loadSessionIndexUnlocked(): Promise<SessionMeta[]> {
         const msgs = JSON.parse(data) as unknown;
         if (Array.isArray(msgs)) fallback.messageCount = msgs.length;
         const prompt = firstUserPrompt(msgs as ChatMessageLike[]);
-        if (prompt) fallback.title = deriveTitleFromPrompt(prompt);
+        if (prompt) fallback.title = deriveSessionTitleFromPrompt(prompt);
       } catch { /* no default file */ }
       index = [fallback];
     }

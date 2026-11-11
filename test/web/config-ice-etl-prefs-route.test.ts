@@ -67,7 +67,6 @@ describe('PATCH /api/config/ice-etl-prefs（allowedKeys 与 DEFAULT 一致性）
       sidebarWidth: 280,
       taskDoneNotification: true,
       panelAutoCollapse: true,
-      showDesktopPet: false,
     };
     for (const key of Object.keys(DEFAULT_ICE_ETL_PREFS)) {
       const res = await patchIceEtlPrefs(port, { [key]: cases[key] });
@@ -102,7 +101,6 @@ describe('PATCH /api/config/ice-etl-prefs（allowedKeys 与 DEFAULT 一致性）
       { key: 'sidebarWidth', bad: 'wide', errorPattern: /sidebarWidth 须为 number/ },
       { key: 'taskDoneNotification', bad: 'true', errorPattern: /taskDoneNotification 须为 boolean/ },
       { key: 'panelAutoCollapse', bad: 'yes', errorPattern: /panelAutoCollapse 须为 boolean/ },
-      { key: 'showDesktopPet', bad: 'yes', errorPattern: /showDesktopPet 须为 boolean/ },
     ];
     for (const c of cases) {
       const res = await patchIceEtlPrefs(port, { [c.key]: c.bad });

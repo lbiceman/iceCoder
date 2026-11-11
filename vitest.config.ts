@@ -8,6 +8,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    setupFiles: ['./test/setup-env.ts'],
     env: {
       ICE_DATA_DIR: path.join(os.tmpdir(), 'iceCoder-vitest-data'),
     },

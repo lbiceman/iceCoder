@@ -91,7 +91,7 @@ function tokensInStats(text: string): number {
 describe('知识库 · 规则页', () => {
   it('页签含「规则」，提示每次对话都会携带并显示 0 token', async () => {
     const page = await openRulesPage();
-    expect(await page.locator('.knowledge-tab').allInnerTexts()).toEqual(['技能', '记忆', '规则']);
+    expect(await page.locator('.knowledge-tab').allInnerTexts()).toEqual(['代理', '技能', '记忆', '规则']);
     expect(await page.locator('.knowledge-tab.is-active').innerText()).toBe('规则');
     const notice = (await page.locator('.rules-notice-text').allInnerTexts()).join('\n');
     expect(notice).toContain('每次对话都会携带');

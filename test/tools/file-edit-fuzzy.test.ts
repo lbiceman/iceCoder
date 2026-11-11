@@ -71,3 +71,35 @@ describe('applyNonRegexReplace', () => {
     expect(result.content.match(/\[Git commit\]/g)).toHaveLength(1);
   });
 });
+
+describe('CRLF 与替换安全性', () => {
+  it('CRLF 文件写入后不产生混合换行', () => {
+    const content = 'line1\r\nline2\r\nline3\r\n';
+    const result = applyNonRegexReplace(content, 'line2\nline3', 'newA\nnewB', false);
+    expect(result.changed).toBe(true);
+    expect(result.content).toBe('line1\r\nnewA\r\nnewB\r\n');
+    // 裸 \n 必须为 0：所有换行仍是 \r\n
+    expect(result.content.replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
+  it('LF 文件保持 LF，不被反向转成 CRLF', () => {
+    const content = 'a\nb\nc\n';
+    const result = applyNonRegexReplace(content, 'b', 'x\ny', false);
+    expect(result.content).toBe('a\nx\ny\nc\n');
+    expect(result.content).not.toContain('\r');
+  });
+
+  it('replace 里的 $& 按字面写入，不被当成替换模式展开', () => {
+    const content = 'const a = 1;\nconst a = 1;\n';
+    const result = applyNonRegexReplace(content, 'const a = 1;', 'price $& 100', true);
+    expect(result.changed).toBe(true);
+    expect(result.content.match(/price \$& 100/g)).toHaveLength(2);
+  });
+
+  it('重复块按真实行偏移定位，不串到前面的相同行', () => {
+    const content = 'x\n  a\n  b\n  a\n  b\n  c';
+    const result = applyNonRegexReplace(content, 'a\nb\nc', 'Z', false);
+    expect(result.changed).toBe(true);
+    expect(result.content).toBe('x\n  a\n  b\nZ');
+  });
+});

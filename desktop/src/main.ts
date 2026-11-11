@@ -19,18 +19,17 @@ import {
   isServerBundleReady,
 } from './paths';
 import { buildTray } from './tray';
-import { PetWindowManager } from './pet-window-manager';
 import { resolveTaskDoneNotification } from './task-done-notify';
 import { configureWindowsNotificationIdentity } from './win-notification-shortcut';
 import { createScreenPingController, type ScreenPingController } from './ping/controller';
 import { readScreenPingSettings, writeScreenPingSettings } from './ping/settings';
+import { applyWindowCommand, mainWindowChromeFields, startupDocumentHtml, WINDOW_CAPTION_HEIGHT } from './window-chrome';
 
 let mainWindow: BrowserWindow | null = null;
 let screenPing: ScreenPingController | null = null;
 let serverHandle: ServerProcessHandle | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
-const petManager = new PetWindowManager();
 const startupStartedAt = performance.now();
 
 function logStartupTiming(phase: string): void {
@@ -70,17 +69,90 @@ function showTaskDoneSystemNotification(decision: {
   });
 }
 
+function windowFromSender(sender: Electron.WebContents): BrowserWindow | null {
+  const win = BrowserWindow.fromWebContents(sender);
+  if (!win || win.isDestroyed()) return null;
+  return win;
+}
+
+function sendWindowChrome(win: BrowserWindow, channel: string, payload: unknown): void {
+  if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+  try {
+    win.webContents.send(channel, payload);
+  } catch {
+    /* 页面切换中，下一次状态事件会再发 */
+  }
+}
+
+function bindWindowChromeState(win: BrowserWindow): void {
+  const publishMaximized = (): void => {
+    if (win.isDestroyed()) return;
+    sendWindowChrome(win, IPC.WINDOW_MAXIMIZED_CHANGED, win.isMaximized() || win.isFullScreen());
+  };
+  win.on('maximize', publishMaximized);
+  win.on('unmaximize', publishMaximized);
+  win.on('enter-full-screen', publishMaximized);
+  win.on('leave-full-screen', publishMaximized);
+  win.on('focus', () => sendWindowChrome(win, IPC.WINDOW_FOCUS_CHANGED, true));
+  win.on('blur', () => sendWindowChrome(win, IPC.WINDOW_FOCUS_CHANGED, false));
+}
+
+let windowChromeIpcReady = false;
+
+function registerWindowChromeIpc(): void {
+  if (windowChromeIpcReady) return;
+  windowChromeIpcReady = true;
+  ipcMain.on(IPC.WINDOW_MINIMIZE, (e) => {
+    const win = windowFromSender(e.sender);
+    if (win) applyWindowCommand(win, 'minimize');
+  });
+  ipcMain.on(IPC.WINDOW_TOGGLE_MAXIMIZE, (e) => {
+    const win = windowFromSender(e.sender);
+    if (win) applyWindowCommand(win, 'toggle-maximize');
+  });
+  ipcMain.on(IPC.WINDOW_CLOSE, (e) => {
+    const win = windowFromSender(e.sender);
+    if (win) applyWindowCommand(win, 'close');
+  });
+  ipcMain.handle(IPC.WINDOW_CHROME_STATE, (e) => {
+    const win = windowFromSender(e.sender);
+    if (!win) return { maximized: false, focused: false };
+    return {
+      maximized: win.isMaximized() || win.isFullScreen(),
+      focused: win.isFocused(),
+    };
+  });
+  ipcMain.on(IPC.WINDOW_SET_TITLEBAR_OVERLAY, (e, payload: unknown) => {
+    const win = windowFromSender(e.sender);
+    if (!win) return;
+    const color = readOverlayHex(payload, 'color');
+    const symbolColor = readOverlayHex(payload, 'symbolColor');
+    if (!color || !symbolColor) return;
+    try {
+      win.setTitleBarOverlay({ color, symbolColor, height: WINDOW_CAPTION_HEIGHT });
+    } catch {
+      /* 这个窗口创建时没有系统按钮覆盖层 */
+    }
+  });
+}
+
+function readOverlayHex(payload: unknown, key: 'color' | 'symbolColor'): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = (payload as { color?: unknown; symbolColor?: unknown })[key];
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : null;
+}
+
 function createWindow(show: boolean): BrowserWindow {
   const appIcon = resolveAppIcon();
-  return new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 960,
     minHeight: 640,
     show,
-    autoHideMenuBar: true,
     backgroundColor: '#0e0f12',
     title: APP_NAME,
+    ...mainWindowChromeFields(),
     ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -89,6 +161,9 @@ function createWindow(show: boolean): BrowserWindow {
       sandbox: false,
     },
   });
+  bindMainWindowCloseHandler(win);
+  bindWindowChromeState(win);
+  return win;
 }
 
 async function createStartupWindow(): Promise<BrowserWindow> {
@@ -97,10 +172,7 @@ async function createStartupWindow(): Promise<BrowserWindow> {
     void win.show();
   });
   await win.loadURL(
-    `data:text/html;charset=UTF-8,${encodeURIComponent(`<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>${APP_NAME}</title>
-<style>body{margin:0;background:#0e0f12;color:#e6e8ee;font:14px system-ui,sans-serif;display:grid;place-items:center;height:100vh}.loading{display:flex;gap:12px;align-items:center}.dot{width:10px;height:10px;border:2px solid #f2f2f3;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style>
-</head><body><div class="loading"><span class="dot"></span><span>正在启动 ${APP_NAME}…</span></div></body></html>`)}`,
+    `data:text/html;charset=UTF-8,${encodeURIComponent(startupDocumentHtml(APP_NAME))}`,
   );
   logStartupTiming('startup-window-visible');
   return win;
@@ -140,46 +212,6 @@ function broadcastWorkspace(ws: string | null): void {
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle(IPC.PET_GET_MODE, () => petManager.getMode());
-  ipcMain.handle(IPC.PET_SET_EMBEDDED, (_e: Electron.IpcMainInvokeEvent, visible: boolean) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('pet:force-visible', !!visible);
-    }
-    return petManager.getMode();
-  });
-  ipcMain.on(IPC.PET_STATE_PUSH, (_e: Electron.IpcMainEvent, snapshot: unknown) => {
-    petManager.pushSnapshot(snapshot);
-  });
-  ipcMain.on(IPC.PET_REQUEST_SHOW_MAIN, () => {
-    showAndFocusMain();
-  });
-  ipcMain.on(IPC.PET_DRAG_MOVE, (_e: Electron.IpcMainEvent, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return;
-    const { dx, dy } = payload as { dx?: unknown; dy?: unknown };
-    if (typeof dx !== 'number' || typeof dy !== 'number') return;
-    petManager.moveFloatingBy(dx, dy);
-  });
-  ipcMain.on(IPC.PET_DRAG_END, (_e: Electron.IpcMainEvent, pos: unknown) => {
-    if (
-      pos && typeof pos === 'object' &&
-      typeof (pos as { x?: unknown }).x === 'number' &&
-      typeof (pos as { y?: unknown }).y === 'number'
-    ) {
-      // 位置已由 pet-window-manager 的 'moved' 监听器持久化；
-      // 此处保留通道位便于将来支持 programmatic move。
-    }
-  });
-  ipcMain.on(IPC.PET_SET_MOUSE_PASSTHROUGH, (_e: Electron.IpcMainEvent, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return;
-    const passthrough = (payload as { passthrough?: unknown }).passthrough;
-    if (typeof passthrough !== 'boolean') return;
-    petManager.setFloatingMousePassthrough(passthrough);
-  });
-  ipcMain.on(IPC.PET_SET_DESKTOP_ENABLED, (_e: Electron.IpcMainEvent, enabled: unknown) => {
-    if (typeof enabled !== 'boolean') return;
-    void petManager.setDesktopPetEnabled(enabled);
-  });
-
   ipcMain.handle(IPC.SCREEN_PING_GET, () => {
     const settings = readScreenPingSettings();
     return {
@@ -284,7 +316,6 @@ function showAndFocusMain(): void {
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
   mainWindow.focus();
-  void petManager.enterEmbeddedMode(mainWindow);
 }
 
 /** 把主窗口拉到前台。浮层仍在上面，但是点击穿透，键盘会进到输入框。 */
@@ -296,7 +327,6 @@ function focusMainForPaste(): void {
   mainWindow.focus();
   mainWindow.setAlwaysOnTop(false);
   mainWindow.webContents.focus();
-  void petManager.enterEmbeddedMode(mainWindow);
 }
 
 async function gracefulShutdown(): Promise<void> {
@@ -305,8 +335,6 @@ async function gracefulShutdown(): Promise<void> {
 
   try { screenPing?.stop(); } catch { /* ignore */ }
   screenPing = null;
-
-  try { petManager.destroy(); } catch { /* ignore */ }
 
   if (tray && !tray.isDestroyed()) {
     try { tray.destroy(); } catch { /* ignore */ }
@@ -333,8 +361,8 @@ async function bootstrap(): Promise<void> {
       '未找到 desktop/server-bundle。请在仓库根目录执行：npm run build:desktop:server',
     );
   }
+  registerWindowChromeIpc();
   mainWindow = await createStartupWindow();
-  bindMainWindowCloseHandler(mainWindow);
   logStartupTiming('server-bootstrap-start');
 
   // 1) 探测端口
@@ -379,22 +407,6 @@ async function bootstrap(): Promise<void> {
   }
   logStartupTiming('main-window-loaded');
 
-  petManager.setContext(mainWindow, url);
-  void petManager.enterEmbeddedMode(mainWindow);
-
-  // 5) 主窗生命周期 ↔ pet 状态机
-  // 桌面宠物关闭时 enterFloatingMode 不会把冰豆浮到桌面，窗口只收到任务栏。
-  mainWindow.on('minimize', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
-  mainWindow.on('hide', () => {
-    if (isQuitting || !mainWindow) return;
-    void petManager.enterFloatingMode(mainWindow);
-  });
-  mainWindow.on('restore', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
-  mainWindow.on('show', () => {
-    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
-    void petManager.enterEmbeddedMode(mainWindow);
-  });
-
   tray = buildTray(mainWindow, {
     showMain: () => showAndFocusMain(),
     quit: () => { void gracefulShutdown(); },
@@ -418,7 +430,6 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0 && serverHandle) {
     void createMainWindow(serverHandle.url).then((win) => {
       mainWindow = win;
-      bindMainWindowCloseHandler(win);
     });
   } else {
     showAndFocusMain();

@@ -935,43 +935,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await mobile.close();
   });
 
-  it('桌面宠物开关不影响工作台最小化后的页内宠物', async () => {
-    const desktop = await loadPanel();
-    const result = await desktop.evaluate((plan) => {
-      const panel = (window as any).ChatExecutionPlan;
-      panel.setPlan(plan);
-      return (window as any).EtlPrefs.set({ showDesktopPet: false }).then(() => {
-        panel.minimize();
-        return {
-          petHidden: document.body.classList.contains('etl-pet-hidden-by-panel'),
-          panelOpen: document.body.classList.contains('etl-panel-open'),
-          chip: !!document.querySelector('.etl-restore-chip'),
-        };
-      });
-    }, makePlan());
-    expect(result).toEqual({
-      petHidden: false,
-      panelOpen: false,
-      chip: false,
-    });
-    await desktop.close();
-  });
-
-  it('桌面宠物文案描述应用窗口最小化，不再改工作台侧边栏', () => {
-    expect(CONFIG_SOURCE).toMatch(/t\('settings\.desktopPet\.hint'\)/);
-    expect(CONFIG_SOURCE).not.toMatch(/最小化面板时不再显示宠物/);
-    expect(PANEL_SOURCE).not.toMatch(/showDesktopPet|etl-restore-chip/);
-  });
-
-  it('打包桌面宠物保持独立，不引用透明层互斥状态', () => {
-    const floatingPetSource = classicWindowSource(readFileSync(
-      path.join(__dirname, '../../src/public/js/pet-floating-page.js'),
-      'utf-8',
-    ));
-    expect(floatingPetSource).toMatch(/petRequestShowMain/);
-    expect(floatingPetSource).not.toMatch(/ChatExecutionPlan|etl-pet-hidden-by-panel/);
-  });
-
   it('缺字段 patch 只跳过坏项，后续合法项仍被消费', async () => {
     const page = await loadPanel();
     const status = await page.evaluate((plan) => {

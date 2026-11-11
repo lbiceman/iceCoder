@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 楼梯导航：会话消息超过阈值时，在聊天区右侧展示横线导航；
  * 悬停显示用户输入列表，点击滚动到对应位置。
@@ -39,7 +40,7 @@ export const ChatStaircaseNav = (() => {
 
     elNav = document.createElement('div');
     elNav.className = 'chat-staircase-nav hidden';
-    elNav.setAttribute('aria-label', '消息导航');
+    elNav.setAttribute('aria-label', t('chat.nav'));
 
     elLines = document.createElement('div');
     elLines.className = 'chat-staircase-lines';
@@ -92,7 +93,7 @@ export const ChatStaircaseNav = (() => {
 
   function truncateText(text, maxLen) {
     const s = (text || '').replace(/\s+/g, ' ').trim();
-    if (!s) return '（空消息）';
+    if (!s) return t('chat.emptyMessage');
     if (s.length <= maxLen) return s;
     return `${s.slice(0, maxLen)}…`;
   }
@@ -127,7 +128,7 @@ export const ChatStaircaseNav = (() => {
         line.type = 'button';
         line.className = 'chat-staircase-line';
         line.setAttribute('data-msg-index', String(group.firstMsgIndex));
-        line.setAttribute('aria-label', '跳转到第 ' + (groupIndex + 1) + ' 段对话');
+        line.setAttribute('aria-label', t('chat.jumpSegment', { n: groupIndex + 1 }));
 
         const widthLevel = (groupIndex % 4) + 1;
         line.style.setProperty('--stair-width-level', String(widthLevel));
@@ -172,18 +173,16 @@ export const ChatStaircaseNav = (() => {
   }
 
   function openPopover() {
-    if (!elPopover || !elLines) return;
+    if (!elPopover) return;
     isPopoverOpen = true;
     elPopover.classList.remove('hidden');
-    elLines.classList.add('is-hidden');
     elNav.classList.add('is-expanded');
   }
 
   function closePopover() {
-    if (!elPopover || !elLines) return;
+    if (!elPopover) return;
     isPopoverOpen = false;
     elPopover.classList.add('hidden');
-    elLines.classList.remove('is-hidden');
     elNav.classList.remove('is-expanded');
   }
 

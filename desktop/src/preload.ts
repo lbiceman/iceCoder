@@ -3,35 +3,9 @@
  */
 import { clipboard, contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { IPC } from './constants';
+import { windowChromeKind, windowUsesCustomControls } from './window-chrome';
 
 const api = {
-  /** 拉取当前冰豆显示模式：'embedded' | 'floating' | 'hidden' */
-  petGetMode: (): Promise<string> => ipcRenderer.invoke(IPC.PET_GET_MODE),
-
-  /** 主窗冰豆上报当前状态快照给 Main。 */
-  petPushState: (state: unknown) => ipcRenderer.send(IPC.PET_STATE_PUSH, state),
-
-  /** 桌面悬浮冰豆请求显示/隐藏主窗内嵌冰豆。 */
-  petSetEmbedded: (visible: boolean) =>
-    ipcRenderer.invoke(IPC.PET_SET_EMBEDDED, visible),
-
-  /** 双击悬浮冰豆 → 请求恢复并聚焦主窗。 */
-  petRequestShowMain: () => ipcRenderer.send(IPC.PET_REQUEST_SHOW_MAIN),
-
-  /** 悬浮冰豆拖动事件（由 floating-renderer 主动通知 main）。 */
-  petDragMove: (dx: number, dy: number) =>
-    ipcRenderer.send(IPC.PET_DRAG_MOVE, { dx, dy }),
-  petDragEnd: (x: number, y: number) =>
-    ipcRenderer.send(IPC.PET_DRAG_END, { x, y }),
-
-  /** true=透明区点击穿透；false=悬浮窗接收鼠标（仅 canvas 命中时应为 false）。 */
-  petSetMousePassthrough: (passthrough: boolean) =>
-    ipcRenderer.send(IPC.PET_SET_MOUSE_PASSTHROUGH, { passthrough }),
-
-  /** 「桌面宠物」开关。关闭后最小化主窗只收到任务栏，不再浮出冰豆。 */
-  setDesktopPetEnabled: (enabled: boolean) =>
-    ipcRenderer.send(IPC.PET_SET_DESKTOP_ENABLED, enabled),
-
   /** 屏幕问号轮盘。supported 为 false 时设置页只展示、不能开。 */
   getScreenPing: (): Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }> =>
     ipcRenderer.invoke(IPC.SCREEN_PING_GET),
@@ -64,6 +38,29 @@ const api = {
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   openDevTools: () => ipcRenderer.send(IPC.APP_DEVTOOLS),
 
+  /** false：不在网页里画最小化 / 最大化 / 关闭。 */
+  windowControls: windowUsesCustomControls(),
+  /** overlay：Windows / Linux 系统按钮。traffic-lights：macOS 红绿灯。 */
+  windowChrome: windowChromeKind(),
+  windowSetTitleBarOverlay: (colors: { color: string; symbolColor: string }) => {
+    ipcRenderer.send(IPC.WINDOW_SET_TITLEBAR_OVERLAY, colors);
+  },
+  windowMinimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
+  windowToggleMaximize: () => ipcRenderer.send(IPC.WINDOW_TOGGLE_MAXIMIZE),
+  windowClose: () => ipcRenderer.send(IPC.WINDOW_CLOSE),
+  windowGetChromeState: (): Promise<{ maximized: boolean; focused: boolean }> =>
+    ipcRenderer.invoke(IPC.WINDOW_CHROME_STATE),
+  onWindowMaximized: (cb: (maximized: boolean) => void) => {
+    const listener = (_e: IpcRendererEvent, maximized: boolean) => cb(!!maximized);
+    ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
+  },
+  onWindowFocus: (cb: (focused: boolean) => void) => {
+    const listener = (_e: IpcRendererEvent, focused: boolean) => cb(!!focused);
+    ipcRenderer.on(IPC.WINDOW_FOCUS_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.WINDOW_FOCUS_CHANGED, listener);
+  },
+
   /**
    * 读取系统剪贴板中的位图。Electron 里 Win+Shift+S / 微信截图等常常
    * 不进入 renderer 的 clipboardData.items，只能从 native clipboard 取。
@@ -88,23 +85,6 @@ const api = {
     const listener = (_e: IpcRendererEvent, sessionId: string) => cb(sessionId);
     ipcRenderer.on(IPC.TASK_DONE_NOTIFY_CLICK, listener);
     return () => ipcRenderer.removeListener(IPC.TASK_DONE_NOTIFY_CLICK, listener);
-  },
-
-  /** 监听 main → renderer 的事件。 */
-  onPetMode: (cb: (mode: string) => void) => {
-    const listener = (_e: IpcRendererEvent, mode: string) => cb(mode);
-    ipcRenderer.on('pet:mode', listener);
-    return () => ipcRenderer.removeListener('pet:mode', listener);
-  },
-  onPetStateSnapshot: (cb: (snapshot: unknown) => void) => {
-    const listener = (_e: IpcRendererEvent, snapshot: unknown) => cb(snapshot);
-    ipcRenderer.on('pet:state-snapshot', listener);
-    return () => ipcRenderer.removeListener('pet:state-snapshot', listener);
-  },
-  onPetForceVisible: (cb: (visible: boolean) => void) => {
-    const listener = (_e: IpcRendererEvent, visible: boolean) => cb(visible);
-    ipcRenderer.on('pet:force-visible', listener);
-    return () => ipcRenderer.removeListener('pet:force-visible', listener);
   },
 };
 

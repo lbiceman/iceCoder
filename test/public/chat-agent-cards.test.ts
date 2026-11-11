@@ -45,6 +45,7 @@ class DomEl {
   textContent = '';
   style: Record<string, string> = {};
   type = '';
+  scrollTop = 0;
   constructor(tag: string) {
     this.tagName = tag.toUpperCase();
   }
@@ -438,6 +439,50 @@ describe('子 Agent 卡片', () => {
     expect(lease.textContent).toBe('1 次写入被拦截');
   });
 
+  it('同一份历史轨迹再次同步时，报告滚动位置保持不变', () => {
+    ChatAgentCards.reset();
+    (document.body as unknown as DomEl).innerHTML = '';
+    toolBlock('tcR', 'report');
+    ChatAgentCards.decorateTaskBlock(document.querySelector('[data-tool-call-id="tcR"]'), 'tcR', '');
+    ChatAgentCards.applyView(view({
+      agentId: 'aR',
+      parentToolCallId: 'tcR',
+      status: 'completed',
+      finishedAt: Date.now(),
+      reportPreview: '报告正文\n'.repeat(30),
+    }));
+    const trace = {
+      role: 'tool_trace',
+      parentId: 'msg',
+      agentId: 'aR',
+      toolName: 'read_file',
+      toolCallId: 'ag:r',
+      detail: 'a.ts',
+      status: 'success',
+    };
+    ChatSession.separateToolTraces([trace, { role: 'agent', id: 'msg', content: 'done' }]);
+    const report = document.querySelector('.agent-card__report') as unknown as DomEl;
+    report.scrollTop = 180;
+    ChatSession.separateToolTraces([
+      { ...trace },
+      { role: 'agent', id: 'msg', content: 'done' },
+    ]);
+    const again = document.querySelector('.agent-card__report') as unknown as DomEl;
+    expect(again).toBe(report);
+    expect(again.scrollTop).toBe(180);
+
+    ChatAgentCards.applyView(view({
+      agentId: 'aR',
+      parentToolCallId: 'tcR',
+      status: 'completed',
+      finishedAt: Date.now(),
+      reportPreview: '报告正文\n'.repeat(30),
+    }));
+    const rebuilt = document.querySelector('.agent-card__report') as unknown as DomEl;
+    expect(rebuilt).not.toBe(report);
+    expect(rebuilt.scrollTop).toBe(180);
+  });
+
   it('历史 tool_trace 里带 agentId 的行不进主轨迹', () => {
     ChatAgentCards.reset();
     const separated = ChatSession.separateToolTraces([
@@ -484,7 +529,7 @@ describe('子 Agent 前端接线', () => {
 
   it('确认弹窗标题带来源子 Agent，流式事件不进主消息', () => {
     const restore = read('chat-ws-restore-handlers.ts');
-    expect(restore).toContain('子 Agent『${src.description}』请求执行：');
+    expect(restore).toContain("t('confirm.agentAsks'");
     const stream = read('chat-ws-stream-handlers.ts');
     expect(stream).toContain('if (step.agentId)');
     expect(stream).toContain('onAgentStep(step)');

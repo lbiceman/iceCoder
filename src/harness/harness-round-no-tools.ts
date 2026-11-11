@@ -84,7 +84,6 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
     request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
   ) => Promise<boolean>;
   shellCollabActive?: boolean;
-  planModeActive?: boolean;
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
   sessionId?: string;
@@ -482,6 +481,7 @@ export async function handleNoToolCalls(
       state.verificationState,
       VERIFICATION_CONTINUATION_MAX,
       plan.fingerprint,
+      verificationFailureKey(stopVerification),
     )) {
       injectContinuationUserMessage(
         deps,
@@ -564,6 +564,14 @@ function buildCompletionSelfCheckPrompt(calledToolsThisTurn: boolean): string {
   ].join('\n');
 }
 
+function verificationFailureKey(result: StopVerificationResult): string {
+  return [
+    result.failedCommand ?? '',
+    result.exitCode ?? '',
+    result.outputTail ?? '',
+  ].join('\n');
+}
+
 function buildVerificationContinuationPrompt(
   result: StopVerificationResult,
 ): string {
@@ -573,7 +581,7 @@ function buildVerificationContinuationPrompt(
     result.exitCode !== undefined ? `Exit code: ${result.exitCode}` : '',
     result.outputTail ? `Relevant output:\n${result.outputTail.slice(-1_200)}` : '',
     'Fix the real cause and run only the relevant verification. Do not substitute git diff or directory listings.',
-    'If you stop again without changing any file, the turn ends and this failure is reported to the user.',
+    'The same failure output will not be continued again. Change the code, or stop and report the failure.',
   ].filter(Boolean).join('\n');
 }
 

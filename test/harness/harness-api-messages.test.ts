@@ -103,6 +103,8 @@ describe('buildMessagesForLlm · tool results', () => {
       typeof m.content === 'string' && m.content.includes('[System Runtime State]'),
     );
     expect(runtimeInView).toBeDefined();
+    expect(runtimeInView?.promptCacheEphemeral).toBe(true);
+    expect(canonical.some(m => m.promptCacheEphemeral)).toBe(false);
   });
 
   it('keeps ephemeral separate from trailing canonical user for cache-friendly tail', () => {

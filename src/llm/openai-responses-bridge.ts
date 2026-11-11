@@ -129,6 +129,7 @@ function buildResponsesParams(
   defaultParams: Record<string, unknown>,
   supportsVision: boolean,
   stream: boolean,
+  promptCacheKey?: string,
 ): OpenAI.Responses.ResponseCreateParams {
   const resolvedModel = options.model || model;
   const params: Record<string, unknown> = {
@@ -151,6 +152,8 @@ function buildResponsesParams(
   }
 
   applyReasoningEffortToResponsesParams(params, parseReasoningEffort(options.reasoningEffort));
+
+  if (promptCacheKey) params.prompt_cache_key = promptCacheKey;
 
   return params as OpenAI.Responses.ResponseCreateParams;
 }
@@ -230,6 +233,7 @@ export async function responsesChat(
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
     reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
+    promptCacheKey?: string;
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(
@@ -239,6 +243,7 @@ export async function responsesChat(
     ctx.defaultParams,
     ctx.supportsVision,
     false,
+    ctx.promptCacheKey,
   );
   const response = await client.responses.create(
     params as OpenAI.Responses.ResponseCreateParamsNonStreaming,
@@ -258,6 +263,7 @@ export async function responsesStream(
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
     reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
+    promptCacheKey?: string;
     onStreamActivity?: () => void;
   },
 ): Promise<LLMResponse> {
@@ -268,6 +274,7 @@ export async function responsesStream(
     ctx.defaultParams,
     ctx.supportsVision,
     true,
+    ctx.promptCacheKey,
   );
   const stream = await client.responses.create(
     { ...params, stream: true } as OpenAI.Responses.ResponseCreateParamsStreaming,

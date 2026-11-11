@@ -217,6 +217,7 @@ export const ChatSession = (() => {
     }
     if (m.shellCommand) o.shellCommand = m.shellCommand;
     if (m.planCommand) o.planCommand = m.planCommand;
+    if (m.agentCommand) o.agentCommand = m.agentCommand;
     if (m.openCommand) o.openCommand = m.openCommand;
     if (m.alsoNote) o.alsoNote = true;
     if (Array.isArray(m.skills) && m.skills.length) o.skills = m.skills.slice();
@@ -260,6 +261,7 @@ export const ChatSession = (() => {
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
     if (raw.shellCommand) o.shellCommand = raw.shellCommand;
     if (raw.planCommand) o.planCommand = raw.planCommand;
+    if (raw.agentCommand) o.agentCommand = raw.agentCommand;
     if (raw.openCommand) o.openCommand = raw.openCommand;
     if (raw.alsoNote) o.alsoNote = true;
     if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
@@ -525,57 +527,39 @@ export const ChatSession = (() => {
     };
   }
 
-  function isPlanCommandMetaLine(trimmed) {
-    if (!trimmed) return true;
-    const tokens = trimmed.split(/\s+/).filter(Boolean);
-    if (tokens.length > 0) {
-      let allSkills = true;
-      for (let i = 0; i < tokens.length; i++) {
-        if (!/^#[^\s#]+\.md$/i.test(tokens[i])) { allSkills = false; break; }
-      }
-      if (allSkills) return true;
+  function knownAgentCommand(token) {
+    const list = window.ChatCommands && typeof window.ChatCommands.getAgentCommands === 'function'
+      ? window.ChatCommands.getAgentCommands()
+      : [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i].name === token) return '/' + token;
     }
-    if (looksLikeReferencePathLine(trimmed)) return true;
-    return false;
+    return '';
   }
 
-  function splitPlanCommandFromContent(text, existingPlanCommand) {
+  function splitAgentCommandFromContent(text, existingAgentCommand) {
     const raw = String(text || '');
     const lines = raw.trim().split(/\r?\n/);
-    let planLineIndex = -1;
-    let planLine = '';
     for (let i = 0; i < lines.length; i++) {
-      const t = lines[i].trim();
-      if (isPlanCommandMetaLine(t)) continue;
-      if (t === '/plan' || t === '/plan exit' || t.startsWith('/plan ')) {
-        const afterCmd = t.slice('/plan'.length).trim();
-        if (afterCmd === 'exit' || afterCmd.startsWith('exit ')) {
-          if (t === '/plan exit') {
-            planLineIndex = i;
-            planLine = t;
-          }
-          break;
-        }
-        planLineIndex = i;
-        planLine = t;
-      }
-      break;
-    }
-    if (planLineIndex < 0) {
+      const line = lines[i].trim();
+      if (!line || /^#[^\s#]+\.md$/i.test(line)) continue;
+      const match = /^\/([a-z][a-z0-9-]{0,31})(?:\s+(.*))?$/.exec(line);
+      if (!match) break;
+      const command = knownAgentCommand(match[1]);
+      if (!command) break;
+      const after = (match[2] || '').trim();
+      if (after.indexOf('exit ') === 0) break;
+      const parts = [];
+      if (after && after !== 'exit') parts.push(after);
+      const rest = lines.slice(i + 1).join('\n').trim();
+      if (rest) parts.push(rest);
+      const shown = after === 'exit' ? command + ' exit' : (existingAgentCommand || command);
       return {
-        planCommand: existingPlanCommand || '',
-        content: raw.trim(),
+        agentCommand: shown,
+        content: parts.join('\n').trim(),
       };
     }
-    const after = planLine.slice('/plan'.length).trim();
-    const promptParts = [];
-    if (after && after !== 'exit') promptParts.push(after);
-    const rest = lines.slice(planLineIndex + 1).join('\n').trim();
-    if (rest) promptParts.push(rest);
-    return {
-      planCommand: existingPlanCommand || '/plan',
-      content: promptParts.join('\n').trim(),
-    };
+    return { agentCommand: existingAgentCommand || '', content: raw.trim() };
   }
 
   function enrichUserMessageForDisplay(msg) {
@@ -588,10 +572,10 @@ export const ChatSession = (() => {
       text = shellSplit.content;
       cloned.content = text;
     }
-    const planSplit = splitPlanCommandFromContent(text, cloned.planCommand);
-    if (planSplit.planCommand) {
-      cloned.planCommand = planSplit.planCommand;
-      text = planSplit.content;
+    const agentSplit = splitAgentCommandFromContent(text, cloned.agentCommand);
+    if (agentSplit.agentCommand) {
+      cloned.agentCommand = agentSplit.agentCommand;
+      text = agentSplit.content;
       cloned.content = text;
     }
     const openSplit = splitOpenCommandFromContent(text, cloned.openCommand);
@@ -784,6 +768,9 @@ export const ChatSession = (() => {
       if (!enriched.planCommand && cur.planCommand) {
         enriched.planCommand = cur.planCommand;
       }
+      if (!enriched.agentCommand && cur.agentCommand) {
+        enriched.agentCommand = cur.agentCommand;
+      }
       if (!enriched.openCommand && cur.openCommand) {
         enriched.openCommand = cur.openCommand;
       }
@@ -800,6 +787,10 @@ export const ChatSession = (() => {
       if ((cur.planCommand || '') !== (enriched.planCommand || '')) {
         if (enriched.planCommand) cur.planCommand = enriched.planCommand;
         else delete cur.planCommand;
+      }
+      if ((cur.agentCommand || '') !== (enriched.agentCommand || '')) {
+        if (enriched.agentCommand) cur.agentCommand = enriched.agentCommand;
+        else delete cur.agentCommand;
         changed = true;
       }
       if ((cur.openCommand || '') !== (enriched.openCommand || '')) {
@@ -878,6 +869,9 @@ export const ChatSession = (() => {
       }
       if (!merged.planCommand && local.planCommand) {
         merged.planCommand = local.planCommand;
+      }
+      if (!merged.agentCommand && local.agentCommand) {
+        merged.agentCommand = local.agentCommand;
         patched = true;
       }
       if (!merged.openCommand && local.openCommand) {
@@ -992,6 +986,8 @@ export const ChatSession = (() => {
       else delete msg.shellCommand;
       if (enriched.planCommand) msg.planCommand = enriched.planCommand;
       else delete msg.planCommand;
+      if (enriched.agentCommand) msg.agentCommand = enriched.agentCommand;
+      else delete msg.agentCommand;
       if (enriched.openCommand) msg.openCommand = enriched.openCommand;
       else delete msg.openCommand;
       if (enriched.skills) msg.skills = enriched.skills;

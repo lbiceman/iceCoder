@@ -32,7 +32,7 @@ export const MobileShell = (() => {
 
   function navPageFor(page) {
     if (page === 'workChat') return 'work';
-    if (page === 'mSkills' || page === 'mMemory' || page === 'mRules') return 'mKnowledge';
+    if (page === 'mAgents' || page === 'mSkills' || page === 'mMemory' || page === 'mRules') return 'mKnowledge';
     if (page === 'mTodos') return 'mTasks';
     return page;
   }
@@ -147,6 +147,7 @@ export const MobileShell = (() => {
     if (path === '/m/chat' || path === '/m/work') return 'work';
     if (path.startsWith('/m/work/')) return 'workChat';
     if (path === '/m/memory') return 'mMemory';
+    if (path === '/m/agents') return 'mAgents';
     if (path === '/m/skills') return 'mSkills';
     if (path === '/m/rules') return 'mRules';
     if (path === '/m/tasks') return 'mTasks';
@@ -157,6 +158,7 @@ export const MobileShell = (() => {
     if (h.startsWith('#/m/work/')) return 'workChat';
     if (h.startsWith('#/m/work')) return 'work';
     if (h.startsWith('#/m/memory')) return 'mMemory';
+    if (h.startsWith('#/m/agents')) return 'mAgents';
     if (h.startsWith('#/m/skills')) return 'mSkills';
     if (h.startsWith('#/m/rules')) return 'mRules';
     if (h.startsWith('#/m/todos')) return 'mTodos';
@@ -264,7 +266,7 @@ export const MobileShell = (() => {
           }
         });
       }
-    } else if (mode === 'memory' || mode === 'skills' || mode === 'rules') {
+    } else if (mode === 'agents' || mode === 'memory' || mode === 'skills' || mode === 'rules') {
       const Tabs = window.KnowledgeTabs;
       center.innerHTML = Tabs
         ? `${Tabs.html(mode, 'is-segmented')}${getConnectionDot()}`

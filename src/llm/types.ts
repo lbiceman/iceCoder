@@ -78,6 +78,11 @@ export interface UnifiedMessage {
   ephemeralFailureRecovery?: 'light' | 'evidence' | 'strong';
   /** 运行中 /also 注入的用户备注；与主任务 user 消息同等写入 canonical 历史 */
   alsoNote?: boolean;
+  /**
+   * 只出现在当次 API 视图上：运行时状态等易变尾。
+   * Anthropic 缓存断点打在它之前，不写进主历史。
+   */
+  promptCacheEphemeral?: boolean;
 }
 
 /**

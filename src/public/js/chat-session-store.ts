@@ -15,16 +15,24 @@ export const ChatSessionStore = (() => {
   let listeners = [];
   const STORAGE_KEY_PREFIX = 'ice-chat-messages:';
   const STORAGE_KEY_LAST_ACTIVE = 'ice-chat-last-active-session';
-  const TITLE_MAX_LEN = 20;
-  const PLACEHOLDER_TITLES = { '新会话': true, '默认会话': true, '未命名': true };
+  const TITLE_MAX_LEN = 50;
+  // 与 src/web/session-title-text.ts 的占位标题保持一致（中英文）
+  const PLACEHOLDER_TITLES = {
+    '新会话': true,
+    '默认会话': true,
+    '未命名': true,
+    'New chat': true,
+    'Default chat': true,
+    'Untitled': true,
+  };
   let defaultWorkDir = '';
   let localUser = '';
   /** sessionId → workspaceRoot */
   let workspacesBySession = {};
   /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
   let shellCollabActiveBySession = {};
-  /** sessionId → 规划模式是否 active */
-  let planModeActiveBySession = {};
+  /** sessionId → { id, name } 当前用户 Agent */
+  let agentModeBySession = {};
   /** sessionId → 定时任务会话状态 { taskId, state: current|history|deleted, enabled?, nextRunAt?, lastStatus? } */
   let scheduledTasksBySession = {};
   let runPhaseBySession = {};
@@ -33,7 +41,7 @@ export const ChatSessionStore = (() => {
 
   function deriveTitleFromPrompt(prompt) {
     const t = (prompt || '').replace(/\s+/g, ' ').trim();
-    if (!t) return '未命名';
+    if (!t) return '';
     if (t.length <= TITLE_MAX_LEN) return t;
     return `${t.slice(0, TITLE_MAX_LEN - 1)}…`;
   }
@@ -60,10 +68,10 @@ export const ChatSessionStore = (() => {
         ? data.shellCollabActive
         : {};
     }
-    if (Object.prototype.hasOwnProperty.call(data, 'planModeActive')
-        && data.planModeActive && typeof data.planModeActive === 'object'
-        && !Array.isArray(data.planModeActive)) {
-      planModeActiveBySession = data.planModeActive;
+    if (Object.prototype.hasOwnProperty.call(data, 'agentMode')
+        && data.agentMode && typeof data.agentMode === 'object'
+        && !Array.isArray(data.agentMode)) {
+      agentModeBySession = data.agentMode;
     }
     scheduledTasksBySession = (data.scheduledTasks && typeof data.scheduledTasks === 'object'
       && !Array.isArray(data.scheduledTasks)) ? data.scheduledTasks : {};
@@ -139,20 +147,21 @@ export const ChatSessionStore = (() => {
     emit();
   }
 
-  function getPlanModeActive(sessionId) {
-    return planModeActiveBySession[sessionId] === true;
+  function getAgentMode(sessionId) {
+    const row = agentModeBySession[sessionId];
+    return row && row.id ? row : null;
   }
 
-  function setPlanModeActive(sessionId, active) {
+  function setAgentMode(sessionId, agent) {
     if (!sessionId) return;
-    if (active) planModeActiveBySession[sessionId] = true;
-    else delete planModeActiveBySession[sessionId];
+    if (agent && agent.id) agentModeBySession[sessionId] = { id: agent.id, name: agent.name || agent.id };
+    else delete agentModeBySession[sessionId];
     emit();
   }
 
-  function applyPlanModeActiveMap(map) {
+  function applyAgentModeMap(map) {
     if (!map || typeof map !== 'object') return;
-    planModeActiveBySession = map;
+    agentModeBySession = map;
     emit();
   }
 
@@ -349,13 +358,14 @@ export const ChatSessionStore = (() => {
   }
 
   /**
-   * 首条用户消息时，将占位标题替换为提示词截取（与服务端一致，即时刷新侧栏）
+   * 第一条有文字的用户消息时，把占位标题换成这段文字（与服务端一致，即时刷新侧栏）
    */
   function maybeAutoTitleFromPrompt(sessionId, prompt) {
     const idx = sessions.findIndex((s) =>  s.id === sessionId);
     if (idx < 0) return;
     if (!PLACEHOLDER_TITLES[sessions[idx].title]) return;
     const title = deriveTitleFromPrompt(prompt);
+    if (!title || PLACEHOLDER_TITLES[title]) return;
     sessions[idx].title = title;
     emit();
     renameSession(sessionId, title);
@@ -491,8 +501,8 @@ export const ChatSessionStore = (() => {
       if (typeof data.shellCollabActive === 'boolean') {
         setShellCollabActive(activeSessionId, data.shellCollabActive);
       }
-      if (typeof data.planModeActive === 'boolean') {
-        setPlanModeActive(activeSessionId, data.planModeActive);
+      if (Object.prototype.hasOwnProperty.call(data, 'agentMode')) {
+        setAgentMode(activeSessionId, data.agentMode);
       }
     }
 
@@ -568,8 +578,8 @@ export const ChatSessionStore = (() => {
           if (shellCollabActiveBySession[sessionId]) {
             delete shellCollabActiveBySession[sessionId];
           }
-          if (planModeActiveBySession[sessionId]) {
-            delete planModeActiveBySession[sessionId];
+          if (agentModeBySession[sessionId]) {
+            delete agentModeBySession[sessionId];
           }
           if (runPhaseBySession[sessionId]) delete runPhaseBySession[sessionId];
           if (composerDrafts[sessionId]) delete composerDrafts[sessionId];
@@ -655,9 +665,9 @@ export const ChatSessionStore = (() => {
     getShellCollabActive,
     setShellCollabActive,
     applyShellCollabActiveMap,
-    getPlanModeActive,
-    setPlanModeActive,
-    applyPlanModeActiveMap,
+    getAgentMode,
+    setAgentMode,
+    applyAgentModeMap,
     applySessionRunState,
     applySessionRunStates,
     getRunPhase,

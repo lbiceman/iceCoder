@@ -27,6 +27,8 @@ export interface EvalMetrics {
   tokens_per_successful_task: number;
   compaction_saved_tokens: number;
   compaction_recovery_success_rate: number;
+  /** 该用例缓存读 token / 输入 token。汇总时改用全部用例的合计，不用比率平均。 */
+  prompt_cache_hit_rate: number;
 }
 
 /** 单个 case 的行为读数：轮次、工具、写同一文件次数、跑命令次数、token、耗时。 */
@@ -586,6 +588,15 @@ async function scoreCase(args: {
       }
     }
   }
+  if (testCase.expected.userMessageContains) {
+    const userText = result.messages
+      .filter(message => message.role === 'user')
+      .map(message => typeof message.content === 'string' ? message.content : '')
+      .join('\n');
+    if (!userText.includes(testCase.expected.userMessageContains)) {
+      failures.push(`user messages do not contain ${JSON.stringify(testCase.expected.userMessageContains)}`);
+    }
+  }
   if (
     testCase.expected.finalContains
     && !result.content.includes(testCase.expected.finalContains)
@@ -652,6 +663,7 @@ async function scoreCase(args: {
       : summary?.tokensPerSuccessfulTask ?? 0,
     compaction_saved_tokens: compactionSavedTokens || summary?.compactionSavedTokens || 0,
     compaction_recovery_success_rate: compactionRecoverySucceeded ? 1 : 0,
+    prompt_cache_hit_rate: cacheHitRateFromResult(result),
   };
 
   return {
@@ -1024,5 +1036,16 @@ export function zeroMetrics(): EvalMetrics {
     tokens_per_successful_task: 0,
     compaction_saved_tokens: 0,
     compaction_recovery_success_rate: 0,
+    prompt_cache_hit_rate: 0,
   };
+}
+
+function cacheHitRateFromResult(result: HarnessResult): number {
+  const usages = result.log
+    .filter(entry => entry.event === 'llm_response')
+    .map(entry => entry.data?.usage as { inputTokens?: number; cacheReadTokens?: number } | undefined)
+    .filter((usage): usage is { inputTokens?: number; cacheReadTokens?: number } => !!usage);
+  const input = usages.reduce((sum, usage) => sum + (usage.inputTokens ?? 0), 0);
+  const cache = usages.reduce((sum, usage) => sum + (usage.cacheReadTokens ?? 0), 0);
+  return input > 0 ? cache / input : 0;
 }

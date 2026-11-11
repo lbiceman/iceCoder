@@ -30,11 +30,19 @@ describe('session-title', () => {
     const { deriveSessionTitleFromPrompt, SESSION_TITLE_MAX_LEN } = await import(
       '../../src/web/session-title.js'
     );
-    const long = '使用git diff分析刚才的变动并给出建议';
+    const long = '使用git diff分析刚才的变动并给出建议'.repeat(4);
     const title = deriveSessionTitleFromPrompt(long);
-    expect(title.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_LEN);
+    expect(title.length).toBe(SESSION_TITLE_MAX_LEN);
     expect(title.endsWith('…')).toBe(true);
     expect(title.startsWith('使用git diff')).toBe(true);
+    expect(deriveSessionTitleFromPrompt('短标题')).toBe('短标题');
+  });
+
+  it('New chat 也是占位标题', async () => {
+    const { isPlaceholderSessionTitle } = await import('../../src/web/session-title.js');
+    expect(isPlaceholderSessionTitle('New chat')).toBe(true);
+    expect(isPlaceholderSessionTitle('新会话')).toBe(true);
+    expect(isPlaceholderSessionTitle('我的专项')).toBe(false);
   });
 
   it('applyFirstPromptSessionTitle updates placeholder on first user message', async () => {
@@ -67,6 +75,76 @@ describe('session-title', () => {
       title: string;
     }[];
     expect(index[0].title).toBe('帮我写单元测试');
+  });
+
+  it('New chat 在先发图片、再发文字时用第一条文字做标题', async () => {
+    const sessionId = 'imgthen';
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([
+        {
+          id: sessionId,
+          title: 'New chat',
+          createdAt: 1,
+          updatedAt: 1,
+          messageCount: 0,
+        },
+      ]),
+      'utf-8',
+    );
+    const sessionFile = path.join(tempDir, `${sessionId}.json`);
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify([
+        { role: 'user', content: '', images: ['/api/sessions/imgthen/images/a.png'], id: 'u0' },
+      ]),
+      'utf-8',
+    );
+
+    const { applyFirstPromptSessionTitle } = await import('../../src/web/session-title.js');
+    expect(await applyFirstPromptSessionTitle(sessionId, '')).toBeNull();
+
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify([
+        { role: 'user', content: '', images: ['/api/sessions/imgthen/images/a.png'], id: 'u0' },
+        { role: 'user', content: '看一下标题栏被蒙版盖住的问题', id: 'u1' },
+      ]),
+      'utf-8',
+    );
+    const title = await applyFirstPromptSessionTitle(sessionId, '看一下标题栏被蒙版盖住的问题');
+    expect(title).toBe('看一下标题栏被蒙版盖住的问题');
+  });
+
+  it('占位标题仍在时，后一条文字不会盖过第一条文字', async () => {
+    const sessionId = 'firstwins';
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([
+        {
+          id: sessionId,
+          title: 'New chat',
+          createdAt: 1,
+          updatedAt: 1,
+          messageCount: 0,
+        },
+      ]),
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(tempDir, `${sessionId}.json`),
+      JSON.stringify([
+        { role: 'user', content: '第一条文字需求', id: 'u1' },
+        { role: 'user', content: '第二条不要当标题', id: 'u2' },
+      ]),
+      'utf-8',
+    );
+
+    const { applyFirstPromptSessionTitle } = await import('../../src/web/session-title.js');
+    const title = await applyFirstPromptSessionTitle(sessionId, '第二条不要当标题');
+    expect(title).toBe('第一条文字需求');
   });
 
   it('applyFirstPromptSessionTitle skips when user renamed', async () => {

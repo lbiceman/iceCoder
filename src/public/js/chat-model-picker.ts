@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 聊天底部模型下拉选择器。
  * 浮层已统一为 ChatDropdown；本模块只负责拉取 providers + 切换默认 + 写回 label。
@@ -90,7 +91,7 @@ export const ChatModelPicker = (() => {
   function writeLabel() {
     if (!elLabel) return;
     const def = defaultProvider();
-    elLabel.textContent = def ? (resolveActiveModelName(def) || '未配置') : '未配置';
+    elLabel.textContent = def ? (resolveActiveModelName(def) || t('chat.unconfigured')) : t('chat.unconfigured');
     syncReasoningStepper();
   }
 
@@ -130,7 +131,7 @@ export const ChatModelPicker = (() => {
     const current = list.find((p) =>  p.isDefault) || list[0];
     const currentActive = current ? resolveActiveModelName(current) : '';
     if (current && current.id === target.id && currentActive === activeModel) return;
-    if (elLabel) elLabel.textContent = '切换中…';
+    if (elLabel) elLabel.textContent = t('chat.switching');
 
     const payload = list.map((p) =>  providerSaveFields(p, {
         isDefault: p.id === target.id,
@@ -145,7 +146,7 @@ export const ChatModelPicker = (() => {
       .then((res) => { return res.json().then((body) =>  ({ ok: res.ok, body })); })
       .then((result) => {
         if (!result.ok || (result.body && result.body.error)) {
-          throw new Error((result.body && result.body.error) || '保存失败');
+          throw new Error((result.body && result.body.error) || t('common.saveFailed'));
         }
         return fetch('/api/config').then((r) =>  r.json());
       })
@@ -160,9 +161,9 @@ export const ChatModelPicker = (() => {
       .catch((err) => {
         const def = defaultProvider();
         if (elLabel) {
-          elLabel.textContent = def ? (resolveActiveModelName(def) || '未配置') : '未配置';
+          elLabel.textContent = def ? (resolveActiveModelName(def) || t('chat.unconfigured')) : t('chat.unconfigured');
         }
-        Notification.error('切换模型失败: ' + (err && err.message ? err.message : err));
+        Notification.error(t('model.switchFailed', { message: err && err.message ? err.message : err }));
       });
   }
 
@@ -174,7 +175,7 @@ export const ChatModelPicker = (() => {
     Promise.resolve(ensure).then(() => {
       const items = buildItems();
       if (!items.length) {
-        Notification.info('暂无可用模型，请先在「设置」页添加。');
+        Notification.info(t('model.none'));
         return;
       }
       // 如果在 await 期间用户已经切换到别的会话、或 dropdown 被关掉了，直接放弃

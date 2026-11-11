@@ -4,31 +4,25 @@ import path from 'path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const publicRoot = path.join(__dirname, '../../src/public');
+const root = path.join(__dirname, '../..');
 
-function readPublic(relativePath: string): string {
-  return readFileSync(path.join(publicRoot, relativePath), 'utf-8');
+function read(relativePath: string): string {
+  return readFileSync(path.join(root, relativePath), 'utf-8');
 }
 
-describe('规划模式走 / 面板', () => {
-  it('slash 列表含 /plan，工具栏不再放模式 chip', () => {
-    const commands = readPublic('js/chat-commands.ts');
-    const page = readPublic('js/chat-page.ts');
-    const main = readPublic('js/main.ts');
-    const welcome = readPublic('js/chat-welcome.ts');
+describe('规划改为 Agent 命令', () => {
+  it('slash 列不再内置 /plan，输入栏用 Agent 芯片退出', () => {
+    const commands = read('src/public/js/chat-commands.ts');
+    const page = read('src/public/js/chat-page.ts');
+    const store = read('src/agents/agent-store.ts');
 
-    expect(commands).toContain("name: 'plan'");
-    expect(commands).toContain("cmd.name === 'shell' || cmd.name === 'plan'");
-    expect(welcome).toContain('/plan');
-
-    expect(page).not.toContain('chip-agent-mode');
-    expect(page).not.toContain('ChatAgentModePicker');
-    expect(main).not.toContain('chat-agent-mode-picker');
-
-    expect(page).toContain('plan-mode-chip-bar');
-    expect(page).toContain('btn-plan-mode-exit');
-    expect(page).toContain("type: 'plan_mode_exit'");
-    expect(page).toContain('shell-mode-chip-bar');
-    expect(page).toContain('shell-mode-chip-label');
+    expect(commands).not.toContain("name: 'plan'");
+    expect(commands).toContain('refreshAgents');
+    expect(page).toContain('agent-mode-indicator');
+    expect(page).toContain("type: 'agent_mode_exit'");
+    expect(page).not.toContain('plan-mode-chip-bar');
+    expect(page).not.toContain("type: 'plan_mode_exit'");
+    expect(store).toContain('PLAN_AGENT_ID');
+    expect(store).toContain('ensureDefaultPlanAgent');
   });
 });

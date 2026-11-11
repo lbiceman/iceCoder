@@ -25,6 +25,10 @@ export interface TokenUsageTotals {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** 有缓存读写时才写入，避免没有缓存数据的汇总多出 0 字段 */
+  cacheReadTokens?: number;
+  cacheMissTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 export interface TokenUsageWindows {
@@ -68,6 +72,33 @@ export interface TokenUsageRecord {
   source?: string;
   /** 子 Agent 调用 */
   agentId?: string;
+  cacheReadTokens?: number;
+  cacheMissTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+export interface PromptCacheHitInput {
+  inputTokens: number;
+  cacheReadTokens?: number;
+  cacheMissTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+/**
+ * 命中率。有 miss 时用 cacheRead / (cacheRead + cacheMiss)；
+ * 没有 miss 时分母用 cacheRead + cacheCreation + 未缓存输入（即不小于 inputTokens）。
+ * 范围内完全没有缓存分项时返回 undefined。
+ */
+export function promptCacheHitRate(totals: PromptCacheHitInput): number | undefined {
+  const read = totals.cacheReadTokens ?? 0;
+  const creation = totals.cacheCreationTokens ?? 0;
+  const hasMiss = typeof totals.cacheMissTokens === 'number';
+  const miss = totals.cacheMissTokens ?? 0;
+  if (read <= 0 && miss <= 0 && creation <= 0) return undefined;
+  const uncached = Math.max(0, totals.inputTokens - read - creation);
+  const denom = hasMiss ? read + miss : read + creation + uncached;
+  if (denom <= 0) return undefined;
+  return read / denom;
 }
 
 export type TokenUsageByModel = Record<string, TokenUsageWindows>;
@@ -168,6 +199,16 @@ function addUsage(target: TokenUsageTotals, inputTokens: number, outputTokens: n
   target.totalTokens += inputTokens + outputTokens;
 }
 
+function addCache(target: TokenUsageTotals, record: TokenUsageRecord): void {
+  const read = record.cacheReadTokens ?? 0;
+  const creation = record.cacheCreationTokens ?? 0;
+  if (read > 0) target.cacheReadTokens = (target.cacheReadTokens ?? 0) + read;
+  if (typeof record.cacheMissTokens === 'number') {
+    target.cacheMissTokens = (target.cacheMissTokens ?? 0) + record.cacheMissTokens;
+  }
+  if (creation > 0) target.cacheCreationTokens = (target.cacheCreationTokens ?? 0) + creation;
+}
+
 function readFiniteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -181,6 +222,9 @@ export function tokenUsageEventsToRecords(events: TokenUsageLogEvent[]): TokenUs
     const outputTokens = Math.max(0, readFiniteNumber(event.outputTokens));
     if (inputTokens <= 0 && outputTokens <= 0) continue;
     const usedModel = typeof event.model === 'string' && event.model.trim() ? event.model.trim() : '';
+    const cacheReadTokens = Math.max(0, readFiniteNumber(event.cacheReadTokens));
+    const cacheCreationTokens = Math.max(0, readFiniteNumber(event.cacheCreationTokens));
+    const hasMiss = typeof event.cacheMissTokens === 'number' && Number.isFinite(event.cacheMissTokens);
     records.push({
       timestamp,
       inputTokens,
@@ -188,6 +232,9 @@ export function tokenUsageEventsToRecords(events: TokenUsageLogEvent[]): TokenUs
       ...(usedModel ? { usedModel } : {}),
       ...(event.source ? { source: event.source } : {}),
       ...(event.agentId ? { agentId: event.agentId } : {}),
+      ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+      ...(hasMiss ? { cacheMissTokens: Math.max(0, event.cacheMissTokens ?? 0) } : {}),
+      ...(cacheCreationTokens > 0 ? { cacheCreationTokens } : {}),
     });
   }
   return records;
@@ -204,14 +251,18 @@ export function aggregateTokenUsageWindows(
 
   for (const record of records) {
     addUsage(windows.all, record.inputTokens, record.outputTokens);
+    addCache(windows.all, record);
     if (record.timestamp >= monthCutoff) {
       addUsage(windows.month, record.inputTokens, record.outputTokens);
+      addCache(windows.month, record);
     }
     if (record.timestamp >= weekCutoff) {
       addUsage(windows.week, record.inputTokens, record.outputTokens);
+      addCache(windows.week, record);
     }
     if (record.timestamp >= dayCutoff) {
       addUsage(windows.day, record.inputTokens, record.outputTokens);
+      addCache(windows.day, record);
     }
   }
 
@@ -221,6 +272,7 @@ export function aggregateTokenUsageWindows(
 function addToBucket(bucket: TokenUsageBucket, record: TokenUsageRecord): void {
   bucket.turns += 1;
   addUsage(bucket, record.inputTokens, record.outputTokens);
+  addCache(bucket, record);
   const kind = isSubAgentTokenRecord(record)
     ? 'subAgent'
     : isMemoryTokenSource(record.source) ? 'memory' : 'chat';

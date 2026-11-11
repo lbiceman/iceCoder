@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 二维码远程控制：复用 Modal.panel。
  */
@@ -16,8 +17,8 @@ export const ChatQR = (() => {
   function openPanel(bodyHtml) {
     if (!window.Modal || typeof window.Modal.panel !== 'function') return null;
     return window.Modal.panel({
-      title: '手机扫码远程控制',
-      description: '请确保手机和电脑在同一局域网内；扫码后将打开手机端 H5 界面',
+      title: t('qr.title'),
+      description: t('qr.desc'),
       bodyHtml,
     });
   }
@@ -104,9 +105,9 @@ export const ChatQR = (() => {
       if (!copyBtn) return;
       const text = copyBtn.getAttribute('data-copy-text') || url || '';
       copyText(text).then(() => {
-        notify('链接已复制', 'success');
+        notify(t('qr.copied'), 'success');
       }).catch(() => {
-        notify('复制失败', 'error');
+        notify(t('qr.copyFailed'), 'error');
       });
     });
   }
@@ -115,17 +116,17 @@ export const ChatQR = (() => {
     const displayUrl = buildMobileRemoteUrl(data);
     const media = data.qrDataUrl
       ? `<div class="modal-panel-media"><img src="${escapeHtml(data.qrDataUrl)}" alt="QR Code" width="220" height="220"></div>`
-      : '<p class="modal-panel-error">二维码生成失败，请手动访问下方地址</p>';
+      : `<p class="modal-panel-error">${escapeHtml(t('qr.imageFailed'))}</p>`;
     const info = data.tunnel
-      ? '通过公网隧道访问（任意网络可用）'
-      : ('局域网 IP: ' + (data.localIP || '') + ' | 端口: ' + (data.port || ''));
+      ? t('qr.tunnel')
+      : t('qr.lan', { ip: data.localIP || '', port: data.port || '' });
     const urlRow = displayUrl
       ? (
-        `<div class="modal-panel-code-row"><div class="modal-panel-code">${escapeHtml(displayUrl)}</div><button type="button" class="btn-icon btn-icon-ghost modal-panel-copy" aria-label="复制链接" title="复制链接" data-copy-text="${escapeHtml(displayUrl)}">${copyIconHtml()}</button></div>`
+        `<div class="modal-panel-code-row"><div class="modal-panel-code">${escapeHtml(displayUrl)}</div><button type="button" class="btn-icon btn-icon-ghost modal-panel-copy" aria-label="${escapeHtml(t('qr.copy'))}" title="${escapeHtml(t('qr.copy'))}" data-copy-text="${escapeHtml(displayUrl)}">${copyIconHtml()}</button></div>`
       )
       : '';
     return (
-      `<div class="modal-panel-card">${media}${urlRow}<p class="modal-panel-note">${escapeHtml(info)}</p><p class="modal-panel-note is-success">链接长期有效，直到下次重新生成</p></div>`
+      `<div class="modal-panel-card">${media}${urlRow}<p class="modal-panel-note">${escapeHtml(info)}</p><p class="modal-panel-note is-success">${escapeHtml(t('qr.longLived'))}</p></div>`
     );
   }
 
@@ -136,7 +137,7 @@ export const ChatQR = (() => {
   }
 
   function showQrCode() {
-    const panel = openPanel('<p class="modal-panel-muted">正在生成二维码…</p>');
+    const panel = openPanel(`<p class="modal-panel-muted">${escapeHtml(t('qr.generating'))}</p>`);
     if (!panel) return;
 
     fetch('/api/remote/session', {
@@ -147,13 +148,13 @@ export const ChatQR = (() => {
       .then((res) =>  res.json())
       .then((data) => {
         if (!data.success) {
-          panel.setBody(`<p class="modal-panel-error">生成二维码失败: ${escapeHtml(data.error || '未知错误')}</p>`);
+          panel.setBody(`<p class="modal-panel-error">${escapeHtml(t('qr.generateFailed', { message: data.error || t('common.unknownError') }))}</p>`);
           return;
         }
         fillQrPanel(panel, data);
       })
       .catch(() => {
-        panel.setBody('<p class="modal-panel-error">生成二维码失败，请检查网络连接</p>');
+        panel.setBody(`<p class="modal-panel-error">${escapeHtml(t('qr.network'))}</p>`);
       });
   }
 

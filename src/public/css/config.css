@@ -691,7 +691,7 @@ body.setup-required .chat-sidebar-settings-btn {
   overflow: auto;
   width: 100%;
   box-sizing: border-box;
-  padding: 20px 32px 32px;
+  padding: 16px 29px 24px;
 }
 
 .settings-section {
@@ -702,12 +702,12 @@ body.setup-required .chat-sidebar-settings-btn {
 .settings-security-grid {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 13px;
 }
 
 .settings-section-spaced {
-  margin-top: 36px;
-  padding-top: 28px;
+  margin-top: 18px;
+  padding-top: 12px;
   border-top: 1px solid var(--border-color);
 }
 
@@ -715,8 +715,8 @@ body.setup-required .chat-sidebar-settings-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 11px;
+  margin-bottom: 5px;
 }
 
 .settings-section-head .settings-section-title {
@@ -734,8 +734,8 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-card {
-  margin-top: 14px;
-  padding: 16px 18px;
+  margin-top: 13px;
+  padding: 14px 16px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -746,18 +746,18 @@ body.setup-required .chat-sidebar-settings-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
 }
 
 .settings-card-row--indent {
-  margin-top: 12px;
-  padding: 12px 14px 12px 18px;
+  margin-top: 11px;
+  padding: 11px 13px 11px 16px;
   border-radius: var(--radius-md, 10px);
   background: var(--bg-card-inset, rgba(255, 255, 255, 0.03));
 }
 
 .settings-card-header {
-  margin-bottom: 12px;
+  margin-bottom: 11px;
 }
 
 .settings-card-info {
@@ -811,9 +811,9 @@ body.setup-required .chat-sidebar-settings-btn {
 .settings-etl-subgroup {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 16px;
-  padding-top: 16px;
+  gap: 11px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--border-color);
 }
 
@@ -821,10 +821,9 @@ body.setup-required .chat-sidebar-settings-btn {
   opacity: 0.55;
 }
 
-.settings-etl-desktop-pet,
 .settings-etl-screen-ping {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--border-color);
 }
 
@@ -834,7 +833,7 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-screen-ping-crop {
-  margin-top: 12px;
+  margin-top: 11px;
 }
 
 .settings-screen-ping-crop-field {
@@ -872,7 +871,7 @@ body.setup-required .chat-sidebar-settings-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
 }
 
 .settings-etl-row-info {
@@ -897,8 +896,8 @@ body.setup-required .chat-sidebar-settings-btn {
 
 .settings-data-directory-controls {
   display: flex;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 9px;
+  margin-top: 13px;
 }
 
 .settings-data-directory-input {
@@ -924,8 +923,8 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-data-directory-note {
-  margin: 12px 0 0;
-  padding: 10px 12px;
+  margin: 11px 0 0;
+  padding: 9px 11px;
   border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 45%, transparent);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent);
@@ -941,12 +940,12 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-blacklist-card {
-  padding-bottom: 14px;
+  padding-bottom: 13px;
 }
 
 .settings-shell-rules-panel {
-  margin: 12px 0 10px;
-  padding: 12px 14px;
+  margin: 11px 0 9px;
+  padding: 11px 13px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 10px);
   background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-secondary));
@@ -1010,8 +1009,8 @@ body.setup-required .chat-sidebar-settings-btn {
 .settings-card-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 9px;
+  margin-top: 13px;
   padding-top: 2px;
 }
 
@@ -1021,14 +1020,14 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-section-title {
-  margin: 0 0 6px;
+  margin: 0 0 5px;
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .settings-section-desc {
-  margin: 0 0 16px;
+  margin: 0 0 14px;
   font-size: 13px;
   color: var(--text-muted);
   line-height: 1.5;
@@ -1037,16 +1036,16 @@ body.setup-required .chat-sidebar-settings-btn {
 .settings-theme-options {
   display: grid;
   grid-template-columns: repeat(4, minmax(88px, 132px));
-  gap: 8px;
+  gap: 7px;
 }
 
 .settings-theme-option {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
-  padding: 6px;
+  padding: 5px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -1197,13 +1196,13 @@ body.setup-required .chat-sidebar-settings-btn {
 .settings-locale-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
 }
 
 .settings-locale-option {
   min-width: 108px;
   height: 36px;
-  padding: 0 16px;
+  padding: 0 14px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -1548,7 +1547,7 @@ body.setup-required .chat-sidebar-settings-btn {
     text-align: center;
   }
   .settings-general {
-    padding: 16px 12px 120px;
+    padding: 14px 11px 108px;
   }
   .settings-section {
     max-width: none;

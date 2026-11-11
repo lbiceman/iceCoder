@@ -591,7 +591,7 @@ Skills are **Markdown playbooks** stored only under **`ICE_SKILLS_DIR`** (defaul
 | **`src/public/js/skills-page.js`** | Desktop Skills tab UI |
 | **`src/public/js/chat-skills.js`** | Composer `#` dropdown + chip bar |
 
-Chat send path (`chat-ws.ts`) resolves `#skill.md` references before Harness runs. Bundled template: `data/skills/创建技能.md` (copied on first install).
+Chat send path (`chat-ws.ts`) resolves `#skill.md` references before Harness runs. Bundled templates: `data/skills/创建技能.md` and `data/skills/创建Agent.md` (copied on first install). Bundled default agent: `data/agents/plan.json`.
 
 ### Workspace references & system filesystem browser
 

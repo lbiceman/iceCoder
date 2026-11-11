@@ -96,48 +96,17 @@ function collectTransitiveDependencies(rootNames, nodeModulesDir) {
   return [...collected].sort();
 }
 
-/** Vite 已打包主 SPA；仅 pet 浮窗仍走未打包 ESM（session-pet*.js + 入口）。 */
-function collectPetStaticJsFiles(srcPublicJs) {
-  const files = new Set(['pet-floating-page.js']);
-  if (!fs.existsSync(srcPublicJs)) return [...files];
-  for (const name of fs.readdirSync(srcPublicJs)) {
-    if (/^session-pet.*\.js$/.test(name)) files.add(name);
-  }
-  return [...files].sort();
-}
-
-const PUBLIC_STATIC_FILES = ['pet-floating.html'];
 const PUBLIC_STATIC_DIRS = ['icons'];
 
 function mergePublicStaticExtras(repoRoot, targetDistPublic) {
   const srcPublic = path.join(repoRoot, 'src', 'public');
   if (!fs.existsSync(srcPublic)) return;
   fs.mkdirSync(targetDistPublic, { recursive: true });
-  for (const rel of PUBLIC_STATIC_FILES) {
-    const src = path.join(srcPublic, rel);
-    if (!fs.existsSync(src)) continue;
-    copyFile(src, path.join(targetDistPublic, rel));
-    log(`mergePublic ${rel}`);
-  }
   for (const rel of PUBLIC_STATIC_DIRS) {
     const src = path.join(srcPublic, rel);
     if (!fs.existsSync(src)) continue;
     copyDir(src, path.join(targetDistPublic, rel));
     log(`mergePublic ${rel}/`);
-  }
-  const petJsFiles = collectPetStaticJsFiles(path.join(srcPublic, 'js'));
-  for (const rel of petJsFiles) {
-    const src = path.join(srcPublic, 'js', rel);
-    if (!fs.existsSync(src)) continue;
-    copyFile(src, path.join(targetDistPublic, 'js', rel));
-    log(`mergePublic js/${rel}`);
-  }
-  // pet-floating.html 直接引用 style.css，而它继续通过 @import 引用其余样式表；
-  // 复制整个 CSS 目录以保留这条依赖链，同时不再复制主 SPA 的 40 余个原始 JS 模块。
-  const cssDir = path.join(srcPublic, 'css');
-  if (fs.existsSync(cssDir)) {
-    copyDir(cssDir, path.join(targetDistPublic, 'css'));
-    log('mergePublic css/ (pet floating dependencies)');
   }
 }
 

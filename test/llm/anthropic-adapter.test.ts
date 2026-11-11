@@ -44,7 +44,10 @@ describe('AnthropicAdapter', () => {
       expect(body.model).toBe('claude-sonnet-4-5');
       expect(body.max_tokens).toBe(1024);
       expect(body.stream).toBe(false);
-      expect(body.messages).toEqual([{ role: 'user', content: 'hi' }]);
+      expect(body.messages).toEqual([{
+        role: 'user',
+        content: [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }],
+      }]);
       return new Response(JSON.stringify({
         content: [{ type: 'text', text: 'hello' }],
         stop_reason: 'end_turn',

@@ -293,7 +293,7 @@ export const ChatWelcome = (() => {
         toolsInlineEl.innerHTML = buildToolsInlineHtml(toolsCategories);
         toolsInlineEl.setAttribute(
           'title',
-          '常用：普通模式默认携带 · 解析：按需携带 · shell模式：/shell 会话专用'
+          t('welcome.toolLegend')
         );
       }
     }
@@ -384,11 +384,11 @@ export const ChatWelcome = (() => {
     const connected = opts.connectionState === 'connected';
     const setupRequired = !!opts.setupRequired;
     if (!connected) {
-      setStatValue(el, iconEl, '未连接', 'warn');
+      setStatValue(el, iconEl, t('chat.disconnected'), 'warn');
       return;
     }
     if (setupRequired) {
-      setStatValue(el, iconEl, '待配置', 'warn');
+      setStatValue(el, iconEl, t('welcome.pendingSetup'), 'warn');
       return;
     }
     setStatValue(el, iconEl, t('welcome.readyValue'), 'success');
@@ -402,7 +402,7 @@ export const ChatWelcome = (() => {
     const connected = opts.connectionState === 'connected';
     const setupRequired = !!opts.setupRequired;
     if (!connected || setupRequired) {
-      setStatValue(el, iconEl, '未激活', 'muted');
+      setStatValue(el, iconEl, t('welcome.inactive'), 'muted');
       return;
     }
     setStatValue(el, iconEl, t('welcome.readyValue'), 'success');

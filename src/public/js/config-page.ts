@@ -217,18 +217,6 @@ export const SettingsPage = (() => {
                 '</div>' +
               '</div>' +
             '</div>' +
-            '<div class="settings-etl-row settings-etl-desktop-pet" id="etl-show-desktop-pet-row">' +
-              '<div class="settings-etl-row-info">' +
-                '<span class="settings-etl-row-label">' + t('settings.desktopPet.label') + '</span>' +
-                '<span class="settings-etl-row-hint">' + t('settings.desktopPet.hint') + '</span>' +
-              '</div>' +
-              '<div class="settings-card-control">' +
-                '<label class="config-default-switch settings-etl-switch" title="' + t('settings.desktopPet.label') + '">' +
-                  '<input type="checkbox" id="etl-show-desktop-pet" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-            '</div>' +
           '</div>' +
         '</section>' +
         '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
@@ -353,7 +341,6 @@ export const SettingsPage = (() => {
 
     const panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
     const panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
-    const showDesktopPet = parentEl.querySelector('#etl-show-desktop-pet');
 
     if (panelDefaultExpanded) {
       panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
@@ -362,10 +349,6 @@ export const SettingsPage = (() => {
     if (panelAutoCollapse) {
       panelAutoCollapse.checked = prefs.panelAutoCollapse === true;
       panelAutoCollapse.disabled = subgroupDisabled;
-    }
-    if (showDesktopPet) {
-      showDesktopPet.checked = prefs.showDesktopPet !== false;
-      showDesktopPet.disabled = false;
     }
   }
 
@@ -484,20 +467,6 @@ export const SettingsPage = (() => {
         window.EtlPrefs.set({ panelAutoCollapse: next })
           .catch(() => {
             panelAutoCollapse.checked = !next;
-            if (window.Notification) window.Notification.error(t('common.updateFailed'));
-          })
-          .finally(() => { syncEtlSettingsUi(parentEl); });
-      });
-    }
-
-    const showDesktopPet = parentEl.querySelector('#etl-show-desktop-pet');
-    if (showDesktopPet) {
-      showDesktopPet.addEventListener('change', () => {
-        const next = showDesktopPet.checked;
-        showDesktopPet.disabled = true;
-        window.EtlPrefs.set({ showDesktopPet: next })
-          .catch(() => {
-            showDesktopPet.checked = !next;
             if (window.Notification) window.Notification.error(t('common.updateFailed'));
           })
           .finally(() => { syncEtlSettingsUi(parentEl); });

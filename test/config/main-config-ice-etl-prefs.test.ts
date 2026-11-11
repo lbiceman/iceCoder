@@ -38,7 +38,6 @@ describe('main-config-ice-etl-prefs', () => {
       sidebarWidth: 256,
       taskDoneNotification: false,
       panelAutoCollapse: false,
-      showDesktopPet: true,
     });
 
     const raw = JSON.parse(await readFile(configPath, 'utf-8')) as { iceEtlPrefs: unknown };

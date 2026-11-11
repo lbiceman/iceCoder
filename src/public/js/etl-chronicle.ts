@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 执行流编年史 — 纯装配。
  *
@@ -28,18 +29,22 @@ export const EtlChronicle = (() => {
   const SEARCH_TOOLS = { glob: true, grep: true };
 
   const STATUS_LABELS = {
-    running: '进行中',
-    done: '完成',
-    failed: '失败',
-    paused: '已暂停',
-    stopped: '用户停止',
+    get running() { return t('etl.status.running'); },
+    get done() { return t('etl.status.done'); },
+    get failed() { return t('etl.status.failed'); },
+    get paused() { return t('etl.status.paused'); },
+    get stopped() { return t('etl.status.stopped'); },
   };
 
   const MARKER_LABELS = {
-    compaction: '本章发生过压缩',
-    circuit: '熔断保护',
-    subagent: '子代理',
+    get compaction() { return t('etl.marker.compaction'); },
+    get circuit() { return t('etl.marker.circuit'); },
+    get subagent() { return t('etl.marker.subagent'); },
   };
+
+  function isBlankPreview(text) {
+    return !text || text === '（无消息摘要）' || text === '(No summary)' || text === t('etl.noPreview');
+  }
 
   function clamp(s, max) {
     s = String(s || '');
@@ -101,7 +106,7 @@ export const EtlChronicle = (() => {
 
   function previewFromUser(msg) {
     const text = stripSkillWall(extractText(msg && msg.content));
-    if (!text) return '（无消息摘要）';
+    if (!text) return t('etl.noPreview');
     return clamp(text, PREVIEW_MAX);
   }
 
@@ -138,19 +143,33 @@ export const EtlChronicle = (() => {
 
   function inferToolIntent(toolName, target) {
     const shown = target ? clamp(String(target).replace(/\\/g, '/'), 32) : '';
-    if (toolName === 'read_file' || READ_TOOLS[toolName]) return shown ? `读取 ${shown}` : '读取文件';
-    if (toolName === 'grep') return shown ? `搜索 ${shown}` : '搜索';
-    if (toolName === 'glob') return shown ? `查找 ${shown}` : '查找文件';
+    const hint = shown ? t('etl.targetHint', { text: shown }) : '';
+    if (toolName === 'fs_operation') {
+      const detail = String(target || '').toLowerCase();
+      if (/\bdelete\b/.test(detail)) return t('etl.deletePath', { hint });
+      if (/\b(mkdir|create_dir)\b/.test(detail)) return t('etl.mkdir', { hint });
+      if (/\b(move|rename)\b/.test(detail)) return t('etl.move', { hint });
+      if (/\bcopy\b/.test(detail)) return t('etl.copy', { hint });
+      return t('etl.fsOp', { hint });
+    }
+    if (toolName && String(toolName).indexOf('mcp_') === 0) {
+      const parts = String(toolName).slice(4).split('_');
+      if (parts.length >= 2) return t('etl.callMcp', { name: parts[0] + '/' + parts.slice(1).join('_') });
+      return t('etl.callMcpExt');
+    }
+    if (toolName === 'read_file' || READ_TOOLS[toolName]) return shown ? t('etl.readTarget', { target: shown }) : t('etl.readFile');
+    if (toolName === 'grep') return shown ? t('etl.searchTarget', { target: shown }) : t('etl.search');
+    if (toolName === 'glob') return shown ? t('etl.findTarget', { target: shown }) : t('etl.findFiles');
     if (toolName === 'write_file' || toolName === 'create_file' || toolName === 'append_file') {
-      return shown ? `写入 ${shown}` : '写入文件';
+      return shown ? t('etl.writeTarget', { target: shown }) : t('etl.writeFile');
     }
     if (toolName === 'edit_file' || toolName === 'patch_file' || toolName === 'apply_patch' || toolName === 'batch_edit_file' || toolName === 'multi_edit') {
-      return shown ? `修改 ${shown}` : '修改文件';
+      return shown ? t('etl.editTarget', { target: shown }) : t('etl.editFile');
     }
-    if (toolName === 'run_command') return shown ? clamp(shown, 40) : '运行命令';
-    if (SEARCH_TOOLS[toolName]) return shown ? `搜索 ${shown}` : '搜索';
-    if (WRITE_TOOLS[toolName]) return shown ? `修改 ${shown}` : '修改文件';
-    return shown ? `${toolName || '工具'} ${shown}` : (toolName || '工具');
+    if (toolName === 'run_command') return shown ? clamp(shown, 40) : t('etl.runCommand');
+    if (SEARCH_TOOLS[toolName]) return shown ? t('etl.searchTarget', { target: shown }) : t('etl.search');
+    if (WRITE_TOOLS[toolName]) return shown ? t('etl.editTarget', { target: shown }) : t('etl.editFile');
+    return shown ? `${toolName || t('etl.tool')} ${shown}` : (toolName || t('etl.tool'));
   }
 
   function toolStatus(raw) {
@@ -203,8 +222,8 @@ export const EtlChronicle = (() => {
   }
 
   function deriveRoundTitle(tools, isFinal, isLastWithoutTools) {
-    if (isFinal || isLastWithoutTools) return '整理结论';
-    if (!tools.length) return '理解目标';
+    if (isFinal || isLastWithoutTools) return t('etl.phase.final');
+    if (!tools.length) return t('etl.phase.intent');
     let hasWrite = false;
     let hasRead = false;
     let hasSearch = false;
@@ -218,10 +237,10 @@ export const EtlChronicle = (() => {
         hasTest = true;
       }
     }
-    if (hasTest) return '验证结果';
-    if (hasWrite) return '实施修改';
-    if (hasRead || hasSearch) return '收集上下文';
-    return '推进任务';
+    if (hasTest) return t('etl.phase.verification');
+    if (hasWrite) return t('etl.phase.editing');
+    if (hasRead || hasSearch) return t('etl.phase.context');
+    return t('etl.advance');
   }
 
   function roundStatusFromTools(tools, fallback) {
@@ -302,7 +321,7 @@ export const EtlChronicle = (() => {
     const writePaths = collectWritePaths(allTools);
     const chapter = {
       messageId: opts.messageId || '',
-      preview: opts.preview || '（无消息摘要）',
+      preview: opts.preview || t('etl.noPreview'),
       status: chapterStatusFromRounds(rounds, opts.status, opts.isLastIncomplete),
       roundCount: rounds.length,
       filesChangedCount: writePaths.length,
@@ -933,7 +952,7 @@ export const EtlChronicle = (() => {
       if (startTs == null && cp && typeof cp.userMessageTime === 'number') startTs = cp.userMessageTime;
       const endTs = lastSliceTs(uiSlice, lastSliceTs(structSlice, null));
       let preview = previewFromUser(ui || structUser);
-      if (preview === '（无消息摘要）' && cp && cp.preview) preview = clamp(cp.preview, PREVIEW_MAX);
+      if (isBlankPreview(preview) && cp && cp.preview) preview = clamp(cp.preview, PREVIEW_MAX);
       chapters.push(buildChapter({
         messageId,
         preview,
@@ -1011,7 +1030,7 @@ export const EtlChronicle = (() => {
     }
     return buildChapter({
       messageId: input.messageId || '',
-      preview: input.preview || '（无消息摘要）',
+      preview: input.preview || t('etl.noPreview'),
       rounds,
       markers: input.markers,
       plan: input.plan,

@@ -7,6 +7,7 @@ import {
   aggregateTokenUsageSeries,
   aggregateTokenUsageWindows,
   collectTokenUsageRecords,
+  promptCacheHitRate,
   summarizeTokenUsage,
   tokenUsageEventsToRecords,
   TOKEN_USAGE_SERIES_DAYS,
@@ -67,6 +68,42 @@ describe('tokenUsageEventsToRecords', () => {
         source: 'memory_extract',
       },
     ]);
+  });
+});
+
+describe('prompt cache hit rate', () => {
+  it('keeps cache counters on the record and the rolling windows', () => {
+    const now = 1_800_000_000_000;
+    const records = tokenUsageEventsToRecords([
+      event({
+        timestamp: new Date(now - 1000).toISOString(),
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 80,
+        cacheMissTokens: 20,
+        cacheCreationTokens: 5,
+      }),
+      event({
+        timestamp: new Date(now - 40 * DAY_MS).toISOString(),
+        inputTokens: 50,
+        outputTokens: 5,
+        cacheReadTokens: 10,
+        cacheMissTokens: 40,
+      }),
+    ]);
+    expect(records[0]).toMatchObject({
+      cacheReadTokens: 80,
+      cacheMissTokens: 20,
+      cacheCreationTokens: 5,
+    });
+    const windows = aggregateTokenUsageWindows(records, now);
+    expect(windows.day.cacheReadTokens).toBe(80);
+    expect(windows.day.cacheMissTokens).toBe(20);
+    expect(windows.all.cacheReadTokens).toBe(90);
+    expect(windows.all.inputTokens).toBe(150);
+    expect(promptCacheHitRate(windows.day)).toBeCloseTo(0.8);
+    expect(promptCacheHitRate({ inputTokens: 100, cacheReadTokens: 40, cacheCreationTokens: 10 })).toBeCloseTo(0.4);
+    expect(promptCacheHitRate({ inputTokens: 100 })).toBeUndefined();
   });
 });
 

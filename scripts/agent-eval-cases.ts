@@ -60,6 +60,8 @@ export interface AgentEvalCase {
     completionReason?: string;
     /** 最终用户可见文本应包含。 */
     finalContains?: string;
+    /** 用户消息里应出现的片段（锁仓大纲等只追加一次的上下文）。 */
+    userMessageContains?: string;
     /** 最终用户可见文本应全部包含（不区分大小写）。 */
     finalContainsAll?: string[];
     /** 主循环 LLM 调用次数上限。多出来的次数通常是误触发的自检 / 失忆恢复 / stop hook。 */
@@ -2576,5 +2578,66 @@ export const agentEvalCases: AgentEvalCase[] = [
     timeoutMs: 480_000,
     compactionThreshold: 40,
     compactionTokenThreshold: 7_000,
+  },
+  {
+    id: 'workspace-outline-frozen',
+    category: 'model-led',
+    prompt: 'Do not edit files. Reply with the word ready.',
+    files: {
+      'package.json': '{"name":"outline-eval"}\n',
+      'src/a.ts': 'export const n = 1;\n',
+    },
+    verifyCommands: [],
+    workspaceLock: true,
+    expected: {
+      requiresTool: false,
+      allowFileChanges: false,
+      userMessageContains: '[Workspace Outline]',
+      finalContains: 'ready',
+    },
+    assertions: [
+      { path: 'src/a.ts', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'final', content: 'ready' },
+    ],
+    maxRounds: 3,
+    timeoutMs: 30_000,
+  },
+  {
+    id: 'patch-mismatch-returns-context',
+    category: 'tool-failure',
+    prompt: 'Apply the patch. If it does not match, report the unmatched context and do not invent a second edit.',
+    files: {
+      'src/a.ts': 'export const value = 1;\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      finalContains: '未匹配的上下文',
+    },
+    assertions: [
+      { path: 'src/a.ts', contains: 'export const value = 1;', unchanged: true },
+    ],
+    scriptedTurns: [
+      { type: 'tool', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      {
+        type: 'tool',
+        name: 'patch_file',
+        arguments: {
+          path: 'src/a.ts',
+          patch: [
+            '@@ -1,1 +1,1 @@',
+            '-export const missing = 0;',
+            '+export const value = 2;',
+            '',
+          ].join('\n'),
+        },
+      },
+      { type: 'final-from-tool', contains: '未匹配的上下文' },
+    ],
+    maxRounds: 6,
+    timeoutMs: 60_000,
   },
 ];

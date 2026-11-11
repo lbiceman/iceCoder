@@ -4,6 +4,7 @@
  * CSS 通过 index.html 的 <link> 标签加载，兼容非 Vite 环境。
  */
 import './i18n.ts';
+import './window-chrome.ts';
 import './icon.ts';
 import './notification.ts';
 import './modal.ts';
@@ -15,7 +16,6 @@ import './config-model-panel.ts';
 import './config-mcp-panel.ts';
 import './config-page.ts';
 import './session-pet.js';
-import './desktop-pet-bridge.ts';
 import './chat-websocket.ts';
 import './chat-session.ts';
 import './chat-session-store.ts';
@@ -52,6 +52,7 @@ import './shell/mobile-shell.ts';
 import './pages/mobile/mobile-work-page.ts';
 import './pages/mobile/mobile-chat-page.ts';
 import './pages/mobile/mobile-memory-page.ts';
+import './pages/mobile/mobile-agents-page.ts';
 import './pages/mobile/mobile-skills-page.ts';
 import './pages/mobile/mobile-rules-page.ts';
 import './pages/mobile/mobile-tasks-page.ts';
@@ -70,6 +71,7 @@ import './memory-page.ts';
 import './scheduled-tasks-page.ts';
 import './tasks-page.ts';
 import './todos-page.ts';
+import './agents-page.ts';
 import './skills-page.ts';
 import './rules-page.ts';
 import './stats-page.ts';

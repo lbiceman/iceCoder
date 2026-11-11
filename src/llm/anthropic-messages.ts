@@ -39,28 +39,40 @@ export type AnthropicImageSource =
   | { type: 'base64'; media_type: string; data: string }
   | { type: 'url'; url: string };
 
+/** 5 分钟 ephemeral 断点。前缀命中后按缓存价计费。 */
+export interface AnthropicCacheControl {
+  type: 'ephemeral';
+}
+
 export type AnthropicContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'image'; source: AnthropicImageSource }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { type: 'text'; text: string; cache_control?: AnthropicCacheControl }
+  | { type: 'image'; source: AnthropicImageSource; cache_control?: AnthropicCacheControl }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; cache_control?: AnthropicCacheControl }
+  | { type: 'tool_result'; tool_use_id: string; content: string; cache_control?: AnthropicCacheControl };
 
 export interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: string | AnthropicContentBlock[];
 }
 
+export interface AnthropicSystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: AnthropicCacheControl;
+}
+
 export interface AnthropicTool {
   name: string;
   description?: string;
   input_schema: Record<string, unknown>;
+  cache_control?: AnthropicCacheControl;
 }
 
 export interface AnthropicMessagesRequest {
   model: string;
   max_tokens: number;
   messages: AnthropicMessage[];
-  system?: string;
+  system?: string | AnthropicSystemBlock[];
   tools?: AnthropicTool[];
   stream?: boolean;
   temperature?: number;
@@ -91,9 +103,17 @@ export interface AnthropicMessageResponse {
   usage?: AnthropicUsage | null;
 }
 
+const EPHEMERAL_CACHE: AnthropicCacheControl = { type: 'ephemeral' };
+
+interface TaggedBlock {
+  block: AnthropicContentBlock;
+  /** 当次请求末尾的易变块，断点打在它前面 */
+  ephemeral?: boolean;
+}
+
 interface DraftMessage {
   role: 'user' | 'assistant';
-  blocks: AnthropicContentBlock[];
+  blocks: TaggedBlock[];
 }
 
 const DATA_IMAGE_RE =
@@ -148,11 +168,14 @@ export function convertToolDefinitionsToAnthropic(
 ): AnthropicTool[] | undefined {
   const prepared = prepareToolsForChatCompletions(tools);
   if (!prepared?.length) return undefined;
-  return prepared.map((tool) => ({
+  const converted: AnthropicTool[] = prepared.map((tool) => ({
     name: tool.name,
     description: tool.description,
     input_schema: normalizeInputSchema(tool.parameters),
   }));
+  const last = converted[converted.length - 1];
+  if (last) last.cache_control = EPHEMERAL_CACHE;
+  return converted;
 }
 
 function normalizeInputSchema(parameters: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -171,7 +194,7 @@ function normalizeInputSchema(parameters: Record<string, unknown> | undefined): 
  * 从 UnifiedMessage[] 抽出 system，其余转为 Anthropic user/assistant 交替消息。
  */
 export function convertUnifiedMessagesToAnthropic(messages: UnifiedMessage[]): {
-  system?: string;
+  system?: AnthropicSystemBlock[];
   messages: AnthropicMessage[];
 } {
   const systemParts: string[] = [];
@@ -189,19 +212,63 @@ export function convertUnifiedMessagesToAnthropic(messages: UnifiedMessage[]): {
 
   const repaired = insertMissingToolResults(dropOrphanToolResults(drafts));
   const merged = mergeConsecutiveDrafts(repaired);
+  collapseStableTextBlocks(merged);
+  applyConversationCacheBreakpoint(merged);
   const out = merged.map((d) => ({
     role: d.role,
-    content: simplifyBlocks(d.blocks),
+    content: emitBlocks(d.blocks),
   }));
 
   if (out.length > 0 && out[0]!.role !== 'user') {
     out.unshift({ role: 'user', content: '(conversation continues)' });
   }
 
+  const system = systemParts.length > 0
+    ? [{ type: 'text' as const, text: systemParts.join('\n\n'), cache_control: EPHEMERAL_CACHE }]
+    : undefined;
+
   return {
-    ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
+    ...(system ? { system } : {}),
     messages: out,
   };
+}
+
+/** 相邻的稳定 text 块合成一块，中间用换行，和以前拼成字符串时的正文一致。不跨易变尾。 */
+function collapseStableTextBlocks(drafts: DraftMessage[]): void {
+  for (const draft of drafts) {
+    const next: TaggedBlock[] = [];
+    for (const tagged of draft.blocks) {
+      const prev = next[next.length - 1];
+      if (
+        prev
+        && !prev.ephemeral
+        && !tagged.ephemeral
+        && prev.block.type === 'text'
+        && tagged.block.type === 'text'
+      ) {
+        prev.block = { type: 'text', text: `${prev.block.text}\n${tagged.block.text}` };
+        continue;
+      }
+      next.push({ ...tagged, block: { ...tagged.block } });
+    }
+    draft.blocks = next;
+  }
+}
+
+/**
+ * 对话侧只留一个断点，打在最后一条稳定块上。
+ * 易变尾排在断点之后，不进入缓存前缀。system 与最后一个 tool 另有断点，合计不超过 4 个。
+ */
+function applyConversationCacheBreakpoint(drafts: DraftMessage[]): void {
+  for (let i = drafts.length - 1; i >= 0; i--) {
+    const blocks = drafts[i]!.blocks;
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const tagged = blocks[j]!;
+      if (tagged.ephemeral) continue;
+      tagged.block = { ...tagged.block, cache_control: EPHEMERAL_CACHE };
+      return;
+    }
+  }
 }
 
 export function buildAnthropicMessagesRequest(
@@ -328,23 +395,28 @@ function asArgumentRecord(input: unknown): Record<string, unknown> {
   return {};
 }
 
+function tagBlocks(blocks: AnthropicContentBlock[], ephemeral: boolean): TaggedBlock[] {
+  return blocks.map((block) => (ephemeral ? { block, ephemeral: true } : { block }));
+}
+
 function convertSingleToDraft(msg: UnifiedMessage): DraftMessage | null {
+  const ephemeral = msg.promptCacheEphemeral === true;
   switch (msg.role) {
     case 'user':
-      return { role: 'user', blocks: convertUserContent(msg.content) };
+      return { role: 'user', blocks: tagBlocks(convertUserContent(msg.content), ephemeral) };
     case 'assistant':
-      return { role: 'assistant', blocks: convertAssistantContent(msg) };
+      return { role: 'assistant', blocks: tagBlocks(convertAssistantContent(msg), ephemeral) };
     case 'tool':
       return {
         role: 'user',
-        blocks: [{
+        blocks: tagBlocks([{
           type: 'tool_result',
           tool_use_id: msg.toolCallId || '',
           content: resolveContentText(msg.content) || '[工具结果丢失]',
-        }],
+        }], ephemeral),
       };
     default:
-      return { role: 'user', blocks: convertUserContent(msg.content) };
+      return { role: 'user', blocks: tagBlocks(convertUserContent(msg.content), ephemeral) };
   }
 }
 
@@ -389,7 +461,8 @@ function dropOrphanToolResults(drafts: DraftMessage[]): DraftMessage[] {
   const required = new Set<string>();
   for (const draft of drafts) {
     if (draft.role !== 'assistant') continue;
-    for (const block of draft.blocks) {
+    for (const tagged of draft.blocks) {
+      const block = tagged.block;
       if (block.type === 'tool_use' && block.id) required.add(block.id);
     }
   }
@@ -400,9 +473,9 @@ function dropOrphanToolResults(drafts: DraftMessage[]): DraftMessage[] {
       out.push(draft);
       continue;
     }
-    const blocks = draft.blocks.filter((block) => {
-      if (block.type !== 'tool_result') return true;
-      return !!block.tool_use_id && required.has(block.tool_use_id);
+    const blocks = draft.blocks.filter((tagged) => {
+      if (tagged.block.type !== 'tool_result') return true;
+      return !!tagged.block.tool_use_id && required.has(tagged.block.tool_use_id);
     });
     if (blocks.length > 0 || draft.blocks.length === 0) {
       out.push({ role: 'user', blocks });
@@ -414,7 +487,8 @@ function dropOrphanToolResults(drafts: DraftMessage[]): DraftMessage[] {
 function insertMissingToolResults(drafts: DraftMessage[]): DraftMessage[] {
   const existing = new Set<string>();
   for (const draft of drafts) {
-    for (const block of draft.blocks) {
+    for (const tagged of draft.blocks) {
+      const block = tagged.block;
       if (block.type === 'tool_result' && block.tool_use_id) {
         existing.add(block.tool_use_id);
       }
@@ -425,13 +499,16 @@ function insertMissingToolResults(drafts: DraftMessage[]): DraftMessage[] {
   for (const draft of drafts) {
     out.push(draft);
     if (draft.role !== 'assistant') continue;
-    const missing: AnthropicContentBlock[] = [];
-    for (const block of draft.blocks) {
+    const missing: TaggedBlock[] = [];
+    for (const tagged of draft.blocks) {
+      const block = tagged.block;
       if (block.type === 'tool_use' && block.id && !existing.has(block.id)) {
         missing.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: '[工具结果丢失]',
+          block: {
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: '[工具结果丢失]',
+          },
         });
         existing.add(block.id);
       }
@@ -457,11 +534,9 @@ function mergeConsecutiveDrafts(drafts: DraftMessage[]): DraftMessage[] {
   return merged;
 }
 
-function simplifyBlocks(blocks: AnthropicContentBlock[]): string | AnthropicContentBlock[] {
+function emitBlocks(tagged: TaggedBlock[]): string | AnthropicContentBlock[] {
+  const blocks = tagged.map((item) => item.block);
   if (blocks.length === 0) return '';
-  const hasNonText = blocks.some((b) => b.type !== 'text');
-  if (!hasNonText) {
-    return blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-  }
+  // 始终用 block。断点移走时如果退回纯字符串，前缀字节会变，缓存每轮失效。
   return blocks;
 }

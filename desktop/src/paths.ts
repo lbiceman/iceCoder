@@ -10,7 +10,6 @@ import { app } from 'electron';
 import { getServerRoot } from './constants';
 
 const WORKSPACE_FILE = 'workspace.json';
-const PET_POS_FILE = 'pet-floating-position.json';
 const DATA_DIR_FILE = 'data-directory.json';
 
 /** 必须与 src/runtime/shell-identity.ts 的 resolveSharedShellDir 保持一致。 */
@@ -92,39 +91,6 @@ export function writeDataDirectory(dataDir: string | null): void {
     DATA_DIR_FILE,
     { dataDir: normalized ? path.resolve(normalized) : null },
   );
-}
-
-export interface PetFloatingPosition {
-  x: number;
-  y: number;
-  /** 记录时的窗口宽，用于尺寸变更后作废旧坐标 */
-  w?: number;
-  h?: number;
-}
-
-export function readPetFloatingPosition(): PetFloatingPosition | null {
-  const file = path.join(app.getPath('userData'), PET_POS_FILE);
-  if (!fs.existsSync(file)) return null;
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (typeof raw?.x === 'number' && typeof raw?.y === 'number') {
-      return {
-        x: raw.x,
-        y: raw.y,
-        w: typeof raw.w === 'number' ? raw.w : undefined,
-        h: typeof raw.h === 'number' ? raw.h : undefined,
-      };
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-export function writePetFloatingPosition(pos: PetFloatingPosition): void {
-  const file = path.join(app.getPath('userData'), PET_POS_FILE);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(pos, null, 2));
 }
 
 /** iceCoder 数据目录（设置页配置，未设置时 ~/\.iceCoder）。 */

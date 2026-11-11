@@ -16,6 +16,8 @@ interface EvalMetrics {
   tokens_per_successful_task: number;
   compaction_saved_tokens: number;
   compaction_recovery_success_rate: number;
+  /** 缓存读 token / 输入 token。脚本化评测的假用量没有缓存，真实模型才有数。 */
+  prompt_cache_hit_rate: number;
 }
 
 interface CaseResult {
@@ -41,6 +43,7 @@ const METRIC_KEYS: Array<keyof EvalMetrics> = [
   'tokens_per_successful_task',
   'compaction_saved_tokens',
   'compaction_recovery_success_rate',
+  'prompt_cache_hit_rate',
 ];
 
 interface CliArgs {
@@ -125,6 +128,7 @@ async function runMockEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseR
       tokens_per_successful_task: 1000 + index * 100,
       compaction_saved_tokens: testCase.category === 'compression' ? 5000 : 0,
       compaction_recovery_success_rate: testCase.category === 'compression' ? 1 : 0,
+      prompt_cache_hit_rate: 0,
     };
     return { id: testCase.id, category: testCase.category, passed: true, metrics, failures: [] };
   });
@@ -198,14 +202,25 @@ async function runRealEval(cases: AgentEvalCase[], args: CliArgs, chatFn: ChatFu
 function aggregate(results: CaseResult[]): EvalMetrics {
   const aggregateMetrics = zeroMetrics();
   for (const key of METRIC_KEYS) {
-    if (key === 'compaction_recovery_success_rate') continue;
+    if (key === 'compaction_recovery_success_rate' || key === 'prompt_cache_hit_rate') continue;
     aggregateMetrics[key] = average(results.map(result => result.metrics[key]));
   }
   const compressionResults = results.filter(result => result.category === 'compression');
   aggregateMetrics.compaction_recovery_success_rate = average(
     compressionResults.map(result => result.metrics.compaction_recovery_success_rate),
   );
+  aggregateMetrics.prompt_cache_hit_rate = pooledCacheHitRate(results);
   return aggregateMetrics;
+}
+
+function pooledCacheHitRate(results: CaseResult[]): number {
+  let input = 0;
+  let cache = 0;
+  for (const result of results) {
+    input += result.stats?.inputTokens ?? 0;
+    cache += result.stats?.cacheReadTokens ?? 0;
+  }
+  return input > 0 ? cache / input : 0;
 }
 
 function zeroMetrics(): EvalMetrics {
@@ -220,6 +235,7 @@ function zeroMetrics(): EvalMetrics {
     tokens_per_successful_task: 0,
     compaction_saved_tokens: 0,
     compaction_recovery_success_rate: 0,
+    prompt_cache_hit_rate: 0,
   };
 }
 
@@ -326,6 +342,7 @@ function formatReport(report: {
     `- no_tool_final_rate: ${roundMetric(report.metrics.no_tool_final_rate)}`,
     `- memory_interference_rate: ${roundMetric(report.metrics.memory_interference_rate)}`,
     `- compaction_recovery_success_rate: ${roundMetric(report.metrics.compaction_recovery_success_rate)}`,
+    `- prompt_cache_hit_rate: ${roundMetric(report.metrics.prompt_cache_hit_rate)}`,
     '',
     '| case | result | rounds | LLM calls | tools | failed | blocked | writes | max same-file writes | run_command | tokens | seconds | stop |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',

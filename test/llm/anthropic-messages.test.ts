@@ -38,10 +38,15 @@ describe('convertUnifiedMessagesToAnthropic', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ]);
-    expect(converted.system).toBe('you are iceCoder');
+    expect(converted.system).toEqual([
+      { type: 'text', text: 'you are iceCoder', cache_control: { type: 'ephemeral' } },
+    ]);
     expect(converted.messages).toEqual([
-      { role: 'user', content: 'hi' },
-      { role: 'assistant', content: 'hello' },
+      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'hello', cache_control: { type: 'ephemeral' } }],
+      },
     ]);
   });
 
@@ -56,7 +61,7 @@ describe('convertUnifiedMessagesToAnthropic', () => {
       { role: 'tool', toolCallId: 'toolu_1', content: '68F' },
     ]);
     expect(converted.messages).toEqual([
-      { role: 'user', content: 'weather?' },
+      { role: 'user', content: [{ type: 'text', text: 'weather?' }] },
       {
         role: 'assistant',
         content: [
@@ -66,7 +71,12 @@ describe('convertUnifiedMessagesToAnthropic', () => {
       },
       {
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: '68F' }],
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_1',
+          content: '68F',
+          cache_control: { type: 'ephemeral' },
+        }],
       },
     ]);
   });
@@ -78,8 +88,11 @@ describe('convertUnifiedMessagesToAnthropic', () => {
       { role: 'assistant', content: 'ok' },
     ]);
     expect(converted.messages).toEqual([
-      { role: 'user', content: 'one\ntwo' },
-      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [{ type: 'text', text: 'one\ntwo' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'ok', cache_control: { type: 'ephemeral' } }],
+      },
     ]);
   });
 
@@ -95,7 +108,12 @@ describe('convertUnifiedMessagesToAnthropic', () => {
     const last = converted.messages[converted.messages.length - 1];
     expect(last?.role).toBe('user');
     expect(last?.content).toEqual([
-      { type: 'tool_result', tool_use_id: 'toolu_missing', content: '[工具结果丢失]' },
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_missing',
+        content: '[工具结果丢失]',
+        cache_control: { type: 'ephemeral' },
+      },
     ]);
   });
 
@@ -106,8 +124,54 @@ describe('convertUnifiedMessagesToAnthropic', () => {
       { role: 'assistant', content: 'ok' },
     ]);
     expect(converted.messages).toEqual([
-      { role: 'user', content: 'hi' },
-      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'ok', cache_control: { type: 'ephemeral' } }],
+      },
+    ]);
+  });
+
+  it('puts the conversation breakpoint before the ephemeral tail', () => {
+    const converted = convertUnifiedMessagesToAnthropic([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'weather?' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'toolu_1', name: 'read_file', arguments: { path: 'a.ts' } }],
+      },
+      { role: 'tool', toolCallId: 'toolu_1', content: 'file body' },
+      { role: 'user', content: '[System Runtime State]\nnow\n[/System Runtime State]', promptCacheEphemeral: true },
+    ]);
+    const last = converted.messages[converted.messages.length - 1];
+    expect(last?.role).toBe('user');
+    expect(last?.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_1',
+        content: 'file body',
+        cache_control: { type: 'ephemeral' },
+      },
+      { type: 'text', text: '[System Runtime State]\nnow\n[/System Runtime State]' },
+    ]);
+    const cachedBlocks = JSON.stringify(converted).match(/"cache_control"/g) ?? [];
+    expect(cachedBlocks).toHaveLength(2);
+  });
+
+  it('does not cache a request that is only the ephemeral tail', () => {
+    const converted = convertUnifiedMessagesToAnthropic([
+      { role: 'user', content: 'stable question' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'clock tick', promptCacheEphemeral: true },
+    ]);
+    expect(converted.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'stable question' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'answer', cache_control: { type: 'ephemeral' } }],
+      },
+      { role: 'user', content: [{ type: 'text', text: 'clock tick' }] },
     ]);
   });
 
@@ -123,7 +187,11 @@ describe('convertUnifiedMessagesToAnthropic', () => {
     ]);
     expect(converted.messages[0]?.content).toEqual([
       { type: 'text', text: 'see' },
-      { type: 'image', source: { type: 'url', url: 'https://cdn.example.com/a.png' } },
+      {
+        type: 'image',
+        source: { type: 'url', url: 'https://cdn.example.com/a.png' },
+        cache_control: { type: 'ephemeral' },
+      },
     ]);
   });
 });
@@ -151,8 +219,26 @@ describe('buildAnthropicMessagesRequest', () => {
       name: 'read_file',
       description: 'read a file',
       input_schema: { type: 'object', properties: { path: { type: 'string' } } },
+      cache_control: { type: 'ephemeral' },
     }]);
     expect(Object.keys(req)[0]).toBe('model');
+  });
+
+  it('marks only the last tool, after name order', () => {
+    const req = buildAnthropicMessagesRequest(
+      [{ role: 'user', content: 'hi' }],
+      {
+        tools: [
+          { name: 'read_file', description: 'read', parameters: { type: 'object', properties: {} } },
+          { name: 'grep', description: 'search', parameters: { type: 'object', properties: {} } },
+        ],
+      },
+      { model: 'claude-sonnet-4-5' },
+      false,
+    );
+    expect(req.tools?.map(tool => tool.name)).toEqual(['grep', 'read_file']);
+    expect(req.tools?.[0]?.cache_control).toBeUndefined();
+    expect(req.tools?.[1]?.cache_control).toEqual({ type: 'ephemeral' });
   });
 
   it('throws when there is no user/assistant message after stripping system', () => {

@@ -248,6 +248,21 @@ describe('document-deliverable', () => {
     expect(hasUnfulfilledFileDeliverableGoal('write a summary report', [], 'edit')).toBe(false);
     expect(hasUnfulfilledFileDeliverableGoal('帮我写 readme 文档', [], 'docs')).toBe(true);
   });
+
+  it('hasUnfulfilledFileDeliverableGoal ignores a read-only investigation', () => {
+    const goal = 'Read-only investigation. Do NOT modify any file. Explain the rewriting of input file handling.';
+    expect(hasUnfulfilledFileDeliverableGoal(goal, [], 'edit')).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('不要修改任何文件，说明 input rewriting', [], 'edit')).toBe(false);
+  });
+
+  it('hasUnfulfilledFileDeliverableGoal does not treat rewrite or input as write verbs', () => {
+    expect(hasUnfulfilledFileDeliverableGoal(
+      'Explain how input rewriting works in this file parser',
+      [],
+      'edit',
+    )).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('save the summary to notes.md', [], 'docs')).toBe(true);
+  });
 });
 
 describe('TaskState deliverable facts', () => {

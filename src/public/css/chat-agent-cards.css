@@ -134,12 +134,13 @@
 
 .agent-card__activity .tool-action-row-block { margin-bottom: 0; }
 .agent-card__activity .tool-action {
+  grid-template-columns: 14px 7.2em minmax(0, 14em) 5.2em;
+  width: 100%;
   max-width: 100%;
-  margin-left: 0;
-  padding: 1px 0 1px 8px;
+  margin: 0;
+  padding: 2px 8px;
   font-size: 11px;
   background: transparent;
-  border-left-color: var(--border-light);
 }
 .agent-card__recent,
 .agent-card__older {
@@ -190,12 +191,14 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
-  line-height: 1.55;
+  line-height: 1.6;
   max-height: 420px;
   overflow: auto;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border-radius: var(--radius-xs);
+  margin: 2px 0 6px;
+  padding: 12px 14px;
+  background: var(--surface-panel, var(--bg-primary));
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
 }
 .agent-card__error {
   color: var(--danger);
@@ -382,7 +385,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
-  line-height: 1.55;
+  line-height: 1.6;
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.agent-drawer__msg .agent-drawer__text {
+  background: var(--surface-panel, var(--bg-primary));
 }
 .agent-drawer__call { margin-top: 4px; }
 .agent-drawer__tool-output {

@@ -8,8 +8,8 @@ import { looksLikeFailedRunCommandOutput } from './failed-run-command.js';
 import { isSystemInjectedUserContent } from './harness-message-utils.js';
 import { normalizeToolPath, SPILL_ALWAYS_MIN_CHARS, spillReadHint } from './tool-result-budget.js';
 
-/** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
-export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
+/** 硬压缩注入会话笔记的最大字符。全文仍在笔记文件里，注入只留开头和路径。 */
+export const MAX_SESSION_NOTES_COMPACT_CHARS = 12_000;
 
 /** 微压缩（light）时，超过若干轮后可清空正文的工具 */
 export const LIGHT_MICROCLEAR_TOOLS = new Set<string>([

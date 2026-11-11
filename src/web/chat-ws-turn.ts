@@ -29,6 +29,9 @@ import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 import { applyRuntimeModePrompt } from '../prompts/runtime-mode-prompt.js';
+import { annotateContextForActiveAgent, applyAgentPrompt } from '../prompts/agent-prompt.js';
+import { fenceSkillsUnderAgent, filterToolsByNames } from '../agents/agent-profile.js';
+import { resolveActiveAgentForTurn } from './chat-ws-agent.js';
 import {
   alignPromptWithAvailableTools,
   harnessOverlayToContextFields,
@@ -372,7 +375,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         id: userMsgId,
         sentAt: userSentAt,
         ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
-        ...(display.planCommand ? { planCommand: display.planCommand } : {}),
         ...(display.openCommand ? { openCommand: display.openCommand } : {}),
         ...(display.skills ? { skills: display.skills } : {}),
         ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
@@ -396,7 +398,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
           content: display.content,
           sentAt: userSentAt,
           ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
-          ...(display.planCommand ? { planCommand: display.planCommand } : {}),
           ...(display.openCommand ? { openCommand: display.openCommand } : {}),
           ...(display.skills ? { skills: display.skills } : {}),
           ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
@@ -485,7 +486,14 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const runtimeToolsDisabled = shouldDisableRuntimeTools();
   const unattended = isSessionUnattended(runSessionId);
   toolDefs = await applyUseWindowsToolOffering(toolDefs, MAIN_CONFIG_PATH, { unattended });
-  const agentTaskEnabled = enableSubAgents && !runtimeToolsDisabled && sessionToolCtx.enableAgentTask;
+  const activeUserAgent = runtimeToolsDisabled ? null : await resolveActiveAgentForTurn(runSessionId);
+  if (activeUserAgent) {
+    toolDefs = filterToolsByNames(toolDefs, activeUserAgent.tools);
+  }
+  const agentTaskEnabled = enableSubAgents
+    && !runtimeToolsDisabled
+    && sessionToolCtx.enableAgentTask
+    && (!activeUserAgent || activeUserAgent.tools.includes('task'));
   const promptToolNames = runtimeToolsDisabled
     ? []
     : [
@@ -534,15 +542,17 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const assembled = await loadAssembledPrompt(effectiveWorkspace);
   const harnessDynamic = harnessOverlayToContextFields(assembled);
 
-  const offeringResult = selectToolsForOffering(toolDefs, {
-    userMessage: harnessMessageText,
-    uploadedFilePaths: filePaths,
-    explicitReferencePaths,
-    sessionRecentToolCalls: getSessionDeferredToolCalls(runSessionId),
-    lastBrowsedPath: getFileBrowserState(runSessionId).lastBrowsedPath ?? undefined,
-    shellCollabActive: sessionToolCtx.shellCollabActive,
-    hasInlineVisionImages: imageUrls.length > 0 || inlineImages.length > 0,
-  });
+  const offeringResult = activeUserAgent
+    ? { tools: toolDefs, activated: new Set<string>(), reasons: [] as string[] }
+    : selectToolsForOffering(toolDefs, {
+        userMessage: harnessMessageText,
+        uploadedFilePaths: filePaths,
+        explicitReferencePaths,
+        sessionRecentToolCalls: getSessionDeferredToolCalls(runSessionId),
+        lastBrowsedPath: getFileBrowserState(runSessionId).lastBrowsedPath ?? undefined,
+        shellCollabActive: sessionToolCtx.shellCollabActive,
+        hasInlineVisionImages: imageUrls.length > 0 || inlineImages.length > 0,
+      });
   toolDefs = offeringResult.tools;
   if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
     console.log(`[lazy-tools] session=${runSessionId.slice(0, 8)} reasons=${offeringResult.reasons.join(',')}`);
@@ -552,11 +562,17 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     assembled,
     promptToolNames,
   );
-  const effectiveAssembled = applyRuntimeModePrompt(toolAlignedAssembled, {
+  const modeAssembled = applyRuntimeModePrompt(toolAlignedAssembled, {
     toolsDisabled: runtimeToolsDisabled,
     shellCollabActive: sessionToolCtx.shellCollabActive,
-    planModeActive: sessionToolCtx.planModeActive,
   });
+  const effectiveAssembled = applyAgentPrompt(modeAssembled, activeUserAgent);
+  if (activeUserAgent && harnessDynamic.userContext) {
+    harnessDynamic.userContext = annotateContextForActiveAgent(harnessDynamic.userContext);
+  }
+  if (activeUserAgent && typeof harnessUserMessage === 'string') {
+    harnessUserMessage = fenceSkillsUnderAgent(harnessUserMessage, activeUserAgent.name);
+  }
   const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
   const docToolsContext = sessionToolCtx.shellCollabActive || runtimeToolsDisabled
     ? {}
@@ -614,7 +630,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     workspaceRoot: effectiveWorkspace,
     verificationExemptDirs,
     shellCollabActive: runtimeToolsDisabled ? false : sessionToolCtx.shellCollabActive,
-    planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: createToolConfirmHandler(runSessionId),
     skipCompletionGate: input.skipCompletionGate === true,

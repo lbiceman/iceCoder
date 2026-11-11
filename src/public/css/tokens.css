@@ -23,7 +23,6 @@
   --transition-fast: 120ms ease;
   --transition: 180ms ease;
   --transition-slow: 260ms ease;
-  --content-max-width: 1080px;
   --sidebar-width: 256px;
   --scrollbar-size: 6px;
   --font: Inter, "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -89,6 +88,9 @@
   --chip-plan-bg: rgba(232, 194, 122, 0.12);
   --chip-plan-border: rgba(232, 194, 122, 0.32);
   --chip-plan-ring: rgba(232, 194, 122, 0.22);
+  --chip-agent-fg: #9eb6e0;
+  --chip-agent-bg: rgba(158, 182, 224, 0.14);
+  --chip-agent-border: rgba(158, 182, 224, 0.34);
   --chip-shell-fg: #7ec8b8;
   --chip-shell-bg: rgba(126, 200, 184, 0.12);
   --chip-shell-border: rgba(126, 200, 184, 0.32);
@@ -193,6 +195,9 @@
   --chip-plan-bg: rgba(202, 138, 4, 0.10);
   --chip-plan-border: rgba(161, 98, 7, 0.22);
   --chip-plan-ring: rgba(161, 98, 7, 0.18);
+  --chip-agent-fg: #1d4ed8;
+  --chip-agent-bg: rgba(29, 78, 216, 0.08);
+  --chip-agent-border: rgba(29, 78, 216, 0.22);
   --chip-shell-fg: #0f766e;
   --chip-shell-bg: rgba(15, 118, 110, 0.10);
   --chip-shell-border: rgba(15, 118, 110, 0.22);
@@ -298,6 +303,9 @@
   --chip-plan-bg: rgba(209, 112, 12, 0.10);
   --chip-plan-border: rgba(209, 112, 12, 0.22);
   --chip-plan-ring: rgba(209, 112, 12, 0.18);
+  --chip-agent-fg: #1d4ed8;
+  --chip-agent-bg: rgba(29, 78, 216, 0.08);
+  --chip-agent-border: rgba(29, 78, 216, 0.22);
   --chip-shell-fg: #0066ff;
   --chip-shell-bg: rgba(0, 102, 255, 0.08);
   --chip-shell-border: rgba(0, 102, 255, 0.22);
@@ -407,6 +415,9 @@
   --chip-plan-bg: rgba(217, 164, 65, 0.18);
   --chip-plan-border: rgba(217, 164, 65, 0.38);
   --chip-plan-ring: rgba(217, 164, 65, 0.22);
+  --chip-agent-fg: #2F5D7A;
+  --chip-agent-bg: rgba(79, 143, 168, 0.16);
+  --chip-agent-border: rgba(79, 143, 168, 0.36);
   --chip-shell-fg: #4F7A60;
   --chip-shell-bg: rgba(143, 184, 154, 0.24);
   --chip-shell-border: rgba(143, 184, 154, 0.48);

@@ -306,6 +306,12 @@ async function mergeAppendMessages(
         if (!incoming.shellCommand && prev.shellCommand) {
           merged.shellCommand = prev.shellCommand;
         }
+        if (!incoming.planCommand && prev.planCommand) {
+          merged.planCommand = prev.planCommand;
+        }
+        if (!incoming.agentCommand && prev.agentCommand) {
+          merged.agentCommand = prev.agentCommand;
+        }
         if (!incoming.openCommand && prev.openCommand) {
           merged.openCommand = prev.openCommand;
         }

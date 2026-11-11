@@ -31,16 +31,28 @@ afterEach(async () => {
   }));
 });
 
-async function loadChatUi(page: Page) {
-  await page.setContent(
-    '<!DOCTYPE html><html><body>' +
-      '<div id="chat-messages" class="chat-messages">' +
-        '<div id="chat-anchor" class="chat-messages-anchor"></div>' +
-      '</div>' +
-      '<textarea id="chat-input"></textarea>' +
-      '<button id="chat-send" type="button">send</button>' +
-    '</body></html>',
-  );
+const CHAT_UI_HTML =
+  '<!DOCTYPE html><html><body>' +
+    '<div id="chat-messages" class="chat-messages">' +
+      '<div id="chat-anchor" class="chat-messages-anchor"></div>' +
+    '</div>' +
+    '<textarea id="chat-input"></textarea>' +
+    '<button id="chat-send" type="button">send</button>' +
+  '</body></html>';
+
+async function loadChatUi(page: Page, locale?: 'zh' | 'en') {
+  if (locale) {
+    const url = 'http://127.0.0.1:9/token-bar';
+    await page.route(url, (route) => route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: CHAT_UI_HTML,
+    }));
+    await page.goto(url);
+    await page.evaluate((next) => localStorage.setItem('ice-locale', next), locale);
+  } else {
+    await page.setContent(CHAT_UI_HTML);
+  }
   await page.addScriptTag({ content: CHAT_UI_SOURCE });
   await page.evaluate(() => {
     const ui = (window as unknown as { ChatUI: { init: (els: Record<string, unknown>) => void } }).ChatUI;
@@ -81,5 +93,45 @@ describe('聊天气泡 Token 条使用模型', () => {
     expect(text).toContain('合计');
     expect(text).toContain('模型');
     expect(text).toContain('DeepSeek-V3.2');
+  });
+
+  it('英文下展示 Input、Output、Total、Model', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadChatUi(page, 'en');
+
+    const text = await page.evaluate(() => {
+      const ui = (window as unknown as {
+        ChatUI: {
+          appendMessageEl: (msg: Record<string, unknown>, strip: (t: string) => string) => HTMLElement;
+        };
+      }).ChatUI;
+      ui.appendMessageEl({
+        role: 'agent',
+        id: 'a2',
+        content: 'done',
+        turnTokenUsage: { inputTokens: 65555, outputTokens: 4327 },
+        usedModel: 'deepseek/deepseek-v4.1-flash',
+      }, (t) => t);
+      ui.appendMessageEl({
+        role: 'agent',
+        id: 'a3',
+        content: 'done',
+        turnTokenUsage: { inputTokens: 10, outputTokens: 2 },
+        agentTokenUsage: { tokens: 1200, agents: 2 },
+      }, (t) => t);
+      const bars = Array.from(document.querySelectorAll('.msg-token-usage'));
+      return bars.map((bar) => bar.textContent || '').join('\n');
+    });
+
+    expect(text).toContain('Input');
+    expect(text).toContain('Output');
+    expect(text).toContain('Total');
+    expect(text).toContain('Model');
+    expect(text).toContain('deepseek/deepseek-v4.1-flash');
+    expect(text).toContain('Main agent');
+    expect(text).toContain('Sub-agents ×2');
+    expect(text).not.toContain('输入');
+    expect(text).not.toContain('合计');
   });
 });

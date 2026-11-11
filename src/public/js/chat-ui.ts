@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t, intlLocale } from './i18n.ts';
 /**
  * 聊天 UI 渲染模块
  * 负责：消息渲染、流式输出、工具调用展示、滚动控制、输入框管理
@@ -236,11 +237,11 @@ export const ChatUI = (() => {
       if (expanded) {
         collapsed.style.display = 'none';
         btn.setAttribute('aria-expanded', 'false');
-        btn.textContent = `还有 ${collapsed.children.length} 条历史 · 展开`;
+        btn.textContent = toolTraceToggleText(collapsed.children.length, false);
       } else {
         collapsed.style.display = '';
         btn.setAttribute('aria-expanded', 'true');
-        btn.textContent = '收起';
+        btn.textContent = toolTraceToggleText(collapsed.children.length, true);
         primeHistoryDiffSourcesInGroup(group);
       }
       notifyHistoryLayoutChange(group);
@@ -292,10 +293,10 @@ export const ChatUI = (() => {
   }
 
   function thinkingToggleLabel(collapsed, previewLine) {
-    if (!collapsed) return '折叠思考内容';
-    if (!previewLine) return '展开思考内容';
+    if (!collapsed) return t('chat.collapseThinking');
+    if (!previewLine) return t('chat.expandThinking');
     const snippet = previewLine.length > 80 ? previewLine.slice(-80) : previewLine;
-    return '展开思考内容：' + snippet;
+    return t('chat.expandThinkingDetail', { text: snippet });
   }
 
   function syncThinkingToggleA11y(block) {
@@ -388,7 +389,7 @@ export const ChatUI = (() => {
     label.className = 'msg-label msg-thinking-toggle'
       + (footer ? ' msg-thinking-toggle-footer' : ' msg-thinking-toggle-header');
     label.setAttribute('aria-expanded', 'true');
-    label.setAttribute('aria-label', '折叠思考内容');
+    label.setAttribute('aria-label', t('chat.collapseThinking'));
     const labelText = document.createElement('span');
     labelText.className = 'msg-thinking-toggle-text';
     labelText.textContent = 'Thinking';
@@ -416,8 +417,7 @@ export const ChatUI = (() => {
       return;
     }
     const cut = text.length - THINKING_EXPAND_MAX_CHARS;
-    bodyEl.textContent = '…（前面还有 ' + cut + ' 字已省略，仅显示最近 '
-      + THINKING_EXPAND_MAX_CHARS + ' 字）\n\n'
+    bodyEl.textContent = t('chat.thinkingPrefix', { hidden: cut, shown: THINKING_EXPAND_MAX_CHARS })
       + text.slice(text.length - THINKING_EXPAND_MAX_CHARS);
   }
 
@@ -701,7 +701,10 @@ export const ChatUI = (() => {
     const toolName = row ? row.getAttribute('data-tool') : '';
     if (!toolName || !isDiffCapableToolName(toolName)) return;
     const ds = resolveDiffSourceForHistoryBlock(block, group);
-    if (ds) block._diffSource = ds;
+    if (ds) {
+      block._diffSource = ds;
+      applyToolDiffStat(block, ds);
+    }
     bindDiffToggleRow(block, toolName, true);
   }
 
@@ -935,8 +938,8 @@ export const ChatUI = (() => {
     elJumpBottom = document.createElement('button');
     elJumpBottom.type = 'button';
     elJumpBottom.className = 'chat-jump-bottom hidden';
-    elJumpBottom.setAttribute('aria-label', '回到底部');
-    elJumpBottom.title = '回到底部';
+    elJumpBottom.setAttribute('aria-label', t('chat.jumpBottom'));
+    elJumpBottom.title = t('chat.jumpBottom');
     elJumpBottom.innerHTML = '<span class="chat-jump-bottom-icon" aria-hidden="true">↓</span>';
     elJumpBottom.addEventListener('click', () => {
       enableAutoScroll();
@@ -1141,6 +1144,7 @@ export const ChatUI = (() => {
   /** 挂载 diff 内容但默认隐藏 */
   function mountHiddenDiffInBlock(block, diffSource) {
     if (!block || !diffSource) return false;
+    applyToolDiffStat(block, diffSource);
     const diffEl = renderDiffElementFromSource(diffSource);
     if (!diffEl) return false;
 
@@ -1202,7 +1206,7 @@ export const ChatUI = (() => {
       if (nameEl) {
         nameEl.classList.add('tool-diff-toggle');
         nameEl.classList.remove('tool-diff-toggle-pending');
-        nameEl.setAttribute('title', '点击查看/关闭文件变更');
+        nameEl.setAttribute('title', t('chat.filesChanged'));
       }
       if (isNodeInHistoryRegion(block)) notifyHistoryLayoutChange(block);
       else notifyTailLayoutChange();
@@ -1275,13 +1279,13 @@ export const ChatUI = (() => {
     nameEl.classList.add('tool-diff-toggle');
     if (block.getAttribute('data-has-diff') === '1') {
       nameEl.classList.remove('tool-diff-toggle-pending');
-      nameEl.setAttribute('title', '点击查看/关闭文件变更');
+      nameEl.setAttribute('title', t('chat.filesChanged'));
     } else if (block._diffSource) {
       nameEl.classList.remove('tool-diff-toggle-pending');
-      nameEl.setAttribute('title', '点击查看文件变更');
+      nameEl.setAttribute('title', t('chat.filesChangedOpen'));
     } else {
       nameEl.classList.add('tool-diff-toggle-pending');
-      nameEl.setAttribute('title', '点击加载文件变更');
+      nameEl.setAttribute('title', t('chat.filesChangedLoad'));
     }
 
     if (forHistory || isNodeInHistoryRegion(block)) return;
@@ -1338,6 +1342,7 @@ export const ChatUI = (() => {
       if (!toolName || !isDiffCapableToolName(toolName)) continue;
       if (isNodeInHistoryRegion(block)) {
         block._diffSource = diffSource;
+        applyToolDiffStat(block, diffSource);
         bindDiffToggleRow(block, toolName, true);
       } else if (mountHiddenDiffInBlock(block, diffSource)) {
         bindDiffToggleRow(block, toolName, false);
@@ -1378,13 +1383,13 @@ export const ChatUI = (() => {
     nameEl.classList.add('tool-io-toggle');
     if (block.getAttribute('data-has-io') === '1') {
       nameEl.classList.remove('tool-io-toggle-pending');
-      nameEl.setAttribute('title', '点击查看/关闭工具参数与结果');
+      nameEl.setAttribute('title', t('chat.toolIo'));
     } else if (block._ioText) {
       nameEl.classList.remove('tool-io-toggle-pending');
-      nameEl.setAttribute('title', '点击查看工具参数与结果');
+      nameEl.setAttribute('title', t('chat.toolIoOpen'));
     } else {
       nameEl.classList.add('tool-io-toggle-pending');
-      nameEl.setAttribute('title', '点击加载工具参数与结果');
+      nameEl.setAttribute('title', t('chat.toolIoLoad'));
     }
 
     if (forHistory || isNodeInHistoryRegion(block)) return;
@@ -1536,6 +1541,51 @@ export const ChatUI = (() => {
     if (done) done(false);
   }
 
+  const FILE_CHANGE_STAT_TOOLS = {
+    write_file: true,
+    edit_file: true,
+    append_file: true,
+    patch_file: true,
+    batch_edit_file: true,
+    run_command: true,
+  };
+
+  /** 路径后面的 +N / -M。只在这次调用真的改了行时出现。 */
+  function applyToolDiffStat(block, diffSource) {
+    if (!block || !block.querySelector) return;
+    const row = block.querySelector('.tool-action');
+    if (!row) return;
+    const existing = row.querySelector('.tool-diff-stat');
+    const failed = !!row.querySelector('.tool-icon.error');
+    const toolName = row.getAttribute('data-tool') || '';
+    const stats = !failed
+      && FILE_CHANGE_STAT_TOOLS[toolName]
+      && window.DiffViewer
+      && typeof window.DiffViewer.countDiffLineStats === 'function'
+      ? window.DiffViewer.countDiffLineStats(diffSource)
+      : null;
+    if (!stats) {
+      if (existing) existing.remove();
+      return;
+    }
+    const stat = existing || document.createElement('span');
+    stat.className = 'tool-diff-stat';
+    stat.textContent = '';
+    const title = [];
+    if (stats.add > 0) title.push(t('chat.diffAdd', { n: stats.add }));
+    if (stats.del > 0) title.push(t('chat.diffDel', { n: stats.del }));
+    stat.title = title.join('，');
+    const add = document.createElement('span');
+    add.className = 'tool-diff-add';
+    add.textContent = stats.add > 0 ? '+' + stats.add : '';
+    stat.appendChild(add);
+    const del = document.createElement('span');
+    del.className = 'tool-diff-del';
+    del.textContent = stats.del > 0 ? '-' + stats.del : '';
+    stat.appendChild(del);
+    if (!existing) row.appendChild(stat);
+  }
+
   function createToolRowBlock(toolName, detail, status, toolCallId, diffSource, forHistory) {
     const block = document.createElement('div');
     block.className = 'tool-action-row-block';
@@ -1545,6 +1595,7 @@ export const ChatUI = (() => {
     block.appendChild(row);
 
     if (diffSource) {
+      applyToolDiffStat(block, diffSource);
       if (forHistory) {
         block._diffSource = diffSource;
       } else {
@@ -1582,6 +1633,10 @@ export const ChatUI = (() => {
     );
   }
 
+  function toolTraceToggleText(count, expanded) {
+    return expanded ? t('common.collapse') : t('chat.moreHistory', { n: count });
+  }
+
   function bindToolTraceToggle(btn, collapsedEl, groupEl, forHistory) {
     if (forHistory) {
       btn.setAttribute('aria-expanded', 'false');
@@ -1596,11 +1651,11 @@ export const ChatUI = (() => {
       if (expanded) {
         collapsedEl.style.display = 'none';
         btn.setAttribute('aria-expanded', 'false');
-        btn.textContent = `还有 ${collapsedEl.children.length} 条历史 · 展开`;
+        btn.textContent = toolTraceToggleText(collapsedEl.children.length, false);
       } else {
         collapsedEl.style.display = '';
         btn.setAttribute('aria-expanded', 'true');
-        btn.textContent = '收起';
+        btn.textContent = toolTraceToggleText(collapsedEl.children.length, true);
       }
       notifyTailLayoutChange();
     });
@@ -1609,7 +1664,7 @@ export const ChatUI = (() => {
 
   function refreshCollapsedToggleLabel(btn, collapsedEl) {
     if (!btn || !collapsedEl || collapsedEl.children.length === 0) return;
-    btn.textContent = btn.getAttribute('aria-expanded') === 'true' ? '收起' : `还有 ${collapsedEl.children.length} 条历史 · 展开`;
+    btn.textContent = toolTraceToggleText(collapsedEl.children.length, btn.getAttribute('aria-expanded') === 'true');
   }
 
   function rebalanceToolTraceVisible(visibleEl, collapsedEl, toggleEl) {
@@ -1736,7 +1791,7 @@ export const ChatUI = (() => {
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'tool-trace-toggle';
-        toggle.textContent = `还有 ${olderCount} 条历史 · 展开`;
+        toggle.textContent = toolTraceToggleText(olderCount, false);
         for (let k = olderCount; k < toolIdx.length; k++) appendTraceRow(visible, traces[toolIdx[k]], toolIdx[k]);
         wrap.appendChild(collapsed);
         wrap.appendChild(toggle);
@@ -1749,7 +1804,7 @@ export const ChatUI = (() => {
     if (taskIdx.length) {
       delegation = document.createElement('section');
       delegation.className = 'agent-delegation';
-      delegation.setAttribute('aria-label', '子 Agent');
+      delegation.setAttribute('aria-label', t('chat.subAgents'));
       for (let i = 0; i < taskIdx.length; i++) appendTraceRow(delegation, traces[taskIdx[i]], taskIdx[i]);
     }
 
@@ -1826,7 +1881,7 @@ export const ChatUI = (() => {
     }
     const host = document.createElement('section');
     host.className = 'agent-delegation';
-    host.setAttribute('aria-label', '子 Agent');
+    host.setAttribute('aria-label', t('chat.subAgents'));
     if (liveToolRoundRoot && liveToolRoundRoot.parentNode) {
       liveToolRoundRoot.parentNode.insertBefore(host, liveToolRoundRoot.nextSibling);
     } else {
@@ -1893,7 +1948,7 @@ export const ChatUI = (() => {
     const btn = group && group.querySelector('.tool-trace-toggle');
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
-      btn.textContent = '收起';
+      btn.textContent = toolTraceToggleText(collapsed.children.length, true);
     }
     if (group && isNodeInHistoryRegion(group)) {
       primeHistoryDiffSourcesInGroup(group);
@@ -2003,6 +2058,7 @@ export const ChatUI = (() => {
       iconEl.className = `tool-icon ${status}`;
       iconEl.textContent = iconTextForStatus(status);
     }
+    if (block) applyToolDiffStat(block, block._diffSource || null);
     if (block && toolOutput && isToolIoToggleName(toolName)
         && block.getAttribute('data-has-diff') !== '1') {
       const prev = block._ioText || '';
@@ -2026,6 +2082,8 @@ export const ChatUI = (() => {
               iconEl.className = `tool-icon ${status}`;
               iconEl.textContent = iconTextForStatus(status);
             }
+            const statBlock = rows[r].closest('.tool-action-row-block');
+            if (statBlock) applyToolDiffStat(statBlock, statBlock._diffSource || null);
             notifyContentLayoutChange();
             return;
           }
@@ -2039,6 +2097,7 @@ export const ChatUI = (() => {
             iconEl3.className = `tool-icon ${status}`;
             iconEl3.textContent = iconTextForStatus(status);
           }
+          applyToolDiffStat(node, node._diffSource || null);
           notifyContentLayoutChange();
           return;
         }
@@ -2049,6 +2108,8 @@ export const ChatUI = (() => {
           iconEl2.className = `tool-icon ${status}`;
           iconEl2.textContent = iconTextForStatus(status);
         }
+        const statBlock2 = node.closest('.tool-action-row-block');
+        if (statBlock2) applyToolDiffStat(statBlock2, statBlock2._diffSource || null);
         notifyContentLayoutChange();
         return;
       }
@@ -2205,7 +2266,7 @@ export const ChatUI = (() => {
     if (window.AppIcon) window.AppIcon.hydrate(restoreBtn);
     restoreBtn.dataset.messageId = messageId;
     if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
-    restoreBtn.setAttribute('aria-label', '回滚到此消息');
+    restoreBtn.setAttribute('aria-label', t('chat.rollback'));
     bindMessageActionButton(restoreBtn, 'restore', messageId);
     applyRestoreButtonState(restoreBtn);
     return restoreBtn;
@@ -2219,8 +2280,8 @@ export const ChatUI = (() => {
     if (window.AppIcon) window.AppIcon.hydrate(reuseBtn);
     reuseBtn.dataset.messageId = messageId;
     if (sentAt) reuseBtn.dataset.sentAt = String(sentAt);
-    reuseBtn.setAttribute('aria-label', '放回输入框');
-    reuseBtn.title = '把这条消息的内容、图片和文件放回输入框';
+    reuseBtn.setAttribute('aria-label', t('chat.reuse'));
+    reuseBtn.title = t('chat.reuseTip');
     bindMessageActionButton(reuseBtn, 'reuse', messageId);
     return reuseBtn;
   }
@@ -2233,8 +2294,8 @@ export const ChatUI = (() => {
     if (window.AppIcon) window.AppIcon.hydrate(deleteBtn);
     deleteBtn.dataset.messageId = messageId;
     if (sentAt) deleteBtn.dataset.sentAt = String(sentAt);
-    deleteBtn.setAttribute('aria-label', '删除此消息');
-    deleteBtn.title = '删除此消息';
+    deleteBtn.setAttribute('aria-label', t('chat.deleteMessage'));
+    deleteBtn.title = t('chat.deleteMessage');
     bindMessageActionButton(deleteBtn, 'delete', messageId);
     return deleteBtn;
   }
@@ -2554,8 +2615,8 @@ export const ChatUI = (() => {
     if (atCursor) {
       btn.disabled = true;
       btn.classList.remove('msg-restore-btn--ready');
-      btn.title = '已在该检查点，无需回滚';
-      btn.setAttribute('aria-label', '已在该检查点，无需回滚');
+      btn.title = t('chat.alreadyThereLabel');
+      btn.setAttribute('aria-label', t('chat.alreadyThereLabel'));
       return;
     }
     const visible = hasCheckpointForMessage(mid, isFinite(sentAt) ? sentAt : undefined);
@@ -2563,8 +2624,8 @@ export const ChatUI = (() => {
     btn.classList.toggle('msg-restore-btn--ready', visible);
     btn.disabled = !visible || !can;
     btn.title = !visible
-      ? '未找到检查点，无法回滚'
-      : (can ? '回滚到此消息' : '运行中，请等待当前任务完成后再回滚');
+      ? t('etl.noCheckpointShort')
+      : (can ? t('chat.rollback') : t('etl.waitRollbackShort'));
     btn.setAttribute('aria-label', btn.title);
   }
 
@@ -2580,8 +2641,8 @@ export const ChatUI = (() => {
       const delBtn = deleteButtons[j];
       delBtn.disabled = !can;
       delBtn.title = can
-        ? '删除此消息及对应回复'
-        : '运行中，请等待当前任务完成后再删除';
+        ? t('chat.deleteAndReply')
+        : t('chat.waitDeleteBare');
     }
   }
 
@@ -2598,7 +2659,7 @@ export const ChatUI = (() => {
     if (role === 'system') {
       label.textContent = 'Runtime';
     } else if (role === 'user' && restoreOpts && restoreOpts.alsoNote) {
-      label.textContent = '备注';
+      label.textContent = t('chat.note');
     } else {
       label.textContent = role === 'user' ? 'You' : 'Assistant';
     }
@@ -2646,7 +2707,7 @@ export const ChatUI = (() => {
   function formatTokenCount(n) {
     const num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
     try {
-      return num.toLocaleString();
+      return num.toLocaleString(intlLocale());
     } catch (_e) {
       return String(num);
     }
@@ -2680,7 +2741,7 @@ export const ChatUI = (() => {
     const total = normalized ? (normalized.inputTokens + normalized.outputTokens) : 0;
     const bar = document.createElement('div');
     bar.className = 'msg-token-usage';
-    bar.setAttribute('aria-label', model ? (`Token 消耗，模型 ${model}`) : 'Token 消耗');
+    bar.setAttribute('aria-label', model ? t('chat.tokenUsageModel', { model }) : t('chat.tokenUsage'));
 
     function addItem(label, value, extraClass) {
       const item = document.createElement('span');
@@ -2698,17 +2759,17 @@ export const ChatUI = (() => {
     }
 
     if (normalized) {
-      addItem('输入', formatTokenCount(normalized.inputTokens));
-      addItem('输出', formatTokenCount(normalized.outputTokens));
+      addItem(t('chat.input'), formatTokenCount(normalized.inputTokens));
+      addItem(t('chat.output'), formatTokenCount(normalized.outputTokens));
       if (subAgents) {
-        addItem('主 Agent', formatTokenCount(total));
-        addItem(`子 Agent ×${subAgents.agents}`, formatTokenCount(subAgents.tokens), 'msg-token-usage__item--sub-agent');
+        addItem(t('chat.mainAgent'), formatTokenCount(total));
+        addItem(t('chat.subAgentCount', { n: subAgents.agents }), formatTokenCount(subAgents.tokens), 'msg-token-usage__item--sub-agent');
       } else {
-        addItem('合计', formatTokenCount(total));
+        addItem(t('chat.total'), formatTokenCount(total));
       }
     }
     if (model) {
-      const modelItem = addItem('模型', model, 'msg-token-usage__item--model');
+      const modelItem = addItem(t('chat.model'), model, 'msg-token-usage__item--model');
       modelItem.title = model;
     }
     return bar;
@@ -2813,7 +2874,7 @@ export const ChatUI = (() => {
   }
 
   function createMsgShellCommandChip(shellCommand) {
-    return createMsgSlashCommandChip(shellCommand, 'Shell 协作模式');
+    return createMsgSlashCommandChip(shellCommand, t('chat.shellChipMode'));
   }
 
   function basenameFromPath(fullPath) {
@@ -2902,12 +2963,17 @@ export const ChatUI = (() => {
     }
 
     if (displayMsg.role === 'user' && displayMsg.planCommand) {
-      const planRow = createMsgSlashCommandChip(displayMsg.planCommand, '规划模式');
+      const planRow = createMsgSlashCommandChip(displayMsg.planCommand, t('chat.planMode'));
       if (planRow) el.appendChild(planRow);
     }
 
+    if (displayMsg.role === 'user' && displayMsg.agentCommand) {
+      const agentRow = createMsgSlashCommandChip(displayMsg.agentCommand, 'Agent');
+      if (agentRow) el.appendChild(agentRow);
+    }
+
     if (displayMsg.role === 'user' && displayMsg.openCommand) {
-      const openRow = createMsgSlashCommandChip(displayMsg.openCommand, '目录浏览');
+      const openRow = createMsgSlashCommandChip(displayMsg.openCommand, t('chat.browseChip'));
       if (openRow) el.appendChild(openRow);
     }
 
@@ -2928,8 +2994,8 @@ export const ChatUI = (() => {
         const img = document.createElement('img');
         img.src = displayMsg.images[j];
         img.className = 'msg-image-thumb';
-        img.alt = '图片 ' + (j + 1);
-        img.title = '点击查看大图';
+        img.alt = t('chat.imageN', { n: j + 1 });
+        img.title = t('chat.viewLarge');
         imgRow.appendChild(img);
       }
       el.appendChild(imgRow);
@@ -3317,8 +3383,8 @@ export const ChatUI = (() => {
       const img = document.createElement('img');
       img.src = persistable[j];
       img.className = 'msg-image-thumb';
-      img.alt = '图片 ' + (j + 1);
-      img.title = '点击查看大图';
+      img.alt = t('chat.imageN', { n: j + 1 });
+      img.title = t('chat.viewLarge');
       imgRow.appendChild(img);
     }
     if (isNodeInHistoryRegion(root)) notifyHistoryLayoutChange(root);

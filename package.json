@@ -8,7 +8,9 @@
   },
   "files": [
     "dist/",
+    "data/agents/plan.json",
     "data/config.example.json",
+    "data/skills/创建Agent.md",
     "data/skills/创建技能.md",
     "data/system-prompt.md",
     "package.json",

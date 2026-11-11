@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 命令面板：`+` 按钮打开 ~ 本地命令；输入 `/` 在输入区上方打开独立 slash 命令面板。
  */
@@ -13,40 +14,40 @@ export const ChatCommands = (() => {
   const SLASH_COMMAND_GROUPS = [
     {
       key: 'followup',
-      label: '跟进',
+      labelKey: 'cmd.followup',
       commands: [
-        { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
-        { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+        { name: 'also', descKey: 'cmd.also', prefix: '/' },
+        { name: 'next', descKey: 'cmd.next', prefix: '/' }
       ]
     },
     {
       key: 'mode',
-      label: '模式',
+      labelKey: 'cmd.mode',
       commands: [
-        { name: 'plan', description: '进入规划模式；可在同一条消息中继续写任务', prefix: '/' },
-        { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' }
+        { name: 'shell', descKey: 'cmd.shell', prefix: '/' }
       ]
     },
     {
       key: 'browse',
-      label: '浏览',
+      labelKey: 'cmd.browse',
       commands: [
-        { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
+        { name: 'open', descKey: 'cmd.open', prefix: '/' }
       ]
     }
   ];
 
   const TILDE_PC_COMMANDS = [
-    { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
-    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'scan', descKey: 'cmd.scan', prefix: '~' },
+    { name: 'tokens', descKey: 'cmd.tokens', prefix: '~' },
+    { name: 'telemetry', descKey: 'cmd.telemetry', prefix: '~' }
   ];
 
   const TILDE_REMOTE_COMMANDS = [
-    { name: 'tokens', description: '查看 Token 消耗统计', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'tokens', descKey: 'cmd.tokens', prefix: '~' },
+    { name: 'telemetry', descKey: 'cmd.telemetry', prefix: '~' }
   ];
 
+  let agentCommands = [];
   let cmdSelectedIndex = 0;
   let cmdFiltered = [];
   let cmdActivePrefix = '';
@@ -70,28 +71,69 @@ export const ChatCommands = (() => {
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
   function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
 
+  function slashGroups() {
+    const groups = SLASH_COMMAND_GROUPS.slice();
+    if (agentCommands.length) {
+      groups.push({ key: 'agents', labelKey: 'nav.agents', commands: agentCommands });
+    }
+    return groups;
+  }
+
   function getSlashCommands() {
+    const groups = slashGroups();
     const list = [];
-    for (let i = 0; i < SLASH_COMMAND_GROUPS.length; i++) {
-      const cmds = SLASH_COMMAND_GROUPS[i].commands;
+    for (let i = 0; i < groups.length; i++) {
+      const cmds = groups[i].commands;
       for (let j = 0; j < cmds.length; j++) list.push(cmds[j]);
     }
     return list;
+  }
+
+  function setAgentCommands(list) {
+    const next = [];
+    const rows = Array.isArray(list) ? list : [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row.id) continue;
+      next.push({
+        name: String(row.id),
+        description: row.description || row.name || String(row.id),
+        prefix: '/',
+        agent: true,
+      });
+    }
+    agentCommands = next;
+  }
+
+  function refreshAgents() {
+    fetch('/api/agents')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.success && Array.isArray(data.agents)) setAgentCommands(data.agents);
+      })
+      .catch(() => {});
+  }
+
+  /** 内置命令的说明随语言切换；代理项的 description 是用户自己写的，保持原样。 */
+  function presentCommand(cmd) {
+    if (!cmd || !cmd.descKey) return cmd;
+    return Object.assign({}, cmd, { description: t(cmd.descKey) });
   }
 
   function buildSlashDropdownItems(filtered) {
     const byName = {};
     for (let i = 0; i < filtered.length; i++) byName[filtered[i].name] = filtered[i];
     const items = [];
-    for (let g = 0; g < SLASH_COMMAND_GROUPS.length; g++) {
-      const group = SLASH_COMMAND_GROUPS[g];
+    const groups = slashGroups();
+    for (let g = 0; g < groups.length; g++) {
+      const group = groups[g];
       const cmds = [];
       for (let j = 0; j < group.commands.length; j++) {
         const cmd = byName[group.commands[j].name];
-        if (cmd) cmds.push(cmd);
+        if (cmd) cmds.push(presentCommand(cmd));
       }
       if (!cmds.length) continue;
-      items.push({ type: 'separator', label: group.label });
+      items.push({ type: 'separator', label: group.labelKey ? t(group.labelKey) : (group.label || '') });
       for (let k = 0; k < cmds.length; k++) items.push(cmds[k]);
     }
     return items;
@@ -112,6 +154,7 @@ export const ChatCommands = (() => {
     for (let j = 0; j < items.length; j++) {
       items[j].classList.toggle('active', j === cmdSelectedIndex);
     }
+    if (window.ChatDropdown.revealActiveItem) window.ChatDropdown.revealActiveItem();
   }
 
   function isOpen() {
@@ -200,7 +243,7 @@ export const ChatCommands = (() => {
     const anchorRect = anchor.getBoundingClientRect();
     const activePrefix = cmdActivePrefix;
     const filteredItems = cmdFiltered.slice();
-    const displayItems = isSlash ? buildSlashDropdownItems(filteredItems) : filteredItems;
+    const displayItems = isSlash ? buildSlashDropdownItems(filteredItems) : filteredItems.map(presentCommand);
     window.ChatDropdown.open({
       anchor,
       items: displayItems,
@@ -243,7 +286,7 @@ export const ChatCommands = (() => {
       applyTargetFn(value);
     } else if (targetInput) {
       let slashValue = value;
-      if (cmd.name === 'shell' || cmd.name === 'plan') slashValue = `${slashValue} `;
+      if (cmd.name === 'shell' || cmd.agent) slashValue = `${slashValue} `;
       if (!replaceSlashTriggerInTextarea(targetInput, slashValue)) {
         targetInput.value = slashValue;
         dispatchInput(targetInput);
@@ -258,12 +301,14 @@ export const ChatCommands = (() => {
     activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       cmdSelectedIndex = (cmdSelectedIndex + 1) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (window.ChatDropdown.suspendPointerHover) window.ChatDropdown.suspendPointerHover();
       cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFiltered.length) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
@@ -319,7 +364,7 @@ export const ChatCommands = (() => {
       return fetch(url, { signal: AbortSignal.timeout(ms) }).then((res) =>  res.json());
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { reject(new Error('请求超时')); }, ms);
+      const timer = setTimeout(() => { reject(new Error(t('cmd.timeout'))); }, ms);
       fetch(url)
         .then((res) =>  res.json())
         .then((body) => { clearTimeout(timer); resolve(body); })
@@ -330,14 +375,14 @@ export const ChatCommands = (() => {
   // Token 与记忆遥测共用一个弹层（reuseKey: usage），只切换标题和正文。
   const USAGE_VIEWS = {
     tokens: {
-      title: 'Token 消耗',
-      description: '按每次模型调用记账，与会话无关',
-      label: 'Token 消耗',
+      get title() { return t('cmd.tokenTitle'); },
+      get description() { return t('cmd.tokenDesc'); },
+      get label() { return t('cmd.tokenTitle'); },
     },
     telemetry: {
-      title: '记忆遥测',
-      description: '运行记录为最近 7 天，记忆库为当前存量',
-      label: '记忆遥测',
+      get title() { return t('cmd.memoryTitle'); },
+      get description() { return t('cmd.memoryDesc'); },
+      get label() { return t('cmd.memoryTitle'); },
     },
   };
 
@@ -373,7 +418,7 @@ export const ChatCommands = (() => {
 
   function renderUsageSwitch(active) {
     const keys = ['tokens', 'telemetry'];
-    let html = '<div class="modal-panel-switch" role="group" aria-label="统计内容">';
+    let html = `<div class="modal-panel-switch" role="group" aria-label="${escapeTokenStatsText(t('cmd.usageSwitch'))}">`;
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       const pressed = key === active ? 'true' : 'false';
@@ -403,12 +448,17 @@ export const ChatCommands = (() => {
       const avgMs = recallLogCount > 0 ? finiteNum(recallLog.avgMs) : finiteNum(proc.avgRecallMs);
       const selected = finiteNum(recallLog.totalSelected) || finiteNum(proc.totalMemoriesSelected);
       activity += panelRow(
-        '召回',
-        `LLM ${formatTokenCount(llmRate)}% · 关键词 ${formatTokenCount(keywordRate)}% · 平均 ${formatTokenCount(avgMs)}ms · 选中 ${formatTokenCount(selected)} 条`,
-        `${formatTokenCount(recallCount)} 次`,
+        t('cmd.recall'),
+        t('cmd.recallHint', {
+          llm: formatTokenCount(llmRate),
+          keyword: formatTokenCount(keywordRate),
+          ms: formatTokenCount(avgMs),
+          selected: formatTokenCount(selected),
+        }),
+        t('cmd.times', { n: formatTokenCount(recallCount) }),
       );
     } else {
-      activity += panelRow('召回', `最近 ${days} 天`, '暂无', true);
+      activity += panelRow(t('cmd.recall'), t('cmd.recentDays', { n: days }), t('cmd.none'), true);
     }
 
     const extractLogCount = finiteNum(extractLog.count);
@@ -418,32 +468,42 @@ export const ChatCommands = (() => {
       const cacheRate = Math.round(extractLogCount > 0 ? finiteNum(extractLog.cacheHitRate) : finiteNum(proc.cacheHitRate));
       const avgMs = extractLogCount > 0 ? finiteNum(extractLog.avgMs) : finiteNum(proc.avgExtractMs);
       const total = finiteNum(extractLog.totalMemories) || finiteNum(proc.totalMemoriesExtracted);
-      let hint = `cache 命中 ${formatTokenCount(cacheRate)}% · 平均 ${formatTokenCount(avgMs)}ms · 提取 ${formatTokenCount(total)} 条`;
-      if (skipCount > 0) hint += ` · 跳过 ${formatTokenCount(skipCount)}`;
-      activity += panelRow('提取', hint, `${formatTokenCount(extractCount)} 次`);
+      let hint = t('cmd.extractHint', {
+        cache: formatTokenCount(cacheRate),
+        ms: formatTokenCount(avgMs),
+        total: formatTokenCount(total),
+      });
+      if (skipCount > 0) hint += ` · ${t('cmd.skipped', { n: formatTokenCount(skipCount) })}`;
+      activity += panelRow(t('cmd.extract'), hint, t('cmd.times', { n: formatTokenCount(extractCount) }));
     } else if (skipCount > 0) {
-      activity += panelRow('提取', `跳过 ${formatTokenCount(skipCount)}`, '0 次');
+      activity += panelRow(t('cmd.extract'), t('cmd.skipped', { n: formatTokenCount(skipCount) }), t('cmd.times', { n: 0 }));
     } else {
-      activity += panelRow('提取', `最近 ${days} 天`, '暂无', true);
+      activity += panelRow(t('cmd.extract'), t('cmd.recentDays', { n: days }), t('cmd.none'), true);
     }
 
     const dreamCount = finiteNum(dreamLog.count) || finiteNum(proc.totalDreams);
     if (dreamCount > 0) {
       const evicted = finiteNum(dreamLog.totalEvicted);
-      let hint = `Dream · 修改 ${formatTokenCount(finiteNum(dreamLog.totalModified))} · 删除 ${formatTokenCount(finiteNum(dreamLog.totalDeleted))}`;
-      if (evicted > 0) hint += ` · 淘汰 ${formatTokenCount(evicted)}`;
-      hint += ` · 平均 ${formatTokenCount(finiteNum(dreamLog.avgMs))}ms`;
-      activity += panelRow('整合', hint, `${formatTokenCount(dreamCount)} 次`);
+      let hint = t('cmd.dreamHint', {
+        modified: formatTokenCount(finiteNum(dreamLog.totalModified)),
+        deleted: formatTokenCount(finiteNum(dreamLog.totalDeleted)),
+      });
+      if (evicted > 0) hint += ` · ${t('cmd.evicted', { n: formatTokenCount(evicted) })}`;
+      hint += ` · ${t('cmd.avgMs', { n: formatTokenCount(finiteNum(dreamLog.avgMs)) })}`;
+      activity += panelRow(t('cmd.dream'), hint, t('cmd.times', { n: formatTokenCount(dreamCount) }));
     } else {
-      activity += panelRow('整合', 'Dream', '暂无', true);
+      activity += panelRow(t('cmd.dream'), 'Dream', t('cmd.none'), true);
     }
 
     const capCount = finiteNum(capLog.count);
     if (capCount > 0) {
       activity += panelRow(
-        '条数淘汰',
-        `归档 ${formatTokenCount(finiteNum(capLog.totalFilesEvicted))} 条 · 平均 ${formatTokenCount(finiteNum(capLog.avgMs))}ms`,
-        `${formatTokenCount(capCount)} 次`,
+        t('cmd.cap'),
+        t('cmd.archiveHint', {
+          n: formatTokenCount(finiteNum(capLog.totalFilesEvicted)),
+          ms: formatTokenCount(finiteNum(capLog.avgMs)),
+        }),
+        t('cmd.times', { n: formatTokenCount(capCount) }),
       );
     }
 
@@ -454,15 +514,15 @@ export const ChatCommands = (() => {
       const typeNames = Object.keys(byType);
       const typeHint = typeNames.length
         ? typeNames.map((name) => `${name} ${formatTokenCount(finiteNum(byType[name]))}`).join(' · ')
-        : '当前存量';
-      storeHtml += panelRow('记忆库', typeHint, formatTokenCount(files));
+        : t('cmd.currentSet');
+      storeHtml += panelRow(t('cmd.library'), typeHint, formatTokenCount(files));
       storeHtml += panelRow(
-        '库龄',
-        `最老 ${formatAgeDays(store.maxAgeDays)} 天`,
-        `${formatAgeDays(store.avgAgeDays)} 天`,
+        t('cmd.age'),
+        t('cmd.oldest', { n: formatAgeDays(store.maxAgeDays) }),
+        t('cmd.ageDays', { n: formatAgeDays(store.avgAgeDays) }),
       );
     } else {
-      storeHtml += panelRow('记忆库', '尚未创建记忆文件', '空', true);
+      storeHtml += panelRow(t('cmd.library'), t('cmd.noFiles'), t('cmd.empty'), true);
     }
 
     return `<div class="modal-panel-card">${activity}</div><div class="modal-panel-card">${storeHtml}</div>`;
@@ -501,10 +561,10 @@ export const ChatCommands = (() => {
           publishUsage(panel, seq, 'tokens', renderTokenStatsWindows(body));
           return;
         }
-        publishUsageError(panel, seq, '统计失败：' + ((body && body.error) || '统计失败'));
+        publishUsageError(panel, seq, t('cmd.statsFailed', { message: (body && body.error) || t('cmd.statsFailedShort') }));
       })
       .catch((err) => {
-        publishUsageError(panel, seq, '统计失败：' + (err && err.message ? err.message : '网络错误'));
+        publishUsageError(panel, seq, t('cmd.statsFailed', { message: (err && err.message) ? err.message : t('cmd.network') }));
       });
   }
 
@@ -515,10 +575,10 @@ export const ChatCommands = (() => {
           publishUsage(panel, seq, 'telemetry', renderTelemetryReport(body));
           return;
         }
-        publishUsageError(panel, seq, '遥测报告获取失败：' + ((body && body.error) || '未知错误'));
+        publishUsageError(panel, seq, t('cmd.telemetryFailed', { message: (body && body.error) || t('common.unknownError') }));
       })
       .catch((err) => {
-        publishUsageError(panel, seq, '遥测报告获取失败：' + (err && err.message ? err.message : '网络错误'));
+        publishUsageError(panel, seq, t('cmd.telemetryFailed', { message: (err && err.message) ? err.message : t('cmd.network') }));
       });
   }
 
@@ -564,9 +624,9 @@ export const ChatCommands = (() => {
 
   function renderTokenStatsWindows(windows) {
     const rows = [
-      { key: 'day', label: '最近一天', hint: '24 小时' },
-      { key: 'week', label: '最近一周', hint: '7 天' },
-      { key: 'month', label: '最近一个月', hint: '30 天' },
+      { key: 'day', label: t('cmd.day'), hint: t('cmd.dayHint') },
+      { key: 'week', label: t('cmd.week'), hint: t('cmd.weekHint') },
+      { key: 'month', label: t('cmd.month'), hint: t('cmd.monthHint') },
     ];
     let html = '<div class="modal-panel-card">';
     for (let i = 0; i < rows.length; i++) {
@@ -586,7 +646,7 @@ export const ChatCommands = (() => {
         const modelUsage = byModel[name] && byModel[name].month ? byModel[name].month : {};
         const modelTotal = typeof modelUsage.totalTokens === 'number' ? modelUsage.totalTokens : 0;
         html +=
-          `<div class="modal-panel-row"><div class="modal-panel-row-meta"><span class="modal-panel-row-label">${escapeTokenStatsText(name)}</span><span class="modal-panel-row-hint">最近一个月</span></div><span class="modal-panel-row-value">${formatTokenCount(modelTotal)}</span></div>`;
+          `<div class="modal-panel-row"><div class="modal-panel-row-meta"><span class="modal-panel-row-label">${escapeTokenStatsText(name)}</span><span class="modal-panel-row-hint">${escapeTokenStatsText(t('cmd.month'))}</span></div><span class="modal-panel-row-value">${formatTokenCount(modelTotal)}</span></div>`;
       }
       html += '</div>';
     }
@@ -609,6 +669,9 @@ export const ChatCommands = (() => {
 
   return {
     init,
+    setAgentCommands,
+    refreshAgents,
+    getAgentCommands() { return agentCommands.slice(); },
     setAnchor,
     setInputAnchor,
     setRemoteMode,

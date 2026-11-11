@@ -294,6 +294,7 @@ describe('AgentSpawner 与真实子 Harness', () => {
       { id: 't', name: 'task', arguments: { description: 'long', prompt: 'LONG-TASK' } },
       {
         config: parentConfig(root, sessionsDir, {
+          loop: { maxRounds: 80, timeout: 10 * 60 * 1000 },
           compactionThreshold: 20,
           compactionTokenThreshold: 3000,
           compactionKeepRecent: 6,

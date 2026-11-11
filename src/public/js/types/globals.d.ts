@@ -5,13 +5,18 @@ interface IceDesktopApi {
   notifyTaskDone?: (payload: unknown) => void;
   onTaskDoneNotifyClick?: (handler: (sessionId: string) => void) => void;
   _iceTaskDoneNotifyClickBound?: boolean;
-  petPushState?: (snapshot: unknown) => void;
-  onPetForceVisible?: (handler: (visible: boolean) => void) => void;
-  petSetMousePassthrough?: (passthrough: boolean) => void;
-  setDesktopPetEnabled?: (enabled: boolean) => void;
   onScreenPingPaste?: (handler: (dataUrl: string) => void) => void;
   getScreenPing?: () => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
   setScreenPing?: (patch: { enabled?: boolean; cropWidth?: number; cropHeight?: number }) => Promise<{ supported: boolean; enabled: boolean; cropWidth: number; cropHeight: number }>;
+  windowControls?: boolean;
+  windowChrome?: 'overlay' | 'traffic-lights';
+  windowSetTitleBarOverlay?: (colors: { color: string; symbolColor: string }) => void;
+  windowMinimize?: () => void;
+  windowToggleMaximize?: () => void;
+  windowClose?: () => void;
+  windowGetChromeState?: () => Promise<{ maximized: boolean; focused: boolean }>;
+  onWindowMaximized?: (handler: (maximized: boolean) => void) => () => void;
+  onWindowFocus?: (handler: (focused: boolean) => void) => () => void;
   [key: string]: unknown;
 }
 
@@ -23,6 +28,7 @@ interface IceUiNotify {
 declare global {
   interface Window {
     iceDesktop?: IceDesktopApi;
+    WindowChrome?: { mount: () => void };
     UI?: IceUiNotify;
     AppIcon?: any;
     Notification?: any;
@@ -38,7 +44,6 @@ declare global {
     ConfigPage?: any;
     SessionPet?: any;
     SESSION_PET_DISPLAY_NAME?: string;
-    DesktopPetBridge?: any;
     ChatWebSocket?: any;
     ChatSession?: any;
     ChatSessionStore?: any;

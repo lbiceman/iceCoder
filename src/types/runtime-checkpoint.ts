@@ -476,6 +476,7 @@ function isVerificationRuntimeState(value: unknown): value is VerificationRuntim
   if (!isNonNegativeInteger(value.continuationCount)) return false;
   if (value.continuationScope !== undefined && !isNullableString(value.continuationScope)) return false;
   if (!isNullableString(value.blockingSignature)) return false;
+  if (value.continuedFailureKey !== undefined && !isNullableString(value.continuedFailureKey)) return false;
   if (!isVerificationLastResult(value.lastResult)) return false;
   if (
     !Array.isArray(value.commandProgress)

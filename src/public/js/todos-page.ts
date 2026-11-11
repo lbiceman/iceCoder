@@ -103,7 +103,7 @@ export const TodosPage = (() => {
         '</label>' +
         `<div class="todo-item-main">${text}${shot}</div>` +
         `<time class="todo-item-time">${escapeHtml(formatTime(todo.createdAt))}</time>` +
-        `<button type="button" class="skills-btn todo-item-delete" data-todo-delete="${escapeHtml(todo.id)}">${t('todos.remove')}</button>` +
+        `<button type="button" class="skills-btn skills-btn-danger todo-item-delete" data-todo-delete="${escapeHtml(todo.id)}">${t('todos.remove')}</button>` +
       '</li>'
     );
   }

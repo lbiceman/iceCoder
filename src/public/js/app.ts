@@ -22,6 +22,7 @@ import { t } from './i18n.ts';
     chat: { shell: 'desktop', root: null, mounted: false },
     settings: { shell: 'desktop', root: null, mounted: false },
     memory: { shell: 'desktop', root: null, mounted: false },
+    agents: { shell: 'desktop', root: null, mounted: false },
     skills: { shell: 'desktop', root: null, mounted: false },
     rules: { shell: 'desktop', root: null, mounted: false },
     tasks: { shell: 'desktop', root: null, mounted: false },
@@ -30,6 +31,7 @@ import { t } from './i18n.ts';
     work: { shell: 'mobile', root: null, mounted: false },
     workChat: { shell: 'mobile', root: null, mounted: false },
     mMemory: { shell: 'mobile', root: null, mounted: false },
+    mAgents: { shell: 'mobile', root: null, mounted: false },
     mSkills: { shell: 'mobile', root: null, mounted: false },
     mRules: { shell: 'mobile', root: null, mounted: false },
     mTasks: { shell: 'mobile', root: null, mounted: false },
@@ -51,6 +53,8 @@ import { t } from './i18n.ts';
     const main = document.createElement('div');
     main.className = 'app-main';
     app.appendChild(shell);
+    const caption = app.querySelector('.window-caption');
+    if (caption) app.insertBefore(caption, shell);
     shell.appendChild(main);
     main.appendChild(pageContainer);
     return shell;
@@ -232,6 +236,7 @@ import { t } from './i18n.ts';
       if (id) return { shell: 'mobile', page: 'workChat', sessionId: decodeURIComponent(id) };
     }
     if (path === '/m/memory') return { shell: 'mobile', page: 'mMemory' };
+    if (path === '/m/agents') return { shell: 'mobile', page: 'mAgents' };
     if (path === '/m/skills') return { shell: 'mobile', page: 'mSkills' };
     if (path === '/m/rules') return { shell: 'mobile', page: 'mRules' };
     if (path === '/m/tasks') return { shell: 'mobile', page: 'mTasks' };
@@ -246,6 +251,7 @@ import { t } from './i18n.ts';
 
   function lastMobileKnowledgePage() {
     const tab = lastKnowledgeTab();
+    if (tab === 'agents') return 'mAgents';
     if (tab === 'memory') return 'mMemory';
     if (tab === 'rules') return 'mRules';
     return 'mSkills';
@@ -258,6 +264,7 @@ import { t } from './i18n.ts';
     }
     if (page === 'work') return '/m/chat';
     if (page === 'mMemory') return '/m/memory';
+    if (page === 'mAgents') return '/m/agents';
     if (page === 'mSkills') return '/m/skills';
     if (page === 'mRules') return '/m/rules';
     if (page === 'mTasks') return '/m/tasks';
@@ -320,6 +327,7 @@ import { t } from './i18n.ts';
       }
       if (rest.startsWith('/work')) return { shell: 'mobile', page: 'work' };
       if (rest.startsWith('/memory')) return { shell: 'mobile', page: 'mMemory' };
+      if (rest.startsWith('/agents')) return { shell: 'mobile', page: 'mAgents' };
       if (rest.startsWith('/skills')) return { shell: 'mobile', page: 'mSkills' };
       if (rest.startsWith('/rules')) return { shell: 'mobile', page: 'mRules' };
       if (rest.startsWith('/todos')) return { shell: 'mobile', page: 'mTodos' };
@@ -333,6 +341,7 @@ import { t } from './i18n.ts';
     if (h.startsWith('#/config')) return { shell: 'desktop', page: 'settings' };
     if (h.startsWith('#/settings')) return { shell: 'desktop', page: 'settings' };
     if (h.startsWith('#/memory')) return { shell: 'desktop', page: 'memory' };
+    if (h.startsWith('#/agents')) return { shell: 'desktop', page: 'agents' };
     if (h.startsWith('#/skills')) return { shell: 'desktop', page: 'skills' };
     if (h.startsWith('#/rules')) return { shell: 'desktop', page: 'rules' };
     if (h.startsWith('#/knowledge')) return { shell: 'desktop', page: lastKnowledgeTab() };
@@ -353,6 +362,7 @@ import { t } from './i18n.ts';
     }
     if (page === 'work') return '#/m/work';
     if (page === 'mMemory') return '#/m/memory';
+    if (page === 'mAgents') return '#/m/agents';
     if (page === 'mSkills') return '#/m/skills';
     if (page === 'mRules') return '#/m/rules';
     if (page === 'mTasks') return '#/m/tasks';
@@ -400,6 +410,7 @@ import { t } from './i18n.ts';
     let newHash = '#/chat';
     if (page === 'settings') newHash = '#/settings';
     else if (page === 'memory') newHash = '#/memory';
+    else if (page === 'agents') newHash = '#/agents';
     else if (page === 'skills') newHash = '#/skills';
     else if (page === 'rules') newHash = '#/rules';
     else if (page === 'tasks') newHash = '#/tasks';
@@ -422,6 +433,15 @@ import { t } from './i18n.ts';
     ) {
       window.MemoryPage.destroy();
       pages.memory.mounted = false;
+    }
+    if (
+      prev === 'agents' &&
+      page !== 'agents' &&
+      window.AgentsPage &&
+      typeof window.AgentsPage.destroy === 'function'
+    ) {
+      window.AgentsPage.destroy();
+      pages.agents.mounted = false;
     }
     if (
       prev === 'skills' &&
@@ -492,6 +512,15 @@ import { t } from './i18n.ts';
     ) {
       window.MobileMemoryPage.destroy();
       pages.mMemory.mounted = false;
+    }
+    if (
+      prev === 'mAgents' &&
+      page !== 'mAgents' &&
+      window.MobileAgentsPage &&
+      typeof window.MobileAgentsPage.destroy === 'function'
+    ) {
+      window.MobileAgentsPage.destroy();
+      pages.mAgents.mounted = false;
     }
     if (
       prev === 'mSkills' &&
@@ -585,6 +614,8 @@ import { t } from './i18n.ts';
         if (settingsPage) settingsPage.render(root);
       } else if (page === 'memory' && window.MemoryPage) {
         window.MemoryPage.render(root);
+      } else if (page === 'agents' && window.AgentsPage) {
+        window.AgentsPage.render(root);
       } else if (page === 'skills' && window.SkillsPage) {
         window.SkillsPage.render(root);
       } else if (page === 'rules' && window.RulesPage) {
@@ -601,6 +632,8 @@ import { t } from './i18n.ts';
         window.MobileChatPage.render(root, sessionId);
       } else if (page === 'mMemory' && window.MobileMemoryPage) {
         window.MobileMemoryPage.render(root);
+      } else if (page === 'mAgents' && window.MobileAgentsPage) {
+        window.MobileAgentsPage.render(root);
       } else if (page === 'mSkills' && window.MobileSkillsPage) {
         window.MobileSkillsPage.render(root);
       } else if (page === 'mRules' && window.MobileRulesPage) {
@@ -623,6 +656,8 @@ import { t } from './i18n.ts';
     } else if (page === 'memory' && window.MemoryPage) {
       // memory 因 destroy 已重置内部状态，每次进入重新 render
       window.MemoryPage.render(root);
+    } else if (page === 'agents' && window.AgentsPage) {
+      window.AgentsPage.render(root);
     } else if (page === 'skills' && window.SkillsPage) {
       window.SkillsPage.render(root);
     } else if (page === 'rules' && window.RulesPage) {
@@ -645,6 +680,8 @@ import { t } from './i18n.ts';
       }
     } else if (page === 'mMemory' && window.MobileMemoryPage) {
       window.MobileMemoryPage.render(root);
+    } else if (page === 'mAgents' && window.MobileAgentsPage) {
+      window.MobileAgentsPage.render(root);
     } else if (page === 'mSkills' && window.MobileSkillsPage) {
       window.MobileSkillsPage.render(root);
     } else if (page === 'mRules' && window.MobileRulesPage) {

@@ -114,6 +114,9 @@ export function applyRuntimeDataEnvDefaults(): void {
   if (!process.env.ICE_SKILLS_DIR?.trim()) {
     process.env.ICE_SKILLS_DIR = path.join(dataDir, 'skills');
   }
+  if (!process.env.ICE_AGENTS_DIR?.trim()) {
+    process.env.ICE_AGENTS_DIR = path.join(dataDir, 'agents');
+  }
   if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
     process.env.ICE_MCP_CONFIG_PATH = path.join(
       usesUserDataRoot() ? dataDir : LOCAL_ICECODER_DIR,
@@ -204,6 +207,7 @@ export interface DataPaths {
   outputDir: string;
   userMemoryDir: string;
   skillsDir: string;
+  agentsDir: string;
   mcpConfigPath: string;
 }
 
@@ -237,6 +241,7 @@ export async function resolveDataPaths(): Promise<DataPaths> {
     outputDir: path.resolve(process.env.ICE_OUTPUT_DIR!),
     userMemoryDir: path.resolve(process.env.ICE_USER_MEMORY_DIR!),
     skillsDir: path.resolve(process.env.ICE_SKILLS_DIR!),
+    agentsDir: path.resolve(process.env.ICE_AGENTS_DIR!),
     mcpConfigPath: resolveMcpConfigPath(),
   };
 }
@@ -378,6 +383,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
   await fs.mkdir(paths.userMemoryDir, { recursive: true });
   await fs.mkdir(paths.skillsDir, { recursive: true });
+  await fs.mkdir(paths.agentsDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
   await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
   await fs.mkdir(getMcpCacheDir(), { recursive: true });
@@ -395,34 +401,40 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
 
   await fs.mkdir(path.join(paths.dataDir, 'runtime'), { recursive: true });
   await ensureDefaultSkillFiles(paths.skillsDir);
+  const { ensureDefaultPlanAgent } = await import('../agents/agent-store.js');
+  await ensureDefaultPlanAgent(paths.agentsDir);
 
   return isFirstRun;
 }
 
 const BUNDLED_SKILLS_DIR = 'skills';
-/** 安装包内唯一自带的技能模板（见 scripts/bundled-data-files.cjs） */
-const DEFAULT_SKILL_FILE = '创建技能.md';
+/** 安装包内自带的技能模板（见 scripts/bundled-data-files.cjs） */
+const DEFAULT_SKILL_FILES = ['创建技能.md', '创建Agent.md'] as const;
 
 /**
- * 若不存在则从包内写入 `{skillsDir}/创建技能.md`（全局安装 → ~/.iceCoder/skills/）。
+ * 若不存在则从包内写入默认技能（全局安装 → ~/.iceCoder/skills/）。
+ * 已有同名文件不覆盖。
  */
 export async function ensureDefaultSkillFiles(skillsDir: string): Promise<void> {
   await fs.mkdir(skillsDir, { recursive: true });
+  for (const filename of DEFAULT_SKILL_FILES) {
+    await ensureOneDefaultSkill(skillsDir, filename);
+  }
+}
 
-  const target = path.join(skillsDir, DEFAULT_SKILL_FILE);
+async function ensureOneDefaultSkill(skillsDir: string, filename: string): Promise<void> {
+  const target = path.join(skillsDir, filename);
   if (await exists(target)) return;
 
-  const bundled = resolvePackagedDataDir(path.join(BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE));
-  const localBundled = path.join(REPO_DATA_DIR, BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE);
+  const bundled = resolvePackagedDataDir(path.join(BUNDLED_SKILLS_DIR, filename));
+  const localBundled = path.join(REPO_DATA_DIR, BUNDLED_SKILLS_DIR, filename);
   let content: string | null = null;
   if (await exists(bundled)) {
     content = await fs.readFile(bundled, 'utf-8');
   } else if (await exists(localBundled)) {
     content = await fs.readFile(localBundled, 'utf-8');
   } else {
-    console.warn(
-      `[iceCoder] 未找到 ${DEFAULT_SKILL_FILE}，跳过默认技能初始化`,
-    );
+    console.warn(`[iceCoder] 未找到 ${filename}，跳过默认技能初始化`);
     return;
   }
 

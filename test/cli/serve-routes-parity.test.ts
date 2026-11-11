@@ -19,6 +19,7 @@ const REQUIRED_API_PREFIXES = [
   '/api/skills',
   '/api/user-rules',
   '/api/scheduled-tasks',
+  '/api/todos',
   '/api/mcp',
   '/api/workspace',
   '/api/screen-ping',

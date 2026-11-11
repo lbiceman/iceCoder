@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 模型名称解析（与 src/config/parse-model-names.ts 语义一致）。
  */
@@ -32,7 +33,7 @@ export const ModelNames = (() => {
 
   function providerDisplayLabel(provider) {
     const names = parseModelNames(provider && provider.modelName);
-    if (!names.length) return '未设置模型';
+    if (!names.length) return t('model.unset');
     if (names.length === 1) return names[0];
     return names.join(', ');
   }

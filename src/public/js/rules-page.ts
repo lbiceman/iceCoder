@@ -137,8 +137,8 @@ export const RulesPage = (() => {
     saveBtn.addEventListener('click', () => {
       const text = input.value.trim();
       if (!text) return;
-      if (editingId === 'new') request('POST', '/api/user-rules', { content: text }, '规则已添加', true);
-      else request('PUT', `/api/user-rules/${encodeURIComponent(editingId)}`, { content: text }, '规则已保存', true);
+      if (editingId === 'new') request('POST', '/api/user-rules', { content: text }, t('rules.added'), true);
+      else request('PUT', `/api/user-rules/${encodeURIComponent(editingId)}`, { content: text }, t('rules.saved'), true);
     });
     refresh();
     input.focus();
@@ -151,16 +151,16 @@ export const RulesPage = (() => {
       `<article class="rules-card${rule.enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(rule.id)}">` +
         '<div class="rules-card-head">' +
           `<span class="rules-card-index">#${index + 1}</span>` +
-          `<span class="rules-card-meta">${rule.content.trim().length} 字 · 约 ${estimateTokens(rule.content.trim())} tokens</span>` +
-          `<label class="config-default-switch rules-card-switch" title="${rule.enabled ? '已启用' : '已停用'}">` +
+          `<span class="rules-card-meta">~ ${estimateTokens(rule.content.trim())} tokens</span>` +
+          `<label class="config-default-switch rules-card-switch" title="${rule.enabled ? t('common.on') : t('common.off')}">` +
             `<input type="checkbox" data-action="toggle"${rule.enabled ? ' checked' : ''}${locked} />` +
             '<span class="config-default-switch-track" aria-hidden="true"></span>' +
           '</label>' +
         '</div>' +
         `<div class="rules-card-content">${escapeHtml(rule.content)}</div>` +
         '<div class="rules-card-actions">' +
-          `<button type="button" class="skills-btn" data-action="edit"${locked}>编辑</button>` +
-          `<button type="button" class="skills-btn skills-btn-danger" data-action="delete"${locked}>删除</button>` +
+          `<button type="button" class="skills-btn" data-action="edit"${locked}>${t('common.edit')}</button>` +
+          `<button type="button" class="skills-btn skills-btn-danger" data-action="delete"${locked}>${t('common.delete')}</button>` +
         '</div>' +
       '</article>'
     );
@@ -174,10 +174,10 @@ export const RulesPage = (() => {
     if (!listEl) return;
 
     const full = totalChars(enabledContents(rules)) >= limits.maxEnabledTotalChars;
-    if (countEl) countEl.textContent = `${rules.length} 条`;
+    if (countEl) countEl.textContent = t('rules.count', { n: rules.length });
     if (addBtn) {
       addBtn.disabled = busy || full || editingId !== null;
-      addBtn.title = full ? `启用规则已写满 ${limits.maxEnabledTotalChars} 字，可精简或停用部分规则后再新增` : '';
+      addBtn.title = full ? t('rules.full', { max: limits.maxEnabledTotalChars }) : '';
     }
     updateStats(enabledContents(rules));
 
@@ -189,7 +189,7 @@ export const RulesPage = (() => {
         : ruleCardHtml(rule, i);
     });
     if (!rules.length && editingId !== 'new') {
-      html = '<div class="skills-empty rules-empty">还没有规则。点击「新增规则」，写下希望每次对话都遵守的约定，例如「始终使用简体中文回复」。</div>';
+      html = `<div class="skills-empty rules-empty">${escapeHtml(t('rules.empty'))}</div>`;
     }
     listEl.innerHTML = html;
 
@@ -213,7 +213,7 @@ export const RulesPage = (() => {
     })
       .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
       .then((out) => {
-        if (!out.ok || !out.body.success) throw new Error((out.body && out.body.error) || '操作失败');
+        if (!out.ok || !out.body.success) throw new Error((out.body && out.body.error) || t('common.operationFailed'));
         applyResponse(out.body);
         if (closeEditor) {
           editingId = null;
@@ -222,7 +222,7 @@ export const RulesPage = (() => {
         if (successText && window.Notification) Notification.success(successText);
       })
       .catch((err) => {
-        if (window.Notification) Notification.error(err.message || '操作失败');
+        if (window.Notification) Notification.error(err.message || t('common.operationFailed'));
       })
       .finally(() => {
         busy = false;
@@ -245,14 +245,14 @@ export const RulesPage = (() => {
       renderList();
     } else if (action === 'delete') {
       window.Modal.confirm({
-        title: '删除规则',
-        message: '确定删除这条规则？此操作不可撤销。',
+        title: t('rules.deleteTitle'),
+        message: t('rules.deleteBody'),
         type: 'danger',
-        confirmText: '删除',
-        cancelText: '取消',
+        confirmText: t('common.delete'),
+        cancelText: t('common.cancel'),
         dangerConfirm: true,
       }).then((ok) => {
-        if (ok) request('DELETE', `/api/user-rules/${encodeURIComponent(id)}`, null, '规则已删除');
+        if (ok) request('DELETE', `/api/user-rules/${encodeURIComponent(id)}`, null, t('rules.deleted'));
       });
     }
   }
@@ -273,13 +273,13 @@ export const RulesPage = (() => {
     fetch('/api/user-rules', { signal: fetchAbort.signal })
       .then((res) => res.json())
       .then((body) => {
-        if (!body.success) throw new Error(body.error || '加载失败');
+        if (!body.success) throw new Error(body.error || t('common.loadFailed'));
         applyResponse(body);
         renderList();
       })
       .catch((err) => {
         if (err && err.name === 'AbortError') return;
-        if (listEl) listEl.innerHTML = `<div class="skills-empty">加载失败：${escapeHtml(err.message || '未知错误')}</div>`;
+        if (listEl) listEl.innerHTML = `<div class="skills-empty">${escapeHtml(t('rules.loadFailed', { message: err.message || t('common.unknownError') }))}</div>`;
       });
   }
 

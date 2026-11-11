@@ -64,6 +64,11 @@ describe('#20 file-deliverable goal needs a file noun or file name', () => {
   it('a file that was already written is not still pending', () => {
     expect(hasUnfulfilledFileDeliverableGoal('整理成 md 文档放到桌面', ['notes.md'], 'docs')).toBe(false);
   });
+
+  it('a read-only investigation that mentions files is not a missing deliverable', () => {
+    const goal = 'Read-only investigation. Do NOT modify any file. Note the rewriting of input files.';
+    expect(hasUnfulfilledFileDeliverableGoal(goal, [], 'edit')).toBe(false);
+  });
 });
 
 describe('#21 post-compaction amnesia detection', () => {

@@ -88,7 +88,7 @@ export const ModelConfigPanel = (() => {
     if (!prov) return t('model.newProvider');
     if (window.ModelNames && typeof window.ModelNames.providerDisplayLabel === 'function') {
       const label = window.ModelNames.providerDisplayLabel(prov);
-      if (!label || label === '未设置模型') return t('model.unset');
+      if (!label || label === '未设置模型' || label === t('model.unset')) return t('model.unset');
       return label;
     }
     const name = (prov.modelName || '').trim();
@@ -709,7 +709,7 @@ export const ModelConfigPanel = (() => {
 
     saveConfig(data, (err, result) => {
       if (err) {
-        Notification.error(t('common.saveFailed') + '：' + err.message);
+        Notification.error(t('model.saveFailedDetail', { message: err.message }));
       } else {
         Notification.success(t('model.saved'));
         if (result && result.setupComplete && window.AppRouter && window.AppRouter.clearSetupMode) {

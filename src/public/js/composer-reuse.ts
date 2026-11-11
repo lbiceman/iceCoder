@@ -19,7 +19,7 @@ export interface ComposerReusePayload {
 
 const FILE_ID_RE = /^\[file:([a-f0-9-]+)\]\s*(.*)$/i;
 const FILE_PLAIN_RE = /^\[file\]\s+(.+)$/i;
-const IMAGE_PLACEHOLDER = '(图片)';
+const IMAGE_PLACEHOLDERS = ['(图片)', '(Image)'];
 
 function emptyPayload(): ComposerReusePayload {
   return { text: '', skills: [], fileRefs: [], images: [], uploadedFiles: [] };
@@ -156,11 +156,12 @@ export function buildComposerReusePayload(msg: {
   }
 
   let text = kept.join('\n').trim();
-  if (text === IMAGE_PLACEHOLDER) text = '';
+  if (IMAGE_PLACEHOLDERS.indexOf(text) >= 0) text = '';
 
   if (msg.alsoNote) text = prefixCommand(text, '/also');
   else if (msg.shellCommand) text = prefixCommand(text, msg.shellCommand);
   else if (msg.planCommand) text = prefixCommand(text, msg.planCommand);
+  else if (msg.agentCommand) text = prefixCommand(text, msg.agentCommand);
   else if (msg.openCommand) text = prefixCommand(text, msg.openCommand);
 
   return { text, skills, fileRefs, images, uploadedFiles };

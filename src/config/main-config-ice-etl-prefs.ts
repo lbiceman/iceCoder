@@ -13,7 +13,6 @@ export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   sidebarWidth: 256,
   taskDoneNotification: false,
   panelAutoCollapse: false,
-  showDesktopPet: true,
 };
 
 const PANEL_WIDTH_MIN = 240;
@@ -43,9 +42,6 @@ export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {
   }
   if (typeof input.panelAutoCollapse === 'boolean') {
     out.panelAutoCollapse = input.panelAutoCollapse;
-  }
-  if (typeof input.showDesktopPet === 'boolean') {
-    out.showDesktopPet = input.showDesktopPet;
   }
   out.panelWidth = clampWidth(input.panelWidth, DEFAULT_ICE_ETL_PREFS.panelWidth, PANEL_WIDTH_MIN, PANEL_WIDTH_MAX);
   out.sidebarWidth = clampWidth(input.sidebarWidth, DEFAULT_ICE_ETL_PREFS.sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
@@ -81,9 +77,6 @@ export function validateIceEtlPrefsPatch(patch: Record<string, unknown>): string
   }
   if (patch.panelAutoCollapse !== undefined && typeof patch.panelAutoCollapse !== 'boolean') {
     return 'panelAutoCollapse 须为 boolean';
-  }
-  if (patch.showDesktopPet !== undefined && typeof patch.showDesktopPet !== 'boolean') {
-    return 'showDesktopPet 须为 boolean';
   }
   return null;
 }

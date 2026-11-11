@@ -1,0 +1,123 @@
+/* 桌面端顶栏：紧挨在 .app-shell 上面，高 30px。只有这条能拖。 */
+
+html.ice-window-chrome,
+html.ice-window-chrome body {
+  -webkit-app-region: no-drag;
+}
+
+html.ice-window-chrome .window-caption {
+  flex: 0 0 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 14px;
+  background: var(--surface-page);
+  color: var(--text-primary);
+  position: relative;
+  z-index: 100;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-app-region: drag;
+}
+
+html.ice-window-chrome .window-caption-controls,
+html.ice-window-chrome .window-caption-btn {
+  -webkit-app-region: no-drag;
+}
+
+html.ice-window-chrome .window-caption-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 30px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html.ice-window-chrome.ice-window-native-controls .window-caption {
+  padding-left: 78px;
+}
+
+/* Windows / Linux：系统按钮盖在右侧，拖拽区停在按钮左边。 */
+html.ice-window-chrome.ice-window-overlay .window-caption {
+  -webkit-app-region: no-drag;
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+}
+
+html.ice-window-chrome.ice-window-overlay .window-caption::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: env(titlebar-area-x, 0px);
+  width: env(titlebar-area-width, 100%);
+  -webkit-app-region: drag;
+}
+
+html.ice-window-chrome.ice-window-overlay .window-caption-title {
+  position: relative;
+  z-index: 1;
+}
+
+html.ice-window-chrome .window-caption-controls {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 30px;
+}
+
+html.ice-window-chrome .window-caption-btn {
+  width: 46px;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+html.ice-window-chrome .window-caption-btn svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+html.ice-window-chrome .window-caption-glyph {
+  display: inline-flex;
+}
+
+html.ice-window-chrome .window-caption-glyph.is-restore,
+html.ice-window-chrome.is-window-maximized .window-caption-glyph.is-max {
+  display: none;
+}
+
+html.ice-window-chrome.is-window-maximized .window-caption-glyph.is-restore {
+  display: inline-flex;
+}
+
+html.ice-window-chrome .window-caption-btn:hover {
+  background: var(--bg-hover);
+}
+
+html.ice-window-chrome .window-caption-btn.window-caption-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+html.ice-window-chrome[data-shell="mobile"] .mobile-shell {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}

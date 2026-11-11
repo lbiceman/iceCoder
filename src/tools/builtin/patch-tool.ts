@@ -74,17 +74,28 @@ function parseUnifiedDiff(patch: string): Hunk[] {
   return hunks;
 }
 
+interface FailedHunk {
+  index: number;
+  oldStart: number;
+  oldLines: string[];
+}
+
 /**
  * 将 hunks 应用到文件内容。
  * 支持模糊匹配：如果精确行号不匹配，会在附近搜索上下文。
  */
-function applyHunks(originalLines: string[], hunks: Hunk[]): { lines: string[]; applied: number; failed: number } {
+function applyHunks(originalLines: string[], hunks: Hunk[]): {
+  lines: string[];
+  applied: number;
+  failures: FailedHunk[];
+} {
   let result = [...originalLines];
   let offset = 0; // 累计行偏移
   let applied = 0;
-  let failed = 0;
+  const failures: FailedHunk[] = [];
 
-  for (const hunk of hunks) {
+  for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex++) {
+    const hunk = hunks[hunkIndex]!;
     const targetLine = hunk.oldStart - 1 + offset; // 0-based
 
     // 提取 hunk 中的旧行（context + delete）
@@ -107,7 +118,7 @@ function applyHunks(originalLines: string[], hunks: Hunk[]): { lines: string[]; 
     }
 
     if (matchPos === -1) {
-      failed++;
+      failures.push({ index: hunkIndex + 1, oldStart: hunk.oldStart, oldLines });
       continue;
     }
 
@@ -122,7 +133,37 @@ function applyHunks(originalLines: string[], hunks: Hunk[]): { lines: string[]; 
     applied++;
   }
 
-  return { lines: result, applied, failed };
+  return { lines: result, applied, failures };
+}
+
+function clipLines(lines: string[], maxLines: number, maxChars: number): string {
+  const clipped = lines.slice(0, maxLines);
+  let text = clipped.join('\n');
+  if (lines.length > maxLines) text += '\n…';
+  if (text.length > maxChars) text = `${text.slice(0, maxChars)}\n…`;
+  return text;
+}
+
+function fileWindow(lines: string[], startLine: number): string {
+  const start = Math.max(0, startLine - 4);
+  const window = lines.slice(start, start + 8);
+  return window.map((line, index) => `${start + index + 1}|${line}`).join('\n');
+}
+
+/** 把没对上的旧上下文和文件里附近的原文交回模型。 */
+function formatUnmatchedHunks(failures: FailedHunk[], originalLines: string[]): string {
+  const blocks = failures.slice(0, 3).map((failure) => {
+    const expected = clipLines(failure.oldLines, 12, 1_200);
+    const nearby = fileWindow(originalLines, failure.oldStart);
+    return [
+      `hunk ${failure.index} 期望从第 ${failure.oldStart} 行开始，未匹配的上下文：`,
+      expected || '(空)',
+      '文件中该位置附近的原文：',
+      nearby || '(文件更短)',
+    ].join('\n');
+  });
+  const extra = failures.length > 3 ? `\n另有 ${failures.length - 3} 个 hunk 未匹配。` : '';
+  return `未匹配的上下文：\n${blocks.join('\n\n')}${extra}`;
 }
 
 /**
@@ -192,13 +233,16 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
           return { success: false, output: '', error: '未能解析出有效的 diff hunk。请确保补丁格式正确（包含 @@ 行号标记）。' };
         }
 
-        const { lines, applied, failed } = applyHunks(originalLines, hunks);
+        const { lines, applied, failures } = applyHunks(originalLines, hunks);
 
         if (applied === 0) {
           return {
             success: false,
             output: '',
-            error: `所有 ${hunks.length} 个 hunk 均匹配失败。文件内容可能已变更。`,
+            error: [
+              `所有 ${hunks.length} 个 hunk 均匹配失败。文件内容可能已变更。`,
+              formatUnmatchedHunks(failures, originalLines),
+            ].join('\n'),
           };
         }
 
@@ -225,8 +269,8 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
         const status = dryRun ? '[预览模式] ' : '';
         let summary = `${status}补丁已应用到 ${args.path}\n`;
         summary += `  成功: ${applied}/${hunks.length} 个 hunk`;
-        if (failed > 0) {
-          summary += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
+        if (failures.length > 0) {
+          summary += `\n  失败: ${failures.length} 个 hunk（上下文不匹配）\n${formatUnmatchedHunks(failures, originalLines)}`;
         }
         if (!dryRun) summary += formatMemoryWritePathNote(destPath);
 

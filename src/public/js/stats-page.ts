@@ -55,6 +55,8 @@ export const StatsPage = (() => {
   let resizeTimer = null;
   let lastChartW = -1;
   let lastChartH = -1;
+  /** 辅助数据（记忆遥测）请求在飞行中：此时不要用旧数据重绘，否则骨架会被覆盖成上一范围的图。 */
+  let auxLoading = false;
 
   function destroy() {
     if (abortCtrl) {
@@ -266,11 +268,13 @@ export const StatsPage = (() => {
       .then((body) => {
         if (ctrl !== auxAbort) return;
         memorySummary = body;
+        auxLoading = false;
         paintAux();
       });
   }
 
   function paintAuxLoading() {
+    auxLoading = true;
     const memoryEl = mainEl && mainEl.querySelector('[data-role="memory-metrics"]');
     if (memoryEl) memoryEl.innerHTML = skelMetrics();
     paintChartSkeleton(mainEl && mainEl.querySelector('[data-chart="memory"]'));
@@ -316,7 +320,7 @@ export const StatsPage = (() => {
   }
 
   function paintAuxCharts() {
-    if (!mainEl) return;
+    if (!mainEl || auxLoading) return;
     paintMemoryChart(currentRange(), chartColors());
   }
 
@@ -386,9 +390,10 @@ export const StatsPage = (() => {
     return memColors[idx % memColors.length] || memColors[0];
   }
 
-  function auxMetric(label, value, sub) {
+  function auxMetric(label, value, sub, role) {
+    const roleAttr = role ? ` data-role="${role}"` : '';
     return (
-      `<div class="stats-aux-metric"><div class="stats-aux-metric-label">${escapeHtml(label)}</div><div class="stats-aux-metric-value">${escapeHtml(value)}</div><div class="stats-aux-metric-sub">${escapeHtml(sub)}</div></div>`
+      `<div class="stats-aux-metric"${roleAttr}><div class="stats-aux-metric-label">${escapeHtml(label)}</div><div class="stats-aux-metric-value">${escapeHtml(value)}</div><div class="stats-aux-metric-sub">${escapeHtml(sub)}</div></div>`
     );
   }
 
@@ -465,11 +470,42 @@ export const StatsPage = (() => {
     const subShare = total > 0 ? Math.round((subAgent / total) * 100) : 0;
     const memoryShare = total > 0 ? Math.max(0, 100 - chatShare - subShare) : 0;
     const turns = kinds.chat.turns + kinds.subAgent.turns + kinds.memory.turns;
+    const cache = promptCacheHit(buckets);
     panel.innerHTML =
       auxMetric(t('stats.session'), formatTokenCount(chat), `${chatShare}%`) +
       auxMetric(t('stats.subAgent'), formatTokenCount(subAgent), `${subShare}%`) +
       auxMetric(t('stats.memory'), formatTokenCount(memory), `${memoryShare}%`) +
-      auxMetric(t('stats.requests'), formatTokenCount(turns), t('stats.times'));
+      auxMetric(t('stats.requests'), formatTokenCount(turns), t('stats.times')) +
+      auxMetric(
+        t('stats.cacheHit'),
+        cache ? `${cache.pct}%` : '—',
+        cache && cache.read > 0 ? formatTokenCount(cache.read) : '',
+        'cache-hit',
+      );
+  }
+
+  /** 与 token-usage-stats.promptCacheHitRate 同一公式，按当前时间范围的桶汇总。 */
+  function promptCacheHit(buckets) {
+    let read = 0;
+    let miss = 0;
+    let creation = 0;
+    let input = 0;
+    let hasMiss = false;
+    for (let i = 0; i < buckets.length; i++) {
+      const bucket = buckets[i] || {};
+      read += num(bucket.cacheReadTokens);
+      creation += num(bucket.cacheCreationTokens);
+      input += num(bucket.inputTokens);
+      if (typeof bucket.cacheMissTokens === 'number') {
+        hasMiss = true;
+        miss += num(bucket.cacheMissTokens);
+      }
+    }
+    if (read <= 0 && miss <= 0 && creation <= 0) return null;
+    const uncached = Math.max(0, input - read - creation);
+    const denom = hasMiss ? read + miss : read + creation + uncached;
+    if (denom <= 0) return null;
+    return { pct: Math.round((read / denom) * 100), read };
   }
 
   function buildTokenSeries(buckets, colors) {

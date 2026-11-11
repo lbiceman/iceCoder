@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { t } from './i18n.ts';
 /**
  * 子 Agent 抽屉：
  * - openCard(agentId)：移动端点卡片标题后，以底部抽屉展示活动与结果
@@ -48,7 +49,7 @@ export const ChatAgentDrawer = (() => {
     header.appendChild(el('span', 'agent-drawer__title'));
     const closeBtn = el('button', 'agent-drawer__close', '✕');
     closeBtn.type = 'button';
-    closeBtn.setAttribute('aria-label', '关闭');
+    closeBtn.setAttribute('aria-label', t('agent.close'));
     closeBtn.addEventListener('click', close);
     header.appendChild(closeBtn);
     const meta = el('div', 'agent-drawer__meta');
@@ -113,7 +114,7 @@ export const ChatAgentDrawer = (() => {
       .catch((err) => {
         if (current.agentId !== agentId) return;
         current.loading = false;
-        current.error = err && err.message ? err.message : '加载失败';
+        current.error = err && err.message ? err.message : t('common.loadFailed');
         render();
       });
     render();
@@ -125,31 +126,33 @@ export const ChatAgentDrawer = (() => {
     const state = C && C.getState(current.agentId);
     if (!state || !state.view) return;
     const view = state.view;
-    root.querySelector('.agent-drawer__type').textContent = view.type || 'general';
+    root.querySelector('.agent-drawer__type').textContent = (C && C.typeLabel) ? C.typeLabel(view.type) : (view.type || 'general');
     root.querySelector('.agent-drawer__title').textContent = view.description || '';
     const meta = root.querySelector('.agent-drawer__meta');
     meta.innerHTML = '';
     meta.appendChild(el('span', '', C.headMetaParts(view).join(' · ')));
-    if (view.leaseRejects > 0) meta.appendChild(el('span', 'agent-card__lease', `${view.leaseRejects} 次写入被拦截`));
+    if (view.leaseRejects > 0) meta.appendChild(el('span', 'agent-card__lease', t('agent.lease', { n: view.leaseRejects })));
     if (!C.isTerminal(view)) {
-      const stop = el('button', 'agent-card__stop', '■ 停止');
+      const stop = el('button', 'agent-card__stop', t('agent.stop'));
       stop.type = 'button';
       stop.addEventListener('click', () => C.requestStop(view.agentId, stop));
       meta.appendChild(stop);
     }
 
     const body = root.querySelector('.agent-drawer__body');
+    const bodyScroll = body && typeof body.scrollTop === 'number' ? body.scrollTop : 0;
     body.innerHTML = '';
     if (current.mode === 'card') {
       renderCardBody(body, state);
     } else {
       renderSessionBody(body, state);
     }
+    if (bodyScroll > 0) body.scrollTop = bodyScroll;
   }
 
   function renderRows(parent, rows) {
     if (!rows.length) {
-      parent.appendChild(el('div', 'agent-card__muted', '还没有工具调用'));
+      parent.appendChild(el('div', 'agent-card__muted', t('agent.noTools')));
       return;
     }
     const list = el('div', 'agent-drawer__rows');
@@ -172,7 +175,7 @@ export const ChatAgentDrawer = (() => {
 
   function renderCardBody(body, state) {
     const C = cards();
-    body.appendChild(el('div', 'agent-card__section-title', `工具轨迹（${state.rows.length}）`));
+    body.appendChild(el('div', 'agent-card__section-title', t('agent.trace', { n: state.rows.length })));
     renderRows(body, state.rows);
     if (!C.isTerminal(state.view)) {
       renderLiveStream(body, state);
@@ -181,7 +184,7 @@ export const ChatAgentDrawer = (() => {
     const result = el('div', 'agent-card__result');
     C.fillResult(result, state, { withOpenSession: false });
     body.appendChild(result);
-    const open = el('button', 'agent-card__open', '打开子会话');
+    const open = el('button', 'agent-card__open', t('agent.openSession'));
     open.type = 'button';
     open.addEventListener('click', () => openSession(state.agentId));
     body.appendChild(open);
@@ -194,7 +197,7 @@ export const ChatAgentDrawer = (() => {
     for (let i = 0; i < content.length; i++) {
       const block = content[i];
       if (block && block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
-      else if (block && block.type === 'image') parts.push('[图片]');
+      else if (block && block.type === 'image') parts.push(t('agent.image'));
     }
     return parts.join('\n');
   }
@@ -216,28 +219,28 @@ export const ChatAgentDrawer = (() => {
     const detail = state.detail;
     if (detail && detail.prompt) {
       const task = el('details', 'agent-drawer__prompt');
-      task.appendChild(el('summary', '', '任务说明'));
+      task.appendChild(el('summary', '', t('agent.brief')));
       task.appendChild(el('div', 'agent-drawer__text', detail.prompt));
       body.appendChild(task);
     }
 
     if (!C.isTerminal(state.view)) {
-      body.appendChild(el('div', 'agent-card__muted', '子 Agent 运行中，完整对话在结束后可查看。以下为实时工具轨迹：'));
+      body.appendChild(el('div', 'agent-card__muted', t('agent.live')));
       renderRows(body, state.rows);
       renderLiveStream(body, state);
       return;
     }
     if (current.loading) {
-      body.appendChild(el('div', 'agent-card__muted', '正在加载子会话…'));
+      body.appendChild(el('div', 'agent-card__muted', t('agent.loading')));
       return;
     }
     if (current.error) {
-      body.appendChild(el('div', 'agent-card__error', `子会话加载失败：${current.error}`));
+      body.appendChild(el('div', 'agent-card__error', t('agent.loadFailed', { message: current.error })));
       return;
     }
     const messages = current.messages || [];
     if (!messages.length) {
-      body.appendChild(el('div', 'agent-card__muted', '没有找到子会话记录'));
+      body.appendChild(el('div', 'agent-card__muted', t('agent.missing')));
       return;
     }
     const list = el('div', 'agent-drawer__messages');
@@ -246,7 +249,7 @@ export const ChatAgentDrawer = (() => {
       if (!m || m.role === 'system') continue;
       if (m.role === 'user') {
         const item = el('div', 'agent-drawer__msg is-user');
-        item.appendChild(el('div', 'agent-drawer__role', '任务'));
+        item.appendChild(el('div', 'agent-drawer__role', t('agent.task')));
         item.appendChild(el('div', 'agent-drawer__text', textOf(m.content)));
         list.appendChild(item);
       } else if (m.role === 'assistant') {
@@ -254,7 +257,7 @@ export const ChatAgentDrawer = (() => {
         const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
         if (!text.trim() && !calls.length) continue;
         const item = el('div', 'agent-drawer__msg is-assistant');
-        item.appendChild(el('div', 'agent-drawer__role', '子 Agent'));
+        item.appendChild(el('div', 'agent-drawer__role', t('agent.role')));
         if (text.trim()) item.appendChild(el('div', 'agent-drawer__text', text));
         for (let c = 0; c < calls.length; c++) {
           const call = el('div', 'agent-drawer__call');
@@ -266,9 +269,11 @@ export const ChatAgentDrawer = (() => {
       } else if (m.role === 'tool') {
         const out = textOf(m.content);
         const item = el('details', 'agent-drawer__msg is-tool');
-        item.appendChild(el('summary', '', `工具结果 · ${out.length} 字符`));
+        item.appendChild(el('summary', '', t('agent.result', { n: out.length })));
         item.appendChild(el('pre', 'agent-drawer__tool-output',
-          out.length > TOOL_OUTPUT_PREVIEW_CHARS ? `${out.slice(0, TOOL_OUTPUT_PREVIEW_CHARS)}\n…（已截断）` : out));
+          out.length > TOOL_OUTPUT_PREVIEW_CHARS
+            ? t('agent.truncated', { text: out.slice(0, TOOL_OUTPUT_PREVIEW_CHARS) })
+            : out));
         list.appendChild(item);
       }
     }
