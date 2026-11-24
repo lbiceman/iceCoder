@@ -59,6 +59,19 @@ declare global {
     ComposerReuse?: any;
     ChatQR?: any;
     ChatPetBridge?: any;
+    TaskStopNotice?: {
+      describe: (input: {
+        stopReason?: string;
+        completionStatus?: string;
+        completionReason?: string;
+      }) => { summary: string; line: string } | null;
+      background: (input: {
+        phase?: string;
+        stopReason?: string;
+        completionStatus?: string;
+        completionReason?: string;
+      }) => { success: boolean; summary: string } | null;
+    };
     EtlShellDock?: any;
     EtlChronicle?: any;
     ChatExecutionPlan?: any;

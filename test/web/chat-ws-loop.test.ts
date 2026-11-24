@@ -238,6 +238,59 @@ describe('chat-ws-loop', () => {
     expect(phases.filter((p) => p === 'done')).toHaveLength(1);
     expect(phases[phases.length - 1]).toBe('done');
     expect(phases.includes('running')).toBe(true);
+    expect(phases.includes('error')).toBe(false);
+  });
+
+  it('验收命令失败仍接力队列，但先发布 error 而不是 done', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(ws);
+    vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+      if (input.message === 'first') {
+        input.onStopped?.({
+          stopReason: 'model_done',
+          completionStatus: 'failed',
+          completionReason: 'verification_failed',
+        });
+        return 'model_done';
+      }
+      input.onStopped?.({
+        stopReason: 'model_done',
+        completionStatus: 'completed',
+        completionReason: 'verification_passed',
+      });
+      return 'model_done';
+    });
+    await getTaskQueueManager(getSessionsDir()).enqueue(sid, {
+      text: 'second',
+      source: 'explicit',
+    });
+    await runSessionMessageLoop(dummyDeps, sid, ws, {
+      content: 'first',
+      images: [],
+      referencePaths: [],
+      source: 'implicit',
+      ws,
+    });
+    expect(handleChatMessage).toHaveBeenCalledTimes(2);
+    expect(await getTaskQueueManager(getSessionsDir()).list(sid)).toHaveLength(0);
+    const runStates = ws.sent.filter((m) => (m as { type?: string }).type === 'session_run_state') as Array<{
+      phase: string;
+      stopReason?: string;
+      completionReason?: string;
+    }>;
+    const errorState = runStates.find((row) => row.phase === 'error');
+    expect(errorState).toMatchObject({
+      phase: 'error',
+      stopReason: 'model_done',
+      completionReason: 'verification_failed',
+    });
+    expect(runStates[runStates.length - 1]?.phase).toBe('done');
+    const errorAt = runStates.findIndex((row) => row.phase === 'error');
+    const lastRunning = runStates.map((row) => row.phase).lastIndexOf('running');
+    expect(errorAt).toBeGreaterThanOrEqual(0);
+    expect(lastRunning).toBeGreaterThan(errorAt);
   });
 
   it('非 model_done 停止循环并保留剩余队列', async () => {

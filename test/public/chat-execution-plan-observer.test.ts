@@ -1290,6 +1290,43 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('下边执行流和本章用分段切换，不同时挤在一页', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate((plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setPlan(plan);
+      const flowPage = document.querySelector('#etl-flow-page');
+      const scenePage = document.querySelector('#etl-chapter-scene');
+      const sceneTab = document.querySelector('#etl-flow-tab-scene') as HTMLButtonElement | null;
+      const flowTab = document.querySelector('#etl-flow-tab-flow') as HTMLButtonElement | null;
+      const before = {
+        flow: flowPage?.classList.contains('is-active') ?? false,
+        scene: scenePage?.classList.contains('is-active') ?? false,
+      };
+      sceneTab?.click();
+      const onScene = {
+        flow: flowPage?.classList.contains('is-active') ?? false,
+        scene: scenePage?.classList.contains('is-active') ?? false,
+      };
+      flowTab?.click();
+      const back = {
+        flow: flowPage?.classList.contains('is-active') ?? false,
+        scene: scenePage?.classList.contains('is-active') ?? false,
+      };
+      sceneTab?.click();
+      const timeline = document.querySelector('#etl-round-timeline');
+      const keptInFlowPage = !!(flowPage && timeline && flowPage.contains(timeline));
+      const sceneOnly = document.querySelector('#etl-panel-flow')?.classList.contains('is-showing-scene') ?? false;
+      return { before, onScene, back, keptInFlowPage, sceneOnly };
+    }, makePlan());
+    expect(result.before).toEqual({ flow: true, scene: false });
+    expect(result.onScene).toEqual({ flow: false, scene: true });
+    expect(result.back).toEqual({ flow: true, scene: false });
+    expect(result.keptInFlowPage).toBe(true);
+    expect(result.sceneOnly).toBe(true);
+    await page.close();
+  });
+
   it('刷新后工作台无 Tab，检查点与执行流同屏', async () => {
     const page = await loadPanel();
     const layout = await page.evaluate((plan) => {

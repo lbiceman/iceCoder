@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { taskStopNoticeApi } from '../../src/harness/task-stop-notice.ts';
 import { classicWindowSource } from './classic-window-source.ts';
 
 
@@ -57,6 +58,7 @@ function loadBridge(options: LoadOptions = {}): Harness {
   sandboxWindow.EtlPrefs = {
     get: () => ({ taskDoneNotification: options.taskDoneNotification ?? true }),
   };
+  sandboxWindow.TaskStopNotice = taskStopNoticeApi;
   if (options.hasIceDesktop !== false) {
     sandboxWindow.iceDesktop = {
       notifyTaskDone: (p: NotifyPayload) => { notifyCalls.push(p); },
@@ -119,6 +121,61 @@ describe('chat-pet-bridge maybeNotifyTaskDone 行为', () => {
     const summary = h.notifyCalls[0].summary;
     expect(h.notifyCalls[0].summary.endsWith('…')).toBe(true);
     expect(h.notifyCalls[0].summary.length).toBe(31);
+  });
+
+  it('熔断 → 失败通知，冰豆进入 error', () => {
+    const h = loadBridge({ taskDoneNotification: true, hasIceDesktop: true, hasFocus: false });
+    h.bridge.applyHarnessStepToPet({ type: 'tool_call', toolName: 'run_command' }, false, true);
+    h.bridge.applyHarnessStepToPet({
+      type: 'final',
+      stopReason: 'circuit_breaker',
+      completionStatus: 'failed',
+      completionReason: 'circuit_breaker',
+    }, false, false);
+    expect(h.notifyCalls).toEqual([{ success: false, summary: '连续工具失败，已熔断' }]);
+    expect(h.petStates[h.petStates.length - 1]).toBe('error');
+  });
+
+  it('轮次用尽 → 失败通知带停因', () => {
+    const h = loadBridge({ taskDoneNotification: true, hasIceDesktop: true, hasFocus: false });
+    h.bridge.applyHarnessStepToPet({
+      type: 'final',
+      stopReason: 'max_rounds',
+      completionStatus: 'interrupted',
+      completionReason: 'max_rounds',
+    }, false, false);
+    expect(h.notifyCalls).toEqual([{ success: false, summary: '轮次已用尽' }]);
+  });
+
+  it('验收命令失败 → 失败通知，不报完成', () => {
+    const h = loadBridge({ taskDoneNotification: true, hasIceDesktop: true, hasFocus: false });
+    h.bridge.setLastUserPrompt('跑一下测试');
+    h.bridge.applyHarnessStepToPet({ type: 'tool_call', toolName: 'run_command' }, false, true);
+    h.bridge.applyHarnessStepToPet({
+      type: 'final',
+      stopReason: 'model_done',
+      completionStatus: 'failed',
+      completionReason: 'verification_failed',
+    }, false, false);
+    expect(h.notifyCalls).toEqual([{ success: false, summary: '验收命令失败' }]);
+    expect(h.petStates).not.toContain('clap');
+  });
+
+  it('失败通知同样遵守开关和前台不打扰', () => {
+    const off = loadBridge({ taskDoneNotification: false, hasIceDesktop: true, hasFocus: false });
+    off.bridge.applyHarnessStepToPet({ type: 'final', stopReason: 'circuit_breaker' }, false, false);
+    expect(off.notifyCalls).toHaveLength(0);
+
+    const focused = loadBridge({ taskDoneNotification: true, hasIceDesktop: true, hasFocus: true });
+    focused.bridge.applyHarnessStepToPet({ type: 'final', stopReason: 'max_rounds' }, false, false);
+    expect(focused.notifyCalls).toHaveLength(0);
+  });
+
+  it('用户自己停 → 不通知', () => {
+    const h = loadBridge({ taskDoneNotification: true, hasIceDesktop: true, hasFocus: false });
+    h.bridge.applyHarnessStepToPet({ type: 'tool_call', toolName: 'run_command' }, false, true);
+    h.bridge.applyHarnessStepToPet({ type: 'final', stopReason: 'user_abort' }, false, false);
+    expect(h.notifyCalls).toHaveLength(0);
   });
 });
 

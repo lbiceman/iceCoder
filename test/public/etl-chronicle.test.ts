@@ -174,6 +174,37 @@ describe('EtlChronicle.assemble', () => {
     expect(String(chapters[0].preview)).not.toMatch(/Active Skill/i);
     expect(chapters[0].preview).toContain('登录失败');
     expect(chapters[0].filesChangedCount).toBe(2);
+    expect(chapters[0].testVerdict).toBe('none');
+  });
+
+  it('最后一条测试命令决定本章测试结果', () => {
+    const Chronicle = loadChronicle();
+    const { chapters } = Chronicle.assemble({
+      structured: [
+        { role: 'user', content: '跑测试' },
+        {
+          role: 'assistant',
+          toolCalls: [
+            { id: 'a', name: 'run_command', arguments: { command: 'npm install' } },
+            { id: 'b', name: 'run_command', arguments: { command: 'npm test' } },
+            { id: 'c', name: 'run_command', arguments: { command: 'npx vitest run' } },
+          ],
+        },
+      ],
+    });
+    const tools = (chapters[0].rounds as Array<{ tools: Array<{ status?: string }> }>)
+      .flatMap((round) => round.tools);
+    expect(tools).toHaveLength(3);
+    expect(chapters[0].testVerdict).toBe('passed');
+
+    const rebuilt = Chronicle.assemble({
+      uiMessages: [
+        { role: 'user', id: 'u', content: '再跑' },
+        { role: 'tool_trace', parentId: 'u', toolName: 'run_command', detail: 'npm test', status: 'done', toolCallId: 'ok' },
+        { role: 'tool_trace', parentId: 'u', toolName: 'run_command', detail: 'pytest -q', status: 'failed', toolCallId: 'bad' },
+      ],
+    });
+    expect(rebuilt.chapters[0].testVerdict).toBe('failed');
   });
 
   it('alsoNote 与技能注入用户句不单独成章', () => {

@@ -169,7 +169,7 @@ export const ChatPetBridge = (() => {
       if (document.hasFocus()) return;
       const payload = {
         success: opts.success !== false,
-        summary: '',
+        summary: typeof opts.summary === 'string' ? opts.summary : '',
       };
       if (opts.sessionId) payload.sessionId = opts.sessionId;
       window.iceDesktop.notifyTaskDone(payload);
@@ -180,19 +180,46 @@ export const ChatPetBridge = (() => {
    * 任务完成时按配置发送桌面系统通知。
    * 不注册任何常驻监听器（一次性读取配置后即发），无内存泄漏风险。
    */
-  function maybeNotifyTaskDone() {
+  function taskStopNotice(step) {
+    const api = window.TaskStopNotice;
+    if (!api || typeof api.describe !== 'function' || !step) return null;
+    try {
+      return api.describe({
+        stopReason: step.stopReason,
+        completionStatus: step.completionStatus,
+        completionReason: step.completionReason,
+      });
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * 任务结束时按配置发送桌面系统通知。
+   * 成功只报真正跑过工具的任务；失败把停因放进摘要。
+   * 不注册任何常驻监听器（一次性读取配置后即发），无内存泄漏风险。
+   */
+  function maybeNotifyTaskDone(opts) {
+    opts = opts || {};
+    const success = opts.success !== false;
     try {
       const prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
         ? window.EtlPrefs.get()
         : null;
       if (!prefs || prefs.taskDoneNotification !== true) return;
-      // 纯闲聊（本轮无工具调用）不通知
-      if (!turnHadToolCall) return;
+      // 纯闲聊（本轮无工具调用）不报成功；失败停因仍然要响
+      if (success && !turnHadToolCall) return;
       if (!window.iceDesktop || typeof window.iceDesktop.notifyTaskDone !== 'function') return;
       // 仅后台弹通知：主窗口处于前台/可见时用户正在看，不打扰
       if (document.hasFocus()) return;
-      const payload = { success: true, summary: summarizeUserPrompt() };
-      if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+      const payload = {
+        success,
+        summary: success
+          ? summarizeUserPrompt()
+          : (typeof opts.summary === 'string' ? opts.summary : ''),
+      };
+      if (opts.sessionId) payload.sessionId = opts.sessionId;
+      else if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
         const sid = window.ChatSessionStore.getActiveSessionId();
         if (sid) payload.sessionId = sid;
       }
@@ -290,6 +317,10 @@ export const ChatPetBridge = (() => {
   }
 
   function applyHarnessStepToPet(step, isStreaming, wsProcessing) {
+    if (step && step.type === 'final') {
+      const notice = taskStopNotice(step);
+      if (notice) maybeNotifyTaskDone({ success: false, summary: notice.summary });
+    }
     if (!sessionPet || !step) return;
     lastIsStreaming = !!isStreaming;
     lastWsProcessing = !!wsProcessing;
@@ -362,6 +393,12 @@ export const ChatPetBridge = (() => {
         break;
       case 'final':
         {
+          const notice = taskStopNotice(step);
+          if (notice) {
+            sessionPet.setState('error');
+            bubble(notice.summary);
+            break;
+          }
           const sr = step.stopReason;
           const cs = step.completionStatus;
           if (cs === 'failed') {

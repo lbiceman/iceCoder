@@ -28,6 +28,9 @@ export const EtlChronicle = (() => {
   };
   const SEARCH_TOOLS = { glob: true, grep: true };
 
+  /** 与 src/harness/chapter-scene.ts 的 TEST_COMMAND_RE 同步。 */
+  const TEST_COMMAND_RE = /(?:^|[^\w.-])(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+test\b|\b(?:vitest|jest|pytest|phpunit|rspec)\b|\bgo\s+test\b|\bcargo\s+test\b|\bmvn\s+(?:test|verify)\b|\bgradle(?:w)?\s+test\b|\bdotnet\s+test\b|\bctest\b/i;
+
   const STATUS_LABELS = {
     get running() { return t('etl.status.running'); },
     get done() { return t('etl.status.done'); },
@@ -207,6 +210,24 @@ export const EtlChronicle = (() => {
     return 0;
   }
 
+  function isTestCommand(command) {
+    return TEST_COMMAND_RE.test(String(command || '').trim());
+  }
+
+  function testVerdictFromTools(tools) {
+    let verdict = 'none';
+    if (!Array.isArray(tools)) return verdict;
+    for (let i = 0; i < tools.length; i++) {
+      const tool = tools[i];
+      if (!tool || tool.toolName !== 'run_command') continue;
+      if (!isTestCommand(tool.target || tool.preview || '')) continue;
+      if (tool.status === 'failed') verdict = 'failed';
+      else if (tool.status === 'running') verdict = 'running';
+      else verdict = 'passed';
+    }
+    return verdict;
+  }
+
   function collectWritePaths(tools) {
     const seen = Object.create(null);
     const out = [];
@@ -325,6 +346,7 @@ export const EtlChronicle = (() => {
       status: chapterStatusFromRounds(rounds, opts.status, opts.isLastIncomplete),
       roundCount: rounds.length,
       filesChangedCount: writePaths.length,
+      testVerdict: testVerdictFromTools(allTools),
       durationMs: sumDuration(rounds, opts.startTs, opts.endTs),
       markers: uniqueMarkers(opts.markers),
       toolCount: allTools.length,

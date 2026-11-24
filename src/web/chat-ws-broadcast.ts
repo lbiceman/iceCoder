@@ -194,6 +194,8 @@ export function broadcastSessionRunState(payload: {
   sessionId: string;
   phase: 'running' | 'done' | 'error' | 'idle';
   stopReason?: string;
+  completionStatus?: string;
+  completionReason?: string;
 }): void {
   sendToAllChatClients(JSON.stringify(payload));
 }

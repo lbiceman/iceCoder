@@ -43,7 +43,12 @@ import {
   readSessionBgTasks,
   syncSessionBgTasksFromManager,
 } from '../../session/bg-tasks-store.js';
-import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
+import { isSafeIntentMessageId, loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
+import {
+  readChapterScene,
+  readChapterSceneDiff,
+  readChapterScenes,
+} from '../../harness/chapter-scene-read.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
 import { buildCheckpointChangedFiles, type CheckpointChangedFile } from '../session-changed-files.js';
 import { openWorkspaceChangedFile } from '../open-workspace-file.js';
@@ -475,6 +480,61 @@ export function createSessionsRouter(deps: SessionsRouterDeps = {}): Router {
     if (rejectUnsafeSessionId(res, id)) return;
     const timeline = await readCheckpointTimeline(id);
     res.json(timeline);
+  });
+
+  /**
+   * GET /api/sessions/:id/chapter-scenes
+   * 每一章的文件数和测试结果。由相邻检查点哈希现算，不落盘。
+   */
+  router.get('/:id/chapter-scenes', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
+    const chapters = await readChapterScenes(SESSIONS_DIR, id);
+    res.json({ chapters });
+  });
+
+  /**
+   * GET /api/sessions/:id/chapters/:messageId/scene
+   * 选中章的文件列表。
+   */
+  router.get('/:id/chapters/:messageId/scene', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
+    const messageId = String(req.params.messageId || '');
+    if (!isSafeIntentMessageId(messageId)) {
+      res.status(400).json({ error: 'invalid message id' });
+      return;
+    }
+    const scene = await readChapterScene(SESSIONS_DIR, id, messageId);
+    if (!scene) {
+      res.status(404).json({ error: 'chapter not found' });
+      return;
+    }
+    res.json(scene);
+  });
+
+  /**
+   * GET /api/sessions/:id/chapters/:messageId/scene/diff?path=
+   * 展开某一个文件时才读正文。
+   */
+  router.get('/:id/chapters/:messageId/scene/diff', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
+    const messageId = String(req.params.messageId || '');
+    if (!isSafeIntentMessageId(messageId)) {
+      res.status(400).json({ error: 'invalid message id' });
+      return;
+    }
+    const relPath = typeof req.query.path === 'string' ? req.query.path : '';
+    const diff = await readChapterSceneDiff(SESSIONS_DIR, id, messageId, relPath);
+    if (!diff) {
+      res.status(404).json({ error: 'diff not found' });
+      return;
+    }
+    res.json(diff);
   });
 
   /**

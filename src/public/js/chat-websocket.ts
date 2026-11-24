@@ -82,9 +82,25 @@ export const ChatWebSocket = (() => {
     }
     if ((phase === 'done' || phase === 'error') && data.sessionId !== getViewportSessionId()) {
       if (window.ChatPetBridge && typeof window.ChatPetBridge.notifyBackgroundTaskDone === 'function') {
+        let success = phase === 'done';
+        let summary = '';
+        const api = window.TaskStopNotice;
+        if (api && typeof api.background === 'function') {
+          const decision = api.background({
+            phase,
+            stopReason: data.stopReason,
+            completionStatus: data.completionStatus,
+            completionReason: data.completionReason,
+          });
+          if (decision) {
+            success = decision.success !== false;
+            summary = decision.summary || '';
+          }
+        }
         window.ChatPetBridge.notifyBackgroundTaskDone({
           sessionId: data.sessionId,
-          success: phase === 'done',
+          success,
+          summary,
         });
       }
     }

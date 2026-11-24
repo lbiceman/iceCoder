@@ -6,6 +6,7 @@ import type { WebSocket } from 'ws';
 import { formatFriendlyError } from '../cli/friendly-errors.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
+import { phaseAfterTaskStop } from '../harness/task-stop-notice.js';
 import type { StopReason } from '../harness/types.js';
 import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 import {
@@ -176,13 +177,16 @@ function publishRunState(
   sessionId: string,
   phase: SessionRunPhase,
   stopReason?: StopReason,
+  completion?: { completionStatus?: string; completionReason?: string },
 ): void {
-  setSessionRunPhase(sessionId, phase, stopReason);
+  setSessionRunPhase(sessionId, phase, stopReason, completion);
   broadcastSessionRunState({
     type: 'session_run_state',
     sessionId,
     phase,
     ...(stopReason ? { stopReason } : {}),
+    ...(completion?.completionStatus ? { completionStatus: completion.completionStatus } : {}),
+    ...(completion?.completionReason ? { completionReason: completion.completionReason } : {}),
   });
 }
 
@@ -302,6 +306,7 @@ export async function runSessionMessageLoop(
   applyUnattendedMode(runSid, first);
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
+  let terminalCompletion: { completionStatus?: string; completionReason?: string } | undefined;
   let terminalError: string | undefined;
   let finalContent: string | undefined;
   try {
@@ -326,6 +331,12 @@ export async function runSessionMessageLoop(
         skipUserMessageAppend: first.skipUserMessageAppend,
         source: first.source,
         reasoningEffort: first.reasoningEffort,
+        onStopped: (info) => {
+          terminalCompletion = {
+            ...(info.completionStatus ? { completionStatus: info.completionStatus } : {}),
+            ...(info.completionReason ? { completionReason: info.completionReason } : {}),
+          };
+        },
         ...(first.scheduledTaskId ? {
           skipCompletionGate: true,
           onFinalContent: (content: string) => { finalContent = content; },
@@ -366,17 +377,30 @@ export async function runSessionMessageLoop(
         error: success ? null : describeScheduledTaskStop(terminalReason, terminalError),
       });
     }
+    const stopInput = {
+      stopReason: terminalReason,
+      completionStatus: terminalCompletion?.completionStatus,
+      completionReason: terminalCompletion?.completionReason,
+    };
+    if (terminalPhase) {
+      terminalPhase = phaseAfterTaskStop(terminalPhase, stopInput) as SessionRunPhase;
+    }
     // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。
+    // 验收命令失败的停因仍是 model_done，队列会继续。先把失败态发出去，
+    // 否则人在别的会话里只能等到下一条结束，看不到这次命令失败。
     let relayed = false;
     if (shouldRelayQueuedTask(terminalReason)) {
       const next = await claimNextQueuedTask(runSid, ws, true);
       if (next) {
+        if (terminalPhase === 'error') {
+          publishRunState(runSid, terminalPhase, terminalReason, terminalCompletion);
+        }
         relayed = true;
         await runSessionMessageLoop(deps, runSid, next.ws, next);
       }
     }
     if (!relayed && terminalPhase && terminalPhase !== 'running') {
-      publishRunState(runSid, terminalPhase, terminalReason);
+      publishRunState(runSid, terminalPhase, terminalReason, terminalCompletion);
     }
     // 有后台子 Agent 在跑或结果待注入：空闲后自动续跑。
     scheduleBackgroundWake(deps, runSid, ws);

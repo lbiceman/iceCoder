@@ -88,6 +88,21 @@ export const ChatExecutionPlan = (() => {
   /** 检查点时间轴下发的会话改动文件（只读 sessionTouchedPaths，不另存）。 */
   let snapshotChangedFiles = [];
   let snapshotFilesRefreshTimer = 0;
+  /** 章节现场：相邻检查点哈希现算，不写入会话文件。 */
+  let chapterSceneEl = null;
+  let chapterSceneBoundEl = null;
+  let chapterSceneClickHandler = null;
+  let chapterSceneSummaries = Object.create(null);
+  let sceneDetailCache = Object.create(null);
+  let sceneDiffCache = Object.create(null);
+  let sceneDetailGen = 0;
+  let sceneSummaryGen = 0;
+  let sceneDiffGen = 0;
+  let expandedScenePath = '';
+  let expandedSceneMessageId = '';
+  /** 下边两页：flow 执行流，scene 本章改动。 */
+  let flowTab = 'flow';
+  let flowTabsBoundEl = null;
 
   // 挂载模式与承载容器：桌面 = 右侧停靠 aside；移动 = 顶部条 + 底部 sheet（设计 §6）。
   let mountedMode = null;      // 'desktop' | 'mobile'
@@ -423,9 +438,9 @@ export const ChatExecutionPlan = (() => {
     return `<div class="etl-files-sheet hidden" id="etl-snapshot-files"><div class="etl-files-sheet-head"><span class="etl-files-sheet-title">${t('etl.changedFiles')}</span><span class="etl-snapshot-header-count" id="etl-snapshot-files-count">${t('etl.noFiles')}</span><button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" title="${t('common.collapse')}" aria-label="${t('common.collapse')}">${minimizeIconHtml()}</button></div><div class="etl-files-sheet-body"><div class="etl-empty etl-snapshot-files-empty">${t('etl.noChanges')}</div><ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol></div></div>`;
   }
 
-  /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
+  /** 单工作台：上检查点章节，下边用分段切换执行流和本章改动。 */
   function workbenchHtml() {
-    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.checkpoints')}</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">${t('etl.checkpointDesc')}</p></div><div class="etl-chapter-empty etl-empty">${t('etl.waiting')}</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">${t('etl.olderChapters')}</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="${t('etl.resizeSplit')}"></div><section class="etl-wb-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.flow')}</span><span class="etl-wb-section-count" id="etl-flow-step-count"></span></div></div><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">${t('etl.waiting')}</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">${t('etl.olderRounds')}</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">${t('etl.noPlan')}</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></section>${filesSheetHtml()}</div>`;
+    return `<div class="etl-body etl-workbench"><section class="etl-wb-chapters" id="etl-chapter-timeline"><div class="etl-wb-section-head"><div class="etl-wb-section-header"><span class="etl-wb-section-title">${t('etl.checkpoints')}</span><span class="etl-wb-section-count" id="etl-chapter-node-count"></span></div><p class="etl-wb-desc">${t('etl.checkpointDesc')}</p></div><div class="etl-chapter-empty etl-empty">${t('etl.waiting')}</div><button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">${t('etl.olderChapters')}</button><ol class="etl-chapter-list"></ol></section><div class="etl-wb-splitter" id="etl-wb-splitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="${t('etl.resizeSplit')}"></div><section class="etl-wb-flow is-showing-flow" id="etl-panel-flow"><div class="etl-wb-section-head"><div class="etl-flow-tabs" role="tablist"><button type="button" class="etl-flow-tab is-active" data-flow-tab="flow" role="tab" aria-selected="true" id="etl-flow-tab-flow"><span>${t('etl.flow')}</span><span class="etl-flow-tab-count" id="etl-flow-step-count"></span></button><button type="button" class="etl-flow-tab" data-flow-tab="scene" role="tab" aria-selected="false" id="etl-flow-tab-scene"><span>${t('etl.scene.tab')}</span><span class="etl-flow-tab-count" id="etl-scene-tab-count"></span></button></div></div><div class="etl-flow-page is-active" data-flow-page="flow" id="etl-flow-page"><div class="etl-task-overview hidden" id="etl-task-overview"></div><div class="etl-current-step hidden" id="etl-current-step"></div><div class="etl-round-timeline" id="etl-round-timeline"><div class="etl-round-empty etl-empty hidden">${t('etl.waiting')}</div><div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div><button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">${t('etl.olderRounds')}</button><ol class="etl-round-list"></ol></div><div class="etl-empty etl-plan-empty hidden">${t('etl.noPlan')}</div><ol class="exec-plan-list" id="exec-plan-list"></ol><div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div></div><div class="etl-chapter-scene etl-flow-page" id="etl-chapter-scene" data-flow-page="scene"></div></section>${filesSheetHtml()}</div>`;
   }
 
   function sharedBodyHtml() {
@@ -442,7 +457,11 @@ export const ChatExecutionPlan = (() => {
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
     chapterTimelineEl = host.querySelector('#etl-chapter-timeline');
+    chapterSceneEl = host.querySelector('#etl-chapter-scene');
     snapshotFilesEl = host.querySelector('#etl-snapshot-files');
+    bindChapterSceneEvents();
+    bindFlowTabs();
+    applyFlowTab();
     bindRoundTimelineEvents();
     bindChapterTimelineEvents();
     bindFilesSheetControls();
@@ -1995,9 +2014,10 @@ export const ChatExecutionPlan = (() => {
     const meta = ensureLiveChapter();
     const files = liveFilesChangedCount();
     let rounds = [];
+    let packed = null;
     const api = chronicleApi();
     if (api && typeof api.fromLive === 'function') {
-      const packed = api.fromLive({
+      packed = api.fromLive({
         messageId: meta.messageId,
         preview: meta.preview || t('etl.runningNow'),
         status: liveChapterStatus(),
@@ -2016,6 +2036,7 @@ export const ChatExecutionPlan = (() => {
       status: liveChapterStatus(),
       roundCount: roundRecords.length,
       filesChangedCount: files,
+      testVerdict: packed && packed.testVerdict ? packed.testVerdict : 'none',
       durationMs: liveChapterDurationMs(),
       markers: liveMarkersFromState(),
       toolCount: uniqueToolCallCount,
@@ -2131,13 +2152,16 @@ export const ChatExecutionPlan = (() => {
     selectedChapterKey = newestChapterKey();
   }
 
+  function flowPageEl() {
+    return hostEl && hostEl.querySelector('#etl-flow-page');
+  }
+
   function detachLiveWidgets() {
-    if (!hostEl) return;
-    const flow = hostEl.querySelector('#etl-panel-flow');
-    if (!flow) return;
-    if (taskOverviewEl && taskOverviewEl.parentNode !== flow) flow.appendChild(taskOverviewEl);
-    if (currentStepEl && currentStepEl.parentNode !== flow) flow.appendChild(currentStepEl);
-    if (roundTimelineEl && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+    const page = flowPageEl();
+    if (!page) return;
+    if (taskOverviewEl && taskOverviewEl.parentNode !== page) page.appendChild(taskOverviewEl);
+    if (currentStepEl && currentStepEl.parentNode !== page) page.appendChild(currentStepEl);
+    if (roundTimelineEl && roundTimelineEl.parentNode !== page) page.appendChild(roundTimelineEl);
   }
 
   function nowDoingText() {
@@ -2297,6 +2321,371 @@ export const ChatExecutionPlan = (() => {
     return row;
   }
 
+  function chapterSceneSummaryFor(chapter) {
+    const live = !!(chapter && (chapter.live || chapter.status === 'running'));
+    const remote = !live && chapter && chapter.messageId ? chapterSceneSummaries[chapter.messageId] : null;
+    const count = remote && typeof remote.fileCount === 'number'
+      ? remote.fileCount
+      : (chapter && typeof chapter.filesChangedCount === 'number' ? chapter.filesChangedCount : 0);
+    const test = remote && remote.test ? remote.test : ((chapter && chapter.testVerdict) || 'none');
+    return { count, test };
+  }
+
+  function sceneOpLabel(op) {
+    if (op === 'added') return t('etl.fileOp.add');
+    if (op === 'deleted') return t('etl.fileOp.delete');
+    if (op === 'command') return t('etl.scene.op.command');
+    return t('etl.fileOp.edit');
+  }
+
+  function sceneOpBadgeClass(op) {
+    if (op === 'added') return 'is-add';
+    if (op === 'deleted') return 'is-del';
+    if (op === 'command') return 'is-command';
+    return 'is-edit';
+  }
+
+  function fillChapterSceneLine(line, chapter) {
+    if (!line) return;
+    const summary = chapterSceneSummaryFor(chapter);
+    line.textContent = '';
+    const files = document.createElement('span');
+    files.className = 'etl-chapter-scene-count';
+    files.textContent = summary.count > 0
+      ? t('etl.scene.files', { n: summary.count })
+      : t('etl.scene.noFiles');
+    line.appendChild(files);
+    line.classList.remove('is-passed', 'is-failed', 'is-running');
+    if (summary.test !== 'passed' && summary.test !== 'failed' && summary.test !== 'running') return;
+    const pill = document.createElement('span');
+    pill.className = 'etl-chapter-scene-pill is-' + summary.test;
+    pill.textContent = summary.test === 'passed'
+      ? t('etl.scene.testPassed')
+      : summary.test === 'failed'
+        ? t('etl.scene.testFailed')
+        : t('etl.scene.testRunning');
+    line.appendChild(pill);
+    line.classList.add('is-' + summary.test);
+  }
+
+  function sceneFilesFromChapter(chapter) {
+    const seen = Object.create(null);
+    const out = [];
+    const rounds = chapter && chapter.rounds ? chapter.rounds : [];
+    for (let i = 0; i < rounds.length; i++) {
+      const tools = rounds[i] && rounds[i].tools ? rounds[i].tools : [];
+      for (let j = 0; j < tools.length; j++) {
+        const tool = tools[j];
+        if (!tool || !CONTEXT_WRITE_TOOLS[tool.toolName]) continue;
+        if (tool.status === 'failed') continue;
+        const path = String(tool.target || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+        if (!path || path === '.' || path === '..' || path.indexOf('..') >= 0) continue;
+        const key = path.toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = true;
+        let op = 'modified';
+        if (tool.toolName === 'write_file' || tool.toolName === 'create_file') op = 'added';
+        else if (tool.toolName === 'undo_edit') op = 'deleted';
+        out.push({ path, op, toolCallId: tool.toolCallId || '' });
+      }
+    }
+    return out;
+  }
+
+  function sceneDiffKey(messageId, path) {
+    return String(messageId || '') + '\n' + String(path || '');
+  }
+
+  function dropSceneDiffs(messageId) {
+    const prefix = String(messageId || '') + '\n';
+    const keys = Object.keys(sceneDiffCache);
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf(prefix) === 0) delete sceneDiffCache[keys[i]];
+    }
+  }
+
+  function makeSceneDiffBlock(diff) {
+    const block = document.createElement('div');
+    block.className = 'etl-chapter-scene-diff';
+    if (!diff) {
+      const note = document.createElement('div');
+      note.className = 'etl-chapter-scene-diff-note';
+      note.textContent = t('etl.scene.loading');
+      block.appendChild(note);
+      return block;
+    }
+    if (diff.binary) {
+      block.textContent = t('etl.scene.binary');
+      return block;
+    }
+    if (diff.pending || !diff.diff) {
+      block.textContent = t('etl.scene.noDiff');
+      return block;
+    }
+    const lines = String(diff.diff).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i];
+      const row = document.createElement('div');
+      const mark = text.charAt(0);
+      row.className = 'etl-chapter-scene-diff-line'
+        + (mark === '+' ? ' is-add' : mark === '-' ? ' is-del' : mark === '@' ? ' is-hunk' : '');
+      row.textContent = text;
+      block.appendChild(row);
+    }
+    if (diff.truncated) {
+      const note = document.createElement('div');
+      note.className = 'etl-chapter-scene-diff-note';
+      note.textContent = t('etl.scene.truncated', { n: lines.length });
+      block.appendChild(note);
+    }
+    return block;
+  }
+
+  function makeSceneFileRow(chapter, file) {
+    const li = document.createElement('li');
+    li.className = 'etl-snapshot-file etl-chapter-scene-file';
+    const messageId = chapter && chapter.messageId ? chapter.messageId : '';
+    const open = expandedScenePath === file.path && expandedSceneMessageId === messageId;
+    if (open) li.classList.add('is-open');
+    li.setAttribute('data-path', file.path);
+    const row = document.createElement('div');
+    row.className = 'etl-chapter-scene-file-row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    const badge = document.createElement('span');
+    badge.className = 'etl-chapter-scene-badge ' + sceneOpBadgeClass(file.op);
+    badge.textContent = sceneOpLabel(file.op);
+    const name = document.createElement('span');
+    name.className = 'etl-chapter-scene-path';
+    name.textContent = file.path;
+    name.title = file.path;
+    row.appendChild(badge);
+    row.appendChild(name);
+    const diff = sceneDiffCache[sceneDiffKey(messageId, file.path)];
+    if (diff && !diff.pending && !diff.binary && (diff.additions || diff.deletions)) {
+      const stat = document.createElement('span');
+      stat.className = 'etl-chapter-scene-stat';
+      stat.textContent = t('etl.scene.stat', { add: diff.additions || 0, del: diff.deletions || 0 });
+      row.appendChild(stat);
+    }
+    li.appendChild(row);
+    if (open) li.appendChild(makeSceneDiffBlock(diff));
+    return li;
+  }
+
+  function syncSceneTabCount(chapter) {
+    const el = hostEl && hostEl.querySelector('#etl-scene-tab-count');
+    if (!el) return;
+    const summary = chapter ? chapterSceneSummaryFor(chapter) : { count: 0 };
+    el.textContent = summary.count > 0 ? String(summary.count) : '';
+  }
+
+  function applyFlowTab() {
+    const root = hostEl && hostEl.querySelector('#etl-panel-flow');
+    if (!root) return;
+    const showingScene = flowTab === 'scene';
+    root.classList.toggle('is-showing-flow', !showingScene);
+    root.classList.toggle('is-showing-scene', showingScene);
+    const tabs = root.querySelectorAll('.etl-flow-tab');
+    const pages = root.querySelectorAll('.etl-flow-page');
+    for (let i = 0; i < tabs.length; i++) {
+      const on = tabs[i].getAttribute('data-flow-tab') === flowTab;
+      tabs[i].classList.toggle('is-active', on);
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    for (let i = 0; i < pages.length; i++) {
+      pages[i].classList.toggle('is-active', pages[i].getAttribute('data-flow-page') === flowTab);
+    }
+  }
+
+  function bindFlowTabs() {
+    const root = hostEl && hostEl.querySelector('#etl-panel-flow');
+    if (!root || flowTabsBoundEl === root) return;
+    root.addEventListener('click', (event) => {
+      const tab = event.target && event.target.closest && event.target.closest('.etl-flow-tab');
+      if (!tab || !root.contains(tab)) return;
+      const next = tab.getAttribute('data-flow-tab') || 'flow';
+      if (next === flowTab) return;
+      flowTab = next;
+      applyFlowTab();
+    });
+    flowTabsBoundEl = root;
+  }
+
+  function paintChapterScene() {
+    const el = chapterSceneEl;
+    if (!el) return;
+    const chapter = getSelectedChapter();
+    syncSceneTabCount(chapter);
+    if (!chapter) {
+      el.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'etl-chapter-scene-empty';
+      empty.textContent = t('etl.scene.empty');
+      el.appendChild(empty);
+      return;
+    }
+    const live = !!(chapter.live || chapter.status === 'running');
+    const cached = !live && chapter.messageId ? sceneDetailCache[chapter.messageId] : null;
+    const files = cached && Array.isArray(cached.files) ? cached.files : sceneFilesFromChapter(chapter);
+    el.textContent = '';
+    const meta = document.createElement('div');
+    meta.className = 'etl-chapter-scene-line etl-chapter-scene-summary';
+    const summaryChapter = cached ? {
+      messageId: chapter.messageId,
+      filesChangedCount: cached.fileCount,
+      testVerdict: cached.test,
+    } : chapter;
+    if (cached) {
+      chapterSceneSummaries[chapter.messageId] = {
+        messageId: chapter.messageId,
+        fileCount: cached.fileCount,
+        test: cached.test || 'none',
+        sealed: !!cached.sealed,
+      };
+    }
+    fillChapterSceneLine(meta, summaryChapter);
+    el.appendChild(meta);
+    syncSceneTabCount(summaryChapter);
+    if (!files.length) {
+      const summary = chapterSceneSummaryFor(chapter);
+      const empty = document.createElement('div');
+      empty.className = 'etl-chapter-scene-empty';
+      empty.textContent = summary.count > 0 && !cached
+        ? t('etl.scene.loading')
+        : t('etl.scene.empty');
+      el.appendChild(empty);
+      return;
+    }
+    const list = document.createElement('ol');
+    list.className = 'etl-chapter-scene-files';
+    const limit = Math.min(files.length, 40);
+    for (let i = 0; i < limit; i++) list.appendChild(makeSceneFileRow(chapter, files[i]));
+    el.appendChild(list);
+  }
+
+  function requestSceneDiff(chapter, path) {
+    const messageId = chapter && chapter.messageId ? chapter.messageId : '';
+    const key = sceneDiffKey(messageId, path);
+    if (!messageId || isSyntheticLiveId(messageId)) {
+      sceneDiffCache[key] = { pending: true, diff: '', binary: false };
+      paintChapterScene();
+      return;
+    }
+    const gen = ++sceneDiffGen;
+    const sid = getActiveSessionIdForSnapshot();
+    const url = '/api/sessions/' + encodeURIComponent(sid)
+      + '/chapters/' + encodeURIComponent(messageId)
+      + '/scene/diff?path=' + encodeURIComponent(path);
+    fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+      .then((res) => (res && res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((data) => {
+        if (gen !== sceneDiffGen) return;
+        sceneDiffCache[key] = data || { pending: true, diff: '', binary: false };
+        if (expandedScenePath === path && expandedSceneMessageId === messageId) paintChapterScene();
+      });
+  }
+
+  function renderChapterScene() {
+    try {
+      paintChapterScene();
+      const chapter = getSelectedChapter();
+      if (!chapter || !chapter.messageId || isSyntheticLiveId(chapter.messageId)) return;
+      if (chapter.live || chapter.status === 'running') return;
+      if (sceneDetailCache[chapter.messageId]) return;
+      const messageId = chapter.messageId;
+      const gen = ++sceneDetailGen;
+      const sid = getActiveSessionIdForSnapshot();
+      fetch('/api/sessions/' + encodeURIComponent(sid) + '/chapters/' + encodeURIComponent(messageId) + '/scene', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }).then((res) => (res && res.ok ? res.json() : null)).catch(() => null).then((data) => {
+        if (gen !== sceneDetailGen || !data || data.messageId !== messageId) return;
+        sceneDetailCache[messageId] = data;
+        chapterSceneSummaries[messageId] = {
+          messageId,
+          fileCount: typeof data.fileCount === 'number' ? data.fileCount : (data.files || []).length,
+          test: data.test || 'none',
+          sealed: !!data.sealed,
+        };
+        const selected = getSelectedChapter();
+        if (selected && selected.messageId === messageId) {
+          paintChapterScene();
+          const node = chapterTimelineEl && chapterTimelineEl.querySelector(
+            '.etl-chapter-node[data-message-id="' + messageId.replace(/"/g, '\\"') + '"] .etl-chapter-scene-line',
+          );
+          if (node) fillChapterSceneLine(node, selected);
+        }
+      });
+    } catch (e) {
+      safeWarn('renderChapterScene', e);
+    }
+  }
+
+  function handleChapterSceneClick(event) {
+    try {
+      const target = event.target;
+      if (!target || !target.closest) return;
+      if (target.closest('.etl-chapter-scene-diff')) return;
+      const row = target.closest('.etl-chapter-scene-file');
+      if (!row) return;
+      event.preventDefault();
+      const path = row.getAttribute('data-path') || '';
+      const chapter = getSelectedChapter();
+      if (!chapter || !path) return;
+      const messageId = chapter.messageId || '';
+      if (expandedScenePath === path && expandedSceneMessageId === messageId) {
+        expandedScenePath = '';
+        expandedSceneMessageId = '';
+        paintChapterScene();
+        return;
+      }
+      expandedScenePath = path;
+      expandedSceneMessageId = messageId;
+      paintChapterScene();
+      if (!sceneDiffCache[sceneDiffKey(messageId, path)]) requestSceneDiff(chapter, path);
+    } catch (e) {
+      safeWarn('chapterSceneClick', e);
+    }
+  }
+
+  function bindChapterSceneEvents() {
+    if (!chapterSceneEl) return;
+    if (chapterSceneBoundEl === chapterSceneEl) return;
+    if (chapterSceneBoundEl && chapterSceneClickHandler) {
+      chapterSceneBoundEl.removeEventListener('click', chapterSceneClickHandler);
+    }
+    chapterSceneClickHandler = handleChapterSceneClick;
+    chapterSceneEl.addEventListener('click', chapterSceneClickHandler);
+    chapterSceneBoundEl = chapterSceneEl;
+  }
+
+  function fetchChapterScenes(sessionId) {
+    const sid = sessionId || getActiveSessionIdForSnapshot();
+    const gen = ++sceneSummaryGen;
+    fetch('/api/sessions/' + encodeURIComponent(sid) + '/chapter-scenes', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    }).then((res) => (res && res.ok ? res.json() : null)).catch(() => null).then((data) => {
+      if (gen !== sceneSummaryGen || !data || !Array.isArray(data.chapters)) return;
+      const list = data.chapters;
+      const next = Object.create(null);
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        if (!item || !item.messageId) continue;
+        next[item.messageId] = item;
+        const prev = sceneDetailCache[item.messageId];
+        if (prev && prev.fileCount !== item.fileCount) {
+          delete sceneDetailCache[item.messageId];
+          dropSceneDiffs(item.messageId);
+        }
+      }
+      chapterSceneSummaries = next;
+      renderChapterDirectory();
+    });
+  }
+
   function makeChapterNode(chapter, index, isCurrent) {
     const selected = isChapterSelected(chapter);
     const isCursor = !!(chapter.messageId && isSnapshotCursorMessage(chapter.messageId));
@@ -2351,6 +2740,10 @@ export const ChatExecutionPlan = (() => {
     }
     main.appendChild(clockRow);
     main.appendChild(titleRow);
+    const sceneLine = document.createElement('div');
+    sceneLine.className = 'etl-chapter-scene-line';
+    fillChapterSceneLine(sceneLine, chapter);
+    main.appendChild(sceneLine);
     card.appendChild(main);
     li.appendChild(rail);
     li.appendChild(card);
@@ -2373,7 +2766,8 @@ export const ChatExecutionPlan = (() => {
   function updateFlowStepCount(n) {
     const el = hostEl && hostEl.querySelector('#etl-flow-step-count');
     if (!el) return;
-    el.textContent = n > 0 ? t('etl.stepCount', { n }) : '';
+    el.textContent = n > 0 ? String(n) : '';
+    el.title = n > 0 ? t('etl.stepCount', { n }) : '';
   }
 
   function renderChapterDirectory(options) {
@@ -2400,6 +2794,7 @@ export const ChatExecutionPlan = (() => {
       if (options.scrollToLatest && list.lastElementChild && list.lastElementChild.scrollIntoView) {
         list.lastElementChild.scrollIntoView({ block: 'nearest' });
       }
+      renderChapterScene();
       if (pendingRevealMessageId) {
         const reveal = list.querySelector(`[data-message-id="${pendingRevealMessageId.replace(/"/g, '\\"')}"]`);
         if (reveal && reveal.scrollIntoView) reveal.scrollIntoView({ block: 'nearest' });
@@ -2434,6 +2829,8 @@ export const ChatExecutionPlan = (() => {
       clock.setAttribute('title', t('etl.roundTime', { time: clock.textContent }));
       clock.classList.remove('hidden');
     }
+    const sceneLine = node.querySelector('.etl-chapter-scene-line');
+    if (sceneLine) fillChapterSceneLine(sceneLine, live);
     renderWorkbenchStatus();
   }
 
@@ -3263,6 +3660,7 @@ export const ChatExecutionPlan = (() => {
     chapter.roundCount = packed.roundCount;
     chapter.toolCount = packed.toolCount;
     chapter.filesChangedCount = packed.filesChangedCount;
+    chapter.testVerdict = packed.testVerdict || chapter.testVerdict || 'none';
   }
 
   /**
@@ -3758,8 +4156,8 @@ export const ChatExecutionPlan = (() => {
     if (!roundTimelineEl || !hostEl) return false;
     if (!selectedChapterIsLive()) return false;
     roundTimelineEl.classList.remove('hidden');
-    const flow = hostEl.querySelector('#etl-panel-flow');
-    if (flow && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+    const page = flowPageEl();
+    if (page && roundTimelineEl.parentNode !== page) page.appendChild(roundTimelineEl);
     return true;
   }
 
@@ -5193,6 +5591,7 @@ export const ChatExecutionPlan = (() => {
     bindLiveChapterIdentity();
     renderDockSheet();
     renderChapterDirectory();
+    fetchChapterScenes(getActiveSessionIdForSnapshot());
     renderRoundTimeline(true);
     notifySnapshotRestoreAvailability();
   }

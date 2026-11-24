@@ -259,6 +259,10 @@ html[data-shell="mobile"] .etl-panel-resizer {
   background: var(--surface-raised);
 }
 
+.etl-wb-flow > .etl-wb-section-head {
+  padding: 8px 12px 8px;
+}
+
 /* ── 检查点 / 执行流 可拖拽分隔线 ── */
 .etl-wb-splitter {
   flex: 0 0 auto;
@@ -458,6 +462,270 @@ body.etl-splitter-dragging * {
   position: static;
   flex: 0 0 24px;
   width: 24px;
+}
+
+.etl-chapter-scene-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.etl-chapter-scene-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-chapter-scene-pill {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.etl-chapter-scene-pill.is-passed {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-chapter-scene-pill.is-failed {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-chapter-scene-pill.is-running {
+  background: var(--warning-light);
+  color: var(--warning);
+}
+
+.etl-flow-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--bg-active);
+}
+
+.etl-flow-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.etl-flow-tab:hover {
+  color: var(--text-primary);
+}
+
+.etl-flow-tab.is-active {
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+  cursor: default;
+}
+
+.etl-flow-tab-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-flow-tab-count:empty {
+  display: none;
+}
+
+.etl-flow-tab.is-active .etl-flow-tab-count {
+  color: var(--text-secondary);
+}
+
+.etl-wb-flow > .etl-flow-page {
+  display: none;
+  min-height: 0;
+}
+
+.etl-wb-flow.is-showing-scene > #etl-flow-page,
+.etl-wb-flow.is-showing-scene > #etl-round-timeline,
+.etl-wb-flow.is-showing-scene > #etl-task-overview,
+.etl-wb-flow.is-showing-scene > #etl-current-step,
+.etl-wb-flow.is-showing-scene > #exec-plan-list,
+.etl-wb-flow.is-showing-scene > .etl-plan-empty,
+.etl-wb-flow.is-showing-scene > #etl-llm-activity {
+  display: none !important;
+}
+
+.etl-wb-flow.is-showing-flow > #etl-chapter-scene {
+  display: none !important;
+}
+
+.etl-wb-flow > .etl-flow-page.is-active {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.etl-wb-flow > .etl-chapter-scene.etl-flow-page.is-active {
+  overflow: auto;
+  padding: 8px 12px 14px;
+  background: transparent;
+}
+
+.etl-chapter-scene-summary {
+  min-height: 28px;
+  margin-top: 0;
+  padding: 2px 2px 0;
+}
+
+.etl-chapter-scene-summary .etl-chapter-scene-count {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.etl-chapter-scene-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-chapter-scene-files .etl-snapshot-file {
+  margin-bottom: 0;
+  padding: 8px 10px;
+}
+
+.etl-chapter-scene-file.is-open {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.etl-chapter-scene-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.etl-chapter-scene-badge.is-add {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-chapter-scene-badge.is-edit {
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.etl-chapter-scene-badge.is-command {
+  background: var(--accent-light);
+  color: var(--text-secondary);
+}
+
+.etl-chapter-scene-badge.is-del {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-chapter-scene-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.etl-chapter-scene-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.etl-chapter-scene-file-row:hover .etl-chapter-scene-path {
+  color: var(--accent);
+}
+
+.etl-chapter-scene-stat {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-chapter-scene-diff {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.etl-chapter-scene-diff-line {
+  padding: 0 8px;
+  white-space: pre;
+  color: var(--text-secondary);
+}
+
+.etl-chapter-scene-diff-line.is-add {
+  background: var(--diff-add-bg);
+  color: var(--diff-add-text);
+}
+
+.etl-chapter-scene-diff-line.is-del {
+  background: var(--diff-del-bg);
+  color: var(--diff-del-text);
+}
+
+.etl-chapter-scene-diff-line.is-hunk {
+  background: var(--diff-hunk-bg);
+  color: var(--diff-hunk-text);
+}
+
+.etl-chapter-scene-diff-note,
+.etl-chapter-scene-empty {
+  margin-top: 8px;
+  padding: 8px 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .etl-chapter-load-more {

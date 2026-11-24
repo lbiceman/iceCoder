@@ -216,22 +216,35 @@ export interface SessionRunStateEntry {
   sessionId: string;
   phase: Exclude<SessionRunPhase, 'idle'>;
   stopReason?: string;
+  completionStatus?: string;
+  completionReason?: string;
 }
 
 /** 进程内会话运行态（侧栏圆点）。done/error 不落盘，重启后只恢复 running。 */
-const runPhaseBySession = new Map<string, { phase: Exclude<SessionRunPhase, 'idle'>; stopReason?: string }>();
+const runPhaseBySession = new Map<string, {
+  phase: Exclude<SessionRunPhase, 'idle'>;
+  stopReason?: string;
+  completionStatus?: string;
+  completionReason?: string;
+}>();
 
 export function setSessionRunPhase(
   sessionId: string,
   phase: SessionRunPhase,
   stopReason?: string,
+  completion?: { completionStatus?: string; completionReason?: string },
 ): void {
   if (!sessionId) return;
   if (phase === 'idle') {
     runPhaseBySession.delete(sessionId);
     return;
   }
-  runPhaseBySession.set(sessionId, stopReason ? { phase, stopReason } : { phase });
+  runPhaseBySession.set(sessionId, {
+    phase,
+    ...(stopReason ? { stopReason } : {}),
+    ...(completion?.completionStatus ? { completionStatus: completion.completionStatus } : {}),
+    ...(completion?.completionReason ? { completionReason: completion.completionReason } : {}),
+  });
 }
 
 export function getSessionRunPhase(sessionId: string): SessionRunPhase {
@@ -243,9 +256,13 @@ export function getSessionRunPhase(sessionId: string): SessionRunPhase {
 export function buildSessionRunStatesSnapshot(): SessionRunStateEntry[] {
   const runStates: SessionRunStateEntry[] = [];
   for (const [sessionId, v] of runPhaseBySession) {
-    runStates.push(v.stopReason
-      ? { sessionId, phase: v.phase, stopReason: v.stopReason }
-      : { sessionId, phase: v.phase });
+    runStates.push({
+      sessionId,
+      phase: v.phase,
+      ...(v.stopReason ? { stopReason: v.stopReason } : {}),
+      ...(v.completionStatus ? { completionStatus: v.completionStatus } : {}),
+      ...(v.completionReason ? { completionReason: v.completionReason } : {}),
+    });
   }
   const seen = new Set(runStates.map((s) => s.sessionId));
   for (const id of sessionProcessing) {

@@ -11,6 +11,7 @@ import type { WebSocket } from 'ws';
 import { Harness } from '../harness/harness.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
+import { describeTaskStopNotice, joinStopNotice } from '../harness/task-stop-notice.js';
 import type { HarnessConfig, StopReason } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -180,6 +181,12 @@ export interface HandleChatMessageInput {
   reasoningEffort?: ReasoningEffort;
   /** Harness 本轮的最终文本（出错时即错误描述），供定时任务回写失败原因。 */
   onFinalContent?: (content: string) => void;
+  /** 循环停因和收尾原因，供会话状态和失败通知使用。 */
+  onStopped?: (info: {
+    stopReason?: StopReason;
+    completionStatus?: string;
+    completionReason?: string;
+  }) => void;
   /** 定时任务：跳过收尾硬状态门禁。 */
   skipCompletionGate?: boolean;
 }
@@ -784,6 +791,14 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     }
 
     let turnAgentMsgId: string | undefined;
+    const visibleContent = joinStopNotice(
+      result.content,
+      describeTaskStopNotice({
+        stopReason: result.loopState.stopReason,
+        completionStatus: result.completionStatus,
+        completionReason: result.completionReason,
+      }),
+    );
     if (!isSessionTombstoned(runSessionId)) {
       setCachedMessages(runSessionId, result.messages);
       await flushStructuredSessionToDisk(SESSIONS_DIR, runSessionId, result.messages);
@@ -834,8 +849,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
           : {}),
       };
 
-      if (result.content) {
-        sessionEntries.push({ ...agentBubble, content: result.content });
+      if (visibleContent) {
+        sessionEntries.push({ ...agentBubble, content: visibleContent });
         turnAgentMsgId = agentMsgId;
       } else if (toolTraceBatch.length > 0) {
         sessionEntries.push({
@@ -864,8 +879,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       broadcastToSession(runSessionId, { type: 'memory_notice', notices: extractionNotices });
     }
 
-    if (result.content) {
-      broadcastToSession(runSessionId, { type: 'response', content: result.content });
+    if (visibleContent) {
+      broadcastToSession(runSessionId, { type: 'response', content: visibleContent });
     }
     if (result.loopState.stopReason === 'user_abort') {
       broadcastToSession(runSessionId, { type: 'info', message: '任务已被用户中断' });
@@ -884,6 +899,11 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       ...(usedModel ? { usedModel } : {}),
     });
     stopReason = result.loopState.stopReason;
+    input.onStopped?.({
+      stopReason: result.loopState.stopReason,
+      completionStatus: result.completionStatus,
+      completionReason: result.completionReason,
+    });
     input.onFinalContent?.(result.content);
   } finally {
     clearInterval(pulseTimer);

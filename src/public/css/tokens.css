@@ -24,7 +24,7 @@
   --transition: 180ms ease;
   --transition-slow: 260ms ease;
   --sidebar-width: 256px;
-  --scrollbar-size: 6px;
+  --scrollbar-size: 8px;
   --font: Inter, "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }

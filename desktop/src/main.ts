@@ -24,6 +24,7 @@ import { configureWindowsNotificationIdentity } from './win-notification-shortcu
 import { createScreenPingController, type ScreenPingController } from './ping/controller';
 import { readScreenPingSettings, writeScreenPingSettings } from './ping/settings';
 import { applyWindowCommand, mainWindowChromeFields, startupDocumentHtml, WINDOW_CAPTION_HEIGHT } from './window-chrome';
+import { installThinWindowResizeBorder } from './win32-resize-border';
 
 let mainWindow: BrowserWindow | null = null;
 let screenPing: ScreenPingController | null = null;
@@ -163,6 +164,7 @@ function createWindow(show: boolean): BrowserWindow {
   });
   bindMainWindowCloseHandler(win);
   bindWindowChromeState(win);
+  installThinWindowResizeBorder(win);
   return win;
 }
 
