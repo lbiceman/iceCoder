@@ -2423,15 +2423,20 @@ export const ChatExecutionPlan = (() => {
       return block;
     }
     const lines = String(diff.diff).split('\n');
+    const body = document.createElement('div');
+    body.className = 'etl-chapter-scene-diff-body';
     for (let i = 0; i < lines.length; i++) {
       const text = lines[i];
       const row = document.createElement('div');
       const mark = text.charAt(0);
       row.className = 'etl-chapter-scene-diff-line'
         + (mark === '+' ? ' is-add' : mark === '-' ? ' is-del' : mark === '@' ? ' is-hunk' : '');
-      row.textContent = text;
-      block.appendChild(row);
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      row.appendChild(cell);
+      body.appendChild(row);
     }
+    block.appendChild(body);
     if (diff.truncated) {
       const note = document.createElement('div');
       note.className = 'etl-chapter-scene-diff-note';
