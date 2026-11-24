@@ -344,6 +344,7 @@ body.etl-splitter-dragging * {
 .etl-wb-chapters .etl-chapter-list,
 .etl-wb-chapters .etl-chapter-empty {
   flex: 1;
+  margin-right: 2px;
   min-height: 0;
   overflow: auto;
 }
@@ -770,6 +771,7 @@ body.etl-splitter-dragging * {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
+  margin-right: 2px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
