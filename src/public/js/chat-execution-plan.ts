@@ -2467,10 +2467,17 @@ export const ChatExecutionPlan = (() => {
     row.appendChild(badge);
     row.appendChild(name);
     const diff = sceneDiffCache[sceneDiffKey(messageId, file.path)];
-    if (diff && !diff.pending && !diff.binary && (diff.additions || diff.deletions)) {
+    if (diff && !diff.pending && !diff.binary) {
       const stat = document.createElement('span');
       stat.className = 'etl-chapter-scene-stat';
-      stat.textContent = t('etl.scene.stat', { add: diff.additions || 0, del: diff.deletions || 0 });
+      const added = document.createElement('span');
+      added.className = 'etl-chapter-scene-stat-add';
+      added.textContent = '+' + (diff.additions || 0);
+      const removed = document.createElement('span');
+      removed.className = 'etl-chapter-scene-stat-del';
+      removed.textContent = '-' + (diff.deletions || 0);
+      stat.appendChild(added);
+      stat.appendChild(removed);
       row.appendChild(stat);
     }
     li.appendChild(row);
@@ -2534,13 +2541,6 @@ export const ChatExecutionPlan = (() => {
     const cached = !live && chapter.messageId ? sceneDetailCache[chapter.messageId] : null;
     const files = cached && Array.isArray(cached.files) ? cached.files : sceneFilesFromChapter(chapter);
     el.textContent = '';
-    const meta = document.createElement('div');
-    meta.className = 'etl-chapter-scene-line etl-chapter-scene-summary';
-    const summaryChapter = cached ? {
-      messageId: chapter.messageId,
-      filesChangedCount: cached.fileCount,
-      testVerdict: cached.test,
-    } : chapter;
     if (cached) {
       chapterSceneSummaries[chapter.messageId] = {
         messageId: chapter.messageId,
@@ -2548,10 +2548,8 @@ export const ChatExecutionPlan = (() => {
         test: cached.test || 'none',
         sealed: !!cached.sealed,
       };
+      syncSceneTabCount(cached);
     }
-    fillChapterSceneLine(meta, summaryChapter);
-    el.appendChild(meta);
-    syncSceneTabCount(summaryChapter);
     if (!files.length) {
       const summary = chapterSceneSummaryFor(chapter);
       const empty = document.createElement('div');

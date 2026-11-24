@@ -597,23 +597,11 @@ body.etl-splitter-dragging * {
   background: transparent;
 }
 
-.etl-chapter-scene-summary {
-  min-height: 28px;
-  margin-top: 0;
-  padding: 2px 2px 0;
-}
-
-.etl-chapter-scene-summary .etl-chapter-scene-count {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .etl-chapter-scene-files {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -682,11 +670,22 @@ body.etl-splitter-dragging * {
 }
 
 .etl-chapter-scene-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
-  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.etl-chapter-scene-stat-add {
+  color: var(--success);
+}
+
+.etl-chapter-scene-stat-del {
+  color: var(--danger);
 }
 
 .etl-chapter-scene-diff {
