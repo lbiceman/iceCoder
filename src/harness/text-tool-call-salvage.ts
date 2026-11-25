@@ -119,6 +119,10 @@ export function resolveSalvagedLlmResponse(
   };
 }
 
+/** 嵌入工具文本被剥光后留给用户的一句说明。不算可续写的正文。 */
+export const STRIPPED_EMBEDDED_TOOL_NOTICE =
+  '（模型以文本形式输出了工具调用，已尝试解析并执行；无额外文字说明。）';
+
 /** 用户可见 assistant 正文：去掉思考块、system 标签与嵌入的工具调用片段。 */
 export function sanitizeAssistantContentForUser(content: string | undefined): string {
   if (!content) return '';
@@ -126,7 +130,7 @@ export function sanitizeAssistantContentForUser(content: string | undefined): st
   const withoutSystem = stripSystemTagsFromReasoning(withoutThinking);
   if (!containsEmbeddedToolCalls(withoutSystem)) return withoutSystem;
   const stripped = stripEmbeddedToolCalls(withoutSystem);
-  return stripped || '（模型以文本形式输出了工具调用，已尝试解析并执行；无额外文字说明。）';
+  return stripped || STRIPPED_EMBEDDED_TOOL_NOTICE;
 }
 
 const XML_TOOL_OPEN = /<tool[_-]?call>|<invoke\b|<\][a-zA-Z]|\[<[a-zA-Z_]/i;

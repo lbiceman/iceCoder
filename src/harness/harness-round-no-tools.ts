@@ -6,11 +6,11 @@ import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import {
   MAX_EMPTY_RESPONSE_RETRIES,
-  MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
   VERIFICATION_CONTINUATION_MAX,
 } from './harness-constants.js';
+import { decideOutputLimitRecovery, resumableOutputLimitText } from './output-limit-recovery.js';
 import { RECOVERY_BUDGET } from './recovery-budget.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { hasAssistantToolCallAfterLatestRealUser } from './harness-message-utils.js';
@@ -191,34 +191,30 @@ export async function handleNoToolCalls(
     state.justCompacted = false;
   }
 
-  if (
-    response.finishReason === 'length'
-    && state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
-  ) {
+  if (response.finishReason === 'length') {
+    const decision = decideOutputLimitRecovery(response, state.maxOutputTokensRecoveryCount);
+    if (decision.type === 'stop') {
+      if (decision.content) msgs.push({ role: 'assistant', content: decision.content });
+      return finishNoToolRound(deps, args, {
+        status: 'interrupted',
+        reason: 'max_output_tokens',
+        stopReason: 'max_output_tokens',
+        content: decision.content,
+        assistantAlreadyRecorded: true,
+      });
+    }
+
     state.maxOutputTokensRecoveryCount++;
     console.log(
-      `[harness] max-output-tokens 恢复 (${state.maxOutputTokensRecoveryCount}/${MAX_OUTPUT_TOKENS_RECOVERY_LIMIT})`,
+      `[harness] max-output-tokens 恢复 ${decision.type} (${state.maxOutputTokensRecoveryCount})`,
     );
-
-    pushAssistantForHistory(msgs, response);
-    msgs.push({
-      role: 'user',
-      content: 'Continue directly — do not apologize, do not restate previous content. If the last response was cut off mid-way, continue from where it left off. Split remaining work into smaller steps.',
-    });
+    if (decision.keepAssistant) {
+      const kept = resumableOutputLimitText(response.content);
+      if (kept) msgs.push({ role: 'assistant', content: kept });
+    }
+    msgs.push({ role: 'user', content: decision.prompt });
     state.transition = 'max_output_tokens_recovery';
     return { action: 'continue' };
-  }
-
-  if (
-    response.finishReason === 'length'
-    && state.maxOutputTokensRecoveryCount >= MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
-  ) {
-    return finishNoToolRound(deps, args, {
-      status: 'interrupted',
-      reason: 'max_output_tokens',
-      stopReason: 'max_output_tokens',
-      content: sanitizeAssistantContentForUser(response.content),
-    });
   }
 
   if (

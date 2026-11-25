@@ -488,7 +488,7 @@ describe('Harness - max-output-tokens 恢复', () => {
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
-    // 连续 4 次 length（超过 MAX_OUTPUT_TOKENS_RECOVERY_LIMIT=3）
+    // 有正文：1 次续写 + 2 次小批量，第 4 次仍顶满才停
     const chatFn = createChatFn([
       lengthResponse('Part 1'),
       lengthResponse('Part 2'),
@@ -501,6 +501,36 @@ describe('Harness - max-output-tokens 恢复', () => {
     expect(result.loopState.stopReason).toBe('max_output_tokens');
     expect(result.completionStatus).toBe('interrupted');
     expect(result.completionReason).toBe('max_output_tokens');
+  });
+
+  it('没有可执行结果时丢掉半截，两次小批量后停下', async () => {
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const truncated = '{"name":"solid.batch","arguments":{"commands":[';
+    const chatFn = createChatFn([
+      lengthResponse(truncated),
+      lengthResponse(''),
+      lengthResponse(truncated),
+    ]);
+
+    const result = await harness.run('Build the engine', chatFn);
+
+    expect(chatFn).toHaveBeenCalledTimes(3);
+    expect(result.loopState.stopReason).toBe('max_output_tokens');
+    expect(result.content).not.toContain('solid.batch');
+    const notes = result.messages.filter(message =>
+      message.role === 'user'
+      && typeof message.content === 'string'
+      && message.content.includes('ONE small batch'),
+    );
+    expect(notes).toHaveLength(2);
+    expect(result.messages.some(message =>
+      message.role === 'assistant'
+      && typeof message.content === 'string'
+      && message.content.includes('solid.batch'),
+    )).toBe(false);
   });
 });
 

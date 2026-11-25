@@ -39,7 +39,7 @@ const STOP_COPY: Record<string, StopCopy> = {
   },
   max_output_tokens: {
     summary: '输出达到上限',
-    next: '发送「继续」，把没写完的部分补上。',
+    next: '拆成一次小的工具调用再发。',
   },
   error: {
     summary: '执行出错',

@@ -1,6 +1,10 @@
 import { RECOVERY_BUDGET } from './recovery-budget.js';
 
-// ─── max-output-tokens 恢复最大次数 ───
+/**
+ * 单次输出顶满后的恢复上限。
+ * 有可续正文时，第 1 次用续写提示，其后改成小批量工具提示，一共最多 3 次。
+ * 没有可执行结果时不走续写，小批量提示最多 2 次。见 output-limit-recovery.ts。
+ */
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
 // ─── 连续工具失败提示干预阈值（见 RECOVERY_BUDGET.failureEvidenceLadder）───
